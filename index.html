@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tiksi - design console</title>
+<meta name="description" content="tiksi: an open, local-first design console for renovation and construction programs. Floorplans to 3D models to budgets, schedules and cut sheets.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230c1013'/%3E%3Cpath d='M7 25h18v-4H7zM10 18h12v-4H10zM13 11h6V7h-6z' fill='%23e8973a'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="./css/console.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.min.js",
+    "three/addons/": "./vendor/addons/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="brand">
+      <span class="brand-mark">TIKSI</span>
+      <span class="brand-sub">design console</span>
+    </div>
+    <div class="topbar-group">
+      <label class="tb-label" for="property-select">PROPERTY</label>
+      <select id="property-select" class="tb-select"></select>
+      <button id="property-new" class="tb-btn" title="New property">+</button>
+    </div>
+    <div class="topbar-spacer"></div>
+    <div class="topbar-group">
+      <div class="seg" id="units-seg">
+        <button data-units="imperial" class="seg-btn">FT</button>
+        <button data-units="metric" class="seg-btn">M</button>
+      </div>
+      <button id="btn-export" class="tb-btn">EXPORT</button>
+      <button id="btn-import" class="tb-btn">IMPORT</button>
+      <button id="btn-demo" class="tb-btn">DEMO</button>
+      <span id="save-status" class="save-status">SAVED</span>
+    </div>
+  </header>
+  <nav id="rail">
+    <a href="#/plan" data-view="plan">PLAN</a>
+    <a href="#/model" data-view="model">MODEL</a>
+    <a href="#/projects" data-view="projects">PROJECTS</a>
+    <a href="#/products" data-view="products">PRODUCTS</a>
+    <a href="#/budget" data-view="budget">BUDGET</a>
+    <a href="#/schedule" data-view="schedule">SCHEDULE</a>
+    <a href="#/sheets" data-view="sheets">CUT SHEETS</a>
+    <div class="rail-foot">
+      <a href="https://github.com/Helladuckets/tiksi" target="_blank" rel="noopener">GITHUB</a>
+    </div>
+  </nav>
+  <main id="view"></main>
+</div>
+<div id="print-root"></div>
+<input type="file" id="import-file" accept="application/json" hidden>
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>
