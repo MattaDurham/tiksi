@@ -48,7 +48,7 @@ Program side:
 It is a static page. Any web server works:
 
 ```
-git clone https://github.com/Helladuckets/tiksi
+git clone https://github.com/MattaDurham/tiksi
 cd tiksi
 python3 -m http.server 8642
 # open http://localhost:8642
