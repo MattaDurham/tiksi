@@ -1,7 +1,8 @@
 // tiksi store: workspace state, persistence, units, shared helpers.
 // All lengths are stored in meters, money in USD, dates as ISO strings.
 
-const LS_KEY = 'tiksi.workspace.v1';
+const LS_KEY = 'tiksi.workspace.v1';   // storage slot, not the schema version (see migrate)
+const SCHEMA_VERSION = 2;
 const M_PER_FT = 0.3048;
 const M2_PER_SF = 0.09290304;
 
@@ -19,7 +20,7 @@ export function touch() {
   saveTimer = setTimeout(save, 450);
 }
 
-function setSaveStatus(text, busy) {
+export function setSaveStatus(text, busy) {
   const el = document.getElementById('save-status');
   if (!el) return;
   el.textContent = text;
@@ -53,11 +54,42 @@ export function replaceWorkspace(data) {
   touch();
 }
 
+// ---------- schema defaults (v2) ----------
+
+// Environment / rendering settings per property. `time` is local solar hours (sunrise 6,
+// noon 12, sunset 20); `azimuth` is the sun's compass heading the user drags; `north`
+// rotates the compass rose relative to plan +x.
+export function defaultEnv() {
+  return {
+    time: 14.5, azimuth: 200, north: 0, exposure: 1.0, quality: 'high',
+    sky: 'dynamic', panoPhotoId: null,
+    showCeilings: true, showGround: true, showGrid: false, nightLights: true,
+  };
+}
+
+// Scan kind inferred from the file extension. PLY defaults to a point cloud; importers
+// that detect a mesh or a 3DGS splat inside a PLY overwrite `kind` at import time.
+const SCAN_KIND_BY_FORMAT = {
+  ply: 'points', pcd: 'points', xyz: 'points', las: 'points', laz: 'points', e57: 'points',
+  obj: 'mesh', glb: 'mesh', gltf: 'mesh', stl: 'mesh',
+  splat: 'splat', spz: 'splat', ksplat: 'splat',
+};
+export function scanKindFor(format) {
+  return SCAN_KIND_BY_FORMAT[String(format || '').toLowerCase()] || 'points';
+}
+
+export function propertyTemplate(name) {
+  return {
+    id: uid('prop'), name: name || 'New property', notes: '', wallHeight: 2.44,
+    plan: null, walls: [], openings: [], rooms: [], scans: [], photos: [], env: defaultEnv(),
+  };
+}
+
 function migrate(d) {
   if (!d.version) d.version = 1;
   d.settings = Object.assign({ units: 'imperial', budgetCap: 150000, programStart: isoToday(), activePropertyId: null }, d.settings || {});
   d.properties = d.properties || [];
-  d.materials = d.materials || [];
+  d.materials = d.materials || [];   // material records are normalised by materials.js
   d.products = d.products || [];
   d.projects = d.projects || [];
   for (const p of d.properties) {
@@ -67,14 +99,43 @@ function migrate(d) {
     p.openings = p.openings || [];
     p.rooms = p.rooms || [];
     p.scans = p.scans || [];
+    // v2: photos, environment, richer scan and room records. Merge over whatever is there
+    // so partially filled objects from hand-edited or older exports keep their values.
+    p.photos = p.photos || [];
+    p.env = Object.assign(defaultEnv(), p.env || {});
+    for (const s of p.scans) {
+      if (!s.kind) s.kind = scanKindFor(s.format);
+      if (!Array.isArray(s.pos)) s.pos = [0, 0, 0];
+      if (!Array.isArray(s.rot)) s.rot = [0, 0, 0];
+      if (s.rotY == null) s.rotY = 0;
+      if (s.scale == null) s.scale = 1;
+      if (s.visible == null) s.visible = true;
+      if (s.pointSize == null) s.pointSize = 0.012;
+      if (!s.pointColor) s.pointColor = 'rgb';
+      if (!s.budget) s.budget = 2000000;
+    }
+    for (const r of p.rooms) {
+      if (r.ceilingMaterial === undefined) r.ceilingMaterial = null;   // viewer falls back to 'mat-ceiling'
+      r.pts = r.pts || [];
+    }
+    for (const ph of p.photos) {
+      if (!ph.kind) ph.kind = 'photo';
+      if (ph.notes == null) ph.notes = '';
+      if (ph.roomId == null) ph.roomId = '';
+      if (!Array.isArray(ph.elementIds)) ph.elementIds = [];
+      if (!Array.isArray(ph.itemIds)) ph.itemIds = [];
+      if (ph.pin === undefined) ph.pin = null;
+      if (!ph.createdAt) ph.createdAt = new Date(0).toISOString();
+    }
   }
   for (const pr of d.projects) pr.items = pr.items || [];
+  d.version = SCHEMA_VERSION;
   return d;
 }
 
 export function emptyWorkspace() {
   return migrate({
-    version: 1,
+    version: SCHEMA_VERSION,
     settings: { units: 'imperial', budgetCap: 150000, programStart: isoToday(), activePropertyId: null },
     properties: [],
     materials: [],
@@ -192,6 +253,14 @@ export function parseMoney(str) {
   return isNaN(n) ? 0 : n;
 }
 
+export function fmtBytes(n) {
+  if (n == null || isNaN(n)) return '-';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(0) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
+}
+
 export function isoToday() {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
@@ -241,7 +310,7 @@ export function selectedTotals() {
   return t;
 }
 
-// ---------- IndexedDB for large binaries (lidar scans) ----------
+// ---------- IndexedDB for large binaries (lidar scans, photos) ----------
 
 let dbPromise = null;
 function db() {
@@ -285,17 +354,159 @@ export async function deleteFile(id) {
   });
 }
 
+// Ids of the files a workspace references (every scan and photo, all properties). Bytes may
+// or may not be present in IndexedDB: a JSON-only export imported elsewhere has records but no bytes.
+export function listAllFileIds(data) {
+  const d = data || ws.data;
+  const ids = [];
+  for (const p of d.properties || []) {
+    for (const s of p.scans || []) ids.push(s.id);
+    for (const ph of p.photos || []) ids.push(ph.id);
+  }
+  return ids;
+}
+
+export function readFileAsArrayBuffer(file) {
+  if (file.arrayBuffer) return file.arrayBuffer();
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(r.error || new Error('read failed'));
+    r.readAsArrayBuffer(file);
+  });
+}
+
 // ---------- export / import ----------
 
-export function exportWorkspace() {
-  const blob = new Blob([JSON.stringify(ws.data, null, 1)], { type: 'application/json' });
+function downloadBlob(blob, filename) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'tiksi-workspace-' + isoToday() + '.json';
+  a.download = filename;
   a.click();
-  URL.revokeObjectURL(a.href);
-  const scanCount = ws.data.properties.reduce((n, p) => n + (p.scans ? p.scans.length : 0), 0);
-  if (scanCount) alert('Note: ' + scanCount + ' scan file(s) live in browser storage and are not embedded in the export. Re-upload scans after importing on another machine.');
+  // Give the click a tick to start the download before the URL goes away.
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+export function exportWorkspace() {
+  downloadBlob(new Blob([JSON.stringify(ws.data, null, 1)], { type: 'application/json' }), 'tiksi-workspace-' + isoToday() + '.json');
+  const n = listAllFileIds().length;
+  if (n) alert('Note: ' + n + ' scan/photo file(s) live in browser storage and are not embedded in a JSON export. Use EXPORT > BUNDLE (.zip) to carry them to another machine.');
+}
+
+const IMAGE_EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/bmp': 'bmp' };
+const MIME_BY_EXT = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif', bmp: 'image/bmp' };
+// Formats that are already compressed: store them in the zip instead of deflating.
+const STORED_EXT = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'glb', 'spz', 'laz', 'ksplat']);
+
+function fflate() { return import('three/addons/libs/fflate.module.js'); }
+
+// Collect every file record the workspace references and that has bytes in IndexedDB.
+// Returns [{ id, kind: 'scan'|'photo', name, format?, mime?, ext, buffer }].
+async function collectBundleFiles() {
+  const out = [];
+  for (const p of ws.data.properties) {
+    for (const s of p.scans || []) {
+      const rec = await getFile(s.id);
+      if (!rec || !rec.buffer) continue;
+      const ext = String(s.format || rec.format || 'bin').toLowerCase();
+      out.push({ id: s.id, kind: 'scan', name: s.name || rec.name || s.id, format: ext, ext, buffer: rec.buffer });
+    }
+    for (const ph of p.photos || []) {
+      const rec = await getFile(ph.id);
+      if (!rec || !rec.buffer) continue;
+      const mime = ph.mime || rec.mime || 'image/jpeg';
+      out.push({ id: ph.id, kind: 'photo', name: ph.name || rec.name || ph.id, mime, ext: IMAGE_EXT_BY_MIME[mime] || 'jpg', buffer: rec.buffer });
+    }
+  }
+  return out;
+}
+
+// Bundle = ZIP with workspace.json (same content as the JSON export), manifest.json
+// (id -> path/name/type) and files/<id>.<ext> for every scan and photo that has bytes.
+export async function exportBundle() {
+  const { zip, zipSync, strToU8 } = await fflate();
+  const files = await collectBundleFiles();
+  const manifest = {
+    format: 'tiksi-bundle', version: 1, app: 'tiksi', exportedAt: new Date().toISOString(),
+    files: files.map(f => ({ id: f.id, kind: f.kind, path: 'files/' + f.id + '.' + f.ext, name: f.name, format: f.format, mime: f.mime, size: f.buffer.byteLength })),
+  };
+  const entries = {
+    'workspace.json': [strToU8(JSON.stringify(ws.data, null, 1)), { level: 6 }],
+    'manifest.json': [strToU8(JSON.stringify(manifest, null, 1)), { level: 6 }],
+  };
+  for (const f of files) entries['files/' + f.id + '.' + f.ext] = [new Uint8Array(f.buffer), { level: STORED_EXT.has(f.ext) ? 0 : 4 }];
+
+  let bytes;
+  try {
+    // Async variant deflates in workers so a multi-hundred-MB scan does not freeze the UI.
+    bytes = await new Promise((resolve, reject) => zip(entries, { level: 4 }, (err, data) => err ? reject(err) : resolve(data)));
+  } catch (e) {
+    bytes = zipSync(entries, { level: 4 });
+  }
+  downloadBlob(new Blob([bytes], { type: 'application/zip' }), 'tiksi-bundle-' + isoToday() + '.zip');
+  return { fileCount: files.length, bytes: bytes.byteLength };
+}
+
+function u8Buffer(u8) {
+  // fflate hands back fresh Uint8Arrays; only copy when the view does not span its buffer.
+  return (u8.byteOffset === 0 && u8.byteLength === u8.buffer.byteLength) ? u8.buffer : u8.slice().buffer;
+}
+
+// Parse and validate a bundle without touching state. Returns { data, files, manifest, missing }.
+export async function readBundle(file) {
+  const { unzipSync, strFromU8 } = await fflate();
+  const buf = new Uint8Array(await readFileAsArrayBuffer(file));
+  let zipped;
+  try { zipped = unzipSync(buf); } catch (e) { throw new Error('not a valid ZIP file'); }
+  if (!zipped['workspace.json']) throw new Error('bundle has no workspace.json');
+  let data;
+  try { data = JSON.parse(strFromU8(zipped['workspace.json'])); } catch (e) { throw new Error('workspace.json is not valid JSON'); }
+  if (!data || !Array.isArray(data.properties)) throw new Error('workspace.json is not a tiksi workspace');
+
+  let manifest = null;
+  if (zipped['manifest.json']) {
+    try { manifest = JSON.parse(strFromU8(zipped['manifest.json'])); } catch (e) { manifest = null; }
+    if (manifest && !Array.isArray(manifest.files)) manifest = null;
+  }
+  // Without a manifest, fall back to naming: files/<id>.<ext>, image extensions are photos.
+  const list = manifest ? manifest.files : Object.keys(zipped).filter(k => k.startsWith('files/') && !k.endsWith('/')).map(path => {
+    const base = path.slice(6);
+    const dot = base.lastIndexOf('.');
+    const id = dot > 0 ? base.slice(0, dot) : base;
+    const ext = dot > 0 ? base.slice(dot + 1).toLowerCase() : 'bin';
+    const mime = MIME_BY_EXT[ext];
+    return mime ? { id, kind: 'photo', path, name: base, mime } : { id, kind: 'scan', path, name: base, format: ext };
+  });
+  const files = [], missing = [];
+  for (const m of list) {
+    if (!m || typeof m.id !== 'string' || typeof m.path !== 'string') continue;
+    const u8 = zipped[m.path];
+    if (!u8) { missing.push(m.id); continue; }
+    const meta = m.kind === 'photo'
+      ? { name: m.name || m.id, mime: m.mime || MIME_BY_EXT[m.path.split('.').pop().toLowerCase()] || 'image/jpeg', kind: 'photo' }
+      : { name: m.name || m.id, format: m.format || m.path.split('.').pop().toLowerCase() };
+    files.push({ id: m.id, buffer: u8Buffer(u8), meta });
+  }
+  return { data, files, manifest, missing };
+}
+
+// Restore a bundle: writes files to IndexedDB first (so a quota failure leaves the current
+// workspace intact), then replaces the workspace. Resolves true when replaced, false if cancelled.
+export async function importBundle(file, opts) {
+  opts = opts || {};
+  const { data, files, missing } = await readBundle(file);
+  const props = data.properties.length;
+  const size = files.reduce((n, f) => n + f.buffer.byteLength, 0);
+  if (opts.confirm !== false) {
+    const msg = 'Replace the current workspace with "' + file.name + '"?\n' +
+      props + ' propert' + (props === 1 ? 'y' : 'ies') + ', ' + files.length + ' file' + (files.length === 1 ? '' : 's') + ' (' + fmtBytes(size) + ').' +
+      (missing.length ? '\n' + missing.length + ' file(s) listed in the manifest are missing from the archive.' : '') +
+      '\nExport first if you want a backup.';
+    if (!confirm(msg)) return false;
+  }
+  for (const f of files) await putFile(f.id, f.buffer, f.meta);
+  replaceWorkspace(data);
+  return true;
 }
 
 export function escapeHtml(s) {

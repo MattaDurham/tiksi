@@ -1,16 +1,16 @@
 // Demo workspace: a generic colonial with a realistic renovation program.
 // Public-safe sample data; replace with your own property and projects.
 
-import { isoToday, addDays } from './store.js';
+import { isoToday, addDays, defaultEnv } from './store.js';
 
 export function demoWorkspace() {
-  const ext = { thickness: 0.165, material: 'mat-fiber' };
+  const ext = { thickness: 0.165, material: 'mat-fiber' };   // fiber cement siding reads well in sun
   const int = { thickness: 0.114, material: 'mat-drywall' };
   const W = (id, ax, ay, bx, by, kind) => Object.assign({ id, ax, ay, bx, by, height: null }, kind);
   const O = (id, wallId, type, t, width, height, sill) => ({ id, wallId, type, t, width, height, sill });
 
   return {
-    version: 1,
+    version: 2,
     settings: {
       units: 'imperial',
       budgetCap: 150000,
@@ -49,12 +49,15 @@ export function demoWorkspace() {
         O('o-arch-2', 'w-int-3', 'door', 0.41, 1.524, 2.032),
       ],
       rooms: [
-        { id: 'r-dining', name: 'Dining', material: 'mat-oak', pts: [[0, 0], [5.0, 0], [5.0, 4.6], [0, 4.6]] },
-        { id: 'r-kitchen', name: 'Kitchen', material: 'mat-tile-f', pts: [[5.0, 0], [12.2, 0], [12.2, 4.6], [5.0, 4.6]] },
-        { id: 'r-living', name: 'Living', material: 'mat-oak', pts: [[0, 4.6], [7.3, 4.6], [7.3, 8.5], [0, 8.5]] },
-        { id: 'r-foyer', name: 'Foyer', material: 'mat-oak', pts: [[7.3, 4.6], [12.2, 4.6], [12.2, 8.5], [7.3, 8.5]] },
+        { id: 'r-dining', name: 'Dining', material: 'mat-oak', ceilingMaterial: null, pts: [[0, 0], [5.0, 0], [5.0, 4.6], [0, 4.6]] },
+        { id: 'r-kitchen', name: 'Kitchen', material: 'mat-tile-f', ceilingMaterial: null, pts: [[5.0, 0], [12.2, 0], [12.2, 4.6], [5.0, 4.6]] },
+        { id: 'r-living', name: 'Living', material: 'mat-oak', ceilingMaterial: null, pts: [[0, 4.6], [7.3, 4.6], [7.3, 8.5], [0, 8.5]] },
+        { id: 'r-foyer', name: 'Foyer', material: 'mat-oak', ceilingMaterial: null, pts: [[7.3, 4.6], [12.2, 4.6], [12.2, 8.5], [7.3, 8.5]] },
       ],
       scans: [],
+      photos: [],
+      // Late-afternoon sun from the south-west so the front (south) elevation reads with long shadows.
+      env: Object.assign(defaultEnv(), { time: 15.5, azimuth: 225, north: 0, exposure: 1.0, quality: 'high' }),
     }],
     materials: [],
     products: [

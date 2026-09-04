@@ -1,7 +1,12 @@
 // App shell: routing, topbar, property management, persistence wiring.
 
-import { ws, load, save, touch, onChange, uid, activeProperty, replaceWorkspace, exportWorkspace, escapeHtml } from './store.js';
+import {
+  ws, load, save, touch, onChange, activeProperty, replaceWorkspace, propertyTemplate,
+  exportWorkspace, exportBundle, importBundle, listAllFileIds, setSaveStatus, escapeHtml,
+} from './store.js';
 import { ensureBuiltinMaterials } from './materials.js';
+import { disposeMaterials } from './textures.js';
+import { revokePhotoUrls } from './photos-store.js';
 import { demoWorkspace } from './demo.js';
 import * as plan2d from './plan2d.js';
 import * as viewer3d from './viewer3d.js';
@@ -45,7 +50,8 @@ function boot() {
 }
 
 function route() {
-  const name = (location.hash.replace(/^#\//, '') || 'plan');
+  // Views may carry a query (#/model?pin=<photoId>); the view reads it from location.hash itself.
+  const name = (location.hash.replace(/^#\//, '').split('?')[0] || 'plan');
   const view = VIEWS[name] || VIEWS.plan;
   if (currentView && currentView.unmount) currentView.unmount();
   currentName = VIEWS[name] ? name : 'plan';
@@ -64,6 +70,15 @@ function remountView() {
   currentView.mount(root);
 }
 
+// Called after the whole workspace was swapped out: drop GPU/material caches and object URLs
+// that belong to the old data, then make sure builtin materials exist and redraw.
+function afterWorkspaceReplaced() {
+  disposeMaterials();
+  revokePhotoUrls();
+  ensureBuiltinMaterials();
+  remountView();
+}
+
 // ---------- topbar ----------
 function bindTopbar() {
   const sel = document.getElementById('property-select');
@@ -76,10 +91,7 @@ function bindTopbar() {
   document.getElementById('property-new').onclick = () => {
     const name = prompt('New property name (street address or nickname):');
     if (!name) return;
-    const p = {
-      id: uid('prop'), name, notes: '', wallHeight: 2.44,
-      plan: null, walls: [], openings: [], rooms: [], scans: [],
-    };
+    const p = propertyTemplate(name);
     ws.data.properties.push(p);
     ws.data.settings.activePropertyId = p.id;
     touch();
@@ -92,21 +104,35 @@ function bindTopbar() {
     remountView();
   });
 
-  document.getElementById('btn-export').onclick = exportWorkspace;
+  const exportBtn = document.getElementById('btn-export');
+  exportBtn.onclick = () => {
+    // No binary files: a JSON export is complete on its own. With scans or photos, offer the
+    // bundle (recommended) or the light JSON-only export.
+    const n = listAllFileIds().length;
+    if (!n) { exportWorkspace(); return; }
+    openMenu(exportBtn, [
+      { label: 'BUNDLE (.zip)', hint: 'workspace + ' + n + ' scan/photo file' + (n === 1 ? '' : 's'), primary: true, run: runExportBundle },
+      { label: 'WORKSPACE ONLY (.json)', hint: 'no binary files', run: exportWorkspace },
+    ]);
+  };
 
   const importFile = document.getElementById('import-file');
+  importFile.accept = '.json,.zip,application/json,application/zip';
   document.getElementById('btn-import').onclick = () => importFile.click();
   importFile.onchange = async () => {
     const file = importFile.files[0];
     importFile.value = '';
     if (!file) return;
     try {
-      const data = JSON.parse(await file.text());
-      if (!data || !Array.isArray(data.properties)) throw new Error('not a tiksi workspace file');
-      if (!confirm('Replace the current workspace with "' + file.name + '"? Export first if you want a backup.')) return;
-      replaceWorkspace(data);
-      ensureBuiltinMaterials();
-      remountView();
+      if (await isZipFile(file)) {
+        if (!(await importBundle(file))) return;
+      } else {
+        const data = JSON.parse(await file.text());
+        if (!data || !Array.isArray(data.properties)) throw new Error('not a tiksi workspace file');
+        if (!confirm('Replace the current workspace with "' + file.name + '"? Export first if you want a backup.')) return;
+        replaceWorkspace(data);
+      }
+      afterWorkspaceReplaced();
     } catch (e) {
       alert('Import failed: ' + e.message);
     }
@@ -115,9 +141,60 @@ function bindTopbar() {
   document.getElementById('btn-demo').onclick = () => {
     if (!confirm('Load the demo workspace? This replaces everything currently here (export first for a backup).')) return;
     replaceWorkspace(demoWorkspace());
-    ensureBuiltinMaterials();
-    remountView();
+    afterWorkspaceReplaced();
   };
+}
+
+async function runExportBundle() {
+  const btn = document.getElementById('btn-export');
+  btn.disabled = true;
+  setSaveStatus('BUNDLING', true);
+  try {
+    const r = await exportBundle();
+    setSaveStatus('EXPORTED ' + r.fileCount + ' FILE' + (r.fileCount === 1 ? '' : 'S'), false);
+  } catch (e) {
+    console.error('bundle export failed', e);
+    setSaveStatus('EXPORT FAILED', true);
+    alert('Bundle export failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function isZipFile(file) {
+  if (/\.zip$/i.test(file.name)) return true;
+  if (/\.json$/i.test(file.name)) return false;
+  const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+  return head[0] === 0x50 && head[1] === 0x4b && head[2] === 3 && head[3] === 4;   // "PK\3\4"
+}
+
+// Small anchored menu under a topbar button. Closes on choice, outside click or Escape.
+function openMenu(anchor, items) {
+  closeMenu();
+  const menu = document.createElement('div');
+  menu.className = 'tb-menu';
+  menu.setAttribute('role', 'menu');
+  menu.innerHTML = items.map((it, i) => `
+    <button class="tb-menu-item ${it.primary ? 'primary' : ''}" role="menuitem" data-i="${i}">
+      <span>${escapeHtml(it.label)}</span>${it.hint ? `<small>${escapeHtml(it.hint)}</small>` : ''}
+    </button>`).join('');
+  const r = anchor.getBoundingClientRect();
+  menu.style.top = (r.bottom + 6) + 'px';
+  menu.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
+  document.body.appendChild(menu);
+  menu.querySelectorAll('.tb-menu-item').forEach(b => b.onclick = () => { closeMenu(); items[+b.dataset.i].run(); });
+  const onKey = e => { if (e.key === 'Escape') { closeMenu(); anchor.focus(); } };
+  const onDown = e => { if (!menu.contains(e.target) && e.target !== anchor) closeMenu(); };
+  menu._cleanup = () => { window.removeEventListener('keydown', onKey); window.removeEventListener('pointerdown', onDown, true); };
+  window.addEventListener('keydown', onKey);
+  window.addEventListener('pointerdown', onDown, true);
+  menu.querySelector('.tb-menu-item').focus();
+}
+function closeMenu() {
+  const m = document.querySelector('.tb-menu');
+  if (!m) return;
+  if (m._cleanup) m._cleanup();
+  m.remove();
 }
 
 function refreshTopbar() {

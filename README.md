@@ -17,27 +17,42 @@ Live app: https://helladuckets.github.io/tiksi/
 
 Design side:
 
-- Upload a floorplan image (photo, scan or PDF export) as a tracing underlay
+- Upload a floorplan image (photo, scan or PDF export) as a tracing underlay,
+  or send any site photo to the plan from the photo gallery
 - Calibrate real-world scale from any known dimension
 - Trace walls with endpoint/axis/angle snapping; place doors and windows; outline rooms
 - Generate a 3D model from the plan: solid walls with real openings (headers over
-  doors, sills under windows), glazed windows, per-room floor slabs
-- Edit the model manually: select any wall or floor in 3D, change thickness,
-  height or material, slide walls with a drag gizmo, delete elements
-- Import lidar scans (PLY point clouds, OBJ, GLB/GLTF from phone apps like
-  Polycam or Scaniverse) as reference geometry, with x-ray mode for alignment
-- Assign building materials from a library, or add custom ones
+  doors, sills under windows), glazed windows, per-room floor slabs and ceilings
+- Render it photoreal: a physical sun and sky driven by time of day and heading,
+  image-based lighting, ambient occlusion, real glass with reflections and
+  refraction, night mode with interior lights, quality presets down to laptop level
+- Edit the model manually: select any wall, floor or ceiling in 3D, change
+  thickness, height or material, slide walls with a drag gizmo, delete elements
+- Assign building materials from a library of procedural PBR materials (drywall,
+  plaster, brick, block, stone, wood, tile, concrete, carpet, siding, marble,
+  metal, glass), tune colour, roughness, tile size and grout, or build a
+  photo-based material from a close-up of the real surface
+- Keep photos with the model: site conditions, reference images and 360
+  panoramas in a gallery per property, filtered by room and tagged to walls,
+  floors and scope items; pin any photo on a surface in the 3D model; use an
+  equirectangular panorama as the sky so light and reflections come from the
+  actual site
+- Import scans as reference geometry: point clouds (PLY, PCD, XYZ, LAS),
+  meshes (OBJ, GLB/GLTF from phone lidar apps like Polycam or Scaniverse) and
+  Gaussian splats (3DGS PLY, .splat, .spz, .ksplat), with colour-by-height,
+  point budgets and x-ray mode for alignment
 
 Program side:
 
 - Capture project ideas, scope them into line items with quantity, unit and
   low/likely/high budget ranges
 - Link scope items to model elements (the digital-twin thread: a wall knows which
-  scope item rebuilds it, and which products are specified for it)
+  scope item rebuilds it, which products are specified for it, and which site
+  photos document it)
 - Research products anywhere, then capture them in a registry with vendor link,
   model number, price and specs
 - Generate printable cut sheets: per scope item (elements, takeoffs, materials,
-  specified products, budget line) and per product
+  site photos, specified products, budget line) and per product
 - Run the current-budget report: select and deselect projects against a budget
   cap, roll up by project and category, print it
 - Generate a schedule: critical-path method over each project's dependencies,
@@ -60,31 +75,39 @@ has something to show; replace it with your own property whenever you like.
 
 ## Where your data lives
 
-Entirely in your browser. The workspace autosaves to localStorage; lidar scan
-files go to IndexedDB. Nothing is uploaded anywhere. EXPORT writes the whole
-workspace to a JSON file you own; IMPORT restores it. That is the entire privacy
+Entirely in your browser. The workspace autosaves to localStorage; scan files and
+full-resolution photos go to IndexedDB. Nothing is uploaded anywhere. EXPORT
+writes a bundle (.zip) with the workspace JSON plus every scan and photo, so a
+property moves to another machine in one file; the JSON-only export is still
+there for a light backup. IMPORT restores either. That is the entire privacy
 model: the code is public, your house is not.
 
 ## How it is built
 
 - One page, vanilla JavaScript ES modules, no build step, no framework
-- [three.js](https://threejs.org) (vendored, r185) is the only runtime dependency
+- [three.js](https://threejs.org) (vendored, r185) does the rendering: physically
+  based materials, procedural textures generated on the fly, post-processing for
+  ambient occlusion and anti-aliasing, a physical sky
+- [Spark](https://sparkjs.dev) (vendored, MIT) renders Gaussian splats; it loads
+  lazily, only when a property actually contains one
 - 2D plan editor on canvas; Gantt and report graphics as inline SVG; cut sheets
   and reports print through the browser
+- Bundles are plain ZIP files (fflate, shipped with three.js): a workspace.json,
+  a manifest and the original scan and photo bytes
 - All lengths stored in meters, displayed in feet/inches or metric; money in USD
 
 The data model deliberately follows BIM thinking in miniature: geometry elements
 (walls, openings, rooms) are first-class objects with identity, so scope items,
-products and schedules can reference them, the way a Revit element carries its
-type, materials and quantities. IFC-class interoperability is on the roadmap, not
-faked in v1.
+products, photos and schedules can reference them, the way a Revit element
+carries its type, materials and quantities. IFC-class interoperability is on the
+roadmap, not faked in v1.
 
 ## Roadmap
 
 - IFC import/export (via web-ifc) so models round-trip with Revit and friends
 - PDF floorplan import (pdf.js) and multi-level plans
 - Automatic wall vectorization from floorplan images
-- E57/LAS lidar formats; scan-to-plan assisted tracing
+- E57 lidar and scan-to-plan assisted tracing
 - Roofs, stairs, sections and elevations
 - Assisted product research (agentic lookup into the registry)
 - Cost database with per-assembly unit pricing
@@ -94,4 +117,5 @@ faked in v1.
 This tool is being built live, in the open, with Claude as the pair. The commit
 history is the build log. Issues and ideas are welcome.
 
-MIT licensed. Vendored three.js retains its own MIT license (THREE-LICENSE.txt).
+MIT licensed. Vendored three.js retains its own MIT license (THREE-LICENSE.txt),
+as does Spark (SPARK-LICENSE.txt).

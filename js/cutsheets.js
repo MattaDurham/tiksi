@@ -1,5 +1,5 @@
 // Cut sheets: printable spec packages. One per scope item (elements + materials +
-// products + budget) and one per product (classic product cut sheet).
+// products + site photos + budget) and one per product (classic product cut sheet).
 
 import {
   ws, escapeHtml, fmtMoney, fmtLen, fmtArea, fmtDate, isoToday,
@@ -89,8 +89,43 @@ function productBlock(p) {
   </div>`;
 }
 
+// Site photos for a scope item: tagged with the item directly, or with any model element
+// the item rebuilds (a wall photo shows up on the sheet of the item that rebuilds that wall).
+function sitePhotosFor(item) {
+  const elIds = new Set(item.elementIds || []);
+  const out = [];
+  for (const p of ws.data.properties) {
+    for (const ph of p.photos || []) {
+      if ((ph.itemIds || []).includes(item.id) || (ph.elementIds || []).some(id => elIds.has(id))) out.push(ph);
+    }
+  }
+  return out;
+}
+
+function roomName(photo) {
+  if (!photo.roomId) return '';
+  for (const p of ws.data.properties) {
+    const r = p.rooms.find(r => r.id === photo.roomId);
+    if (r) return r.name || 'Room';
+  }
+  return '';
+}
+
+function sitePhotosHtml(photos) {
+  if (!photos.length) return '';
+  return `<h2>Site photos</h2>
+    <div class="s-photos">${photos.map(ph => {
+      const meta = [ph.kind === 'pano' ? '360 panorama' : '', roomName(ph), ph.pin ? 'pinned in 3D' : ''].filter(Boolean).join(' - ');
+      return `<figure class="s-photo ${ph.kind === 'pano' ? 'pano' : ''}">
+        <img src="${escapeHtml(ph.thumb || '')}" alt="${escapeHtml(ph.name)}">
+        <figcaption><b>${escapeHtml(ph.name)}</b>${meta ? `<span class="s-photo-meta">${escapeHtml(meta)}</span>` : ''}${ph.notes ? `<span class="s-photo-notes">${escapeHtml(ph.notes)}</span>` : ''}</figcaption>
+      </figure>`;
+    }).join('')}</div>`;
+}
+
 function itemSheetHtml(project, item) {
   const t = itemTotals(item);
+  const photos = sitePhotosFor(item);
   const prods = ws.data.products.filter(p => (p.itemIds || []).includes(item.id));
   const elements = (item.elementIds || []).map(id => elementInfo(project.propertyId, id)).filter(Boolean);
   const matIds = new Set(elements.map(e => e.material).filter(Boolean));
@@ -131,6 +166,8 @@ function itemSheetHtml(project, item) {
     ${prods.length ? `<h2>Specified products</h2>${prods.map(productBlock).join('')}
       <table style="margin-top:8px"><tbody><tr><td><b>Product subtotal (unit prices)</b></td>
       <td class="num"><b>${fmtMoney(prods.reduce((n, p) => n + (p.price || 0), 0))}</b></td></tr></tbody></table>` : ''}
+
+    ${sitePhotosHtml(photos)}
 
     ${item.notes ? `<h2>Notes</h2><p style="font-size:12.5px">${escapeHtml(item.notes)}</p>` : ''}
 
