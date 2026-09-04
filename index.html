@@ -7,11 +7,15 @@
 <meta name="description" content="tiksi: an open, local-first design console for renovation and construction programs. Floorplans to 3D models to budgets, schedules and cut sheets.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230c1013'/%3E%3Cpath d='M7 25h18v-4H7zM10 18h12v-4H10zM13 11h6V7h-6z' fill='%23e8973a'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="./css/console.css">
+<link rel="stylesheet" href="./css/viewer.css">
+<link rel="stylesheet" href="./css/materials.css">
+<link rel="stylesheet" href="./css/photos.css">
 <script type="importmap">
 {
   "imports": {
     "three": "./vendor/three.module.min.js",
-    "three/addons/": "./vendor/addons/"
+    "three/addons/": "./vendor/addons/",
+    "@sparkjsdev/spark": "./vendor/spark/spark.module.min.js"
   }
 }
 </script>
@@ -43,6 +47,8 @@
   <nav id="rail">
     <a href="#/plan" data-view="plan">PLAN</a>
     <a href="#/model" data-view="model">MODEL</a>
+    <a href="#/materials" data-view="materials">MATERIALS</a>
+    <a href="#/photos" data-view="photos">PHOTOS</a>
     <a href="#/projects" data-view="projects">PROJECTS</a>
     <a href="#/products" data-view="products">PRODUCTS</a>
     <a href="#/budget" data-view="budget">BUDGET</a>

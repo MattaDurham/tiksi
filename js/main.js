@@ -5,6 +5,8 @@ import { ensureBuiltinMaterials } from './materials.js';
 import { demoWorkspace } from './demo.js';
 import * as plan2d from './plan2d.js';
 import * as viewer3d from './viewer3d.js';
+import * as materialsview from './materialsview.js';
+import * as photos from './photos.js';
 import * as projects from './projects.js';
 import * as products from './products.js';
 import * as budget from './budget.js';
@@ -14,6 +16,8 @@ import * as cutsheets from './cutsheets.js';
 const VIEWS = {
   plan: plan2d,
   model: viewer3d,
+  materials: materialsview,
+  photos,
   projects,
   products,
   budget,
