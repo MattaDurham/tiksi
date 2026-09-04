@@ -2,6 +2,7 @@
 // linked to scope items so the model becomes a true digital twin.
 
 import { ws, uid, touch, fmtMoney, parseMoney, escapeHtml, allScopeItems } from './store.js';
+import { icon } from './icons.js';
 
 const CATEGORIES = ['appliance', 'plumbing', 'lighting', 'flooring', 'tile', 'cabinetry', 'hardware', 'hvac', 'electrical', 'lumber', 'windows-doors', 'paint', 'other'];
 
@@ -32,7 +33,7 @@ function render() {
         <span class="view-sub">${d.products.length} in registry - link products to scope items to build the digital twin</span>
       </div>
       <div class="toolbar">
-        <button class="btn primary" id="new-prod">NEW PRODUCT</button>
+        <button class="btn primary" id="new-prod">${icon('plus')}NEW PRODUCT</button>
         <input type="text" class="search-input" id="prod-q" placeholder="search products..." value="${escapeHtml(query)}">
         <select id="prod-cat" class="tb-select">
           <option value="">all categories</option>
@@ -42,7 +43,10 @@ function render() {
         <span class="mono faint" style="font-size:10px">Research a product on the web, then capture it here with its link.</span>
       </div>
       <div style="display:grid; grid-template-columns: 1fr ${editingId != null ? '340px' : ''}; gap:16px; align-items:start">
-        <div class="prod-grid">${products.map(prodCard).join('') || '<p class="muted">No products yet. NEW PRODUCT to add your first researched item.</p>'}</div>
+        ${products.length ? `<div class="prod-grid">${products.map(prodCard).join('')}</div>` :
+          `<div class="empty-state"><span class="empty-ic">${icon('products')}</span>
+            <b>${d.products.length ? 'No products match' : 'No products yet'}</b>
+            ${d.products.length ? 'Try a different search or category.' : 'Research a product on the web, then capture it here with its vendor link, price and specs.'}</div>`}
         ${editingId != null ? `<div class="card" id="prod-form"></div>` : ''}
       </div>
     </div>`;
@@ -77,16 +81,16 @@ function usedIn(p) {
 function prodCard(p) {
   const links = usedIn(p);
   return `<div class="card prod-card clickable ${p.id === editingId ? 'active' : ''}" data-edit="${p.id}">
-    <div class="p-img">${p.imageUrl ? `<img src="${escapeHtml(p.imageUrl)}" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'ph',textContent:'NO IMAGE'}))">` : '<span class="ph">NO IMAGE</span>'}</div>
+    <div class="p-img">${p.imageUrl ? `<img src="${escapeHtml(p.imageUrl)}" loading="lazy" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'ph',textContent:'NO IMAGE'}))">` : `<span class="ph">${icon('image')}NO IMAGE</span>`}</div>
     <div class="p-name">${escapeHtml(p.name)}</div>
     <div class="p-meta">${escapeHtml([p.brand, p.model].filter(Boolean).join(' '))}</div>
-    <div style="display:flex; gap:5px; margin-top:6px; flex-wrap:wrap">
+    <div class="p-chips">
       <span class="chip">${p.category}</span>
-      ${links.map(l => `<span class="chip cyan" title="${escapeHtml(l.project.name)}">${escapeHtml(l.item.name)}</span>`).join('')}
+      ${links.map(l => `<span class="chip cyan" title="${escapeHtml(l.project.name)}">${icon('link')}${escapeHtml(l.item.name)}</span>`).join('')}
     </div>
-    <div style="display:flex; justify-content:space-between; align-items:baseline">
+    <div class="p-foot">
       <span class="p-price">${p.price ? fmtMoney(p.price) + (p.unit && p.unit !== 'ea' ? ' / ' + escapeHtml(p.unit) : '') : ''}</span>
-      ${p.url ? `<a href="${escapeHtml(p.url)}" target="_blank" rel="noopener" class="mono" style="color:var(--cyan); font-size:10px">VENDOR</a>` : ''}
+      ${p.url ? `<a href="${escapeHtml(p.url)}" target="_blank" rel="noopener" class="p-link">VENDOR ${icon('arrow-right', { size: 11 })}</a>` : ''}
     </div>
   </div>`;
 }
@@ -119,8 +123,8 @@ function renderForm(items) {
       </select></div>
     <div class="field"><label>Notes</label><textarea data-f="notes">${escapeHtml(p.notes || '')}</textarea></div>
     <div style="display:flex; gap:8px">
-      <button class="btn primary" id="prod-done" style="flex:1">DONE</button>
-      <button class="btn danger" id="prod-del">DELETE</button>
+      <button class="btn primary" id="prod-done" style="flex:1">${icon('check')}DONE</button>
+      <button class="btn danger" id="prod-del">${icon('trash')}DELETE</button>
     </div>`;
 
   form.querySelectorAll('[data-f]').forEach(inp => inp.onchange = () => { p[inp.dataset.f] = inp.value; touch(); render(); });

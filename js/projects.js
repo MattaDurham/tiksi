@@ -5,6 +5,7 @@ import {
   ws, uid, touch, fmtMoney, parseMoney, escapeHtml, projectTotals, itemTotals,
   activeProperty, elementInfo, fmtLen, fmtArea, isoToday,
 } from './store.js';
+import { icon } from './icons.js';
 
 const STATUSES = ['idea', 'scoped', 'committed', 'in-progress', 'done'];
 const CATEGORIES = ['kitchen', 'bath', 'interior', 'exterior', 'systems', 'structure', 'landscape', 'other'];
@@ -31,7 +32,7 @@ function render() {
         <span class="view-title">PROJECTS</span>
         <span class="view-sub">${d.projects.length} projects, ${d.projects.filter(p => p.selected).length} selected into the program</span>
         <span class="sp" style="flex:1"></span>
-        <button class="btn primary" id="new-project">NEW PROJECT</button>
+        <button class="btn primary" id="new-project">${icon('plus')}NEW PROJECT</button>
       </div>
       <div class="two-col" style="height:auto; align-items:start">
         <div class="list-stack" id="proj-list"></div>
@@ -55,18 +56,19 @@ function render() {
   list.innerHTML = d.projects.map(p => {
     const t = projectTotals(p);
     const days = p.items.reduce((n, i) => n + (i.durationDays || 0), 0);
-    return `<div class="card clickable ${p.id === activeProjectId ? 'active' : ''}" data-id="${p.id}">
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px">
+    return `<div class="card clickable proj-card ${p.id === activeProjectId ? 'active' : ''}" data-id="${p.id}">
+      <span class="sbar status-${p.status}"></span>
+      <div class="p-title">
         <b>${escapeHtml(p.name)}</b>
         <input type="checkbox" ${p.selected ? 'checked' : ''} data-sel="${p.id}" title="Include in program budget/schedule">
       </div>
-      <div style="display:flex; gap:6px; margin:6px 0 4px; flex-wrap:wrap">
+      <div class="p-chips">
         <span class="chip status-${p.status}">${p.status}</span>
         <span class="chip">${p.category}</span>
       </div>
-      <div class="mono muted" style="font-size:11px">${fmtMoney(t.likely)} likely, ${p.items.length} items${days ? ', ' + days + 'd work' : ''}</div>
+      <div class="p-sub">${fmtMoney(t.likely)} likely, ${p.items.length} items${days ? ', ' + days + 'd work' : ''}</div>
     </div>`;
-  }).join('') || '<p class="muted">No projects yet. Every renovation idea starts as a project.</p>';
+  }).join('') || `<div class="empty-state"><span class="empty-ic">${icon('projects')}</span><b>No projects yet</b>Every renovation idea starts as a project.</div>`;
 
   list.querySelectorAll('.card').forEach(c => c.onclick = e => {
     if (e.target.matches('input')) return;
@@ -84,7 +86,7 @@ function render() {
 
 function renderDetail(p) {
   const det = el.querySelector('#proj-detail');
-  if (!p) { det.innerHTML = '<p class="muted">Select or create a project.</p>'; return; }
+  if (!p) { det.innerHTML = `<div class="empty-state"><span class="empty-ic">${icon('edit')}</span><b>Nothing selected</b>Select or create a project.</div>`; return; }
   const t = projectTotals(p);
 
   det.innerHTML = `
@@ -114,9 +116,9 @@ function renderDetail(p) {
         </tbody>
       </table>
       <div style="display:flex; gap:8px; margin-top:10px">
-        <button class="btn" id="add-item">+ ADD ITEM</button>
+        <button class="btn" id="add-item">${icon('plus')}ADD ITEM</button>
         <span style="flex:1"></span>
-        <button class="btn danger" id="del-project">DELETE PROJECT</button>
+        <button class="btn danger" id="del-project">${icon('trash')}DELETE PROJECT</button>
       </div>
     </div>`;
 
@@ -153,15 +155,15 @@ function itemRow(p, it) {
   if (prods) linkBits.push(prods + ' prod');
   return `<tr data-item="${it.id}">
     <td><input type="text" data-if="name" value="${escapeHtml(it.name)}"></td>
-    <td class="num" style="width:52px"><input type="number" class="num" data-if="qty" value="${it.qty || 1}" min="0" step="0.5"></td>
+    <td class="num" style="width:64px"><input type="number" class="num" data-if="qty" value="${it.qty || 1}" min="0" step="0.5"></td>
     <td style="width:56px"><input type="text" data-if="unit" value="${escapeHtml(it.unit || 'ls')}"></td>
     <td class="num" style="width:92px"><input type="text" class="num" data-money="low" value="${it.low ? fmtMoney(it.low) : ''}"></td>
     <td class="num" style="width:92px"><input type="text" class="num" data-money="likely" value="${it.likely ? fmtMoney(it.likely) : ''}"></td>
     <td class="num" style="width:92px"><input type="text" class="num" data-money="high" value="${it.high ? fmtMoney(it.high) : ''}"></td>
     <td class="num" style="width:56px"><input type="number" class="num" data-if="durationDays" value="${it.durationDays || 0}" min="0"></td>
-    <td style="width:130px"><select multiple size="1" data-deps title="Cmd-click to pick multiple predecessors">${depOpts}</select></td>
+    <td style="width:130px"><div class="dep-wrap" title="Cmd-click to pick multiple predecessors"><select multiple size="1" data-deps>${depOpts}</select></div></td>
     <td class="mono faint" style="font-size:10px; white-space:nowrap" title="Linked model elements and products">${linkBits.join(', ') || '-'}</td>
-    <td><span class="row-del" data-del-item="${it.id}">X</span></td>
+    <td><span class="row-del" data-del-item="${it.id}" title="Remove item">${icon('close', { size: 13 })}</span></td>
   </tr>`;
 }
 

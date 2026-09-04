@@ -1,11 +1,14 @@
 // Floorplan editor: trace walls over an uploaded plan image, place doors/windows,
 // outline rooms, calibrate real-world scale. Canvas-based; all model coords in meters.
+// Rendering follows drafting conventions: hatched cut walls with a crisp outline, door
+// swings, glazing lines, dimension strings with ticks, rulers, a north arrow and a scale bar.
 
 import {
   ws, activeProperty, uid, touch, fmtLen, parseLen, fmtArea, polyArea,
   escapeHtml, itemById,
 } from './store.js';
 import { materialSelectHtml } from './materials.js';
+import { icon } from './icons.js';
 
 const PRESETS = {
   interior: { thickness: 0.114, material: 'mat-drywall' },   // 4.5 in stud wall
@@ -13,6 +16,30 @@ const PRESETS = {
 };
 const DOOR_DEFAULT = { width: 0.813, height: 2.032 };         // 32 x 80 in
 const WINDOW_DEFAULT = { width: 0.914, height: 1.219, sill: 0.762 }; // 36 x 48, sill 30
+
+const RULER = 22;                 // px; rulers sit along the top and left canvas edges
+const FONT = 'ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
+const MOD = /Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘' : '^';
+// Palette for the drawing surface (kept in sync with css/console.css tokens by hand:
+// canvas cannot read CSS variables cheaply every frame).
+const C = {
+  bg: '#0a0e12',
+  gridMinor: 'rgba(255,255,255,0.032)',
+  gridMajor: 'rgba(255,255,255,0.075)',
+  axis: 'rgba(125,155,180,0.28)',
+  wallLine: 'rgba(236,241,246,0.78)',
+  ink: '#e9eef3',
+  dim: '#8f9ca8',
+  faint: '#5d6a76',
+  accent: '#e8973a',
+  cyan: '#5fb3c9',
+  door: '#d9b47c',
+  dimLine: 'rgba(160,176,190,0.85)',
+  hover: 'rgba(255,255,255,0.6)',
+  rulerBg: 'rgba(12,17,22,0.96)',
+  rulerLine: 'rgba(255,255,255,0.12)',
+  rulerText: '#7c8995',
+};
 
 // Module-persistent editor state (survives view switches).
 const viewByProp = {};
@@ -26,6 +53,7 @@ let raf = 0;
 let prop = null;
 let vs = null; // {zoom, panX, panY}
 let selection = null;        // {kind, id}
+let hover = null;            // hit under the cursor (select tool only)
 let drawing = null;          // {last:[x,y]}
 let roomDraft = null;        // {pts:[[x,y],...]}
 let calib = null;            // {a:[x,y], b:[x,y]|null}
@@ -33,18 +61,26 @@ let hoverPt = null;          // last cursor world pos
 let drag = null;             // active drag descriptor
 let spaceDown = false;
 let undoStack = [], redoStack = [];
+const hatchCache = new Map(); // material colour -> CanvasPattern (per device pixel ratio)
 
 function dpr() { return window.devicePixelRatio || 1; }
 function w2s(p) { return [(p[0] - vs.panX) * vs.zoom, (p[1] - vs.panY) * vs.zoom]; }
 function s2w(x, y) { return [x / vs.zoom + vs.panX, y / vs.zoom + vs.panY]; }
 function rnd(v) { return Math.round(v * 200) / 200; } // 5 mm
+function crisp(v) { const d = dpr(); return (Math.round(v * d) + 0.5) / d; }
+function hexRgb(hex) {
+  if (!hex || hex[0] !== '#') return [216, 212, 204];
+  const h = hex.length === 4 ? '#' + hex[1] + hex[1] + hex[2] + hex[2] + hex[3] + hex[3] : hex;
+  const n = parseInt(h.slice(1, 7), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
 function hexA(hex, a) {
-  const n = parseInt(hex.slice(1), 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  const [r, g, b] = hexRgb(hex);
+  return `rgba(${r},${g},${b},${a})`;
 }
 function matColor(id, fallback) {
   const m = ws.data.materials.find(m => m.id === id);
-  return m ? m.color : (fallback || '#d8d4cc');
+  return (m && m.color) || fallback || '#d8d4cc';
 }
 
 function bounds() {
@@ -60,11 +96,12 @@ function bounds() {
 
 function fitView() {
   const b = bounds();
-  const w = wrapEl.clientWidth, h = wrapEl.clientHeight;
+  // Fit inside the area right of / below the rulers, with a margin for dimension strings.
+  const w = wrapEl.clientWidth - RULER, h = wrapEl.clientHeight - RULER;
   const bw = Math.max(b.maxX - b.minX, 1), bh = Math.max(b.maxY - b.minY, 1);
-  vs.zoom = Math.min(w / (bw * 1.15), h / (bh * 1.15), 250);
-  vs.panX = b.minX - (w / vs.zoom - bw) / 2;
-  vs.panY = b.minY - (h / vs.zoom - bh) / 2;
+  vs.zoom = Math.min(w / (bw * 1.22), h / (bh * 1.22), 250);
+  vs.panX = b.minX - (w / vs.zoom - bw) / 2 - RULER / vs.zoom;
+  vs.panY = b.minY - (h / vs.zoom - bh) / 2 - RULER / vs.zoom;
 }
 
 // ---------- undo ----------
@@ -73,15 +110,19 @@ function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 80) und
 function applySnap(s) {
   const d = JSON.parse(s);
   prop.walls = d.walls; prop.openings = d.openings; prop.rooms = d.rooms;
-  selection = null; touch(); renderInspector();
+  selection = null; hover = null; touch(); renderInspector();
 }
 function undo() { if (!undoStack.length) return; redoStack.push(snapshot()); applySnap(undoStack.pop()); }
 function redo() { if (!redoStack.length) return; undoStack.push(snapshot()); applySnap(redoStack.pop()); }
 
 // ---------- snapping ----------
+// Returns the snapped point; snapInfo (module state) records what it snapped to so the
+// renderer can draw guides. Rules are unchanged: endpoint, then axis, then 15 degree angle.
+let snapInfo = null;
 function snapPoint(wx, wy, opts) {
   opts = opts || {};
   const tolW = 11 / vs.zoom;
+  snapInfo = null;
   // Endpoint snap.
   let best = null, bestD = tolW;
   for (const w of prop.walls) {
@@ -91,19 +132,22 @@ function snapPoint(wx, wy, opts) {
       if (d < bestD) { bestD = d; best = p; }
     }
   }
-  if (best) return [best[0], best[1]];
+  if (best) { snapInfo = { kind: 'endpoint' }; return [best[0], best[1]]; }
   let x = wx, y = wy;
   if (snapOn && opts.from) {
     const [fx, fy] = opts.from;
     // Axis alignment.
-    if (Math.abs(x - fx) < tolW) x = fx;
-    else if (Math.abs(y - fy) < tolW) y = fy;
+    if (Math.abs(x - fx) < tolW) { x = fx; snapInfo = { kind: 'axis', axis: 'v', from: opts.from }; }
+    else if (Math.abs(y - fy) < tolW) { y = fy; snapInfo = { kind: 'axis', axis: 'h', from: opts.from }; }
     else {
       // 15 degree angle snap.
       const ang = Math.atan2(y - fy, x - fx);
       const dist = Math.hypot(x - fx, y - fy);
       const snapAng = Math.round(ang / (Math.PI / 12)) * (Math.PI / 12);
-      if (Math.abs(ang - snapAng) < 0.06) { x = fx + Math.cos(snapAng) * dist; y = fy + Math.sin(snapAng) * dist; }
+      if (Math.abs(ang - snapAng) < 0.06) {
+        x = fx + Math.cos(snapAng) * dist; y = fy + Math.sin(snapAng) * dist;
+        snapInfo = { kind: 'angle', from: opts.from, ang: snapAng };
+      }
     }
   }
   return [rnd(x), rnd(y)];
@@ -198,7 +242,7 @@ function deleteSelection() {
   } else if (selection.kind === 'underlay') {
     prop.plan = null;
   }
-  selection = null;
+  selection = null; hover = null;
   touch(); renderInspector();
 }
 
@@ -233,176 +277,305 @@ function uploadUnderlay(file) {
   img.src = URL.createObjectURL(file);
 }
 
-// ---------- rendering ----------
-function gridStep() {
+// ---------- rendering: grid, hatch, text helpers ----------
+const IMPERIAL_STEPS = [0.0762, 0.1524, 0.3048, 0.6096, 1.524, 3.048, 6.096, 15.24];
+const IMPERIAL_DIV = [3, 2, 4, 4, 5, 5, 4, 5];   // 1in, 3in, 3in, 6in, 1ft, 2ft, 5ft, 10ft minors
+const METRIC_STEPS = [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10];
+const METRIC_DIV = [5, 5, 5, 5, 5, 4, 5, 5];
+function gridSteps() {
   const imperial = ws.data.settings.units === 'imperial';
-  const steps = imperial
-    ? [0.0762, 0.1524, 0.3048, 0.6096, 1.524, 3.048, 6.096, 15.24]
-    : [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10];
-  for (const s of steps) if (s * vs.zoom >= 26) return s;
-  return steps[steps.length - 1];
+  const steps = imperial ? IMPERIAL_STEPS : METRIC_STEPS;
+  const divs = imperial ? IMPERIAL_DIV : METRIC_DIV;
+  for (let i = 0; i < steps.length; i++) if (steps[i] * vs.zoom >= 34) return { major: steps[i], minor: steps[i] / divs[i] };
+  const i = steps.length - 1;
+  return { major: steps[i], minor: steps[i] / divs[i] };
+}
+function gridStep() { return gridSteps().major; }
+
+// 45 degree hatch in the material colour, seamless, aligned to the model (not the screen)
+// so walls keep their texture while panning. Cached per colour and device pixel ratio.
+function hatchPattern(color) {
+  const d = dpr();
+  const key = color + '@' + d;
+  let pat = hatchCache.get(key);
+  if (!pat) {
+    const S = 8, D = S * d;
+    const c = document.createElement('canvas');
+    c.width = D; c.height = D;
+    const g = c.getContext('2d');
+    g.strokeStyle = hexA(color, 0.42);
+    g.lineWidth = 1 * d;
+    g.beginPath();
+    // x + y = D through the tile plus the two neighbours through the corners keeps the diagonal continuous.
+    g.moveTo(0, D); g.lineTo(D, 0);
+    g.moveTo(-D / 2, D / 2); g.lineTo(D / 2, -D / 2);
+    g.moveTo(D / 2, 3 * D / 2); g.lineTo(3 * D / 2, D / 2);
+    g.stroke();
+    pat = ctx.createPattern(c, 'repeat');
+    pat._size = S; pat._d = d;
+    hatchCache.set(key, pat);
+  }
+  if (pat.setTransform) {
+    const S = pat._size;
+    const tx = ((-vs.panX * vs.zoom) % S + S) % S, ty = ((-vs.panY * vs.zoom) % S + S) % S;
+    pat.setTransform(new DOMMatrix([1 / pat._d, 0, 0, 1 / pat._d, tx, ty]));
+  }
+  return pat;
 }
 
+function roundRect(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+// Rounded label pill centred on (x, y).
+function pill(text, x, y, color, opts) {
+  opts = opts || {};
+  const size = opts.size || 10.5;
+  ctx.font = `${opts.weight || 600} ${size}px ${FONT}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const w = ctx.measureText(text).width + 14, h = size + 9;
+  roundRect(x - w / 2, y - h / 2, w, h, h / 2);
+  ctx.fillStyle = opts.bg || 'rgba(10,14,18,0.92)';
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = opts.stroke || hexA(color, 0.55);
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.fillText(text, x, y + 0.5);
+  ctx.textBaseline = 'alphabetic';
+  return { w, h };
+}
+
+function tracePoly(pts) {
+  ctx.beginPath();
+  pts.forEach((c, i) => i ? ctx.lineTo(c[0], c[1]) : ctx.moveTo(c[0], c[1]));
+  ctx.closePath();
+}
+
+// At an L-corner two centreline rectangles leave a notch on the outside; extending each wall
+// by the neighbour's half thickness at a shared endpoint fills it (drawing only, no data change).
+function endExtension(wl, px, py) {
+  let ext = 0;
+  for (const o of prop.walls) {
+    if (o === wl) continue;
+    if ((Math.abs(o.ax - px) < 0.003 && Math.abs(o.ay - py) < 0.003) ||
+        (Math.abs(o.bx - px) < 0.003 && Math.abs(o.by - py) < 0.003)) ext = Math.max(ext, o.thickness / 2);
+  }
+  return ext;
+}
+
+function wallPoly(wl) {
+  const L = Math.hypot(wl.bx - wl.ax, wl.by - wl.ay);
+  if (L < 0.001) return null;
+  const ux = (wl.bx - wl.ax) / L, uy = (wl.by - wl.ay) / L;
+  const nx = -uy * wl.thickness / 2, ny = ux * wl.thickness / 2;
+  const ea = endExtension(wl, wl.ax, wl.ay), eb = endExtension(wl, wl.bx, wl.by);
+  const ax = wl.ax - ux * ea, ay = wl.ay - uy * ea, bx = wl.bx + ux * eb, by = wl.by + uy * eb;
+  return {
+    L, ux, uy, nx, ny,
+    pts: [
+      w2s([ax + nx, ay + ny]), w2s([bx + nx, by + ny]),
+      w2s([bx - nx, by - ny]), w2s([ax - nx, ay - ny]),
+    ],
+  };
+}
+
+// ---------- rendering: main pass ----------
 let underlayImg = null, underlayImgSrc = null;
 function draw() {
   const w = wrapEl.clientWidth, h = wrapEl.clientHeight;
-  if (canvas.width !== w * dpr() || canvas.height !== h * dpr()) {
-    canvas.width = w * dpr(); canvas.height = h * dpr();
+  if (!w || !h) return;
+  const d = dpr();
+  if (canvas.width !== Math.round(w * d) || canvas.height !== Math.round(h * d)) {
+    canvas.width = Math.round(w * d); canvas.height = Math.round(h * d);
     canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
   }
-  ctx.setTransform(dpr(), 0, 0, dpr(), 0, 0);
-  ctx.fillStyle = '#0c1013';
+  ctx.setTransform(d, 0, 0, d, 0, 0);
+  ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, w, h);
 
-  // Grid.
-  const step = gridStep();
+  drawGrid(w, h);
+  drawUnderlay();
+  drawRooms();
+  drawWalls();
+  for (const o of prop.openings) drawOpening(o);
+  drawRoomLabels();
+  drawDims();
+  drawDrafts(w, h);
+  drawSelectionHandles();
+  drawVignette(w, h);
+  drawRulers(w, h);
+  drawHud(w, h);
+}
+
+function drawGrid(w, h) {
+  const { major, minor } = gridSteps();
+  const minorPx = minor * vs.zoom;
+  const fade = Math.max(0, Math.min(1, (minorPx - 5) / 22));
   ctx.lineWidth = 1;
-  const x0 = Math.floor(vs.panX / step) * step;
-  const y0 = Math.floor(vs.panY / step) * step;
-  ctx.strokeStyle = '#1a2229';
+  if (fade > 0) {
+    ctx.strokeStyle = `rgba(255,255,255,${(0.034 * fade).toFixed(3)})`;
+    ctx.beginPath();
+    const x0 = Math.floor(vs.panX / minor) * minor, y0 = Math.floor(vs.panY / minor) * minor;
+    for (let x = x0; (x - vs.panX) * vs.zoom < w; x += minor) { const sx = crisp((x - vs.panX) * vs.zoom); ctx.moveTo(sx, 0); ctx.lineTo(sx, h); }
+    for (let y = y0; (y - vs.panY) * vs.zoom < h; y += minor) { const sy = crisp((y - vs.panY) * vs.zoom); ctx.moveTo(0, sy); ctx.lineTo(w, sy); }
+    ctx.stroke();
+  }
+  ctx.strokeStyle = C.gridMajor;
   ctx.beginPath();
-  for (let x = x0; (x - vs.panX) * vs.zoom < w; x += step) { const sx = (x - vs.panX) * vs.zoom; ctx.moveTo(sx, 0); ctx.lineTo(sx, h); }
-  for (let y = y0; (y - vs.panY) * vs.zoom < h; y += step) { const sy = (y - vs.panY) * vs.zoom; ctx.moveTo(0, sy); ctx.lineTo(w, sy); }
+  const X0 = Math.floor(vs.panX / major) * major, Y0 = Math.floor(vs.panY / major) * major;
+  for (let x = X0; (x - vs.panX) * vs.zoom < w; x += major) { const sx = crisp((x - vs.panX) * vs.zoom); ctx.moveTo(sx, 0); ctx.lineTo(sx, h); }
+  for (let y = Y0; (y - vs.panY) * vs.zoom < h; y += major) { const sy = crisp((y - vs.panY) * vs.zoom); ctx.moveTo(0, sy); ctx.lineTo(w, sy); }
   ctx.stroke();
   // Origin axes.
-  ctx.strokeStyle = '#26313b';
+  ctx.strokeStyle = C.axis;
   ctx.beginPath();
-  const ox = (0 - vs.panX) * vs.zoom, oy = (0 - vs.panY) * vs.zoom;
+  const ox = crisp(-vs.panX * vs.zoom), oy = crisp(-vs.panY * vs.zoom);
   ctx.moveTo(ox, 0); ctx.lineTo(ox, h); ctx.moveTo(0, oy); ctx.lineTo(w, oy);
   ctx.stroke();
+}
 
-  // Underlay.
+function drawUnderlay() {
   const pl = prop.plan;
-  if (pl && pl.img) {
-    if (underlayImgSrc !== pl.img) {
-      underlayImg = new Image(); underlayImg.src = pl.img; underlayImgSrc = pl.img;
-    }
-    if (underlayImg.complete && underlayImg.naturalWidth) {
-      ctx.globalAlpha = pl.opacity;
-      const [sx, sy] = w2s([pl.offsetX, pl.offsetY]);
-      ctx.drawImage(underlayImg, sx, sy, pl.imgW * pl.mPerPx * vs.zoom, pl.imgH * pl.mPerPx * vs.zoom);
-      ctx.globalAlpha = 1;
-      if (selection && selection.kind === 'underlay') {
-        ctx.strokeStyle = '#e8973a';
-        ctx.setLineDash([6, 4]);
-        ctx.strokeRect(sx, sy, pl.imgW * pl.mPerPx * vs.zoom, pl.imgH * pl.mPerPx * vs.zoom);
-        ctx.setLineDash([]);
-      }
-    }
+  if (!pl || !pl.img) return;
+  if (underlayImgSrc !== pl.img) {
+    underlayImg = new Image(); underlayImg.src = pl.img; underlayImgSrc = pl.img;
   }
-
-  // Rooms.
-  for (const r of prop.rooms) {
-    if (r.pts.length < 3) continue;
+  if (!(underlayImg.complete && underlayImg.naturalWidth)) return;
+  const [sx, sy] = w2s([pl.offsetX, pl.offsetY]);
+  const sw = pl.imgW * pl.mPerPx * vs.zoom, sh = pl.imgH * pl.mPerPx * vs.zoom;
+  const sel = selection && selection.kind === 'underlay';
+  const hov = hover && hover.kind === 'underlay';
+  ctx.save();
+  if (sel || hov) { ctx.shadowColor = sel ? 'rgba(232,151,58,0.45)' : 'rgba(255,255,255,0.25)'; ctx.shadowBlur = 22; }
+  ctx.fillStyle = 'rgba(255,255,255,0.03)';
+  ctx.fillRect(sx, sy, sw, sh);
+  ctx.restore();
+  ctx.globalAlpha = pl.opacity;
+  ctx.drawImage(underlayImg, sx, sy, sw, sh);
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = sel ? 1.5 : 1;
+  ctx.strokeStyle = sel ? C.accent : (hov ? C.hover : 'rgba(255,255,255,0.12)');
+  ctx.setLineDash(sel ? [6, 4] : []);
+  ctx.strokeRect(crisp(sx), crisp(sy), sw, sh);
+  ctx.setLineDash([]);
+  if (sel) {
+    // corner brackets
+    const k = 10;
     ctx.beginPath();
-    r.pts.forEach((p, i) => { const s = w2s(p); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); });
-    ctx.closePath();
-    const col = matColor(r.material, '#5fb3c9');
-    const sel = selection && selection.kind === 'room' && selection.id === r.id;
-    ctx.fillStyle = hexA(col, sel ? 0.22 : 0.10);
-    ctx.fill();
-    ctx.strokeStyle = sel ? '#e8973a' : hexA(col, 0.5);
-    ctx.setLineDash([5, 4]);
-    ctx.lineWidth = sel ? 1.6 : 1;
-    ctx.stroke();
-    ctx.setLineDash([]);
-    // Label at centroid.
-    let cx = 0, cy = 0;
-    for (const p of r.pts) { cx += p[0]; cy += p[1]; }
-    const s = w2s([cx / r.pts.length, cy / r.pts.length]);
-    ctx.fillStyle = sel ? '#e8973a' : '#8b9aa7';
-    ctx.font = '600 11px ui-monospace, Menlo, monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText((r.name || 'ROOM').toUpperCase(), s[0], s[1] - 3);
-    ctx.font = '10px ui-monospace, Menlo, monospace';
-    ctx.fillStyle = '#5a6875';
-    ctx.fillText(fmtArea(polyArea(r.pts)), s[0], s[1] + 10);
-  }
-
-  // Walls.
-  for (const wl of prop.walls) {
-    drawWall(wl);
-  }
-  // Openings.
-  for (const o of prop.openings) drawOpening(o);
-
-  // Drafts.
-  if (drawing && hoverPt) {
-    const pt = snapPoint(hoverPt[0], hoverPt[1], { from: drawing.last });
-    const a = w2s(drawing.last), b = w2s(pt);
-    ctx.strokeStyle = '#e8973a';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([7, 5]);
-    ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
-    ctx.setLineDash([]);
-    label(fmtLen(Math.hypot(pt[0] - drawing.last[0], pt[1] - drawing.last[1])), (a[0] + b[0]) / 2, (a[1] + b[1]) / 2 - 12, '#e8973a');
-  }
-  if (roomDraft && roomDraft.pts.length) {
-    ctx.strokeStyle = '#5fb3c9';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([5, 4]);
-    ctx.beginPath();
-    roomDraft.pts.forEach((p, i) => { const s = w2s(p); i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]); });
-    if (hoverPt) { const s = w2s(snapPoint(hoverPt[0], hoverPt[1], {})); ctx.lineTo(s[0], s[1]); }
-    ctx.stroke();
-    ctx.setLineDash([]);
-    const first = w2s(roomDraft.pts[0]);
-    ctx.fillStyle = '#5fb3c9';
-    ctx.fillRect(first[0] - 4, first[1] - 4, 8, 8);
-  }
-  if (calib && calib.a) {
-    const a = w2s(calib.a);
-    const bPt = calib.b || hoverPt;
-    ctx.fillStyle = '#e8973a';
-    ctx.beginPath(); ctx.arc(a[0], a[1], 4, 0, 7); ctx.fill();
-    if (bPt) {
-      const b = w2s(bPt);
-      ctx.strokeStyle = '#e8973a';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.beginPath(); ctx.arc(b[0], b[1], 4, 0, 7); ctx.fill();
-      label(fmtLen(Math.hypot(bPt[0] - calib.a[0], bPt[1] - calib.a[1])), (a[0] + b[0]) / 2, (a[1] + b[1]) / 2 - 12, '#e8973a');
+    for (const [cx, cy, dx, dy] of [[sx, sy, 1, 1], [sx + sw, sy, -1, 1], [sx, sy + sh, 1, -1], [sx + sw, sy + sh, -1, -1]]) {
+      ctx.moveTo(cx + dx * k, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy + dy * k);
     }
-  }
-
-  // Selected wall handles + dimension.
-  if (selection && selection.kind === 'wall') {
-    const wl = prop.walls.find(w => w.id === selection.id);
-    if (wl) {
-      for (const p of [[wl.ax, wl.ay], [wl.bx, wl.by]]) {
-        const s = w2s(p);
-        ctx.fillStyle = '#e8973a';
-        ctx.fillRect(s[0] - 4.5, s[1] - 4.5, 9, 9);
-        ctx.strokeStyle = '#0c1013';
-        ctx.strokeRect(s[0] - 4.5, s[1] - 4.5, 9, 9);
-      }
-    }
+    ctx.lineWidth = 2; ctx.stroke();
   }
 }
 
-function drawWall(wl) {
-  const L = Math.hypot(wl.bx - wl.ax, wl.by - wl.ay);
-  if (L < 0.001) return;
-  const ux = (wl.bx - wl.ax) / L, uy = (wl.by - wl.ay) / L;
-  const nx = -uy * wl.thickness / 2, ny = ux * wl.thickness / 2;
-  const sel = selection && selection.kind === 'wall' && selection.id === wl.id;
-  const corners = [
-    w2s([wl.ax + nx, wl.ay + ny]), w2s([wl.bx + nx, wl.by + ny]),
-    w2s([wl.bx - nx, wl.by - ny]), w2s([wl.ax - nx, wl.ay - ny]),
-  ];
-  ctx.beginPath();
-  corners.forEach((c, i) => i ? ctx.lineTo(c[0], c[1]) : ctx.moveTo(c[0], c[1]));
-  ctx.closePath();
-  ctx.fillStyle = hexA(matColor(wl.material), sel ? 0.5 : 0.32);
-  ctx.fill();
-  ctx.strokeStyle = sel ? '#e8973a' : '#dfe7ee66';
-  ctx.lineWidth = sel ? 2 : 1;
-  ctx.stroke();
-  if (sel || dimsOn) {
-    const mid = w2s([(wl.ax + wl.bx) / 2, (wl.ay + wl.by) / 2]);
-    label(fmtLen(L), mid[0] - ny * 1 * 0 + (-uy) * 14, mid[1] - 14, sel ? '#e8973a' : '#8b9aa7');
+function roomCentroid(r) {
+  let cx = 0, cy = 0;
+  for (const p of r.pts) { cx += p[0]; cy += p[1]; }
+  return [cx / r.pts.length, cy / r.pts.length];
+}
+
+function drawRooms() {
+  for (const r of prop.rooms) {
+    if (r.pts.length < 3) continue;
+    const col = matColor(r.material, '#5fb3c9');
+    const sel = selection && selection.kind === 'room' && selection.id === r.id;
+    const hov = hover && hover.kind === 'room' && hover.id === r.id;
+    const c = w2s(roomCentroid(r));
+    let rad = 1;
+    for (const p of r.pts) { const s = w2s(p); rad = Math.max(rad, Math.hypot(s[0] - c[0], s[1] - c[1])); }
+    tracePoly(r.pts.map(w2s));
+    const g = ctx.createRadialGradient(c[0], c[1], 0, c[0], c[1], rad * 1.1);
+    g.addColorStop(0, hexA(col, sel ? 0.30 : hov ? 0.22 : 0.17));
+    g.addColorStop(1, hexA(col, sel ? 0.12 : hov ? 0.08 : 0.05));
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.lineWidth = sel ? 1.6 : 1;
+    ctx.strokeStyle = sel ? C.accent : hov ? C.hover : hexA(col, 0.45);
+    ctx.setLineDash(sel ? [] : [5, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+function drawRoomLabels() {
+  for (const r of prop.rooms) {
+    if (r.pts.length < 3) continue;
+    const col = matColor(r.material, '#5fb3c9');
+    const sel = selection && selection.kind === 'room' && selection.id === r.id;
+    const s = w2s(roomCentroid(r));
+    const name = (r.name || 'ROOM').toUpperCase();
+    ctx.font = `700 11px ${FONT}`;
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '1.5px';
+    const tw = ctx.measureText(name).width;
+    // swatch dot + name on one line, area beneath
+    const x0 = s[0] - (tw + 12) / 2;
+    ctx.beginPath(); ctx.arc(x0 + 3.5, s[1] - 4, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = col; ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.stroke();
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillText(name, x0 + 12 + 0.5, s[1] - 4 + 1);
+    ctx.fillStyle = sel ? C.accent : C.ink;
+    ctx.fillText(name, x0 + 12, s[1] - 4);
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+    ctx.font = `10px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.fillStyle = sel ? hexA(C.accent, 0.85) : C.dim;
+    ctx.fillText(fmtArea(polyArea(r.pts)), s[0], s[1] + 10);
+    ctx.textBaseline = 'alphabetic';
+  }
+}
+
+function drawWalls() {
+  const polys = [];
+  for (const wl of prop.walls) { const p = wallPoly(wl); if (p) polys.push([wl, p]); }
+  // Thin walls first, thick walls last: at a T-junction the partition's end overlaps the
+  // exterior wall, and the later (thicker) fill hides that overlap instead of showing a seam.
+  polys.sort((a, b) => a[0].thickness - b[0].thickness);
+  // 1. Outline first, under everything: each rectangle stroked wide. The fills that follow
+  //    cover the inner half of every stroke, so shared corners and T-junctions merge cleanly.
+  ctx.lineJoin = 'miter';
+  ctx.lineWidth = 2.4;
+  ctx.strokeStyle = C.wallLine;
+  for (const [, p] of polys) { tracePoly(p.pts); ctx.stroke(); }
+  // 2. Material-tinted solid fill.
+  for (const [wl, p] of polys) {
+    tracePoly(p.pts);
+    ctx.fillStyle = hexA(matColor(wl.material), 0.36);
+    ctx.fill();
+  }
+  // 3. Cut-wall hatch on top of the fill.
+  if (vs.zoom > 12) {
+    for (const [wl, p] of polys) {
+      tracePoly(p.pts);
+      ctx.fillStyle = hatchPattern(matColor(wl.material));
+      ctx.fill();
+    }
+  }
+  // 4. Hover and selection emphasis.
+  for (const [wl, p] of polys) {
+    const sel = selection && selection.kind === 'wall' && selection.id === wl.id;
+    const hov = !sel && hover && hover.kind === 'wall' && hover.id === wl.id;
+    if (!sel && !hov) continue;
+    tracePoly(p.pts);
+    if (sel) {
+      ctx.save();
+      ctx.shadowColor = 'rgba(232,151,58,0.75)'; ctx.shadowBlur = 16;
+      ctx.fillStyle = 'rgba(232,151,58,0.16)'; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = C.accent; ctx.stroke();
+      ctx.restore();
+    } else {
+      ctx.lineWidth = 1.5; ctx.strokeStyle = C.hover; ctx.stroke();
+    }
   }
 }
 
@@ -411,66 +584,456 @@ function drawOpening(o) {
   if (!p) return;
   const { w, ux, uy } = p;
   const sel = selection && selection.kind === 'opening' && selection.id === o.id;
+  const hov = !sel && hover && hover.kind === 'opening' && hover.id === o.id;
   const half = o.width / 2;
   const nx = -uy, ny = ux;
   const th = w.thickness / 2;
-  // Blank the wall band.
-  const c = [
-    w2s([p.cx - ux * half + nx * (th + 0.004), p.cy - uy * half + ny * (th + 0.004)]),
-    w2s([p.cx + ux * half + nx * (th + 0.004), p.cy + uy * half + ny * (th + 0.004)]),
-    w2s([p.cx + ux * half - nx * (th + 0.004), p.cy + uy * half - ny * (th + 0.004)]),
-    w2s([p.cx - ux * half - nx * (th + 0.004), p.cy - uy * half - ny * (th + 0.004)]),
-  ];
-  ctx.beginPath();
-  c.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]));
-  ctx.closePath();
-  ctx.fillStyle = '#0c1013';
+  // Blank the wall band (fill, hatch and the outline just outside it).
+  const out = th + 1.8 / vs.zoom;
+  tracePoly([
+    w2s([p.cx - ux * half + nx * out, p.cy - uy * half + ny * out]),
+    w2s([p.cx + ux * half + nx * out, p.cy + uy * half + ny * out]),
+    w2s([p.cx + ux * half - nx * out, p.cy + uy * half - ny * out]),
+    w2s([p.cx - ux * half - nx * out, p.cy - uy * half - ny * out]),
+  ]);
+  ctx.fillStyle = C.bg;
   ctx.fill();
 
-  const col = sel ? '#e8973a' : (o.type === 'door' ? '#c9a06a' : '#5fb3c9');
-  ctx.strokeStyle = col;
-  ctx.lineWidth = sel ? 2 : 1.4;
+  const col = sel ? C.accent : hov ? '#ffffff' : (o.type === 'door' ? C.door : C.cyan);
+  ctx.lineCap = 'butt';
+  // Jamb ticks across the wall thickness.
+  ctx.strokeStyle = sel ? C.accent : C.wallLine;
+  ctx.lineWidth = 1.4;
+  for (const s of [-half, half]) {
+    const a = w2s([p.cx + ux * s + nx * th, p.cy + uy * s + ny * th]);
+    const b = w2s([p.cx + ux * s - nx * th, p.cy + uy * s - ny * th]);
+    ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+  }
   if (o.type === 'door') {
-    // Hinge at -half end; leaf + quarter arc.
+    // Hinge at -half end; solid leaf + quarter-circle swing.
     const hx = p.cx - ux * half, hy = p.cy - uy * half;
-    const leafEnd = [hx + nx * o.width, hy + ny * o.width];
-    const hs = w2s([hx, hy]), ls = w2s(leafEnd);
-    ctx.beginPath(); ctx.moveTo(hs[0], hs[1]); ctx.lineTo(ls[0], ls[1]); ctx.stroke();
+    const hs = w2s([hx, hy]), ls = w2s([hx + nx * o.width, hy + ny * o.width]);
     const a0 = Math.atan2(ny, nx), a1 = Math.atan2(uy, ux);
-    ctx.beginPath();
-    ctx.setLineDash([3, 3]);
-    ctx.arc(hs[0], hs[1], o.width * vs.zoom, a0, a1, a0 > a1);
-    ctx.stroke();
+    ctx.save();
+    if (sel) { ctx.shadowColor = 'rgba(232,151,58,0.7)'; ctx.shadowBlur = 10; }
+    ctx.strokeStyle = hexA(col, 0.8);
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(hs[0], hs[1], o.width * vs.zoom, a0, a1, a0 > a1); ctx.stroke();
+    ctx.strokeStyle = col;
+    ctx.lineWidth = Math.max(2.5, Math.min(5, 0.045 * vs.zoom));
+    ctx.beginPath(); ctx.moveTo(hs[0], hs[1]); ctx.lineTo(ls[0], ls[1]); ctx.stroke();
+    ctx.restore();
+    // Threshold: a hairline across the opening at the wall centreline.
+    const t0 = w2s([p.cx - ux * half, p.cy - uy * half]), t1 = w2s([p.cx + ux * half, p.cy + uy * half]);
+    ctx.strokeStyle = hexA(col, 0.35); ctx.lineWidth = 1;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(t0[0], t0[1]); ctx.lineTo(t1[0], t1[1]); ctx.stroke();
     ctx.setLineDash([]);
-    // Jamb ticks.
-    for (const s of [-half, half]) {
-      const j = w2s([p.cx + ux * s, p.cy + uy * s]);
-      ctx.beginPath(); ctx.moveTo(j[0] + nx * -6, j[1] + ny * -6); ctx.lineTo(j[0] + nx * 6, j[1] + ny * 6); ctx.stroke();
-    }
   } else {
-    // Window: triple line across the span.
-    for (const off of [-th * 0.7, 0, th * 0.7]) {
+    // Window: frame across the wall plus two glazing lines.
+    const fr = th * 0.92;
+    tracePoly([
+      w2s([p.cx - ux * half + nx * fr, p.cy - uy * half + ny * fr]),
+      w2s([p.cx + ux * half + nx * fr, p.cy + uy * half + ny * fr]),
+      w2s([p.cx + ux * half - nx * fr, p.cy + uy * half - ny * fr]),
+      w2s([p.cx - ux * half - nx * fr, p.cy - uy * half - ny * fr]),
+    ]);
+    ctx.fillStyle = hexA(col, 0.10); ctx.fill();
+    ctx.strokeStyle = sel ? C.accent : C.wallLine; ctx.lineWidth = 1; ctx.stroke();
+    ctx.save();
+    if (sel) { ctx.shadowColor = 'rgba(232,151,58,0.7)'; ctx.shadowBlur = 10; }
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 1.3;
+    for (const off of [-th * 0.3, th * 0.3]) {
       const a = w2s([p.cx - ux * half + nx * off, p.cy - uy * half + ny * off]);
       const b = w2s([p.cx + ux * half + nx * off, p.cy + uy * half + ny * off]);
       ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
     }
+    ctx.restore();
   }
 }
 
-function label(text, x, y, color) {
-  ctx.font = '600 11px ui-monospace, Menlo, monospace';
-  const w = ctx.measureText(text).width;
-  ctx.fillStyle = '#0c1013dd';
-  ctx.fillRect(x - w / 2 - 4, y - 9, w + 8, 15);
-  ctx.fillStyle = color;
+// A dimension string between two world points with extension lines, ticks and a label pill.
+function dimString(a, b, color, opts) {
+  opts = opts || {};
+  const A = w2s(a), B = w2s(b);
+  const dx = B[0] - A[0], dy = B[1] - A[1];
+  const L = Math.hypot(dx, dy);
+  if (L < 2) return;
+  const ux = dx / L, uy = dy / L;
+  const side = opts.side || 1;
+  const nx = -uy * side, ny = ux * side;
+  const gap = opts.gap || 6, off = opts.offset || 26, ext = off + 6;
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = color;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  // extension lines
+  ctx.moveTo(A[0] + nx * gap, A[1] + ny * gap); ctx.lineTo(A[0] + nx * ext, A[1] + ny * ext);
+  ctx.moveTo(B[0] + nx * gap, B[1] + ny * gap); ctx.lineTo(B[0] + nx * ext, B[1] + ny * ext);
+  // dimension line
+  const D1 = [A[0] + nx * off, A[1] + ny * off], D2 = [B[0] + nx * off, B[1] + ny * off];
+  ctx.moveTo(D1[0], D1[1]); ctx.lineTo(D2[0], D2[1]);
+  ctx.stroke();
+  // architectural ticks: short 45 degree slashes at the ends
+  const tx = (ux + nx) * 0.7071 * 4.5, ty = (uy + ny) * 0.7071 * 4.5;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(D1[0] - tx, D1[1] - ty); ctx.lineTo(D1[0] + tx, D1[1] + ty);
+  ctx.moveTo(D2[0] - tx, D2[1] - ty); ctx.lineTo(D2[0] + tx, D2[1] + ty);
+  ctx.stroke();
+  const text = opts.text || fmtLen(Math.hypot(b[0] - a[0], b[1] - a[1]));
+  pill(text, (D1[0] + D2[0]) / 2, (D1[1] + D2[1]) / 2, color, { size: opts.size || 10 });
+}
+
+function dimSideFor(wl) {
+  // Put the string on the side of the wall facing away from the plan's centre.
+  const b = bounds();
+  const cx = (b.minX + b.maxX) / 2, cy = (b.minY + b.maxY) / 2;
+  const mx = (wl.ax + wl.bx) / 2, my = (wl.ay + wl.by) / 2;
+  const L = Math.hypot(wl.bx - wl.ax, wl.by - wl.ay) || 1;
+  const nx = -(wl.by - wl.ay) / L, ny = (wl.bx - wl.ax) / L;
+  return (nx * (mx - cx) + ny * (my - cy)) < 0 ? -1 : 1;
+}
+
+function drawDims() {
+  for (const wl of prop.walls) {
+    const sel = selection && selection.kind === 'wall' && selection.id === wl.id;
+    if (!sel && !dimsOn) continue;
+    const L = Math.hypot(wl.bx - wl.ax, wl.by - wl.ay);
+    if (L < 0.01) continue;
+    const gapPx = wl.thickness / 2 * vs.zoom + 5;
+    dimString([wl.ax, wl.ay], [wl.bx, wl.by], sel ? C.accent : C.dimLine, {
+      side: dimSideFor(wl), gap: gapPx, offset: gapPx + 18, size: sel ? 10.5 : 9.5,
+    });
+  }
+}
+
+function crossGuides(pt, w, h, color) {
+  const s = w2s(pt);
+  ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.setLineDash([3, 5]);
+  ctx.beginPath();
+  ctx.moveTo(crisp(s[0]), RULER); ctx.lineTo(crisp(s[0]), h);
+  ctx.moveTo(RULER, crisp(s[1])); ctx.lineTo(w, crisp(s[1]));
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function snapMarker(pt) {
+  const s = w2s(pt);
+  ctx.lineWidth = 1.5; ctx.strokeStyle = C.accent;
+  if (snapInfo && snapInfo.kind === 'endpoint') {
+    ctx.beginPath(); ctx.arc(s[0], s[1], 6, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = C.accent; ctx.beginPath(); ctx.arc(s[0], s[1], 2, 0, Math.PI * 2); ctx.fill();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(s[0] - 5, s[1]); ctx.lineTo(s[0] + 5, s[1]);
+    ctx.moveTo(s[0], s[1] - 5); ctx.lineTo(s[0], s[1] + 5);
+    ctx.stroke();
+  }
+  if (snapInfo && (snapInfo.kind === 'axis' || snapInfo.kind === 'angle')) {
+    // A long guide through the anchor and the snapped point shows what we aligned to.
+    const f = w2s(snapInfo.from);
+    const dx = s[0] - f[0], dy = s[1] - f[1], L = Math.hypot(dx, dy) || 1;
+    const ex = dx / L * 4000, ey = dy / L * 4000;
+    ctx.strokeStyle = 'rgba(232,151,58,0.28)'; ctx.lineWidth = 1; ctx.setLineDash([2, 6]);
+    ctx.beginPath(); ctx.moveTo(f[0] - ex, f[1] - ey); ctx.lineTo(s[0] + ex, s[1] + ey); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+function drawDrafts(w, h) {
+  if (drawing && hoverPt) {
+    const pt = snapPoint(hoverPt[0], hoverPt[1], { from: drawing.last });
+    const a = w2s(drawing.last), b = w2s(pt);
+    crossGuides(pt, w, h, 'rgba(232,151,58,0.18)');
+    // Ghost of the wall about to be placed.
+    const th = PRESETS[wallPreset].thickness / 2;
+    const L = Math.hypot(pt[0] - drawing.last[0], pt[1] - drawing.last[1]);
+    if (L > 0.01) {
+      const ux = (pt[0] - drawing.last[0]) / L, uy = (pt[1] - drawing.last[1]) / L;
+      const nx = -uy * th, ny = ux * th;
+      tracePoly([
+        w2s([drawing.last[0] + nx, drawing.last[1] + ny]), w2s([pt[0] + nx, pt[1] + ny]),
+        w2s([pt[0] - nx, pt[1] - ny]), w2s([drawing.last[0] - nx, drawing.last[1] - ny]),
+      ]);
+      ctx.fillStyle = 'rgba(232,151,58,0.14)'; ctx.fill();
+    }
+    ctx.strokeStyle = C.accent;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([7, 5]);
+    ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = C.accent;
+    ctx.beginPath(); ctx.arc(a[0], a[1], 3.5, 0, Math.PI * 2); ctx.fill();
+    snapMarker(pt);
+    if (L > 0.01) {
+      dimString(drawing.last, pt, C.accent, { side: dimSideFor({ ax: drawing.last[0], ay: drawing.last[1], bx: pt[0], by: pt[1] }), gap: th * vs.zoom + 5, offset: th * vs.zoom + 22 });
+    }
+  } else if (tool === 'wall' && hoverPt && !drag) {
+    const pt = snapPoint(hoverPt[0], hoverPt[1], {});
+    crossGuides(pt, w, h, 'rgba(232,151,58,0.12)');
+    snapMarker(pt);
+  }
+  if (roomDraft && roomDraft.pts.length) {
+    const pts = roomDraft.pts.map(w2s);
+    let end = null;
+    if (hoverPt) {
+      const last = roomDraft.pts[roomDraft.pts.length - 1];
+      const sp = snapPoint(hoverPt[0], hoverPt[1], { from: last });
+      end = sp;
+      crossGuides(sp, w, h, 'rgba(95,179,201,0.18)');
+    }
+    ctx.beginPath();
+    pts.forEach((s, i) => i ? ctx.lineTo(s[0], s[1]) : ctx.moveTo(s[0], s[1]));
+    if (end) { const s = w2s(end); ctx.lineTo(s[0], s[1]); }
+    if (pts.length >= 2) {
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(95,179,201,0.10)'; ctx.fill();
+    }
+    ctx.strokeStyle = C.cyan; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for (const s of pts) {
+      ctx.fillStyle = C.cyan; ctx.beginPath(); ctx.arc(s[0], s[1], 3, 0, Math.PI * 2); ctx.fill();
+    }
+    // First point is the close target: ring it.
+    ctx.strokeStyle = C.cyan; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(pts[0][0], pts[0][1], 7, 0, Math.PI * 2); ctx.stroke();
+    if (end) {
+      snapMarker(end);
+      const last = roomDraft.pts[roomDraft.pts.length - 1];
+      const L = Math.hypot(end[0] - last[0], end[1] - last[1]);
+      if (L > 0.01) {
+        const m = w2s([(last[0] + end[0]) / 2, (last[1] + end[1]) / 2]);
+        pill(fmtLen(L), m[0], m[1] - 14, C.cyan);
+      }
+    }
+  } else if (tool === 'room' && hoverPt && !drag) {
+    const pt = snapPoint(hoverPt[0], hoverPt[1], {});
+    crossGuides(pt, w, h, 'rgba(95,179,201,0.12)');
+    snapMarker(pt);
+  }
+  if (calib && calib.a) {
+    const a = w2s(calib.a);
+    const bPt = calib.b || hoverPt;
+    const ring = s => {
+      ctx.fillStyle = C.accent; ctx.beginPath(); ctx.arc(s[0], s[1], 3, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = C.accent; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(s[0], s[1], 7, 0, Math.PI * 2); ctx.stroke();
+    };
+    ring(a);
+    if (bPt) {
+      const b = w2s(bPt);
+      ctx.strokeStyle = C.accent;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+      ctx.setLineDash([]);
+      ring(b);
+      dimString(calib.a, bPt, C.accent, { side: 1, gap: 9, offset: 24 });
+    }
+  } else if (tool === 'calibrate' && hoverPt && prop.plan && !drag) {
+    crossGuides(hoverPt, w, h, 'rgba(232,151,58,0.14)');
+  }
+}
+
+function drawSelectionHandles() {
+  if (!(selection && selection.kind === 'wall')) return;
+  const wl = prop.walls.find(w => w.id === selection.id);
+  if (!wl) return;
+  for (const [end, p] of [['a', [wl.ax, wl.ay]], ['b', [wl.bx, wl.by]]]) {
+    const s = w2s(p);
+    const hot = hover && hover.kind === 'handle' && hover.end === end;
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 4;
+    ctx.fillStyle = hot ? '#ffffff' : C.accent;
+    roundRect(s[0] - 5, s[1] - 5, 10, 10, 2.5);
+    ctx.fill();
+    ctx.restore();
+    ctx.lineWidth = 1.5; ctx.strokeStyle = C.bg;
+    roundRect(s[0] - 5, s[1] - 5, 10, 10, 2.5);
+    ctx.stroke();
+  }
+}
+
+function drawVignette(w, h) {
+  const r = Math.hypot(w, h) / 2;
+  const g = ctx.createRadialGradient(w / 2, h / 2, r * 0.45, w / 2, h / 2, r * 1.05);
+  g.addColorStop(0, 'rgba(0,0,0,0)');
+  g.addColorStop(1, 'rgba(0,0,0,0.34)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+}
+
+function rulerLabel(v, major) {
+  if (ws.data.settings.units === 'metric') {
+    return (Math.round(v * 100) / 100).toString();
+  }
+  const ft = v / 0.3048;
+  if (major >= 0.3048) return Math.round(ft) + "'";
+  return Math.round(ft * 12) + '"';
+}
+
+function drawRulers(w, h) {
+  const R = RULER;
+  const { major, minor } = gridSteps();
+  const minorPx = minor * vs.zoom;
+  ctx.fillStyle = C.rulerBg;
+  ctx.fillRect(0, 0, w, R);
+  ctx.fillRect(0, 0, R, h);
+  ctx.strokeStyle = C.rulerLine; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(R, crisp(R)); ctx.lineTo(w, crisp(R));
+  ctx.moveTo(crisp(R), R); ctx.lineTo(crisp(R), h);
+  ctx.stroke();
+
+  ctx.font = `9px ${FONT}`;
+  ctx.fillStyle = C.rulerText;
+  ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+  ctx.textBaseline = 'alphabetic';
+  // Horizontal ruler.
+  ctx.textAlign = 'left';
+  ctx.beginPath();
+  const X0 = Math.floor(vs.panX / major) * major;
+  for (let x = X0; (x - vs.panX) * vs.zoom < w; x += major) {
+    const sx = crisp((x - vs.panX) * vs.zoom);
+    if (sx < R) continue;
+    ctx.moveTo(sx, R - 8); ctx.lineTo(sx, R);
+    ctx.fillText(rulerLabel(x, major), sx + 3, R - 9);
+  }
+  if (minorPx >= 5) {
+    const x0 = Math.floor(vs.panX / minor) * minor;
+    for (let x = x0; (x - vs.panX) * vs.zoom < w; x += minor) {
+      const sx = crisp((x - vs.panX) * vs.zoom);
+      if (sx < R) continue;
+      ctx.moveTo(sx, R - 3.5); ctx.lineTo(sx, R);
+    }
+  }
+  ctx.stroke();
+  // Vertical ruler (labels rotated to read along the edge).
+  ctx.beginPath();
+  const Y0 = Math.floor(vs.panY / major) * major;
+  for (let y = Y0; (y - vs.panY) * vs.zoom < h; y += major) {
+    const sy = crisp((y - vs.panY) * vs.zoom);
+    if (sy < R) continue;
+    ctx.moveTo(R - 8, sy); ctx.lineTo(R, sy);
+    ctx.save();
+    ctx.translate(R - 9, sy + 3);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = 'right';
+    ctx.fillText(rulerLabel(y, major), 0, 0);
+    ctx.restore();
+  }
+  if (minorPx >= 5) {
+    const y0 = Math.floor(vs.panY / minor) * minor;
+    for (let y = y0; (y - vs.panY) * vs.zoom < h; y += minor) {
+      const sy = crisp((y - vs.panY) * vs.zoom);
+      if (sy < R) continue;
+      ctx.moveTo(R - 3.5, sy); ctx.lineTo(R, sy);
+    }
+  }
+  ctx.stroke();
+  // Cursor position markers.
+  if (hoverPt) {
+    const s = w2s(hoverPt);
+    ctx.fillStyle = C.accent;
+    if (s[0] > R) ctx.fillRect(Math.round(s[0]) - 0.5, 0, 1.5, R);
+    if (s[1] > R) ctx.fillRect(0, Math.round(s[1]) - 0.5, R, 1.5);
+  }
+  // Corner: unit badge.
+  ctx.fillStyle = C.rulerBg;
+  ctx.fillRect(0, 0, R, R);
+  ctx.strokeStyle = C.rulerLine;
+  ctx.strokeRect(crisp(0) - 0.5, crisp(0) - 0.5, R, R);
+  ctx.fillStyle = C.faint;
+  ctx.font = `700 8px ${FONT}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(ws.data.settings.units === 'metric' ? 'M' : 'FT', R / 2, R / 2 + 0.5);
+  ctx.textBaseline = 'alphabetic';
+}
+
+function scaleBarLength() {
+  const imperial = ws.data.settings.units === 'imperial';
+  const cands = imperial
+    ? [0.3048, 0.6096, 1.524, 3.048, 6.096, 15.24, 30.48]
+    : [0.5, 1, 2, 5, 10, 20, 50];
+  let best = cands[0];
+  for (const c of cands) if (c * vs.zoom <= 150) best = c;
+  return best;
+}
+
+function drawHud(w, h) {
+  // Scale bar, bottom right.
+  const len = scaleBarLength();
+  const px = len * vs.zoom;
+  const x1 = w - 18, x0 = x1 - px, y = h - 22;
+  const segs = 4, segW = px / segs;
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 6;
+  for (let i = 0; i < segs; i++) {
+    ctx.fillStyle = i % 2 ? 'rgba(233,238,243,0.9)' : 'rgba(10,14,18,0.9)';
+    ctx.fillRect(x0 + i * segW, y - 3, segW, 6);
+  }
+  ctx.restore();
+  ctx.strokeStyle = 'rgba(233,238,243,0.9)'; ctx.lineWidth = 1;
+  ctx.strokeRect(crisp(x0), crisp(y - 3), px, 6);
+  ctx.fillStyle = C.dim;
+  ctx.font = `9px ${FONT}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText('0', x0, y - 7);
+  ctx.fillText(fmtLen(len, { short: true }), x1, y - 7);
+  ctx.fillText(fmtLen(len / 2, { short: true }), (x0 + x1) / 2, y - 7);
+  // North arrow above the scale bar. env.north rotates the rose relative to plan +x.
+  const north = (prop.env && typeof prop.env.north === 'number') ? prop.env.north : 0;
+  const cx = w - 34, cy = h - 64, r = 14;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(13,18,23,0.85)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.14)'; ctx.lineWidth = 1; ctx.stroke();
+  ctx.rotate(north * Math.PI / 180);
+  ctx.beginPath();
+  ctx.moveTo(0, -r + 3); ctx.lineTo(4, 3); ctx.lineTo(0, 1); ctx.lineTo(-4, 3); ctx.closePath();
+  ctx.fillStyle = C.accent; ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(0, r - 3); ctx.lineTo(3, -1); ctx.lineTo(0, 1); ctx.lineTo(-3, -1); ctx.closePath();
+  ctx.fillStyle = 'rgba(233,238,243,0.35)'; ctx.fill();
+  ctx.restore();
+  ctx.fillStyle = C.dim;
+  ctx.font = `700 9px ${FONT}`;
   ctx.textAlign = 'center';
-  ctx.fillText(text, x, y + 3);
+  ctx.fillText('N', cx, cy - r - 4);
 }
 
 // ---------- pointer handling ----------
 function canvasPos(e) {
   const r = canvas.getBoundingClientRect();
   return [e.clientX - r.left, e.clientY - r.top];
+}
+
+function updateCursor() {
+  if (!canvas) return;
+  let c = 'crosshair';
+  if (drag && drag.kind === 'pan') c = 'grabbing';
+  else if (spaceDown) c = 'grab';
+  else if (tool === 'select') {
+    if (!hover) c = 'default';
+    else if (hover.kind === 'handle') c = 'pointer';
+    else c = 'move';
+  }
+  canvas.style.cursor = c;
+}
+
+function updateBadge(wx, wy) {
+  if (!badgeEl) return;
+  let html = `X <b>${escapeHtml(fmtLen(wx))}</b> &nbsp; Y <b>${escapeHtml(fmtLen(wy))}</b>`;
+  if (drawing) {
+    const pt = snapPoint(wx, wy, { from: drawing.last });
+    const L = Math.hypot(pt[0] - drawing.last[0], pt[1] - drawing.last[1]);
+    const ang = ((Math.atan2(-(pt[1] - drawing.last[1]), pt[0] - drawing.last[0]) * 180 / Math.PI) + 360) % 360;
+    html += ` &nbsp; L <b class="ac">${escapeHtml(fmtLen(L))}</b> &nbsp; <b>${Math.round(ang)}&deg;</b>`;
+  }
+  badgeEl.innerHTML = html;
 }
 
 function onPointerDown(e) {
@@ -481,6 +1044,7 @@ function onPointerDown(e) {
 
   if (e.button === 1 || spaceDown) {
     drag = { kind: 'pan', sx, sy, panX: vs.panX, panY: vs.panY };
+    updateCursor();
     return;
   }
 
@@ -533,7 +1097,7 @@ function onPointerDown(e) {
   if (!hit) {
     selection = null;
     drag = { kind: 'pan', sx, sy, panX: vs.panX, panY: vs.panY };
-    renderInspector();
+    renderInspector(); updateCursor();
     return;
   }
   if (hit.kind === 'handle') {
@@ -563,9 +1127,13 @@ function onPointerMove(e) {
   const [sx, sy] = canvasPos(e);
   const [wx, wy] = s2w(sx, sy);
   hoverPt = [wx, wy];
-  if (badgeEl) badgeEl.textContent = fmtLen(wx) + ' , ' + fmtLen(wy);
+  updateBadge(wx, wy);
 
-  if (!drag) return;
+  if (!drag) {
+    hover = tool === 'select' ? hitTest(wx, wy) : null;
+    updateCursor();
+    return;
+  }
   if (drag.kind === 'pan') {
     vs.panX = drag.panX - (sx - drag.sx) / vs.zoom;
     vs.panY = drag.panY - (sy - drag.sy) / vs.zoom;
@@ -608,6 +1176,13 @@ function onPointerUp() {
     undoStack.pop();
   }
   drag = null;
+  if (hoverPt && tool === 'select') hover = hitTest(hoverPt[0], hoverPt[1]);
+  updateCursor();
+}
+
+function onPointerLeave() {
+  hoverPt = null; hover = null;
+  if (!drag) updateCursor();
 }
 
 function onDblClick() {
@@ -641,7 +1216,7 @@ function onWheel(e) {
 
 function onKeyDown(e) {
   if (e.target.matches('input, textarea, select')) return;
-  if (e.key === ' ') { spaceDown = true; e.preventDefault(); return; }
+  if (e.key === ' ') { spaceDown = true; e.preventDefault(); updateCursor(); return; }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
     e.preventDefault();
     e.shiftKey ? redo() : undo();
@@ -660,14 +1235,14 @@ function onKeyDown(e) {
   }
   if (e.key === 'Delete' || e.key === 'Backspace') { deleteSelection(); }
 }
-function onKeyUp(e) { if (e.key === ' ') spaceDown = false; }
+function onKeyUp(e) { if (e.key === ' ') { spaceDown = false; updateCursor(); } }
 
 // ---------- tool column / hint ----------
 function setTool(t) {
   tool = t;
-  drawing = null; roomDraft = null;
+  drawing = null; roomDraft = null; hover = null;
   if (t !== 'calibrate') calib = null;
-  renderToolCol(); updateHint(); renderInspector();
+  renderToolCol(); updateHint(); renderInspector(); updateCursor();
 }
 
 function setHint(text) { if (hintEl) hintEl.textContent = text; }
@@ -683,33 +1258,37 @@ function updateHint() {
   setHint(hints[tool] || '');
 }
 
+function toolBtn(attrs, ic, name, key, active) {
+  return `<button class="tool-btn ${active ? 'active' : ''}" ${attrs} title="${name}${key ? ' (' + key + ')' : ''}">` +
+    `${icon(ic)}<span class="tb-text">${name}</span>${key ? `<kbd class="key">${key}</kbd>` : ''}</button>`;
+}
+
 function renderToolCol() {
   const tools = [
-    ['select', 'SELECT', 'V'], ['wall', 'WALL', 'W'], ['door', 'DOOR', 'D'],
-    ['window', 'WINDOW', 'N'], ['room', 'ROOM', 'R'], ['calibrate', 'CALIBRATE', 'C'],
+    ['select', 'SELECT', 'V', 'select'], ['wall', 'WALL', 'W', 'wall'], ['door', 'DOOR', 'D', 'door'],
+    ['window', 'WINDOW', 'N', 'window'], ['room', 'ROOM', 'R', 'room'], ['calibrate', 'CALIBRATE', 'C', 'calibrate'],
   ];
   const tc = el.querySelector('.tool-col');
   tc.innerHTML = `
-    <div class="tool-head">TOOLS</div>
-    ${tools.map(([id, name, key]) =>
-      `<button class="tool-btn ${tool === id ? 'active' : ''}" data-tool="${id}">${name}<span class="key">${key}</span></button>`).join('')}
+    <div class="tool-head">Tools</div>
+    ${tools.map(([id, name, key, ic]) => toolBtn(`data-tool="${id}"`, ic, name, key, tool === id)).join('')}
     <div class="tool-sep"></div>
-    <div class="tool-head">WALL PRESET</div>
-    <div class="seg" style="margin:2px 4px">
-      <button class="seg-btn ${wallPreset === 'interior' ? 'active' : ''}" data-preset="interior" style="flex:1">INT</button>
-      <button class="seg-btn ${wallPreset === 'exterior' ? 'active' : ''}" data-preset="exterior" style="flex:1">EXT</button>
+    <div class="tool-head">Wall preset</div>
+    <div class="seg fill" style="margin:0 4px">
+      <button class="seg-btn ${wallPreset === 'interior' ? 'active' : ''}" data-preset="interior" title="Interior partition, ${escapeHtml(fmtLen(PRESETS.interior.thickness))}">INT</button>
+      <button class="seg-btn ${wallPreset === 'exterior' ? 'active' : ''}" data-preset="exterior" title="Exterior wall, ${escapeHtml(fmtLen(PRESETS.exterior.thickness))}">EXT</button>
     </div>
     <div class="tool-sep"></div>
-    <div class="tool-head">UNDERLAY</div>
-    <button class="tool-btn" data-act="upload">UPLOAD IMAGE</button>
+    <div class="tool-head">Underlay</div>
+    ${toolBtn('data-act="upload"', 'upload', 'UPLOAD IMAGE', '', false)}
     <input type="file" class="hidden-file" accept="image/*,.pdf">
     <div class="tool-sep"></div>
-    <label class="tool-check"><input type="checkbox" ${snapOn ? 'checked' : ''} data-chk="snap"> SNAP</label>
-    <label class="tool-check"><input type="checkbox" ${dimsOn ? 'checked' : ''} data-chk="dims"> DIMS</label>
+    <label class="tool-check" title="Snap to endpoints, axes and 15 degree angles">${icon('snap')}<span>SNAP</span><input type="checkbox" ${snapOn ? 'checked' : ''} data-chk="snap"></label>
+    <label class="tool-check" title="Show a dimension string on every wall">${icon('dims')}<span>DIMS</span><input type="checkbox" ${dimsOn ? 'checked' : ''} data-chk="dims"></label>
     <div class="tool-sep"></div>
-    <button class="tool-btn" data-act="fit">FIT VIEW<span class="key">F</span></button>
-    <button class="tool-btn" data-act="undo">UNDO<span class="key">Z</span></button>
-    <button class="tool-btn" data-act="redo">REDO</button>
+    ${toolBtn('data-act="fit"', 'fit', 'FIT VIEW', 'F', false)}
+    ${toolBtn('data-act="undo"', 'undo', 'UNDO', MOD + 'Z', false)}
+    ${toolBtn('data-act="redo"', 'redo', 'REDO', '⇧' + MOD + 'Z', false)}
   `;
   tc.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => setTool(b.dataset.tool));
   tc.querySelectorAll('[data-preset]').forEach(b => b.onclick = () => { wallPreset = b.dataset.preset; renderToolCol(); });
@@ -758,16 +1337,18 @@ function lenField(label, value, key, placeholder) {
     <input type="text" data-len="${key}" value="${value != null ? escapeHtml(fmtLen(value)) : ''}" placeholder="${placeholder || ''}"></div>`;
 }
 
+function head(ic, text) { return `<h3>${icon(ic)}${text}</h3>`; }
+
 function renderInspector() {
   if (!inspEl) return;
   const insp = inspEl;
 
   if (calib && calib.a && calib.b) {
     const measured = Math.hypot(calib.b[0] - calib.a[0], calib.b[1] - calib.a[1]);
-    insp.innerHTML = `<h3>CALIBRATE SCALE</h3>
+    insp.innerHTML = `${head('calibrate', 'CALIBRATE SCALE')}
       <div class="stat-line"><span>Measured on screen</span><b>${fmtLen(measured)}</b></div>
-      <div class="field"><label>Real distance (e.g. 12'6" or 3.8m)</label><input type="text" data-cal-input placeholder="12'-6&quot;"></div>
-      <button class="btn primary" data-cal-apply>APPLY SCALE</button>
+      <div class="field" style="margin-top:10px"><label>Real distance (e.g. 12'6" or 3.8m)</label><input type="text" data-cal-input placeholder="12'-6&quot;"></div>
+      <button class="btn primary" data-cal-apply>${icon('check')}APPLY SCALE</button>
       <button class="btn" data-cal-cancel>CANCEL</button>`;
     const input = insp.querySelector('[data-cal-input]');
     input.focus();
@@ -779,7 +1360,6 @@ function renderInspector() {
       // Rescale the underlay mapping about its own origin so image geometry matches reality.
       pl.mPerPx = pl.mPerPx * ratio;
       pl.calibrated = true;
-      if (prop.walls.length === 0 && prop.rooms.length === 0) { /* nothing else to preserve */ }
       calib = null;
       tool = 'wall';
       fitView();
@@ -794,16 +1374,17 @@ function renderInspector() {
   if (!selection) {
     const totalWall = prop.walls.reduce((n, w) => n + Math.hypot(w.bx - w.ax, w.by - w.ay), 0);
     const floorArea = prop.rooms.reduce((n, r) => n + polyArea(r.pts), 0);
-    insp.innerHTML = `<h3>PROPERTY</h3>
+    insp.innerHTML = `${head('home', 'PROPERTY')}
       <div class="field"><label>Name</label><input type="text" data-prop-name value="${escapeHtml(prop.name)}"></div>
       ${lenField('Default wall height', prop.wallHeight, 'wallHeight')}
-      <div class="tool-sep" style="border-top:1px solid var(--line); margin:10px 0"></div>
+      <div class="tool-sep"></div>
       <div class="stat-line"><span>Walls</span><b>${prop.walls.length}</b></div>
       <div class="stat-line"><span>Openings</span><b>${prop.openings.length}</b></div>
       <div class="stat-line"><span>Rooms</span><b>${prop.rooms.length}</b></div>
       <div class="stat-line"><span>Total wall run</span><b>${fmtLen(totalWall)}</b></div>
       <div class="stat-line"><span>Floor area</span><b>${fmtArea(floorArea)}</b></div>
-      <div class="empty" style="margin-top:12px">Select an element to edit it, or use the tools to draw.<br><br>W wall, D door, N window, R room.</div>`;
+      <div class="empty" style="margin-top:14px">Select an element to edit it, or use the tools to draw.<br><br>
+        <span class="kbd-hint"><kbd>W</kbd> wall</span> <span class="kbd-hint"><kbd>D</kbd> door</span> <span class="kbd-hint"><kbd>N</kbd> window</span> <span class="kbd-hint"><kbd>R</kbd> room</span></div>`;
     insp.querySelector('[data-prop-name]').onchange = e => { prop.name = e.target.value; touch(); };
     insp.querySelector('[data-len=wallHeight]').onchange = e => {
       const v = parseLen(e.target.value);
@@ -817,14 +1398,17 @@ function renderInspector() {
     const w = prop.walls.find(w => w.id === selection.id);
     if (!w) { selection = null; return renderInspector(); }
     const L = Math.hypot(w.bx - w.ax, w.by - w.ay);
-    insp.innerHTML = `<h3>WALL</h3>
+    insp.innerHTML = `${head('wall', 'WALL')}
       ${lenField('Length', L, 'len')}
-      ${lenField('Thickness', w.thickness, 'th')}
-      ${lenField('Height (blank = default)', w.height, 'h', fmtLen(prop.wallHeight))}
+      <div class="field-row">
+        ${lenField('Thickness', w.thickness, 'th')}
+        ${lenField('Height', w.height, 'h', fmtLen(prop.wallHeight) + ' (default)')}
+      </div>
       <div class="field"><label>Material</label>${materialSelectHtml('wall', w.material, 'data-mat')}</div>
       ${scopeAssignHtml(w.id)}
       <div class="stat-line"><span>Face area</span><b>${fmtArea(L * (w.height || prop.wallHeight))}</b></div>
-      <button class="btn danger" data-del>DELETE WALL</button>`;
+      <div class="stat-line"><span>Openings</span><b>${prop.openings.filter(o => o.wallId === w.id).length}</b></div>
+      <button class="btn danger" data-del>${icon('trash')}DELETE WALL</button>`;
     insp.querySelector('[data-len=len]').onchange = e => {
       const v = parseLen(e.target.value);
       if (!isNaN(v) && v > 0.05) {
@@ -855,16 +1439,18 @@ function renderInspector() {
   if (selection.kind === 'opening') {
     const o = prop.openings.find(o => o.id === selection.id);
     if (!o) { selection = null; return renderInspector(); }
-    insp.innerHTML = `<h3>${o.type === 'door' ? 'DOOR' : 'WINDOW'}</h3>
+    insp.innerHTML = `${head(o.type === 'door' ? 'door' : 'window', o.type === 'door' ? 'DOOR' : 'WINDOW')}
       <div class="field"><label>Type</label>
         <select data-type><option value="door" ${o.type === 'door' ? 'selected' : ''}>Door</option>
         <option value="window" ${o.type === 'window' ? 'selected' : ''}>Window</option></select></div>
-      ${lenField('Width', o.width, 'w')}
-      ${lenField('Height', o.height, 'h')}
+      <div class="field-row">
+        ${lenField('Width', o.width, 'w')}
+        ${lenField('Height', o.height, 'h')}
+      </div>
       ${o.type === 'window' ? lenField('Sill height', o.sill || 0, 's') : ''}
       <div class="field"><label>Position along wall</label>
         <input type="range" min="0.02" max="0.98" step="0.005" value="${o.t}" data-t></div>
-      <button class="btn danger" data-del>DELETE</button>`;
+      <button class="btn danger" data-del>${icon('trash')}DELETE</button>`;
     insp.querySelector('[data-type]').onchange = e => {
       pushUndo();
       o.type = e.target.value;
@@ -890,13 +1476,14 @@ function renderInspector() {
   if (selection.kind === 'room') {
     const r = prop.rooms.find(r => r.id === selection.id);
     if (!r) { selection = null; return renderInspector(); }
-    insp.innerHTML = `<h3>ROOM</h3>
+    insp.innerHTML = `${head('room', 'ROOM')}
       <div class="field"><label>Name</label><input type="text" data-name value="${escapeHtml(r.name || '')}"></div>
       <div class="field"><label>Floor material</label>${materialSelectHtml('floor', r.material, 'data-mat')}</div>
       ${scopeAssignHtml(r.id)}
       <div class="stat-line"><span>Area</span><b>${fmtArea(polyArea(r.pts))}</b></div>
       <div class="stat-line"><span>Perimeter</span><b>${fmtLen(r.pts.reduce((n, p, i) => n + Math.hypot(p[0] - r.pts[(i + 1) % r.pts.length][0], p[1] - r.pts[(i + 1) % r.pts.length][1]), 0))}</b></div>
-      <button class="btn danger" data-del>DELETE ROOM</button>`;
+      <div class="stat-line"><span>Corners</span><b>${r.pts.length}</b></div>
+      <button class="btn danger" data-del>${icon('trash')}DELETE ROOM</button>`;
     insp.querySelector('[data-name]').onchange = e => { r.name = e.target.value; touch(); };
     insp.querySelector('[data-mat]').onchange = e => { r.material = e.target.value || null; touch(); };
     insp.querySelector('[data-del]').onclick = deleteSelection;
@@ -907,14 +1494,14 @@ function renderInspector() {
   if (selection.kind === 'underlay') {
     const pl = prop.plan;
     if (!pl) { selection = null; return renderInspector(); }
-    insp.innerHTML = `<h3>PLAN UNDERLAY</h3>
+    insp.innerHTML = `${head('image', 'PLAN UNDERLAY')}
       <div class="field"><label>Opacity</label>
         <input type="range" min="0.1" max="1" step="0.05" value="${pl.opacity}" data-op></div>
       <div class="stat-line"><span>Image</span><b>${pl.imgW} x ${pl.imgH} px</b></div>
       <div class="stat-line"><span>Scale</span><b>${(pl.mPerPx * 100).toFixed(2)} cm/px</b></div>
       <div class="stat-line"><span>Calibrated</span><b>${pl.calibrated ? 'yes' : 'NO - use CALIBRATE'}</b></div>
-      <div class="empty" style="margin:10px 0">Drag the image with the select tool to align it with your walls. Use CALIBRATE (C) to set true scale from a known dimension.</div>
-      <button class="btn danger" data-del>REMOVE UNDERLAY</button>`;
+      <div class="empty" style="margin:12px 0">Drag the image with the select tool to align it with your walls. Use CALIBRATE (C) to set true scale from a known dimension.</div>
+      <button class="btn danger" data-del>${icon('trash')}REMOVE UNDERLAY</button>`;
     insp.querySelector('[data-op]').oninput = e => { pl.opacity = parseFloat(e.target.value); touch(); };
     insp.querySelector('[data-del]').onclick = deleteSelection;
     return;
@@ -927,13 +1514,14 @@ export function mount(root) {
   el = root;
   if (!prop) {
     root.innerHTML = `<div class="view-scroll"><div class="kicker">PLAN</div>
-      <p class="muted">No property yet. Create one from the PROPERTY selector in the top bar.</p></div>`;
+      <div class="empty-state"><span class="empty-ic">${icon('plan')}</span><b>No property yet</b>
+      Create one from the PROPERTY selector in the top bar.</div></div>`;
     return;
   }
   root.innerHTML = `
     <div class="editor-layout">
       <div class="tool-col"></div>
-      <div class="canvas-wrap">
+      <div class="canvas-wrap plan-canvas">
         <canvas></canvas>
         <div class="canvas-hint"></div>
         <div class="canvas-badge"></div>
@@ -946,6 +1534,7 @@ export function mount(root) {
   inspEl = root.querySelector('.inspector');
   hintEl = root.querySelector('.canvas-hint');
   badgeEl = root.querySelector('.canvas-badge');
+  hatchCache.clear();
 
   vs = viewByProp[prop.id];
   if (!vs) { vs = viewByProp[prop.id] = { zoom: 60, panX: 0, panY: 0 }; requestAnimationFrame(() => { fitView(); }); }
@@ -953,6 +1542,7 @@ export function mount(root) {
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointermove', onPointerMove);
   canvas.addEventListener('pointerup', onPointerUp);
+  canvas.addEventListener('pointerleave', onPointerLeave);
   canvas.addEventListener('dblclick', onDblClick);
   canvas.addEventListener('wheel', onWheel, { passive: false });
   canvas.addEventListener('contextmenu', e => e.preventDefault());
@@ -962,6 +1552,7 @@ export function mount(root) {
   renderToolCol();
   renderInspector();
   updateHint();
+  updateCursor();
 
   const loop = () => { draw(); raf = requestAnimationFrame(loop); };
   raf = requestAnimationFrame(loop);
@@ -971,6 +1562,6 @@ export function unmount() {
   cancelAnimationFrame(raf);
   window.removeEventListener('keydown', onKeyDown);
   window.removeEventListener('keyup', onKeyUp);
-  drawing = null; roomDraft = null; drag = null;
-  el = null; canvas = null; ctx = null; inspEl = null;
+  drawing = null; roomDraft = null; drag = null; hover = null; hoverPt = null;
+  el = null; canvas = null; ctx = null; inspEl = null; hintEl = null; badgeEl = null;
 }
