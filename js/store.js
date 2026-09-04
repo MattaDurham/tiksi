@@ -113,6 +113,7 @@ function migrate(d) {
       if (s.pointSize == null) s.pointSize = 0.012;
       if (!s.pointColor) s.pointColor = 'rgb';
       if (!s.budget) s.budget = 2000000;
+      if (s.flip == null) s.flip = s.kind === 'splat';   // 3DGS captures are y-down; the viewer flips them
     }
     for (const r of p.rooms) {
       if (r.ceilingMaterial === undefined) r.ceilingMaterial = null;   // viewer falls back to 'mat-ceiling'

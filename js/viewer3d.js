@@ -26,6 +26,8 @@ import {
   escapeHtml, deleteFile, itemById, isoToday,
 } from './store.js';
 import { materialSelectHtml } from './materials.js';
+import { pendingTextureJobs } from './textures.js';
+import { icon } from './icons.js';
 import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapRects, disposeBuilt } from './geometry.js';
 import { addPhotoFromFile, photoUrl, photoById } from './photos-store.js';
 import {
@@ -525,10 +527,12 @@ function presetView(name, immediate) {
   const { H, cx, cz, radius } = boundsInfo();
   const target = new THREE.Vector3(cx, H * 0.45, cz);
   let dir;
+  // Elevations around 35 deg: high enough that sight lines clear the far walls and reach the
+  // floors (a dollhouse read), low enough that facades and openings still show.
   if (name === 'front') dir = new THREE.Vector3(0.02, 0.26, 1);
-  else if (name === 'iso') dir = new THREE.Vector3(-0.75, 0.5, 0.75);
+  else if (name === 'iso') dir = new THREE.Vector3(-0.72, 0.62, 0.72);
   else if (name === 'top') dir = northVector().multiplyScalar(-0.002).add(new THREE.Vector3(0, 1, 0));
-  else dir = new THREE.Vector3(0.72, 0.42, 0.88);
+  else dir = new THREE.Vector3(0.66, 0.74, 0.8);
   dir.normalize();
   const dist = fitDistance(radius) * (name === 'top' ? 1.15 : 1);
   const pos = target.clone().addScaledVector(dir, dist);
@@ -644,6 +648,16 @@ function tick(time) {
   else if (mode === 'walk') { if (stepWalk(dt)) active = true; }
   else if (controls.update(dt)) active = true;
   if (active || splatBusy()) requestRender(2);
+  // Procedural textures attach to shared materials asynchronously (textures.js synthesises them in
+  // idle slices). Redraw at a gentle cadence while that is happening, and a few frames once it is
+  // done, so surfaces do not stay flat until the next interaction.
+  if (pendingTextureJobs() > 0) {
+    texturesPending = true;
+    if (time - lastTextureRedraw > 400) { lastTextureRedraw = time; requestRender(1); }
+  } else if (texturesPending) {
+    texturesPending = false;
+    requestRender(3);
+  }
   if (framesLeft > 0) {
     framesLeft--;
     // One bad frame must not kill the animation loop for the rest of the session.
@@ -652,6 +666,7 @@ function tick(time) {
   }
 }
 let renderFailed = false;
+let texturesPending = false, lastTextureRedraw = 0;
 
 // Inside the house there is no sky to bounce light around, so fake the bounce: more, warmer
 // ambient and the room fixtures at a daytime level while the camera is within a room.
@@ -1543,36 +1558,40 @@ function renderInspector() {
 function renderToolCol() {
   const tc = el && el.querySelector('.tool-col');
   if (!tc) return;
-  const scanRows = prop.scans.map(s => `<button class="tool-btn v-scan-row ${selection && selection.kind === 'scan' && selection.id === s.id ? 'active' : ''}" data-scan="${s.id}" title="${escapeHtml(s.name)}"><span>${escapeHtml(s.name.length > 14 ? s.name.slice(0, 12) + '..' : s.name)}</span><span class="key">${escapeHtml((s.kind || '').toUpperCase().slice(0, 5))}</span></button>`).join('');
+  // Same button anatomy as the plan editor: icon, label, key badge.
+  const tb = (act, ic, label, key, active) =>
+    `<button class="tool-btn ${active ? 'active' : ''}" data-act="${act}" title="${label}${key ? ' (' + key + ')' : ''}">` +
+    `${icon(ic)}<span class="tb-text">${label}</span>${key ? `<kbd class="key">${key}</kbd>` : ''}</button>`;
+  const scanRows = prop.scans.map(s => `<button class="tool-btn v-scan-row ${selection && selection.kind === 'scan' && selection.id === s.id ? 'active' : ''}" data-scan="${s.id}" title="${escapeHtml(s.name)}">${icon(s.kind === 'splat' ? 'splat' : s.kind === 'mesh' ? 'model' : 'scan')}<span class="tb-text">${escapeHtml(s.name.length > 14 ? s.name.slice(0, 12) + '..' : s.name)}</span><kbd class="key">${escapeHtml((s.kind || '').toUpperCase().slice(0, 5))}</kbd></button>`).join('');
   tc.innerHTML = `
     <div class="tool-head">VIEW</div>
-    <button class="tool-btn" data-act="frame">FRAME <span class="key">F</span></button>
-    <button class="tool-btn" data-act="front">FRONT</button>
-    <button class="tool-btn" data-act="iso">ISO</button>
-    <button class="tool-btn" data-act="top">TOP <span class="key">T</span></button>
-    <button class="tool-btn ${mode === 'walk' ? 'active' : ''}" data-act="walk">WALK <span class="key">W</span></button>
+    ${tb('frame', 'frame', 'FRAME', 'F')}
+    ${tb('front', 'target', 'FRONT')}
+    ${tb('iso', 'model', 'ISO')}
+    ${tb('top', 'top', 'TOP', 'T')}
+    ${tb('walk', 'walk', 'WALK', 'W', mode === 'walk')}
     <div class="tool-sep"></div>
     <div class="tool-head">TOOLS</div>
-    <button class="tool-btn ${tool === 'select' ? 'active' : ''}" data-act="select">SELECT <span class="key">V</span></button>
-    <button class="tool-btn ${tool === 'move' ? 'active' : ''}" data-act="move">MOVE WALLS <span class="key">M</span></button>
-    <button class="tool-btn ${tool === 'measure' ? 'active' : ''}" data-act="measure">MEASURE <span class="key">D</span></button>
-    ${measures.length ? '<button class="tool-btn" data-act="clearm">CLEAR MEASURES</button>' : ''}
-    <button class="tool-btn ${tool === 'pin' ? 'active' : ''}" data-act="pin">PIN PHOTO <span class="key">P</span></button>
-    <button class="tool-btn ${section.on ? 'active' : ''}" data-act="section">SECTION <span class="key">C</span></button>
-    <button class="tool-btn ${xray ? 'active' : ''}" data-act="xray">X-RAY <span class="key">X</span></button>
+    ${tb('select', 'select', 'SELECT', 'V', tool === 'select')}
+    ${tb('move', 'move', 'MOVE WALLS', 'M', tool === 'move')}
+    ${tb('measure', 'measure', 'MEASURE', 'D', tool === 'measure')}
+    ${measures.length ? tb('clearm', 'close', 'CLEAR MEASURES') : ''}
+    ${tb('pin', 'pin', 'PIN PHOTO', 'P', tool === 'pin')}
+    ${tb('section', 'section', 'SECTION', 'C', section.on)}
+    ${tb('xray', 'xray', 'X-RAY', 'X', xray)}
     <div class="tool-sep"></div>
     <div class="tool-head">RENDER</div>
-    <button class="tool-btn" data-act="render2">STILL 2x</button>
-    <button class="tool-btn" data-act="render3">STILL 3x</button>
+    ${tb('render2', 'camera', 'STILL 2x')}
+    ${tb('render3', 'camera', 'STILL 3x')}
     <div class="tool-sep"></div>
     <div class="tool-head">SCANS</div>
-    <button class="tool-btn" data-act="scan">IMPORT SCAN</button>
+    ${tb('scan', 'scan', 'IMPORT SCAN')}
     <input type="file" class="hidden-file" accept="${SCAN_ACCEPT}">
     ${scanRows}
     <div class="empty" style="padding:6px 8px; font-size:9.5px; color:var(--faint); font-family:var(--mono); line-height:1.5">
       PLY / PCD / XYZ / LAS point clouds, OBJ / GLB meshes, .splat / .spz / .ply Gaussian splats.</div>
     <div class="tool-sep"></div>
-    <button class="tool-btn" data-act="rebuild">REGENERATE</button>`;
+    ${tb('rebuild', 'refresh', 'REGENERATE')}`;
   const on = (act, fn) => { const b = tc.querySelector(`[data-act=${act}]`); if (b) b.onclick = fn; };
   on('frame', () => { if (mode !== 'orbit') setMode('orbit'); presetView('frame'); });
   on('front', () => { if (mode !== 'orbit') setMode('orbit'); presetView('front'); });

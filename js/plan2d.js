@@ -1537,7 +1537,9 @@ export function mount(root) {
   hatchCache.clear();
 
   vs = viewByProp[prop.id];
-  if (!vs) { vs = viewByProp[prop.id] = { zoom: 60, panX: 0, panY: 0 }; requestAnimationFrame(() => { fitView(); }); }
+  const planSrc = prop.plan && prop.plan.img ? prop.plan.img.length + ':' + prop.plan.imgW + 'x' + prop.plan.imgH : '';
+  if (!vs) { vs = viewByProp[prop.id] = { zoom: 60, panX: 0, panY: 0, planSrc }; requestAnimationFrame(() => { fitView(); }); }
+  else if (vs.planSrc !== planSrc) { vs.planSrc = planSrc; requestAnimationFrame(() => { fitView(); }); }   // a new underlay arrived from PHOTOS
 
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointermove', onPointerMove);
