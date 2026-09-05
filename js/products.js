@@ -80,12 +80,12 @@ function usedIn(p) {
 
 function prodCard(p) {
   const links = usedIn(p);
-  return `<div class="card prod-card clickable ${p.id === editingId ? 'active' : ''}" data-edit="${p.id}">
+  return `<div class="card prod-card clickable ${p.id === editingId ? 'active' : ''}" data-edit="${escapeHtml(p.id)}">
     <div class="p-img">${p.imageUrl ? `<img src="${escapeHtml(p.imageUrl)}" loading="lazy" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'ph',textContent:'NO IMAGE'}))">` : `<span class="ph">${icon('image')}NO IMAGE</span>`}</div>
     <div class="p-name">${escapeHtml(p.name)}</div>
     <div class="p-meta">${escapeHtml([p.brand, p.model].filter(Boolean).join(' '))}</div>
     <div class="p-chips">
-      <span class="chip">${p.category}</span>
+      <span class="chip">${escapeHtml(p.category)}</span>
       ${links.map(l => `<span class="chip cyan" title="${escapeHtml(l.project.name)}">${icon('link')}${escapeHtml(l.item.name)}</span>`).join('')}
     </div>
     <div class="p-foot">
@@ -119,7 +119,7 @@ function renderForm(items) {
     <div class="field"><label>Used in scope items</label>
       <select data-items multiple size="${Math.min(8, Math.max(3, items.length))}" style="font-size:11px">
         ${items.map(({ project, item }) =>
-          `<option value="${item.id}" ${(p.itemIds || []).includes(item.id) ? 'selected' : ''}>${escapeHtml(project.name)} / ${escapeHtml(item.name)}</option>`).join('')}
+          `<option value="${escapeHtml(item.id)}" ${(p.itemIds || []).includes(item.id) ? 'selected' : ''}>${escapeHtml(project.name)} / ${escapeHtml(item.name)}</option>`).join('')}
       </select></div>
     <div class="field"><label>Notes</label><textarea data-f="notes">${escapeHtml(p.notes || '')}</textarea></div>
     <div style="display:flex; gap:8px">

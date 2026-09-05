@@ -79,8 +79,8 @@ function render() {
       <div class="kpi-band">
         <div class="kpi">
           <div class="k-label">Program start</div>
-          <div class="k-value" style="font-size:15px"><input type="date" id="prog-start" value="${start}"
-            style="background:transparent;border:none;color:var(--ink);font:inherit;outline:none;color-scheme:dark;border-bottom:1px dashed var(--line-2)"></div>
+          <div class="k-value" style="font-size:15px"><input type="date" id="prog-start" value="${escapeHtml(start)}"
+            style="background:transparent;border:none;color:var(--ink);font:inherit;color-scheme:dark;border-bottom:1px dashed var(--line-2)"></div>
           <div class="k-sub">click to change</div>
         </div>
         <div class="kpi accent">
@@ -227,7 +227,8 @@ function ganttSvg(plans, startIso, programEnd) {
       }
       const bw = Math.max(x1 - x0, 3);
       const bh = ROWH - 10;
-      const title = `${escapeHtml(r.it.name)}: ${r.it.durationDays}d, ${fmtDate(addDays(startIso, off + s.es))} to ${fmtDate(addDays(startIso, off + s.ef))}${s.critical ? ' (CRITICAL)' : ', slack ' + s.slack + 'd'}`;
+      const dur = escapeHtml(r.it.durationDays);
+      const title = `${escapeHtml(r.it.name)}: ${dur}d, ${fmtDate(addDays(startIso, off + s.es))} to ${fmtDate(addDays(startIso, off + s.ef))}${s.critical ? ' (CRITICAL)' : ', slack ' + s.slack + 'd'}`;
       if (s.critical) {
         svg += `<g class="g-bar"><title>${title}</title>` +
           `<rect x="${x0}" y="${y + 5}" width="${bw}" height="${bh}" rx="4" fill="url(#g-crit)" stroke="rgba(255,205,140,0.7)" stroke-width="1" filter="url(#g-glow)"/>` +
@@ -239,7 +240,7 @@ function ganttSvg(plans, startIso, programEnd) {
       }
       if (dayW >= 6) {
         const inside = bw > 34;
-        svg += `<text x="${inside ? x0 + bw / 2 : x1 + 6}" y="${yc + 3.5}" fill="${inside ? (s.critical ? '#2a1a08' : '#dfe8ef') : '#5d6a76'}" font-size="9" font-weight="${inside ? 700 : 400}" text-anchor="${inside ? 'middle' : 'start'}">${r.it.durationDays}d</text>`;
+        svg += `<text x="${inside ? x0 + bw / 2 : x1 + 6}" y="${yc + 3.5}" fill="${inside ? (s.critical ? '#2a1a08' : '#dfe8ef') : '#5d6a76'}" font-size="9" font-weight="${inside ? 700 : 400}" text-anchor="${inside ? 'middle' : 'start'}">${dur}d</text>`;
       }
       svg += '</g>';
       barPos[r.it.id] = { x0, x1, yc, off, proj: r.x.p.id };

@@ -52,7 +52,9 @@ body {
 }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
-:focus-visible { outline: none; box-shadow: var(--focus); }
+/* keyboard focus ring: an outline, so no component box-shadow can override it and no
+   overflow clip can hide it; text fields override it below with their own border + glow */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 ::selection { background: rgba(232, 151, 58, 0.35); color: var(--ink); }
 svg.ic { flex: none; vertical-align: -3px; }
 
@@ -102,7 +104,10 @@ svg.ic { flex: none; vertical-align: -3px; }
   padding-left: 9px;
   border-left: 1px solid var(--line-2);
   line-height: 1;
+  white-space: nowrap;
 }
+/* the tag is the first thing the topbar squeezes; below this width it goes rather than wraps */
+@media (max-width: 1140px) { .brand-sub { display: none; } }
 .topbar-group { display: flex; align-items: center; gap: 8px; }
 .topbar-spacer { flex: 1; }
 .tb-label {
@@ -180,7 +185,6 @@ select option { background: var(--panel-2); color: var(--ink); }
   display: inline-flex;
   border: 1px solid var(--line-2);
   border-radius: var(--radius);
-  overflow: hidden;
   background: var(--panel-2);
   box-shadow: var(--lift);
 }
@@ -191,6 +195,9 @@ select option { background: var(--panel-2); color: var(--ink); }
   font-family: var(--mono); font-size: 10.5px; padding: 5px 10px; letter-spacing: 0.08em;
   transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
 }
+/* the end buttons carry the group's rounding themselves (no overflow clip, so focus rings show) */
+.seg-btn:first-child { border-radius: calc(var(--radius) - 1px) 0 0 calc(var(--radius) - 1px); }
+.seg-btn:last-child { border-radius: 0 calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0; }
 .seg-btn + .seg-btn { border-left: 1px solid var(--line); }
 .seg-btn:hover { color: var(--ink); }
 .seg-btn.active {
@@ -327,7 +334,7 @@ h3.kicker { font-weight: 700; }
 }
 .tool-check input[type="checkbox"]:checked { background: var(--accent); border-color: var(--accent); }
 .tool-check input[type="checkbox"]:checked::after { transform: translateX(12px); background: var(--accent-ink); }
-.tool-check input[type="checkbox"]:focus-visible { box-shadow: var(--focus); }
+.tool-check input[type="checkbox"]:focus-visible { outline-offset: 1px; }
 
 .canvas-wrap { position: relative; overflow: hidden; background: var(--bg); }
 .canvas-wrap canvas { display: block; cursor: crosshair; }
@@ -423,7 +430,7 @@ input[type="range"]::-moz-range-thumb {
   width: 12px; height: 12px; border-radius: 50%; background: var(--accent); border: 2px solid var(--panel);
   box-shadow: 0 0 0 1px rgba(232, 151, 58, 0.6);
 }
-input[type="range"]:focus-visible { box-shadow: none; }
+input[type="range"]:focus-visible { outline: none; }   /* the thumb glow is the ring */
 input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: var(--focus); }
 
 /* ---------- tables ---------- */
@@ -450,18 +457,29 @@ table.grid select { padding-right: 5px; }
 /* number spinners steal half of a narrow cell; the value matters more than the arrows */
 table.grid input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 table.grid input[type="number"]::-webkit-outer-spin-button, table.grid input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-/* multi-select dependency pickers collapse to one row until focused (the view grows them) */
-table.grid select[multiple] { height: 26px; overflow: hidden; padding: 2px 5px; line-height: 1.45; font-family: var(--mono); font-size: 11px; }
-table.grid select[multiple]:focus { height: auto; overflow: auto; background: var(--panel-2); }
 table.grid select[multiple] option { padding: 2px 4px; border-radius: 3px; }
 table.grid select[multiple] option:checked { background: var(--accent-soft); color: var(--accent); }
 .card table.grid th { background: var(--panel-2); }
-/* the dependency listbox is clipped to one row until focused; the view grows its size on focus */
-.dep-wrap { height: 26px; overflow: hidden; border: 1px solid transparent; border-radius: 4px; transition: border-color var(--dur) var(--ease); }
+/* dependency picker: the collapsed state is a one-line summary of the chosen predecessors
+   (a clipped listbox would show whatever option Chromium scrolled to); the listbox itself
+   takes its place only while open, then the summary returns */
+.dep-wrap { border: 1px solid transparent; border-radius: 4px; transition: border-color var(--dur) var(--ease); }
 .dep-wrap:hover { border-color: var(--line-2); }
-.dep-wrap:focus-within { height: auto; overflow: visible; border-color: var(--accent); background: var(--panel-2); box-shadow: var(--focus); }
-.dep-wrap select, table.grid .dep-wrap select[multiple] { border: 0; height: auto; box-shadow: none; background: transparent; }
-.dep-wrap select:focus { box-shadow: none; border: 0; }
+.dep-summary {
+  display: block; width: 100%; text-align: left; background: transparent; border: 0; color: var(--ink);
+  font-family: var(--mono); font-size: 11px; padding: 3px 5px; line-height: 1.45; border-radius: 3px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dep-summary.none { color: var(--faint); }
+.dep-summary:disabled { cursor: default; }
+.dep-wrap select, table.grid .dep-wrap select[multiple] {
+  border: 0; box-shadow: none; background: transparent; width: 100%;
+  padding: 2px 5px; line-height: 1.45; font-family: var(--mono); font-size: 11px;
+}
+.dep-wrap select { display: none; }
+.dep-wrap.open { border-color: var(--accent); background: var(--panel-2); box-shadow: var(--focus); }
+.dep-wrap.open .dep-summary { display: none; }
+.dep-wrap.open select { display: block; }
 table.grid .row-del {
   opacity: 0; cursor: pointer; color: var(--faint); font-family: var(--mono); font-size: 11px;
   display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 4px;

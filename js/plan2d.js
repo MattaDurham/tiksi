@@ -4,7 +4,7 @@
 // swings, glazing lines, dimension strings with ticks, rulers, a north arrow and a scale bar.
 
 import {
-  ws, activeProperty, uid, touch, fmtLen, parseLen, fmtArea, polyArea,
+  ws, activeProperty, uid, touch, onChange, fmtLen, parseLen, fmtArea, polyArea,
   escapeHtml, itemById,
 } from './store.js';
 import { materialSelectHtml } from './materials.js';
@@ -60,8 +60,21 @@ let calib = null;            // {a:[x,y], b:[x,y]|null}
 let hoverPt = null;          // last cursor world pos
 let drag = null;             // active drag descriptor
 let spaceDown = false;
-let undoStack = [], redoStack = [];
+// Undo history is kept per workspace object and per property: a snapshot taken while editing
+// one property must never replay into another, nor into a re-imported workspace that reuses
+// the same property ids (import/demo swap ws.data, so the WeakMap starts over for them).
+const historyByWs = new WeakMap();
+let hist = null;             // {undo: [], redo: []} of the mounted property
 const hatchCache = new Map(); // material colour -> CanvasPattern (per device pixel ratio)
+const HATCH = 8;             // hatch tile size in CSS px
+let frameNo = 0, hatchMatrix = null;   // the pattern phase is identical for every wall in a frame
+let vignette = null, vignetteKey = ''; // radial gradient cached per canvas size
+const textWidthCache = new Map();      // font|text -> measured width
+// The canvas repaints only when something changed; every input handler, store change and
+// resize marks it dirty, and the rAF loop idles otherwise (no CPU/battery cost while looking).
+let dirty = true;
+let resizeObs = null, offChange = null;
+function invalidate() { dirty = true; }
 
 function dpr() { return window.devicePixelRatio || 1; }
 function w2s(p) { return [(p[0] - vs.panX) * vs.zoom, (p[1] - vs.panY) * vs.zoom]; }
@@ -102,18 +115,31 @@ function fitView() {
   vs.zoom = Math.min(w / (bw * 1.22), h / (bh * 1.22), 250);
   vs.panX = b.minX - (w / vs.zoom - bw) / 2 - RULER / vs.zoom;
   vs.panY = b.minY - (h / vs.zoom - bh) / 2 - RULER / vs.zoom;
+  invalidate();
 }
 
+// Identity of the underlay image. mount() compares it with the one it saw last to spot an
+// underlay that arrived from another view (PHOTOS) and refit once for it; the in-editor
+// mutators keep it current so a plain revisit never throws the user's zoom/pan away.
+function planKey(p) { return p.plan && p.plan.img ? p.plan.img.length + ':' + p.plan.imgW + 'x' + p.plan.imgH : ''; }
+
 // ---------- undo ----------
-function snapshot() { return JSON.stringify({ walls: prop.walls, openings: prop.openings, rooms: prop.rooms }); }
-function pushUndo() { undoStack.push(snapshot()); if (undoStack.length > 80) undoStack.shift(); redoStack = []; }
+function historyFor(p) {
+  let byProp = historyByWs.get(ws.data);
+  if (!byProp) historyByWs.set(ws.data, byProp = {});
+  return byProp[p.id] || (byProp[p.id] = { undo: [], redo: [] });
+}
+function snapshot() { return JSON.stringify({ propId: prop.id, walls: prop.walls, openings: prop.openings, rooms: prop.rooms }); }
+function pushUndo() { hist.undo.push(snapshot()); if (hist.undo.length > 80) hist.undo.shift(); hist.redo.length = 0; }
 function applySnap(s) {
   const d = JSON.parse(s);
+  if (d.propId !== prop.id) return false;   // belt and braces: never write another property's geometry
   prop.walls = d.walls; prop.openings = d.openings; prop.rooms = d.rooms;
-  selection = null; hover = null; touch(); renderInspector();
+  selection = null; hover = null; touch(); renderInspector(); invalidate();
+  return true;
 }
-function undo() { if (!undoStack.length) return; redoStack.push(snapshot()); applySnap(undoStack.pop()); }
-function redo() { if (!redoStack.length) return; undoStack.push(snapshot()); applySnap(redoStack.pop()); }
+function undo() { if (!hist || !hist.undo.length) return; const cur = snapshot(); if (applySnap(hist.undo.pop())) hist.redo.push(cur); }
+function redo() { if (!hist || !hist.redo.length) return; const cur = snapshot(); if (applySnap(hist.redo.pop())) hist.undo.push(cur); }
 
 // ---------- snapping ----------
 // Returns the snapped point; snapInfo (module state) records what it snapped to so the
@@ -123,16 +149,18 @@ function snapPoint(wx, wy, opts) {
   opts = opts || {};
   const tolW = 11 / vs.zoom;
   snapInfo = null;
-  // Endpoint snap.
-  let best = null, bestD = tolW;
-  for (const w of prop.walls) {
-    for (const p of [[w.ax, w.ay], [w.bx, w.by]]) {
-      if (opts.excludeWall && opts.excludeWall === w.id) continue;
-      const d = Math.hypot(p[0] - wx, p[1] - wy);
-      if (d < bestD) { bestD = d; best = p; }
+  // Endpoint snap (the SNAP switch gates every kind of snapping, as its label promises).
+  if (snapOn) {
+    let best = null, bestD = tolW;
+    for (const w of prop.walls) {
+      for (const p of [[w.ax, w.ay], [w.bx, w.by]]) {
+        if (opts.excludeWall && opts.excludeWall === w.id) continue;
+        const d = Math.hypot(p[0] - wx, p[1] - wy);
+        if (d < bestD) { bestD = d; best = p; }
+      }
     }
+    if (best) { snapInfo = { kind: 'endpoint' }; return [best[0], best[1]]; }
   }
-  if (best) { snapInfo = { kind: 'endpoint' }; return [best[0], best[1]]; }
   let x = wx, y = wy;
   if (snapOn && opts.from) {
     const [fx, fy] = opts.from;
@@ -231,19 +259,27 @@ function addOpening(wallId, t, type) {
 }
 function deleteSelection() {
   if (!selection) return;
-  pushUndo();
   if (selection.kind === 'wall') {
+    pushUndo();
     prop.walls = prop.walls.filter(w => w.id !== selection.id);
     prop.openings = prop.openings.filter(o => o.wallId !== selection.id);
   } else if (selection.kind === 'opening') {
+    pushUndo();
     prop.openings = prop.openings.filter(o => o.id !== selection.id);
   } else if (selection.kind === 'room') {
+    pushUndo();
     prop.rooms = prop.rooms.filter(r => r.id !== selection.id);
   } else if (selection.kind === 'underlay') {
+    // The underlay is not part of the undo snapshot, so no history entry for it. The
+    // calibration form cannot outlive its image: drop it and fall back to the select tool.
     prop.plan = null;
+    vs.planSrc = planKey(prop);
+    calib = null;
+    if (tool === 'calibrate') { tool = 'select'; renderToolCol(); }
+    updateHint();
   }
   selection = null; hover = null;
-  touch(); renderInspector();
+  touch(); renderInspector(); invalidate();
 }
 
 // ---------- underlay upload ----------
@@ -268,10 +304,11 @@ function uploadUnderlay(file) {
       mPerPx: 18 / cw,           // assume ~18 m wide until calibrated
       opacity: 0.55, offsetX: 0, offsetY: 0, calibrated: false,
     };
+    vs.planSrc = planKey(prop);
     selection = { kind: 'underlay' };
     tool = 'calibrate'; calib = null;
     fitView();
-    touch(); renderToolCol(); renderInspector();
+    touch(); renderToolCol(); renderInspector(); updateHint();
   };
   img.onerror = () => alert('Could not read that image file.');
   img.src = URL.createObjectURL(file);
@@ -299,7 +336,7 @@ function hatchPattern(color) {
   const key = color + '@' + d;
   let pat = hatchCache.get(key);
   if (!pat) {
-    const S = 8, D = S * d;
+    const S = HATCH, D = S * d;
     const c = document.createElement('canvas');
     c.width = D; c.height = D;
     const g = c.getContext('2d');
@@ -312,15 +349,32 @@ function hatchPattern(color) {
     g.moveTo(D / 2, 3 * D / 2); g.lineTo(3 * D / 2, D / 2);
     g.stroke();
     pat = ctx.createPattern(c, 'repeat');
-    pat._size = S; pat._d = d;
     hatchCache.set(key, pat);
   }
-  if (pat.setTransform) {
-    const S = pat._size;
-    const tx = ((-vs.panX * vs.zoom) % S + S) % S, ty = ((-vs.panY * vs.zoom) % S + S) % S;
-    pat.setTransform(new DOMMatrix([1 / pat._d, 0, 0, 1 / pat._d, tx, ty]));
+  // The phase depends only on pan/zoom, so one matrix serves every pattern this frame and
+  // each pattern is transformed at most once per frame (not once per wall).
+  if (pat.setTransform && pat._frame !== frameNo) {
+    if (!hatchMatrix) {
+      const S = HATCH;
+      const tx = ((-vs.panX * vs.zoom) % S + S) % S, ty = ((-vs.panY * vs.zoom) % S + S) % S;
+      hatchMatrix = new DOMMatrix([1 / d, 0, 0, 1 / d, tx, ty]);
+    }
+    pat.setTransform(hatchMatrix);
+    pat._frame = frameNo;
   }
   return pat;
+}
+
+// measureText is slow enough to matter with many labels; widths are stable per font + text.
+function textWidth(text) {
+  const key = ctx.font + '|' + (ctx.letterSpacing || '') + '|' + text;
+  let w = textWidthCache.get(key);
+  if (w == null) {
+    if (textWidthCache.size > 500) textWidthCache.clear();
+    w = ctx.measureText(text).width;
+    textWidthCache.set(key, w);
+  }
+  return w;
 }
 
 function roundRect(x, y, w, h, r) {
@@ -340,7 +394,7 @@ function pill(text, x, y, color, opts) {
   const size = opts.size || 10.5;
   ctx.font = `${opts.weight || 600} ${size}px ${FONT}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  const w = ctx.measureText(text).width + 14, h = size + 9;
+  const w = textWidth(text) + 14, h = size + 9;
   roundRect(x - w / 2, y - h / 2, w, h, h / 2);
   ctx.fillStyle = opts.bg || 'rgba(10,14,18,0.92)';
   ctx.fill();
@@ -389,14 +443,16 @@ function wallPoly(wl) {
 
 // ---------- rendering: main pass ----------
 let underlayImg = null, underlayImgSrc = null;
+// Returns false when the canvas has no size yet so the loop keeps the frame pending.
 function draw() {
   const w = wrapEl.clientWidth, h = wrapEl.clientHeight;
-  if (!w || !h) return;
+  if (!w || !h) return false;
   const d = dpr();
   if (canvas.width !== Math.round(w * d) || canvas.height !== Math.round(h * d)) {
     canvas.width = Math.round(w * d); canvas.height = Math.round(h * d);
     canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
   }
+  frameNo++; hatchMatrix = null;
   ctx.setTransform(d, 0, 0, d, 0, 0);
   ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, w, h);
@@ -413,6 +469,7 @@ function draw() {
   drawVignette(w, h);
   drawRulers(w, h);
   drawHud(w, h);
+  return true;
 }
 
 function drawGrid(w, h) {
@@ -446,7 +503,7 @@ function drawUnderlay() {
   const pl = prop.plan;
   if (!pl || !pl.img) return;
   if (underlayImgSrc !== pl.img) {
-    underlayImg = new Image(); underlayImg.src = pl.img; underlayImgSrc = pl.img;
+    underlayImg = new Image(); underlayImg.onload = invalidate; underlayImg.src = pl.img; underlayImgSrc = pl.img;
   }
   if (!(underlayImg.complete && underlayImg.naturalWidth)) return;
   const [sx, sy] = w2s([pl.offsetX, pl.offsetY]);
@@ -477,11 +534,42 @@ function drawUnderlay() {
   }
 }
 
-function roomCentroid(r) {
-  let cx = 0, cy = 0;
-  for (const p of r.pts) { cx += p[0]; cy += p[1]; }
-  return [cx / r.pts.length, cy / r.pts.length];
+// Label anchor for a room polygon: the area-weighted centroid, or, when that falls outside
+// the polygon (L- and U-shapes), the midpoint of the longest inside run on a row through it.
+// Same idea as roomInteriorPoint() in geometry.js, duplicated because that module pulls in three.
+function roomInteriorPoint(pts) {
+  const n = pts.length;
+  let a = 0, cx = 0, cy = 0;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const f = pts[j][0] * pts[i][1] - pts[i][0] * pts[j][1];
+    a += f; cx += (pts[j][0] + pts[i][0]) * f; cy += (pts[j][1] + pts[i][1]) * f;
+  }
+  if (Math.abs(a) < 1e-9) {   // degenerate polygon: the vertex mean is as good as anything
+    let sx = 0, sy = 0;
+    for (const p of pts) { sx += p[0]; sy += p[1]; }
+    return [sx / n, sy / n];
+  }
+  cx /= 3 * a; cy /= 3 * a;
+  if (pointInPoly(cx, cy, pts)) return [cx, cy];
+  let minY = Infinity, maxY = -Infinity;
+  for (const p of pts) { minY = Math.min(minY, p[1]); maxY = Math.max(maxY, p[1]); }
+  let best = null, bestLen = 0;
+  for (let k = 0; k < 8; k++) {
+    const y = k === 0 ? cy : minY + (maxY - minY) * (k / 8);
+    const xs = [];
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const [xi, yi] = pts[i], [xj, yj] = pts[j];
+      if ((yi > y) !== (yj > y)) xs.push(xi + (y - yi) * (xj - xi) / (yj - yi));
+    }
+    xs.sort((p, q) => p - q);
+    for (let i = 0; i + 1 < xs.length; i += 2) {
+      const len = xs[i + 1] - xs[i];
+      if (len > bestLen) { bestLen = len; best = [(xs[i] + xs[i + 1]) / 2, y]; }
+    }
+  }
+  return best || [cx, cy];
 }
+function roomCentroid(r) { return roomInteriorPoint(r.pts); }
 
 function drawRooms() {
   for (const r of prop.rooms) {
@@ -515,7 +603,7 @@ function drawRoomLabels() {
     const name = (r.name || 'ROOM').toUpperCase();
     ctx.font = `700 11px ${FONT}`;
     if ('letterSpacing' in ctx) ctx.letterSpacing = '1.5px';
-    const tw = ctx.measureText(name).width;
+    const tw = textWidth(name);
     // swatch dot + name on one line, area beneath
     const x0 = s[0] - (tw + 12) / 2;
     ctx.beginPath(); ctx.arc(x0 + 3.5, s[1] - 4, 3.5, 0, Math.PI * 2);
@@ -613,12 +701,14 @@ function drawOpening(o) {
     // Hinge at -half end; solid leaf + quarter-circle swing.
     const hx = p.cx - ux * half, hy = p.cy - uy * half;
     const hs = w2s([hx, hy]), ls = w2s([hx + nx * o.width, hy + ny * o.width]);
-    const a0 = Math.atan2(ny, nx), a1 = Math.atan2(uy, ux);
+    // n is u rotated +90 degrees in screen space, so the swing is always the default-direction
+    // quarter from the wall direction; a computed end angle could wrap and sweep 270 degrees.
+    const a1 = Math.atan2(uy, ux);
     ctx.save();
     if (sel) { ctx.shadowColor = 'rgba(232,151,58,0.7)'; ctx.shadowBlur = 10; }
     ctx.strokeStyle = hexA(col, 0.8);
     ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.arc(hs[0], hs[1], o.width * vs.zoom, a0, a1, a0 > a1); ctx.stroke();
+    ctx.beginPath(); ctx.arc(hs[0], hs[1], o.width * vs.zoom, a1, a1 + Math.PI / 2); ctx.stroke();
     ctx.strokeStyle = col;
     ctx.lineWidth = Math.max(2.5, Math.min(5, 0.045 * vs.zoom));
     ctx.beginPath(); ctx.moveTo(hs[0], hs[1]); ctx.lineTo(ls[0], ls[1]); ctx.stroke();
@@ -857,11 +947,15 @@ function drawSelectionHandles() {
 }
 
 function drawVignette(w, h) {
-  const r = Math.hypot(w, h) / 2;
-  const g = ctx.createRadialGradient(w / 2, h / 2, r * 0.45, w / 2, h / 2, r * 1.05);
-  g.addColorStop(0, 'rgba(0,0,0,0)');
-  g.addColorStop(1, 'rgba(0,0,0,0.34)');
-  ctx.fillStyle = g;
+  const key = w + 'x' + h;
+  if (vignetteKey !== key) {
+    const r = Math.hypot(w, h) / 2;
+    vignette = ctx.createRadialGradient(w / 2, h / 2, r * 0.45, w / 2, h / 2, r * 1.05);
+    vignette.addColorStop(0, 'rgba(0,0,0,0)');
+    vignette.addColorStop(1, 'rgba(0,0,0,0.34)');
+    vignetteKey = key;
+  }
+  ctx.fillStyle = vignette;
   ctx.fillRect(0, 0, w, h);
 }
 
@@ -1038,6 +1132,7 @@ function updateBadge(wx, wy) {
 
 function onPointerDown(e) {
   if (e.button === 2) return;
+  invalidate();
   canvas.setPointerCapture(e.pointerId);
   const [sx, sy] = canvasPos(e);
   const [wx, wy] = s2w(sx, sy);
@@ -1080,7 +1175,9 @@ function onPointerDown(e) {
       const here = w2s(pt);
       if (Math.hypot(first[0] - here[0], first[1] - here[1]) < 12) { closeRoom(); return; }
     }
-    roomDraft.pts.push(pt);
+    // A double-click is two pointerdowns on the same spot; the second must not add a corner.
+    const last = roomDraft.pts[roomDraft.pts.length - 1];
+    if (!last || Math.hypot(pt[0] - last[0], pt[1] - last[1]) > 0.01) roomDraft.pts.push(pt);
     updateHint();
     return;
   }
@@ -1100,23 +1197,21 @@ function onPointerDown(e) {
     renderInspector(); updateCursor();
     return;
   }
+  // Drags take their undo snapshot on the first real move (onPointerMove), so a plain
+  // click-select never touches the history or clears the redo stack.
   if (hit.kind === 'handle') {
-    pushUndo();
-    drag = { kind: 'handle', id: hit.id, end: hit.end };
+    drag = { kind: 'handle', id: hit.id, end: hit.end, moved: false };
     return;
   }
   selection = { kind: hit.kind, id: hit.id };
   renderInspector();
   if (hit.kind === 'wall') {
     const w = prop.walls.find(w => w.id === hit.id);
-    pushUndo();
     drag = { kind: 'wall', id: hit.id, wx, wy, orig: { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by }, moved: false };
   } else if (hit.kind === 'opening') {
-    pushUndo();
     drag = { kind: 'opening', id: hit.id, moved: false };
   } else if (hit.kind === 'room') {
     const r = prop.rooms.find(r => r.id === hit.id);
-    pushUndo();
     drag = { kind: 'room', id: hit.id, wx, wy, orig: r.pts.map(p => [...p]), moved: false };
   } else if (hit.kind === 'underlay') {
     drag = { kind: 'underlay', wx, wy, ox: prop.plan.offsetX, oy: prop.plan.offsetY, moved: false };
@@ -1124,6 +1219,7 @@ function onPointerDown(e) {
 }
 
 function onPointerMove(e) {
+  invalidate();
   const [sx, sy] = canvasPos(e);
   const [wx, wy] = s2w(sx, sy);
   hoverPt = [wx, wy];
@@ -1139,6 +1235,8 @@ function onPointerMove(e) {
     vs.panY = drag.panY - (sy - drag.sy) / vs.zoom;
     return;
   }
+  // First real movement: snapshot the pre-drag state (the underlay is not in the snapshot).
+  if (!drag.moved && drag.kind !== 'underlay') pushUndo();
   drag.moved = true;
   if (drag.kind === 'handle') {
     const w = prop.walls.find(w => w.id === drag.id);
@@ -1170,37 +1268,42 @@ function onPointerMove(e) {
 }
 
 function onPointerUp() {
+  invalidate();
   if (drag && drag.moved) { touch(); renderInspector(); }
-  else if (drag && !drag.moved && (drag.kind === 'wall' || drag.kind === 'opening' || drag.kind === 'room')) {
-    // Was a click-select; undo snapshot without changes is harmless but pop it to keep stack clean.
-    undoStack.pop();
-  }
   drag = null;
   if (hoverPt && tool === 'select') hover = hitTest(hoverPt[0], hoverPt[1]);
   updateCursor();
 }
 
 function onPointerLeave() {
+  invalidate();
   hoverPt = null; hover = null;
   if (!drag) updateCursor();
 }
 
 function onDblClick() {
+  invalidate();
   if (tool === 'wall') { drawing = null; updateHint(); }
   if (tool === 'room' && roomDraft && roomDraft.pts.length >= 3) closeRoom();
 }
 
 function closeRoom() {
-  pushUndo();
-  const r = { id: uid('r'), name: 'Room ' + (prop.rooms.length + 1), pts: roomDraft.pts, material: 'mat-oak' };
-  prop.rooms.push(r);
+  // Drop consecutive duplicates (and a last point that repeats the first) so a room closed
+  // by double-click or by clicking its first corner never carries a zero-length edge.
+  const pts = roomDraft.pts.filter((p, i, a) => !i || Math.hypot(p[0] - a[i - 1][0], p[1] - a[i - 1][1]) > 0.01);
+  if (pts.length > 3 && Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]) <= 0.01) pts.pop();
   roomDraft = null;
+  if (pts.length < 3) { updateHint(); return; }
+  pushUndo();
+  const r = { id: uid('r'), name: 'Room ' + (prop.rooms.length + 1), pts, material: 'mat-oak' };
+  prop.rooms.push(r);
   selection = { kind: 'room', id: r.id };
   touch(); renderInspector(); updateHint();
 }
 
 function onWheel(e) {
   e.preventDefault();
+  invalidate();
   const [sx, sy] = canvasPos(e);
   if (e.ctrlKey || e.metaKey) {
     const factor = Math.exp(-e.deltaY * 0.01);
@@ -1216,6 +1319,7 @@ function onWheel(e) {
 
 function onKeyDown(e) {
   if (e.target.matches('input, textarea, select')) return;
+  invalidate();
   if (e.key === ' ') { spaceDown = true; e.preventDefault(); updateCursor(); return; }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
     e.preventDefault();
@@ -1233,16 +1337,21 @@ function onKeyDown(e) {
     updateHint();
     return;
   }
-  if (e.key === 'Delete' || e.key === 'Backspace') { deleteSelection(); }
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    // While calibrating, a stray Backspace (meant for the distance field) must never delete
+    // the underlay the calibration is measuring; REMOVE UNDERLAY in the inspector still works.
+    if (tool === 'calibrate' || calib) return;
+    deleteSelection();
+  }
 }
-function onKeyUp(e) { if (e.key === ' ') { spaceDown = false; updateCursor(); } }
+function onKeyUp(e) { if (e.key === ' ') { spaceDown = false; updateCursor(); invalidate(); } }
 
 // ---------- tool column / hint ----------
 function setTool(t) {
   tool = t;
   drawing = null; roomDraft = null; hover = null;
   if (t !== 'calibrate') calib = null;
-  renderToolCol(); updateHint(); renderInspector(); updateCursor();
+  renderToolCol(); updateHint(); renderInspector(); updateCursor(); invalidate();
 }
 
 function setHint(text) { if (hintEl) hintEl.textContent = text; }
@@ -1301,6 +1410,7 @@ function renderToolCol() {
   tc.querySelectorAll('[data-chk]').forEach(c => c.onchange = () => {
     if (c.dataset.chk === 'snap') snapOn = c.checked;
     if (c.dataset.chk === 'dims') dimsOn = c.checked;
+    invalidate();
   });
 }
 
@@ -1334,7 +1444,7 @@ function bindAssign(root) {
 
 function lenField(label, value, key, placeholder) {
   return `<div class="field"><label>${label}</label>
-    <input type="text" data-len="${key}" value="${value != null ? escapeHtml(fmtLen(value)) : ''}" placeholder="${placeholder || ''}"></div>`;
+    <input type="text" data-len="${key}" value="${value != null ? escapeHtml(fmtLen(value)) : ''}" placeholder="${escapeHtml(placeholder || '')}"></div>`;
 }
 
 function head(ic, text) { return `<h3>${icon(ic)}${text}</h3>`; }
@@ -1351,11 +1461,14 @@ function renderInspector() {
       <button class="btn primary" data-cal-apply>${icon('check')}APPLY SCALE</button>
       <button class="btn" data-cal-cancel>CANCEL</button>`;
     const input = insp.querySelector('[data-cal-input]');
-    input.focus();
+    // Deferred: this renders inside pointerdown, and the browser's own mousedown focus handling
+    // would otherwise move focus straight back to <body> (the canvas is not focusable).
+    setTimeout(() => { if (input.isConnected) input.focus(); }, 0);
     const apply = () => {
+      const pl = prop.plan;
+      if (!pl) { calib = null; renderInspector(); return; }   // underlay removed while the form was open
       const real = parseLen(input.value);
       if (isNaN(real) || real <= 0) { alert('Could not parse that distance. Try 12\'6", 150", or 3.8m.'); return; }
-      const pl = prop.plan;
       const ratio = real / measured;
       // Rescale the underlay mapping about its own origin so image geometry matches reality.
       pl.mPerPx = pl.mPerPx * ratio;
@@ -1367,7 +1480,7 @@ function renderInspector() {
     };
     insp.querySelector('[data-cal-apply]').onclick = apply;
     input.onkeydown = e => { if (e.key === 'Enter') apply(); };
-    insp.querySelector('[data-cal-cancel]').onclick = () => { calib = null; renderInspector(); };
+    insp.querySelector('[data-cal-cancel]').onclick = () => { calib = null; renderInspector(); invalidate(); };
     return;
   }
 
@@ -1405,6 +1518,7 @@ function renderInspector() {
         ${lenField('Height', w.height, 'h', fmtLen(prop.wallHeight) + ' (default)')}
       </div>
       <div class="field"><label>Material</label>${materialSelectHtml('wall', w.material, 'data-mat')}</div>
+      <div class="field"><label>Interior face material</label>${materialSelectHtml('wall', w.materialIn, 'data-matin').replace('(none)', 'Automatic')}</div>
       ${scopeAssignHtml(w.id)}
       <div class="stat-line"><span>Face area</span><b>${fmtArea(L * (w.height || prop.wallHeight))}</b></div>
       <div class="stat-line"><span>Openings</span><b>${prop.openings.filter(o => o.wallId === w.id).length}</b></div>
@@ -1431,6 +1545,8 @@ function renderInspector() {
       renderInspector();
     };
     insp.querySelector('[data-mat]').onchange = e => { w.material = e.target.value || null; touch(); };
+    // Room-facing faces in 3D; blank = automatic (drywall on exterior walls, the wall material otherwise).
+    insp.querySelector('[data-matin]').onchange = e => { w.materialIn = e.target.value || null; touch(); };
     insp.querySelector('[data-del]').onclick = deleteSelection;
     bindAssign(insp);
     return;
@@ -1534,12 +1650,14 @@ export function mount(root) {
   inspEl = root.querySelector('.inspector');
   hintEl = root.querySelector('.canvas-hint');
   badgeEl = root.querySelector('.canvas-badge');
-  hatchCache.clear();
+  hatchCache.clear(); textWidthCache.clear(); vignetteKey = '';
+  hist = historyFor(prop);
+  dirty = true;
 
   vs = viewByProp[prop.id];
-  const planSrc = prop.plan && prop.plan.img ? prop.plan.img.length + ':' + prop.plan.imgW + 'x' + prop.plan.imgH : '';
-  if (!vs) { vs = viewByProp[prop.id] = { zoom: 60, panX: 0, panY: 0, planSrc }; requestAnimationFrame(() => { fitView(); }); }
-  else if (vs.planSrc !== planSrc) { vs.planSrc = planSrc; requestAnimationFrame(() => { fitView(); }); }   // a new underlay arrived from PHOTOS
+  const planSrc = planKey(prop);
+  if (!vs) { vs = viewByProp[prop.id] = { zoom: 60, panX: 0, panY: 0, planSrc }; requestAnimationFrame(() => { if (wrapEl) fitView(); }); }
+  else if (vs.planSrc !== planSrc) { vs.planSrc = planSrc; requestAnimationFrame(() => { if (wrapEl) fitView(); }); }   // a new underlay arrived from PHOTOS
 
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointermove', onPointerMove);
@@ -1551,12 +1669,21 @@ export function mount(root) {
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
 
+  // Inspector edits and other views' changes reach the canvas through the store; layout
+  // changes (panel resize, browser zoom) through the observer. Everything else is an input.
+  offChange = onChange(invalidate);
+  if (typeof ResizeObserver !== 'undefined') { resizeObs = new ResizeObserver(invalidate); resizeObs.observe(wrapEl); }
+  else window.addEventListener('resize', invalidate);
+
   renderToolCol();
   renderInspector();
   updateHint();
   updateCursor();
 
-  const loop = () => { draw(); raf = requestAnimationFrame(loop); };
+  const loop = () => {
+    if (dirty && draw()) dirty = false;
+    raf = requestAnimationFrame(loop);
+  };
   raf = requestAnimationFrame(loop);
 }
 
@@ -1564,6 +1691,9 @@ export function unmount() {
   cancelAnimationFrame(raf);
   window.removeEventListener('keydown', onKeyDown);
   window.removeEventListener('keyup', onKeyUp);
-  drawing = null; roomDraft = null; drag = null; hover = null; hoverPt = null;
-  el = null; canvas = null; ctx = null; inspEl = null; hintEl = null; badgeEl = null;
+  window.removeEventListener('resize', invalidate);
+  if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
+  if (offChange) { offChange(); offChange = null; }
+  drawing = null; roomDraft = null; drag = null; hover = null; hoverPt = null; hist = null;
+  el = null; canvas = null; ctx = null; wrapEl = null; inspEl = null; hintEl = null; badgeEl = null;
 }
