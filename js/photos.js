@@ -7,7 +7,7 @@
 import {
   ws, activeProperty, touch, escapeHtml, allScopeItems, elementInfo, materialById, fmtLen, fmtDate,
 } from './store.js';
-import { addPhotoFromFile, photoUrl, photoBytes, photoById, deletePhoto, isPanoramaAspect } from './photos-store.js';
+import { addPhotoFromFile, photoUrl, photoBytes, photoById, deletePhoto, isPanoramaAspect, revokePhotoUrls } from './photos-store.js';
 import { addCustomMaterial } from './materials.js';
 
 const PLAN_MAX_PX = 2000;   // same cap as plan2d's own underlay upload
@@ -18,7 +18,8 @@ const filters = { kind: '', room: '', pin: '', q: '' };
 let selectedId = null;
 
 let el = null, prop = null;
-let importing = null;       // { done, total, failed } while an upload batch is running
+let dropRoot = null;        // the shared #view element while the drop listeners are attached
+let importing = null;       // running upload batch: { done, total, failed, queue: [{ file, prop }] }
 let lightbox = null;        // { ids, idx } while the lightbox is open
 let dragDepth = 0;
 let previewToken = 0;       // guards async preview loads against stale selections
@@ -77,24 +78,36 @@ async function averageColor(src) {
 }
 
 // ---------- uploads ----------
+// One batch runs at a time and owns its state; files added while it runs join its queue.
+// Every queued file remembers the property it was added to, and the DOM is only touched
+// while the view is mounted, so navigating away or switching property mid-upload neither
+// aborts the batch nor throws.
 async function addFiles(list) {
   const files = Array.from(list || []).filter(f => f && (f.type.startsWith('image/') || /\.(jpe?g|png|webp|gif|avif|bmp|heic|heif)$/i.test(f.name)));
   if (!files.length) { if (list && list.length) alert('Only image files can be added as photos.'); return; }
-  importing = { done: 0, total: files.length, failed: [] };
-  renderHead();
-  let last = null;
-  for (const f of files) {
-    try { last = await addPhotoFromFile(prop, f); }
-    catch (e) { importing.failed.push(f.name); }
-    importing.done++;
-    renderHead();
-    renderGrid();
+  const entries = files.map(file => ({ file, prop }));
+  if (importing) {
+    importing.queue.push(...entries);
+    importing.total += entries.length;
+    if (el) renderHead();
+    return;
   }
-  const failed = importing.failed;
+  const batch = importing = { done: 0, total: entries.length, failed: [], queue: entries };
+  if (el) renderHead();
+  let last = null;
+  while (batch.queue.length) {
+    const { file, prop: target } = batch.queue.shift();
+    try { last = await addPhotoFromFile(target, file); }
+    catch (e) { batch.failed.push(file.name); }
+    batch.done++;
+    if (el) { renderHead(); renderGrid(); }
+  }
   importing = null;
-  if (last) selectedId = last.id;
-  render();
-  if (failed.length) alert('Could not read ' + failed.length + ' file(s): ' + failed.join(', '));
+  if (el) {
+    if (last && photoById(prop, last.id)) selectedId = last.id;
+    render();
+  }
+  if (batch.failed.length) alert('Could not read ' + batch.failed.length + ' file(s): ' + batch.failed.join(', '));
 }
 
 function onPaste(e) {
@@ -148,8 +161,12 @@ async function useAsUnderlay(p) {
   location.hash = '#/plan';
 }
 
-function useAsSky(p) {
+async function useAsSky(p) {
   if (p.kind !== 'pano') return;
+  // The viewer needs the full-resolution bytes for the equirect texture; a thumbnail-only
+  // record (JSON-only import) would leave the model with a dark sky and no explanation.
+  if (!(await photoBytes(p.id))) { alert('The full-resolution file for this panorama is not in this browser (it came from a JSON-only export). Re-upload it to use it as the sky.'); return; }
+  if (!prop) return;
   prop.env.sky = 'pano';
   prop.env.panoPhotoId = p.id;
   touch();
@@ -194,11 +211,17 @@ async function materialFromPhoto(p) {
   location.hash = '#/materials';
 }
 
-function clearReferences(id) {
+// Stop lighting the model with this photo (it is no longer a panorama, or is being deleted).
+function clearSkyReference(id) {
   if (prop.env && prop.env.panoPhotoId === id) {
     prop.env.panoPhotoId = null;
     if (prop.env.sky === 'pano') prop.env.sky = 'dynamic';
   }
+}
+
+// Delete cascade: the sky plus every photo-based material built from it.
+function clearReferences(id) {
+  clearSkyReference(id);
   for (const m of ws.data.materials) {
     if (m.photoId === id) { m.photoId = null; if (m.pattern === 'photo') m.pattern = 'flat'; }
   }
@@ -264,7 +287,7 @@ async function renderLightbox() {
   img.alt = p.name;
   box.classList.toggle('pano', p.kind === 'pano');
   box.querySelector('.ph-lb-cap').innerHTML =
-    `<b>${escapeHtml(p.name)}</b><span>${kindLabel(p)} - ${p.w} x ${p.h}${p.roomId ? ' - ' + escapeHtml(roomName(p.roomId)) : ''} - ${lightbox.idx + 1} / ${lightbox.ids.length}</span>`;
+    `<b>${escapeHtml(p.name)}</b><span>${kindLabel(p)} - ${escapeHtml(p.w)} x ${escapeHtml(p.h)}${p.roomId ? ' - ' + escapeHtml(roomName(p.roomId)) : ''} - ${lightbox.idx + 1} / ${lightbox.ids.length}</span>`;
   const url = await photoUrl(id);
   if (url && lightbox && lightbox.ids[lightbox.idx] === id) img.src = url;
 }
@@ -320,7 +343,7 @@ function bindUploadButtons(root) {
 function renderFilters() {
   const bar = el.querySelector('.ph-filters');
   if (!bar) return;
-  const rooms = prop.rooms.map(r => `<option value="${r.id}" ${filters.room === r.id ? 'selected' : ''}>${escapeHtml(r.name || 'Room')}</option>`).join('');
+  const rooms = prop.rooms.map(r => `<option value="${escapeHtml(r.id)}" ${filters.room === r.id ? 'selected' : ''}>${escapeHtml(r.name || 'Room')}</option>`).join('');
   bar.innerHTML = `
     <select data-filter="kind" aria-label="Filter by kind">
       <option value="">ALL KINDS</option>
@@ -352,7 +375,7 @@ function cardHtml(p) {
     (p.elementIds || []).length ? `<span class="chip">${p.elementIds.length} ELEMENT${p.elementIds.length === 1 ? '' : 'S'}</span>` : '',
     prop.env && prop.env.panoPhotoId === p.id ? `<span class="chip accent">SKY</span>` : '',
   ].filter(Boolean).join('');
-  return `<button class="ph-card ${p.kind === 'pano' ? 'pano' : ''} ${p.id === selectedId ? 'active' : ''}" data-id="${p.id}"
+  return `<button class="ph-card ${p.kind === 'pano' ? 'pano' : ''} ${p.id === selectedId ? 'active' : ''}" data-id="${escapeHtml(p.id)}"
       aria-pressed="${p.id === selectedId}" title="${escapeHtml(p.name)} (double-click to zoom)">
     <div class="ph-thumb"><img src="${escapeHtml(p.thumb || '')}" alt="" loading="lazy" draggable="false"></div>
     <div class="ph-card-body">
@@ -426,7 +449,7 @@ function scopeOptionsHtml(p) {
   for (const { project, item } of allScopeItems()) (groups[project.name] = groups[project.name] || []).push(item);
   return Object.entries(groups).map(([name, items]) =>
     `<optgroup label="${escapeHtml(name)}">${items.map(it =>
-      `<option value="${it.id}" ${have.has(it.id) ? 'selected' : ''}>${escapeHtml(it.name)}</option>`).join('')}</optgroup>`).join('');
+      `<option value="${escapeHtml(it.id)}" ${have.has(it.id) ? 'selected' : ''}>${escapeHtml(it.name)}</option>`).join('')}</optgroup>`).join('');
 }
 
 function elementOptionsHtml(p) {
@@ -435,10 +458,10 @@ function elementOptionsHtml(p) {
     const info = elementInfo(prop.id, w.id);
     const mat = materialById(w.material);
     const label = `Wall ${fmtLen(info ? info.length : 0)}${mat ? ' - ' + mat.name : ''}  [${w.id.slice(-6)}]`;
-    return `<option value="${w.id}" ${have.has(w.id) ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+    return `<option value="${escapeHtml(w.id)}" ${have.has(w.id) ? 'selected' : ''}>${escapeHtml(label)}</option>`;
   }).join('');
   const rooms = prop.rooms.map(r =>
-    `<option value="${r.id}" ${have.has(r.id) ? 'selected' : ''}>${escapeHtml(r.name || 'Room')}</option>`).join('');
+    `<option value="${escapeHtml(r.id)}" ${have.has(r.id) ? 'selected' : ''}>${escapeHtml(r.name || 'Room')}</option>`).join('');
   return (rooms ? `<optgroup label="Rooms / floors">${rooms}</optgroup>` : '') + (walls ? `<optgroup label="Walls">${walls}</optgroup>` : '');
 }
 
@@ -489,7 +512,7 @@ function renderDetail() {
       </div>
       <div class="field"><label>Room</label>
         <select data-f="roomId"><option value="">(none)</option>${prop.rooms.map(r =>
-          `<option value="${r.id}" ${p.roomId === r.id ? 'selected' : ''}>${escapeHtml(r.name || 'Room')}</option>`).join('')}</select></div>
+          `<option value="${escapeHtml(r.id)}" ${p.roomId === r.id ? 'selected' : ''}>${escapeHtml(r.name || 'Room')}</option>`).join('')}</select></div>
       <div class="field"><label>Notes</label><textarea data-f="notes" placeholder="What does this show? Conditions, measurements, ideas.">${escapeHtml(p.notes || '')}</textarea></div>
       <div class="field"><label>Scope items (cut sheets)</label>
         <select multiple size="4" data-multi="itemIds" aria-label="Linked scope items">${scopeOptionsHtml(p)}</select>
@@ -498,7 +521,7 @@ function renderDetail() {
         <select multiple size="4" data-multi="elementIds" aria-label="Linked model elements">${elementOptionsHtml(p)}</select>
         <div class="ph-note">Photos of a wall or floor follow it onto every cut sheet that rebuilds it.</div></div>
 
-      <div class="stat-line"><span>Size</span><b>${p.w} x ${p.h}</b></div>
+      <div class="stat-line"><span>Size</span><b>${escapeHtml(p.w)} x ${escapeHtml(p.h)}</b></div>
       <div class="stat-line"><span>Added</span><b>${escapeHtml(fmtDate(String(p.createdAt || '').slice(0, 10)))}</b></div>
       <div class="stat-line"><span>Pinned in 3D</span><b>${p.pin ? `x ${(+p.pin.x).toFixed(2)}  y ${(+p.pin.y).toFixed(2)}  z ${(+p.pin.z).toFixed(2)}` : 'no'}</b></div>
       ${isSky ? '<div class="stat-line"><span>Sky</span><b class="accent">ACTIVE (lighting the model)</b></div>' : ''}
@@ -530,7 +553,8 @@ function renderDetail() {
   pane.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => {
     if (p.kind === b.dataset.kind) return;
     p.kind = b.dataset.kind;
-    if (p.kind !== 'pano' && prop.env && prop.env.panoPhotoId === p.id) clearReferences(p.id);
+    // Only the sky depends on the kind; a material built from the image keeps working.
+    if (p.kind !== 'pano') clearSkyReference(p.id);
     touch(); render();
   });
   pane.querySelectorAll('[data-multi]').forEach(sel => sel.onchange = () => {
@@ -559,6 +583,9 @@ export function mount(root) {
     return;
   }
   if (selectedId && !photoById(prop, selectedId)) selectedId = null;
+  // A room filter from another property (or a deleted room) would hide every photo while the
+  // select shows ALL ROOMS.
+  if (filters.room && filters.room !== '-' && !prop.rooms.some(r => r.id === filters.room)) filters.room = '';
   root.innerHTML = `
     <div class="ph-layout">
       <div class="ph-main">
@@ -571,17 +598,28 @@ export function mount(root) {
     </div>`;
   render();
 
-  root.addEventListener('dragenter', onDragEnter);
-  root.addEventListener('dragover', onDragOver);
-  root.addEventListener('dragleave', onDragLeave);
-  root.addEventListener('drop', onDrop);
+  // #view outlives the view, so these come off again in unmount().
+  dropRoot = root;
+  dropRoot.addEventListener('dragenter', onDragEnter);
+  dropRoot.addEventListener('dragover', onDragOver);
+  dropRoot.addEventListener('dragleave', onDragLeave);
+  dropRoot.addEventListener('drop', onDrop);
   document.addEventListener('paste', onPaste);
   window.addEventListener('keydown', onKeyDown);
 }
 
 export function unmount() {
+  if (dropRoot) {
+    dropRoot.removeEventListener('dragenter', onDragEnter);
+    dropRoot.removeEventListener('dragover', onDragOver);
+    dropRoot.removeEventListener('dragleave', onDragLeave);
+    dropRoot.removeEventListener('drop', onDrop);
+    dropRoot = null;
+  }
   document.removeEventListener('paste', onPaste);
   window.removeEventListener('keydown', onKeyDown);
-  lightbox = null; importing = null; dragDepth = 0;
+  // A running upload batch keeps going (it owns its state); the preview and lightbox URLs go.
+  revokePhotoUrls();
+  lightbox = null; dragDepth = 0;
   el = null; prop = null;
 }
