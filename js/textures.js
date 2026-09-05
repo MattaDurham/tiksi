@@ -21,7 +21,9 @@ const FALLBACK = { id: '', name: 'Fallback', color: '#d8d4cc', pattern: 'flat', 
 const SWATCH_RES = 256;          // texture resolution behind a swatch; the chip is tiny
 const HI_RES = new Set(['wood', 'stone', 'marble']);
 const SLICE_MS = 12;             // per-tick CPU budget of the synthesis scheduler
-const MAX_TEX_ENTRIES = 56;      // LRU cap: an editor slider can mint dozens of variants
+const MAX_TEX_ENTRIES = 56;      // LRU cap on full texture sets (a 1024 set is ~16 MB of maps)
+const MAX_TRANSIENT_ENTRIES = 8; // of which editor-preview variants: the current one and a few recent
+const MAX_SWATCHES = 200;        // cached swatch PNGs (~50 KB each); a long editing session mints many
 
 // ---------- deterministic noise ----------
 // Tiny mulberry32 PRNG (used for setup tables) and an integer hash for lattice noise.
@@ -798,6 +800,9 @@ function finishEntry(entry, mat, N, col, nrm, orm, wrap) {
   entry.status = 'ready';
   const ws = entry.waiters; entry.waiters = [];
   for (const w of ws) { try { w(entry); } catch (e) { console.error(e); } }
+  // Variants queued faster than they synthesise were not evictable when the next one was minted;
+  // trim now that this one is ready, so a long slider drag does not leave a dozen sets resident.
+  evictTextures(entry);
 }
 
 // ---------- photo pipeline ----------
@@ -894,9 +899,13 @@ export function textureStats() {
 }
 
 // ---------- caches ----------
-const texCache = new Map();     // texKey -> entry { status, maps, albedo, waiters, gen, lastUsed, matKeys }
+// Two kinds of texture entry share texCache. The viewer's sets are requested through materialFor()
+// with no options and are what the model is built from; the materials editor asks for its preview
+// variants with { transient: true }. Eviction takes transient entries first (and keeps only a few of
+// them), so browsing or editing the library never throws away the sets the model is showing.
+const texCache = new Map();     // texKey -> entry { status, maps, albedo, waiters, lastUsed, matKeys, transient, res }
 const matCache = new Map();     // matKey -> THREE.Material
-const swatchCache = new Map();  // swatchKey -> dataURL
+const swatchCache = new Map();  // swatchKey -> dataURL (insertion order doubles as LRU order)
 const swatchPending = new Map();// swatchKey -> [cb]
 let clock = 0;
 
@@ -919,11 +928,18 @@ function snapshot(mat) {
   };
 }
 
-function ensureTextures(mat, res) {
+// Every request counts as a use, cache hits included; a set stops being transient the moment a
+// non-transient consumer (the model) asks for it.
+function touchEntry(entry, transient) {
+  entry.lastUsed = ++clock;
+  if (!transient) entry.transient = false;
+}
+
+function ensureTextures(mat, res, transient) {
   const key = texKey(mat, res);
   let entry = texCache.get(key);
-  if (entry) { entry.lastUsed = ++clock; return entry; }
-  entry = { key, status: 'pending', maps: null, albedo: null, waiters: [], lastUsed: ++clock, matKeys: new Set(), cancelled: false };
+  if (entry) { touchEntry(entry, transient); return entry; }
+  entry = { key, res, status: 'pending', maps: null, albedo: null, waiters: [], lastUsed: ++clock, matKeys: new Set(), cancelled: false, transient: !!transient };
   texCache.set(key, entry);
   const snap = snapshot(mat);
   if (snap.pattern === 'photo') photoJob(snap, res, entry);
@@ -933,10 +949,24 @@ function ensureTextures(mat, res) {
 }
 function whenReady(entry, cb) { if (entry.status === 'ready') cb(entry); else entry.waiters.push(cb); }
 
-function evictTextures() {
-  if (texCache.size <= MAX_TEX_ENTRIES) return;
-  const entries = [...texCache.values()].filter(e => e.status === 'ready').sort((a, b) => a.lastUsed - b.lastUsed);
-  for (const e of entries.slice(0, Math.max(1, texCache.size - MAX_TEX_ENTRIES))) {
+// Only ready entries are candidates (a pending one has a job and waiters on it), never `keep` (the
+// set that just finished, whose consumers were handed it a moment ago) and never a set a swatch
+// render is still queued for. Editor variants go first, oldest first, and never more than
+// MAX_TRANSIENT_ENTRIES of them survive; the model's sets are touched on every rebuild, so among
+// the rest the LRU order really is "least recently shown".
+function evictTextures(keep) {
+  const byAge = (a, b) => a.lastUsed - b.lastUsed;
+  const awaited = new Set();
+  for (const k of swatchPending.keys()) awaited.add(k.slice(0, k.lastIndexOf('#')));
+  const ready = [...texCache.values()].filter(e => e.status === 'ready' && e !== keep && !awaited.has(e.key));
+  const transient = ready.filter(e => e.transient).sort(byAge);
+  let drop = transient.slice(0, Math.max(0, transient.length - MAX_TRANSIENT_ENTRIES));
+  const over = texCache.size - drop.length - MAX_TEX_ENTRIES;
+  if (over > 0) {
+    const rest = transient.slice(drop.length).concat(ready.filter(e => !e.transient).sort(byAge));
+    drop = drop.concat(rest.slice(0, over));
+  }
+  for (const e of drop) {
     disposeEntry(e);
     texCache.delete(e.key);
   }
@@ -993,7 +1023,7 @@ function buildMaterial(mat, opts, res, key) {
   m.userData.cacheKey = key;
   m.userData.materialId = mat.id || '';
   if (hasMaps(mat)) {
-    const entry = ensureTextures(mat, res);
+    const entry = ensureTextures(mat, res, opts.transient);
     entry.matKeys.add(key);
     whenReady(entry, e => { if (!e.cancelled) applyMaps(m, mat, e); });
   }
@@ -1005,26 +1035,45 @@ function materialForRes(mat, opts, res) {
   const key = texKey(mat, res) + '#' + num(mat.normalScale, 1) + '|' +
     (opts.side != null ? opts.side : '') + '|' + (opts.transparent ? 1 : 0) + '|' + (opts.opacity != null ? opts.opacity : '');
   let m = matCache.get(key);
-  if (m) return m;
+  if (m) {
+    // A hit is a use too: without this the model's sets kept their creation-time stamp and were
+    // the LRU's first victims whenever the library minted a few variants.
+    if (hasMaps(mat)) { const e = texCache.get(texKey(mat, res)); if (e) touchEntry(e, opts.transient); }
+    return m;
+  }
   m = buildMaterial(mat, opts, res, key);
   matCache.set(key, m);
   return m;
 }
 
+// opts: side / transparent / opacity as for MeshStandardMaterial, plus `transient` for a preview
+// that will move on (its texture set is evicted before anything the model uses).
 export function materialFor(mat, opts) {
   mat = normRec(mat);
   return materialForRes(mat, opts, resFor(mat));
 }
 
 // Resolve when the material's maps are on the GPU-ready side (used by the previews).
-export function whenMaterialReady(mat, cb) {
+export function whenMaterialReady(mat, cb, opts) {
   mat = normRec(mat);
   if (!hasMaps(mat)) { cb(); return; }
-  whenReady(ensureTextures(mat, resFor(mat)), () => cb());
+  whenReady(ensureTextures(mat, resFor(mat), opts && opts.transient), () => cb());
 }
 
 // ---------- public: swatches ----------
 let pv = null;   // shared preview renderer/scene, created on first use
+
+// The studio IBL lives in a render target, which a lost context cannot restore from source data
+// like an ordinary texture; rebuild it whenever the context comes back or swatches lose their sheen.
+function rigEnvironment(rig) {
+  if (rig.env) rig.env.dispose();
+  const room = new RoomEnvironment();
+  const pmrem = new THREE.PMREMGenerator(rig.renderer);
+  rig.env = pmrem.fromScene(room, 0.04).texture;
+  pmrem.dispose();
+  room.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  rig.scene.environment = rig.env;
+}
 
 function previewRig() {
   if (pv) return pv;
@@ -1038,11 +1087,14 @@ function previewRig() {
   renderer.toneMappingExposure = 0.8;
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#161c22');
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-  pmrem.dispose();
-  scene.environment = env;
+  const rig = { renderer, scene, lost: false, env: null };
+  rigEnvironment(rig);
   scene.environmentIntensity = 0.55;
+  // The browser drops the least recently flushed context when a page holds too many, and this
+  // off-screen canvas only flushes when a swatch renders. three preventDefault()s the loss so the
+  // context is restorable; while it is gone, swatches fall back to their albedo and are not cached.
+  renderer.domElement.addEventListener('webglcontextlost', () => { rig.lost = true; });
+  renderer.domElement.addEventListener('webglcontextrestored', () => { rig.lost = false; rigEnvironment(rig); });
   const camera = new THREE.PerspectiveCamera(28, 1, 0.05, 20);
   camera.position.set(0.62, 1.2, 1.78);
   camera.lookAt(0, -0.04, 0);
@@ -1063,8 +1115,28 @@ function previewRig() {
   const back = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), new THREE.MeshStandardMaterial({ color: 0x1b232b, roughness: 1 }));
   back.rotation.x = -Math.PI / 2; back.position.y = -0.2;
   scene.add(back);
-  pv = { renderer, scene, camera, chip, env, idle };
+  Object.assign(rig, { camera, chip, idle });
+  pv = rig;
   return pv;
+}
+
+function rigLost(rig) {
+  const gl = rig.renderer.getContext();
+  return rig.lost || !gl || gl.isContextLost();
+}
+
+function rememberSwatch(key, url) {
+  swatchCache.set(key, url);
+  while (swatchCache.size > MAX_SWATCHES) swatchCache.delete(swatchCache.keys().next().value);
+}
+
+// A swatch's 256-res maps have no reader once its PNG is cached, so they are dropped straight after
+// the render unless another size of the same swatch is still waiting on them (card 160 / picker 48).
+// Re-minting one later costs ~30 ms; keeping all of them cost the model its texture slots.
+function releaseSwatchMaps(tk) {
+  for (const k of swatchPending.keys()) if (k.startsWith(tk + '#')) return;
+  const e = texCache.get(tk);
+  if (e && e.res === SWATCH_RES && e.status === 'ready') { disposeEntry(e); texCache.delete(tk); }
 }
 
 function albedoDataUrl(entry, mat, size) {
@@ -1084,21 +1156,36 @@ function albedoDataUrl(entry, mat, size) {
   return c.toDataURL('image/png');
 }
 
+// Always settles the key: waiters get a URL (lit chip, or the albedo fallback) even if the render
+// throws, so a card can never be left waiting forever. Only a real render is cached; a fallback
+// produced while the context is lost is retried on the next request.
 function renderSwatch(mat, size, key) {
   const rig = previewRig();
-  let url = null;
+  let url = null, cacheable = true;
   if (rig.renderer) {
-    rig.chip.material = materialForRes(mat, {}, SWATCH_RES);
-    rig.renderer.setSize(size, size, false);
-    rig.renderer.render(rig.scene, rig.camera);
-    try { url = rig.renderer.domElement.toDataURL('image/png'); } catch (e) { url = null; }
-    rig.chip.material = rig.idle;
+    if (rigLost(rig)) cacheable = false;
+    else {
+      try {
+        rig.chip.material = materialForRes(mat, { transient: true }, SWATCH_RES);
+        rig.renderer.setSize(size, size, false);
+        rig.renderer.render(rig.scene, rig.camera);
+        url = rig.renderer.domElement.toDataURL('image/png');
+      } catch (e) {
+        console.error('swatch render failed', e);
+        url = null;
+      } finally {
+        rig.chip.material = rig.idle;
+      }
+      // The context can go between the check and the read; a blank PNG must not be cached.
+      if (rigLost(rig)) { url = null; cacheable = false; }
+    }
   }
   if (!url) url = albedoDataUrl(hasMaps(mat) ? texCache.get(texKey(mat, SWATCH_RES)) : null, mat, size);
-  swatchCache.set(key, url);
+  if (cacheable) rememberSwatch(key, url);
   const cbs = swatchPending.get(key) || [];
   swatchPending.delete(key);
   for (const cb of cbs) { try { cb(url); } catch (e) { console.error(e); } }
+  if (cacheable && hasMaps(mat)) releaseSwatchMaps(texKey(mat, SWATCH_RES));
   return url;
 }
 
@@ -1107,7 +1194,11 @@ export function swatchUrl(mat, size, cb) {
   size = size || 96;
   const key = texKey(mat, SWATCH_RES) + '#' + num(mat.normalScale, 1) + '@' + size;
   const hit = swatchCache.get(key);
-  if (hit) return hit;
+  if (hit) {
+    // Re-insert so the bound behaves as an LRU rather than dropping the oldest-minted first.
+    swatchCache.delete(key); swatchCache.set(key, hit);
+    return hit;
+  }
   let list = swatchPending.get(key);
   if (list) { if (cb) list.push(cb); return null; }
   list = cb ? [cb] : [];
@@ -1115,7 +1206,7 @@ export function swatchUrl(mat, size, cb) {
   // Snapshot the record: the caller may keep editing it while the maps are still being synthesised.
   const snap = Object.assign({}, mat, { tile: tileOf(mat) });
   const go = () => { if (!swatchCache.has(key) && swatchPending.has(key)) renderSwatch(snap, size, key); };
-  if (hasMaps(snap)) whenReady(ensureTextures(snap, SWATCH_RES), () => setTimeout(go, 0));
+  if (hasMaps(snap)) whenReady(ensureTextures(snap, SWATCH_RES, true), () => setTimeout(go, 0));
   else setTimeout(go, 0);
   return null;
 }

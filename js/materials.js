@@ -144,8 +144,36 @@ export function normalizeMaterial(m) {
   return m;
 }
 
+// Ids land in attribute templates (option values, data-* hooks) and in cache keys, so a hostile or
+// malformed id from an imported file is replaced before any view renders, and every wall, room and
+// property field that pointed at it follows. Same rule as store.js migrate() uses for record ids.
+const ID_OK = /^[\w.:-]{1,80}$/;
+
+function remapMaterialId(from, to) {
+  for (const p of ws.data.properties) {
+    const swap = o => { for (const k of Object.keys(o)) if (/material/i.test(k) && o[k] === from) o[k] = to; };
+    (p.walls || []).forEach(swap);
+    (p.rooms || []).forEach(swap);
+    swap(p);
+  }
+}
+
+function sanitizeMaterialIds(list) {
+  const seen = new Set();
+  for (const m of list) {
+    const ok = typeof m.id === 'string' && ID_OK.test(m.id);
+    if (ok && !seen.has(m.id)) { seen.add(m.id); continue; }
+    const old = m.id;
+    m.id = uid('mat');
+    seen.add(m.id);
+    // A duplicate keeps pointing at the first record; only an invalid id drags its references along.
+    if (!ok && typeof old === 'string' && old) remapMaterialId(old, m.id);
+  }
+}
+
 export function ensureBuiltinMaterials() {
   const list = ws.data.materials;
+  sanitizeMaterialIds(list);
   for (const m of list) {
     const b = BUILTIN_BY_ID.get(m.id);
     if (b && m.pattern == null) {
@@ -239,9 +267,26 @@ export function resetBuiltin(id) {
 }
 
 // ---------- pickers ----------
+// Everything of the kind (or 'any'), plus whatever is assigned right now even when its kind no
+// longer matches: the editor can re-kind a material that walls or rooms still use, and imported
+// data can assign anything. Dropping it would show "(none)" for a surface that still has a
+// material and let the first change silently discard it.
+function pickerList(kind, selectedId) {
+  const list = materialsFor(kind);
+  if (selectedId && !list.some(m => m.id === selectedId)) {
+    const cur = ws.data.materials.find(m => m.id === selectedId);
+    if (cur) list.unshift(cur);
+  }
+  return list;
+}
+function optionLabel(m, kind) {
+  const off = kind && m.kind !== kind && m.kind !== 'any';
+  return escapeHtml(m.name) + (off ? ' (' + escapeHtml(m.kind) + ')' : '');
+}
+
 export function materialSelectHtml(kind, selectedId, attrs) {
-  const opts = materialsFor(kind).map(m =>
-    `<option value="${m.id}" ${m.id === selectedId ? 'selected' : ''}>${escapeHtml(m.name)}</option>`
+  const opts = pickerList(kind, selectedId).map(m =>
+    `<option value="${escapeHtml(m.id)}" ${m.id === selectedId ? 'selected' : ''}>${optionLabel(m, kind)}</option>`
   ).join('');
   return `<select ${attrs || ''}><option value="">(none)</option>${opts}</select>`;
 }
@@ -249,8 +294,8 @@ export function materialSelectHtml(kind, selectedId, attrs) {
 // Select + a strip of rendered swatches. Bind with bindMaterialPicker(root, onChange) so either
 // control updates the other; swatches render lazily (flat colour first, lit chip when ready).
 export function materialPickerHtml(kind, selectedId, attrs) {
-  const chips = materialsFor(kind).map(m =>
-    `<button type="button" class="mat-pick ${m.id === selectedId ? 'active' : ''}" data-mat-pick="${m.id}" title="${escapeHtml(m.name)}" style="background:${escapeHtml(m.color)}"><img alt="" hidden></button>`
+  const chips = pickerList(kind, selectedId).map(m =>
+    `<button type="button" class="mat-pick ${m.id === selectedId ? 'active' : ''}" data-mat-pick="${escapeHtml(m.id)}" title="${escapeHtml(m.name)}" style="background:${escapeHtml(m.color)}"><img alt="" hidden></button>`
   ).join('');
   return `<div class="mat-picker" data-kind="${escapeHtml(kind || '')}">${materialSelectHtml(kind, selectedId, attrs)}<div class="mat-picker-strip">${chips}</div></div>`;
 }
