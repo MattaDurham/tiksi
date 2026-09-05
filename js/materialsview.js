@@ -10,16 +10,21 @@ import {
   KINDS, PATTERNS, PATTERN_LABELS, builtinById, normalizeMaterial, newMaterial, duplicateMaterial,
   deleteMaterial, resetBuiltin, materialUsage,
 } from './materials.js';
-import { materialFor, swatchUrl, pendingTextureJobs } from './textures.js';
+import { materialFor, whenMaterialReady, swatchUrl, pendingTextureJobs } from './textures.js';
 import { addPhotoFromFile, photoById } from './photos-store.js';
 
 const FILTERS = ['all', 'wall', 'floor', 'ceiling', 'trim', 'any'];
 const CARD_SWATCH = 160;
+const REGEN_MS = 220;        // slider input -> new texture set + swatch, at most this often
 
 let el = null, gridEl = null, edEl = null, countEl = null;
 let editingId = null;
 let query = '', kindFilter = 'all';
-let preview = null;          // live three.js preview, created on first editor open
+// Live three.js preview. Created on the first editor open and kept for the life of the page
+// (parked while the view is away), like the 3D viewer's renderer: a renderer per mount left a
+// WebGL context behind each time, and the browser evicts the oldest contexts once it has too many.
+let preview = null;
+let previewSeq = 0;          // ordering stamp for preview material requests (see setPreviewMaterial)
 let regenTimer = 0;
 let notice = '';             // one-line message inside the editor (delete refusals etc.)
 let onKey = null;
@@ -72,7 +77,7 @@ export function unmount() {
   clearTimeout(regenTimer);
   if (onKey) window.removeEventListener('keydown', onKey);
   onKey = null;
-  destroyPreview();
+  parkPreview();
   el = null; gridEl = null; edEl = null; countEl = null;
 }
 
@@ -119,37 +124,46 @@ function renderGrid() {
 }
 
 function cardHtml(m, uses) {
-  const label = PATTERN_LABELS[m.pattern] || m.pattern;
   return `<div class="mv-card ${m.id === editingId ? 'active' : ''}" data-id="${escapeHtml(m.id)}" title="${escapeHtml(m.name)}">
     <div class="mv-chip" style="background:${escapeHtml(m.color)}"><img alt="" hidden><i class="mv-hole"></i></div>
     <div class="mv-card-body">
       <div class="mv-name">${escapeHtml(m.name)}</div>
-      <div class="mv-meta">
-        <span class="mv-kind">${escapeHtml(m.kind)}</span>
-        <span class="mv-pat">${escapeHtml(label)}</span>
-        ${uses ? `<span class="mv-use" title="referenced by ${uses} element${uses === 1 ? '' : 's'}">${uses} in use</span>` : ''}
-        ${m.custom ? '<span class="mv-custom">custom</span>' : ''}
-      </div>
+      <div class="mv-meta">${cardMetaHtml(m, uses)}</div>
     </div>
   </div>`;
+}
+
+function cardMetaHtml(m, uses) {
+  const label = PATTERN_LABELS[m.pattern] || m.pattern;
+  return `<span class="mv-kind">${escapeHtml(m.kind)}</span>
+        <span class="mv-pat">${escapeHtml(label)}</span>
+        ${uses ? `<span class="mv-use" title="referenced by ${uses} element${uses === 1 ? '' : 's'}">${uses} in use</span>` : ''}
+        ${m.custom ? '<span class="mv-custom">custom</span>' : ''}`;
 }
 
 function loadSwatch(card, m) {
   if (!m) return;
   const img = card.querySelector('img');
-  const show = url => { if (url && img && img.isConnected) { img.src = url; img.hidden = false; } };
+  if (!img) return;
+  // Stamp the request so a slower, older render cannot overwrite a newer swatch. The previous image
+  // stays up until the new one arrives instead of the chip flashing back to its flat tint.
+  const seq = String((+card.dataset.swatchSeq || 0) + 1);
+  card.dataset.swatchSeq = seq;
+  const show = url => { if (url && img.isConnected && card.dataset.swatchSeq === seq) { img.src = url; img.hidden = false; } };
   show(swatchUrl(m, CARD_SWATCH, show));
 }
 
-function refreshCard(m) {
+// Patch the card in place: text and tint now, and (withSwatch) a new lit chip when it is ready.
+function refreshCard(m, withSwatch) {
   if (!gridEl) return;
   const card = gridEl.querySelector(`.mv-card[data-id="${CSS.escape(m.id)}"]`);
   if (!card) { renderGrid(); return; }
   const counts = usageCounts();
-  card.outerHTML = cardHtml(m, counts[m.id] || 0);
-  const fresh = gridEl.querySelector(`.mv-card[data-id="${CSS.escape(m.id)}"]`);
-  fresh.onclick = () => openEditor(m.id);
-  loadSwatch(fresh, m);
+  card.title = m.name;
+  card.querySelector('.mv-chip').style.background = m.color;
+  card.querySelector('.mv-name').textContent = m.name;
+  card.querySelector('.mv-meta').innerHTML = cardMetaHtml(m, counts[m.id] || 0);
+  if (withSwatch) loadSwatch(card, m);
 }
 
 // ---------- editor ----------
@@ -165,14 +179,14 @@ function openEditor(id, focusName) {
   edEl.hidden = false;
   renderEditor();
   ensurePreview();
-  setPreviewMaterial(m);
+  setPreviewMaterial(m, true);
   if (focusName) { const n = edEl.querySelector('[data-f=name]'); if (n) { n.focus(); n.select(); } }
 }
 
 function closeEditor() {
   editingId = null;
   if (edEl) { edEl.hidden = true; edEl.innerHTML = ''; }
-  if (preview) { preview.parked = true; cancelAnimationFrame(preview.raf); preview.raf = 0; }
+  parkPreview();
   if (gridEl) gridEl.querySelectorAll('.mv-card.active').forEach(c => c.classList.remove('active'));
 }
 
@@ -190,7 +204,12 @@ function renderEditor() {
   const uses = materialUsage(m.id);
   const prop = activeProperty();
   const photos = prop ? (prop.photos || []) : [];
-  const photo = m.photoId && prop ? photoById(prop, m.photoId) : null;
+  // Materials are workspace-wide and the texture pipeline loads photo bytes by id alone, so the
+  // photo may belong to another property: find it wherever it lives rather than reporting "no photo"
+  // for a material that renders fine.
+  const owner = m.photoId ? ws.data.properties.find(p => (p.photos || []).some(ph => ph.id === m.photoId)) : null;
+  const photo = owner ? photoById(owner, m.photoId) : null;
+  const foreign = photo && owner !== prop ? owner : null;
   const dirty = isDirty(m);
   edEl.innerHTML = `
     <div class="mv-ed-head">
@@ -228,12 +247,14 @@ function renderEditor() {
         <div class="kicker">FROM PHOTO</div>
         ${prop ? `
           <div class="mv-photos">
+            ${foreign ? `<button type="button" class="mv-photo active" data-photo="${escapeHtml(photo.id)}" title="${escapeHtml(photo.name)} (on ${escapeHtml(foreign.name)})"><img src="${escapeHtml(photo.thumb || '')}" alt=""></button>` : ''}
             ${photos.map(p => `<button type="button" class="mv-photo ${p.id === m.photoId ? 'active' : ''}" data-photo="${escapeHtml(p.id)}" title="${escapeHtml(p.name)}"><img src="${escapeHtml(p.thumb || '')}" alt=""></button>`).join('')}
             <button type="button" class="mv-photo mv-photo-add" data-upload title="Upload an image from this device">+<span>UPLOAD</span></button>
             <input type="file" accept="image/*" class="hidden-file">
           </div>
           <div class="mv-hint">${photo
-            ? `Albedo from <b>${escapeHtml(photo.name)}</b>; normals and roughness are derived from its luminance. Mirrored repeat hides the seams.`
+            ? `Albedo from <b>${escapeHtml(photo.name)}</b>${foreign ? ' (on ' + escapeHtml(foreign.name) + ')' : ''}; normals and roughness are derived from its luminance. Mirrored repeat hides the seams.`
+            : m.photoId ? 'The photo this material used is gone; pick another, or upload one.'
             : (photos.length ? 'Pick a photo of the real surface to use it as the albedo, or upload one.' : 'No photos on ' + escapeHtml(prop.name) + ' yet. Upload one, or add photos in the PHOTOS view.')}</div>`
           : `<div class="mv-hint">Create a property first: photo materials are stored with the property's photos.</div>`}
       </div>
@@ -304,11 +325,13 @@ function tileHint(m) {
 
 function bindEditor(m) {
   const q = s => edEl.querySelector(s);
+  // Text updates land at once; the texture set, swatch and preview are minted on the debounced
+  // timer, because a slider fires per pixel and each distinct value is a fresh synthesis job.
   const changed = (rebuild) => {
     normalizeMaterial(m);
     touch();
-    refreshCard(m);
-    schedulePreview(m);
+    refreshCard(m, false);
+    scheduleRegen(m);
     if (rebuild) renderEditor(); else refreshDirty(m);
   };
   q('[data-f=name]').onchange = e => { m.name = e.target.value.trim() || 'Material'; changed(false); };
@@ -386,8 +409,8 @@ function bindEditor(m) {
     resetBuiltin(m.id);
     notice = '';
     renderEditor();
-    refreshCard(current());
-    schedulePreview(current());
+    refreshCard(current(), false);
+    scheduleRegen(current());
   };
   edEl.querySelectorAll('[data-close]').forEach(b => b.onclick = closeEditor);
   // Re-parent the live preview canvas into the freshly rendered panel.
@@ -420,10 +443,6 @@ function ensurePreview() {
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color('#10151a');
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-  pmrem.dispose();
-  scene.environment = env;
   scene.environmentIntensity = 0.6;
 
   const camera = new THREE.PerspectiveCamera(34, 4 / 3, 0.05, 40);
@@ -469,9 +488,24 @@ function ensurePreview() {
   back.receiveShadow = true;
   scene.add(back);
 
-  preview = { renderer, scene, camera, controls, meshes: [sphere, cube, ground], raf: 0, ro: null, parked: false, env, back };
+  preview = { renderer, scene, camera, controls, meshes: [sphere, cube, ground], raf: 0, ro: null, parked: false, lost: false, env: null, back, shown: 0 };
+  previewEnvironment();
+  // If the browser ever evicts this context, three stops rendering until it is restored; the IBL
+  // lives in a render target that a restore cannot bring back, so it is rebuilt then.
+  canvas.addEventListener('webglcontextlost', () => { if (!preview) return; preview.lost = true; cancelAnimationFrame(preview.raf); preview.raf = 0; });
+  canvas.addEventListener('webglcontextrestored', () => { if (!preview) return; preview.lost = false; previewEnvironment(); if (!preview.parked && !preview.raf) loop(); });
   attachPreviewCanvas();
   loop();
+}
+
+function previewEnvironment() {
+  if (preview.env) preview.env.dispose();
+  const room = new RoomEnvironment();
+  const pmrem = new THREE.PMREMGenerator(preview.renderer);
+  preview.env = pmrem.fromScene(room, 0.04).texture;
+  pmrem.dispose();
+  room.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  preview.scene.environment = preview.env;
 }
 
 function attachPreviewCanvas() {
@@ -501,7 +535,7 @@ function resizePreview() {
 }
 
 function loop() {
-  if (!preview || preview.parked || !el) { if (preview) preview.raf = 0; return; }
+  if (!preview || preview.parked || preview.lost || !el) { if (preview) preview.raf = 0; return; }
   preview.raf = requestAnimationFrame(loop);
   // While maps are still synthesising, render every fourth frame so the CPU can finish them sooner.
   preview.frame = (preview.frame || 0) + 1;
@@ -510,27 +544,41 @@ function loop() {
   preview.renderer.render(preview.scene, preview.camera);
 }
 
-function setPreviewMaterial(m) {
+// `immediate` puts the material on the meshes now (opening the editor: the flat tint is better than
+// the idle grey while the maps synthesise). Edits instead keep showing the previous variant until
+// the new maps exist, so a slider pause never flashes the flat tint; the stamp makes sure a slow
+// older variant cannot land after a newer one.
+function setPreviewMaterial(m, immediate) {
   if (!preview) return;
-  const mat = materialFor(m);
-  for (const mesh of preview.meshes) mesh.material = mat;
-  // Glass on the ground plane hides the scene; keep the floor neutral for transmissive materials.
-  if (m.pattern === 'glass') preview.meshes[2].material = preview.back.material;
+  const seq = ++previewSeq;
+  const apply = () => {
+    if (!preview || seq < preview.shown || current() !== m) return;
+    preview.shown = seq;
+    const mat = materialFor(m, { transient: true });
+    for (const mesh of preview.meshes) mesh.material = mat;
+    // Glass on the ground plane hides the scene; keep the floor neutral for transmissive materials.
+    if (m.pattern === 'glass') preview.meshes[2].material = preview.back.material;
+  };
+  if (immediate) apply();
+  else whenMaterialReady(m, apply, { transient: true });
 }
 
-function schedulePreview(m) {
+// One timer for everything a value change regenerates: the preview's texture set and the card's swatch.
+function scheduleRegen(m) {
   clearTimeout(regenTimer);
-  regenTimer = setTimeout(() => { const cur = current(); if (cur && cur === m) setPreviewMaterial(m); }, 220);
+  regenTimer = setTimeout(() => {
+    const cur = current();
+    if (!cur || cur !== m) return;
+    setPreviewMaterial(m, false);
+    refreshCard(m, true);
+  }, REGEN_MS);
 }
 
-function destroyPreview() {
+// The view is going away; keep the renderer (and its context) for the next mount, just stop drawing.
+function parkPreview() {
   if (!preview) return;
+  preview.parked = true;
   cancelAnimationFrame(preview.raf);
-  if (preview.ro) preview.ro.disconnect();
-  preview.controls.dispose();
-  for (const mesh of preview.meshes) mesh.geometry.dispose();
-  preview.back.geometry.dispose(); preview.back.material.dispose();
-  preview.env.dispose();
-  preview.renderer.dispose();
-  preview = null;
+  preview.raf = 0;
+  if (preview.ro) { preview.ro.disconnect(); preview.ro = null; }
 }
