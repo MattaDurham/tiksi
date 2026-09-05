@@ -29,7 +29,7 @@ import { materialSelectHtml } from './materials.js';
 import { pendingTextureJobs } from './textures.js';
 import { icon } from './icons.js';
 import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapRects, disposeBuilt } from './geometry.js';
-import { addPhotoFromFile, photoUrl, photoById } from './photos-store.js';
+import { addPhotoFromFile, photoUrl, photoById, revokePhotoUrls } from './photos-store.js';
 import {
   SCAN_ACCEPT, importScanFile, loadScanObject, applyScanTransform, disposeScanObject,
   scanStats, dropScanToFloor, centerScanOnModel, releaseSplatRenderer, splatDrawables, splatBusy,
@@ -1900,6 +1900,7 @@ function warmPrograms() {
 export function unmount() {
   if (renderer) renderer.setAnimationLoop(null);
   mountId++;
+  revokePhotoUrls();   // object URLs handed to the lightbox, pin picker and pano loader
   // mount() bails out before building anything when there is no property; there is nothing to tear down.
   if (!scene) { el = wrapEl = inspEl = null; hud = {}; return; }
   window.removeEventListener('keydown', onKeyDown);
