@@ -56,15 +56,15 @@ function render() {
   list.innerHTML = d.projects.map(p => {
     const t = projectTotals(p);
     const days = p.items.reduce((n, i) => n + (i.durationDays || 0), 0);
-    return `<div class="card clickable proj-card ${p.id === activeProjectId ? 'active' : ''}" data-id="${p.id}">
-      <span class="sbar status-${p.status}"></span>
+    return `<div class="card clickable proj-card ${p.id === activeProjectId ? 'active' : ''}" data-id="${escapeHtml(p.id)}">
+      <span class="sbar status-${escapeHtml(p.status)}"></span>
       <div class="p-title">
         <b>${escapeHtml(p.name)}</b>
-        <input type="checkbox" ${p.selected ? 'checked' : ''} data-sel="${p.id}" title="Include in program budget/schedule">
+        <input type="checkbox" ${p.selected ? 'checked' : ''} data-sel="${escapeHtml(p.id)}" title="Include in program budget/schedule">
       </div>
       <div class="p-chips">
-        <span class="chip status-${p.status}">${p.status}</span>
-        <span class="chip">${p.category}</span>
+        <span class="chip status-${escapeHtml(p.status)}">${escapeHtml(p.status)}</span>
+        <span class="chip">${escapeHtml(p.category)}</span>
       </div>
       <div class="p-sub">${fmtMoney(t.likely)} likely, ${p.items.length} items${days ? ', ' + days + 'd work' : ''}</div>
     </div>`;
@@ -97,7 +97,7 @@ function renderDetail(p) {
           <select data-f="category">${CATEGORIES.map(c => `<option ${c === p.category ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
         <div class="field"><label>Status</label>
           <select data-f="status">${STATUSES.map(s => `<option ${s === p.status ? 'selected' : ''}>${s}</option>`).join('')}</select></div>
-        <div class="field"><label>Earliest start</label><input type="date" data-f="startDate" value="${p.startDate || ''}"></div>
+        <div class="field"><label>Earliest start</label><input type="date" data-f="startDate" value="${escapeHtml(p.startDate || '')}"></div>
       </div>
       <div class="field"><label>Scope notes</label><textarea data-f="notes">${escapeHtml(p.notes || '')}</textarea></div>
 
@@ -145,25 +145,35 @@ function renderDetail(p) {
   bindItemRows(p);
 }
 
+// Names of the item's predecessors (dropped items are skipped), or '-' when it has none.
+function depSummary(p, it) {
+  const names = (it.deps || []).map(id => { const d = p.items.find(x => x.id === id); return d ? d.name : null; }).filter(Boolean);
+  return names.join(', ') || '-';
+}
+
 function itemRow(p, it) {
   const links = (it.elementIds || []).length;
   const prods = ws.data.products.filter(pr => (pr.itemIds || []).includes(it.id)).length;
-  const depOpts = p.items.filter(x => x.id !== it.id)
-    .map(x => `<option value="${x.id}" ${(it.deps || []).includes(x.id) ? 'selected' : ''}>${escapeHtml(x.name)}</option>`).join('');
+  const others = p.items.filter(x => x.id !== it.id);
+  const depOpts = others
+    .map(x => `<option value="${escapeHtml(x.id)}" ${(it.deps || []).includes(x.id) ? 'selected' : ''} title="${escapeHtml(x.name)}">${escapeHtml(x.name)}</option>`).join('');
+  const summary = depSummary(p, it);
   const linkBits = [];
   if (links) linkBits.push(links + ' elem');
   if (prods) linkBits.push(prods + ' prod');
-  return `<tr data-item="${it.id}">
+  return `<tr data-item="${escapeHtml(it.id)}">
     <td><input type="text" data-if="name" value="${escapeHtml(it.name)}"></td>
-    <td class="num" style="width:64px"><input type="number" class="num" data-if="qty" value="${it.qty || 1}" min="0" step="0.5"></td>
+    <td class="num" style="width:64px"><input type="number" class="num" data-if="qty" value="${escapeHtml(it.qty || 1)}" min="0" step="0.5"></td>
     <td style="width:56px"><input type="text" data-if="unit" value="${escapeHtml(it.unit || 'ls')}"></td>
     <td class="num" style="width:92px"><input type="text" class="num" data-money="low" value="${it.low ? fmtMoney(it.low) : ''}"></td>
     <td class="num" style="width:92px"><input type="text" class="num" data-money="likely" value="${it.likely ? fmtMoney(it.likely) : ''}"></td>
     <td class="num" style="width:92px"><input type="text" class="num" data-money="high" value="${it.high ? fmtMoney(it.high) : ''}"></td>
-    <td class="num" style="width:56px"><input type="number" class="num" data-if="durationDays" value="${it.durationDays || 0}" min="0"></td>
-    <td style="width:130px"><div class="dep-wrap" title="Cmd-click to pick multiple predecessors"><select multiple size="1" data-deps>${depOpts}</select></div></td>
+    <td class="num" style="width:56px"><input type="number" class="num" data-if="durationDays" value="${escapeHtml(it.durationDays || 0)}" min="0"></td>
+    <td style="width:130px"><div class="dep-wrap" title="${escapeHtml(summary === '-' ? 'No predecessors; click to pick (cmd-click for several)' : 'After: ' + summary)}">
+      <button type="button" class="dep-summary ${summary === '-' ? 'none' : ''}" data-dep-open ${others.length ? '' : 'disabled'}>${escapeHtml(summary)}</button>
+      <select multiple size="${Math.min(6, Math.max(2, others.length))}" data-deps>${depOpts}</select></div></td>
     <td class="mono faint" style="font-size:10px; white-space:nowrap" title="Linked model elements and products">${linkBits.join(', ') || '-'}</td>
-    <td><span class="row-del" data-del-item="${it.id}" title="Remove item">${icon('close', { size: 13 })}</span></td>
+    <td><span class="row-del" data-del-item="${escapeHtml(it.id)}" title="Remove item">${icon('close', { size: 13 })}</span></td>
   </tr>`;
 }
 
@@ -181,12 +191,18 @@ function bindItemRows(p) {
       it[inp.dataset.money] = parseMoney(inp.value);
       touch(); renderDetail(p);
     });
-    const deps = tr.querySelector('[data-deps]');
-    deps.onfocus = () => { deps.size = Math.min(6, Math.max(2, p.items.length - 1)); };
-    deps.onblur = () => { deps.size = 1; };
+    // The summary button opens the listbox in place; leaving it (blur, Escape, Enter) closes
+    // it and refreshes the summary from the data.
+    const wrap = tr.querySelector('.dep-wrap');
+    const deps = wrap.querySelector('[data-deps]');
+    const summary = wrap.querySelector('[data-dep-open]');
+    const refresh = () => { const s = depSummary(p, it); summary.textContent = s; summary.classList.toggle('none', s === '-'); };
+    summary.onclick = () => { wrap.classList.add('open'); deps.focus(); };
+    deps.onblur = () => { wrap.classList.remove('open'); refresh(); };
+    deps.onkeydown = e => { if (e.key === 'Escape' || e.key === 'Enter') { e.preventDefault(); summary.focus(); } };
     deps.onchange = () => {
       it.deps = Array.from(deps.selectedOptions).map(o => o.value);
-      touch();
+      touch(); refresh();
     };
   });
   det.querySelectorAll('[data-del-item]').forEach(x => x.onclick = () => {
