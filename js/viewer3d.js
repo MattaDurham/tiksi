@@ -64,14 +64,20 @@ let pinPhotoId = null;         // photo being placed by the PIN PHOTO tool
 let measureDraft = null;       // first measure point
 const measures = [];           // {a, b, line, label}
 const scanObjs = {};           // scanId -> Object3D
+const scanState = {};          // scanId -> 'loading' | 'ready' | 'missing' | 'failed'
 const pinObjs = {};            // photoId -> {group, sprite, line, dot, aspect}
 const walkKeys = {};
 let walkLocked = false, dragLook = null;
 let pmremTimer = 0, envDirty = true, sunDirty = true;
 let pressed = null;
 let toastTimer = 0;
+// Bumped on every mount; async loaders compare their captured token so work started by a
+// previous mount never lands in (or doubles up inside) the next one.
+let mountId = 0;
 const raycaster = new THREE.Raycaster();
 raycaster.params.Points = { threshold: 0.05 };
+// three's default Line threshold is 1 m: far too fat a corridor for helper lines to pick through.
+raycaster.params.Line = { threshold: 0.02 };
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion();
 const walkEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 
@@ -104,6 +110,8 @@ function ensureRenderer() {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.AgXToneMapping || THREE.ACESFilmicToneMapping;
   renderer.shadowMap.enabled = true;
+  // PCF with a wide sample radius (set on the sun): soft, alias-free shadow edges at grazing
+  // sun angles. r185 has retired PCFSoftShadowMap in favour of this kernel.
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.localClippingEnabled = true;
   renderer.domElement.className = 'v-canvas';
@@ -127,15 +135,17 @@ function setupScene() {
   skyScene = new THREE.Scene();
   skyScene.add(envSky);
 
-  sun = new THREE.DirectionalLight(0xfff4e6, 3);
+  sun = new THREE.DirectionalLight(0xfff4e6, 2);
   sun.castShadow = true;
-  sun.shadow.bias = -0.00035;
-  sun.shadow.normalBias = 0.025;
-  sun.shadow.radius = 2;
+  // normalBias must stay below the 16 mm casing depth, or the wall beside every casing samples
+  // the map in front of the trim and a lit "stitch" line opens along the joint.
+  sun.shadow.bias = -0.0002;
+  sun.shadow.normalBias = 0.008;
+  sun.shadow.radius = 3;
   scene.add(sun);
   scene.add(sun.target);
 
-  hemi = new THREE.HemisphereLight(0xbfd4ea, 0x5a5648, 0.45);
+  hemi = new THREE.HemisphereLight(0xdfe6ee, 0x6b7a4a, 0.7);
   scene.add(hemi);
 
   lightRoot = new THREE.Group(); lightRoot.name = 'nightlights'; scene.add(lightRoot);
@@ -168,12 +178,13 @@ function setupScene() {
   scene.add(gizmo.getHelper());
 }
 
-const SKY_SCALE = 0.3, ENV_SKY_SCALE = 0.16;
+const SKY_SCALE = 0.3, ENV_SKY_SCALE = 0.35;
 function makeSky(forEnv) {
   const s = new Sky();
   s.scale.setScalar(2000);
   // The environment bake has no sun disc (the DirectionalLight is the sun) and is scaled so
-  // the sky's irradiance sits in a believable ratio to direct sunlight.
+  // the sky's irradiance sits in a believable ratio to direct sunlight: about 4:1 key to fill
+  // on a clear day, so shadows stay open and neutral instead of black and blue.
   if (forEnv) s.material.uniforms.showSunDisc.value = 0;
   s.material.uniforms.cloudCoverage.value = 0.35;
   s.material.uniforms.cloudDensity.value = 0.45;
@@ -248,6 +259,7 @@ function setupComposer() {
   for (const p of [passes.outline, passes.hover]) {
     const orig = p.render.bind(p);
     p.render = (...args) => { const hidden = hideSplats(); orig(...args); hidden.forEach(o => { o.visible = true; }); };
+    enableMaskClipping(p.prepareMaskMaterial);
   }
 
   passes.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.28, 0.4, 2.2);
@@ -260,6 +272,29 @@ function hideSplats() {
   const hidden = [];
   for (const o of splatDrawables()) if (o.visible) { o.visible = false; hidden.push(o); }
   return hidden;
+}
+
+// OutlinePass draws the selection mask with its own ShaderMaterial, which carries no clipping
+// chunks, so in SECTION the outline of the cut-away part of a wall would float above the cut.
+// Splice three's clipping includes into it; applySection() then hands it the plane.
+function enableMaskClipping(m) {
+  if (!m || m.userData.clipReady) return;
+  m.vertexShader = m.vertexShader
+    .replace('#include <batching_pars_vertex>', '#include <batching_pars_vertex>\n#include <clipping_planes_pars_vertex>')
+    .replace('#include <project_vertex>', '#include <project_vertex>\n#include <clipping_planes_vertex>');
+  m.fragmentShader = m.fragmentShader
+    .replace('#include <packing>', '#include <packing>\n#include <clipping_planes_pars_fragment>')
+    .replace('void main() {', 'void main() {\n#include <clipping_planes_fragment>');
+  m.clipping = true;
+  m.userData.clipReady = true;
+  m.needsUpdate = true;
+}
+// Every pass material that re-renders scene geometry and must respect the section cut.
+function passClipMaterials() {
+  const list = [];
+  if (passes.gtao) list.push(passes.gtao.normalMaterial);
+  for (const p of [passes.outline, passes.hover]) if (p) list.push(p.depthMaterial, p.prepareMaskMaterial);
+  return list.filter(Boolean);
 }
 
 function applyQuality() {
@@ -317,7 +352,8 @@ function fitShadow() {
   const b = modelBounds(prop);
   const cx = (b.minX + b.maxX) / 2, cz = (b.minY + b.maxY) / 2;
   const H = wallHeight();
-  const R = Math.max(Math.hypot(b.maxX - b.minX, b.maxY - b.minY, H) / 2 * 1.15, 4);
+  // Hug the model's bounding sphere: every unit of slack here is wasted shadow texels.
+  const R = Math.max(Math.hypot(b.maxX - b.minX, b.maxY - b.minY, H) / 2 * 1.05, 4);
   sun.target.position.set(cx, H / 2, cz);
   const c = sun.shadow.camera;
   c.left = -R; c.right = R; c.top = R; c.bottom = -R;
@@ -328,10 +364,14 @@ function fitShadow() {
 }
 
 // ---------- environment: sun, sky, IBL, night ----------
+// Solar elevation in degrees: sunrise 06:00, sunset 20:00, and a continuous descent to -18
+// (astronomical night) after that, so dragging TIME through dusk never jumps.
 function sunElevation(t) {
-  if (t < 6 || t > 20) return -12 - Math.min(Math.abs(t - 6), Math.abs(t - 20)) * 4;
+  if (t < 6) return Math.max(-18, -(6 - t) * 6);
+  if (t > 20) return Math.max(-18, -(t - 20) * 6);
   return t < 12 ? 65 * Math.sin(Math.PI / 2 * (t - 6) / 6) : 65 * Math.sin(Math.PI / 2 * (20 - t) / 8);
 }
+const smooth = (x, a, b) => THREE.MathUtils.smoothstep(x, a, b);
 function northVector() {
   const n = THREE.MathUtils.degToRad(prop.env.north || 0);
   return new THREE.Vector3(Math.sin(n), 0, -Math.cos(n));
@@ -345,73 +385,89 @@ function sunDirection(elDeg, azDeg) {
   const N = northVector(), E = eastVector();
   return N.multiplyScalar(Math.cos(az) * Math.cos(el)).add(E.multiplyScalar(Math.sin(az) * Math.cos(el))).add(new THREE.Vector3(0, Math.sin(el), 0)).normalize();
 }
-function isNight() { return sunElevation(prop.env.time) < 0; }
+// Civil twilight ends around -6 deg; the sky shader has gone dark by then.
+function isNight() { return sunElevation(prop.env.time) < -6; }
+// True once the chosen panorama has actually been decoded; until then the dynamic sky stands in.
+function panoReady() { return prop.env.sky === 'pano' && !!panoTex && panoId === prop.env.panoPhotoId; }
 
 function applyEnvironment() {
   const env = prop.env;
   const el = sunElevation(env.time);
-  const night = el < 0;
-  const dusk = THREE.MathUtils.clamp(el / 18, 0, 1);         // 0 at horizon, 1 above 18 deg
+  // Continuous dusk: the sun fades out just below the horizon, night fades in through civil
+  // twilight (-2 .. -6 deg), and everything keyed on "night" blends across that band.
+  const sunUp = smooth(el, -1, 5);                            // direct sun present
+  const nightMix = smooth(-el, 2, 6);                         // 0 by day, 1 after civil dusk
+  const dusk = THREE.MathUtils.clamp(el / 18, 0, 1);          // 0 at horizon, 1 above 18 deg
   const dir = sunDirection(Math.max(el, -8), env.azimuth);
+  const usePano = panoReady();
 
-  // Sky.
-  sky.visible = env.sky === 'dynamic';
+  // Sky (also the stand-in while a panorama is missing or still decoding).
+  sky.visible = env.sky === 'dynamic' || (env.sky === 'pano' && !usePano);
   for (const s of [sky, envSky]) {
     const u = s.material.uniforms;
     u.sunPosition.value.copy(dir);
-    u.turbidity.value = night ? 2 : 2.2 + (1 - dusk) * 6;
-    u.rayleigh.value = night ? 0.6 : 0.9 + (1 - dusk) * 2.2;
-    u.mieCoefficient.value = night ? 0.002 : 0.003 + (1 - dusk) * 0.02;
+    u.turbidity.value = THREE.MathUtils.lerp(2.2 + (1 - dusk) * 6, 2, nightMix);
+    u.rayleigh.value = THREE.MathUtils.lerp(0.9 + (1 - dusk) * 2.2, 0.6, nightMix);
+    u.mieCoefficient.value = THREE.MathUtils.lerp(0.003 + (1 - dusk) * 0.02, 0.002, nightMix);
     u.mieDirectionalG.value = 0.82;
   }
 
-  // Sun (or moon): warm and low near the horizon, white overhead.
+  // Sun by day (warm and low near the horizon, white overhead); once it has set the same light
+  // becomes a cool moon that brightens through twilight. Key stays about 4:1 against the fill.
   const R = sun.userData.radius || 10;
-  if (!night) {
+  if (sunUp > 0) {
     sun.color.setHex(0xfff1dc).lerp(new THREE.Color(0xffa860), 1 - dusk);
-    sun.intensity = 0.9 + 3.0 * Math.pow(Math.sin(THREE.MathUtils.degToRad(el)), 0.6);
+    sun.intensity = sunUp * (0.6 + 2.6 * Math.pow(Math.sin(THREE.MathUtils.degToRad(Math.max(el, 0.5))), 0.6));
     sun.position.copy(sun.target.position).addScaledVector(dir, R * 3);
   } else {
     const moon = sunDirection(38, env.azimuth + 160);
     sun.color.setHex(0x9fb4d6);
-    sun.intensity = 0.28;
+    sun.intensity = 0.28 * nightMix;
     sun.position.copy(sun.target.position).addScaledVector(moon, R * 3);
   }
-  hemi.color.setHex(night ? 0x2a3b55 : 0xc4d8ef).lerp(new THREE.Color(0xf0c8a0), night ? 0 : (1 - dusk) * 0.6);
-  hemi.groundColor.setHex(night ? 0x0d1014 : 0x5a5446);
-  hemi.intensity = night ? 0.2 : 0.18 + 0.1 * dusk;
-  scene.environmentIntensity = env.sky === 'studio' ? 0.9 : (night ? 0.3 : 0.22 + 0.1 * dusk);
-  if (interiorFill && !night) {
-    hemi.color.setHex(0xe9e2d6); hemi.groundColor.setHex(0x8c8478);
-    hemi.intensity = 0.7; scene.environmentIntensity *= 1.6;
+  // Fill is mostly the neutral hemisphere (skylight plus warm ground bounce) with a smaller
+  // share of the blue sky IBL, so neutral surfaces in shade read grey rather than blue.
+  const dayHemi = new THREE.Color(0xe8e6e0).lerp(new THREE.Color(0xf0c8a0), (1 - dusk) * 0.5);
+  hemi.color.copy(dayHemi).lerp(new THREE.Color(0x2a3b55), nightMix);
+  hemi.groundColor.setHex(0x6b7a4a).lerp(new THREE.Color(0x0d1014), nightMix);
+  hemi.intensity = THREE.MathUtils.lerp(0.65 + 0.1 * dusk, 0.2, nightMix);
+  scene.environmentIntensity = env.sky === 'studio' ? 0.9 : THREE.MathUtils.lerp(0.45 + 0.1 * dusk, 0.3, nightMix);
+  if (interiorFill && nightMix < 1) {
+    // Inside there is no sky to bounce light around, so fake the bounce: warmer, stronger ambient.
+    const k = 1 - nightMix;
+    hemi.color.lerp(new THREE.Color(0xe9e2d6), k); hemi.groundColor.lerp(new THREE.Color(0x8c8478), k);
+    hemi.intensity = THREE.MathUtils.lerp(hemi.intensity, 0.9, k); scene.environmentIntensity *= 1 + 0.3 * k;
   }
-  // A camera would open up at dusk; lift the exposure as the sun drops toward the horizon.
-  renderer.toneMappingExposure = (env.exposure || 1) * (night ? 0.6 : 1 + 0.45 * (1 - dusk));
+  // A camera would open up at dusk; lift the exposure as the sun drops, then settle for night.
+  renderer.toneMappingExposure = (env.exposure || 1) * 0.85 * THREE.MathUtils.lerp(1 + 0.45 * (1 - dusk), 0.6, nightMix);
 
   // Fog fades the ground into the horizon, in exactly the sky's horizon colour.
   const fogColor = env.sky === 'studio' ? new THREE.Color(0x171d23) : skyHorizonColor();
   const b = modelBounds(prop);
   const span = Math.max(b.maxX - b.minX, b.maxY - b.minY, 8);
-  if (env.sky === 'pano') scene.fog = null;
+  if (usePano) scene.fog = null;
   else scene.fog = new THREE.Fog(fogColor, span * 4, Math.max(span * 9, 110));
 
   // Night lights (and a gentle daytime level while walking through rooms).
-  const lightsOn = (night && env.nightLights !== false) || interiorFill;
+  const lampMix = env.nightLights !== false ? nightMix : 0;
+  const lightsOn = lampMix > 0 || interiorFill;
   lightRoot.visible = lightsOn;
-  lightRoot.traverse(o => { if (o.isPointLight) o.intensity = night ? 14 : 5; if (o.isMesh) o.material.emissiveIntensity = night ? 5 : 1.4; });
+  const lampI = interiorFill ? Math.max(5, 14 * lampMix) : 14 * lampMix;
+  const discI = interiorFill ? Math.max(1.4, 5 * lampMix) : 5 * lampMix;
+  lightRoot.traverse(o => { if (o.isPointLight) o.intensity = lampI; if (o.isMesh) o.material.emissiveIntensity = discI; });
   if (modelGroup && modelGroup.userData.glass) {
     const g = modelGroup.userData.glass;
     g.emissive.setHex(0xffcf9a);
-    g.emissiveIntensity = night && env.nightLights !== false ? 0.5 : 0;
+    g.emissiveIntensity = 0.5 * lampMix;
   }
   // Background / IBL per sky mode.
   if (env.sky === 'studio') {
     scene.background = new THREE.Color(0x171d23);
     scheduleEnvMap(0);
   } else if (env.sky === 'pano') {
-    if (panoTex && panoId === env.panoPhotoId) { scene.background = panoTex; }
-    else { scene.background = new THREE.Color(0x0c1013); loadPano(env.panoPhotoId); }
-    scheduleEnvMap(0);
+    if (usePano) scene.background = panoTex;
+    else { scene.background = null; loadPano(env.panoPhotoId); }
+    scheduleEnvMap(usePano ? 0 : 120);
   } else {
     scene.background = null;
     scheduleEnvMap(120);
@@ -433,30 +489,48 @@ function regenEnvMap() {
     const room = new RoomEnvironment();
     rt = pmrem.fromScene(room, 0.04);
     room.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
-  } else if (env.sky === 'pano') {
-    if (!panoTex) return;
+  } else if (panoReady()) {
     rt = pmrem.fromEquirectangular(panoTex);
   } else {
+    // Dynamic sky, or a panorama that is missing / still decoding: there is always an IBL.
     rt = pmrem.fromScene(skyScene, 0, 0.1, 3000);
   }
   if (envRT) envRT.dispose();
   envRT = rt;
   scene.environment = rt.texture;
+  // Shader variants depend on the environment map being present, so the first bake is the
+  // earliest moment the warm-up compiles the programs the frames will actually use.
+  if (!programsWarm) { programsWarm = true; warmPrograms(); }
   requestRender(3);
 }
+let programsWarm = false;
 
-let panoNagged = false;
+let panoNagged = false, panoPending = null, panoMissing = null;
 async function loadPano(id) {
   if (!id) { if (!panoNagged) toast('Choose a panorama photo in the ENVIRONMENT panel (add a 2:1 image with PIN PHOTO > ADD PHOTO).'); panoNagged = true; return; }
-  const url = await photoUrl(id);
-  if (!url || !scene) return;
+  // applyEnvironment() calls this on every slider tick until the texture lands: load each id once.
+  if (panoPending === id || panoMissing === id) return;
+  panoPending = id;
+  const token = mountId;
+  const url = photoById(prop, id) ? await photoUrl(id) : null;
+  if (token !== mountId || !scene) return;
+  if (!url) {
+    // The record or its bytes are gone (JSON-only import, cleared storage): say so and keep the sky.
+    panoPending = null; panoMissing = id;
+    toast('Panorama photo is missing; using the dynamic sky instead.', 'warn', 5000);
+    return;
+  }
   new THREE.TextureLoader().load(url, tex => {
-    if (!scene) { tex.dispose(); return; }
+    if (token !== mountId || !scene) { tex.dispose(); return; }
     if (panoTex) panoTex.dispose();
     tex.mapping = THREE.EquirectangularReflectionMapping;
     tex.colorSpace = THREE.SRGBColorSpace;
-    panoTex = tex; panoId = id;
-    if (prop.env.sky === 'pano') { scene.background = tex; regenEnvMap(); }
+    panoTex = tex; panoId = id; panoPending = null;
+    if (prop.env.sky === 'pano') applyEnvironment();
+  }, undefined, () => {
+    if (token !== mountId) return;
+    panoPending = null; panoMissing = id;
+    toast('Panorama photo could not be decoded; using the dynamic sky instead.', 'warn', 5000);
   });
 }
 
@@ -505,7 +579,17 @@ function applySection() {
   if (modelGroup) modelGroup.traverse(visit);
   if (lightRoot) lightRoot.traverse(visit);
   if (scanRoot) scanRoot.traverse(o => { if (!(o.userData && o.userData.splatDraw)) visit(o); });
+  // GTAO's normal/depth prepass and the outline masks re-render the geometry with their own
+  // materials; without the plane they would shade and outline the part that was cut away.
+  for (const m of passClipMaterials()) { m.clippingPlanes = planes; m.needsUpdate = true; }
   requestRender(2);
+}
+// Anything above the cut is not on screen and must not be picked, unless its material is
+// exempt from clipping (section caps, pin cards).
+function clippedAway(h) {
+  if (!section.on || h.point.y <= section.height + 1e-4) return false;
+  const m = h.object.material;
+  return !(m && m.userData && m.userData.noClip);
 }
 
 // ---------- camera framing ----------
@@ -656,6 +740,9 @@ function tick(time) {
     if (time - lastTextureRedraw > 400) { lastTextureRedraw = time; requestRender(1); }
   } else if (texturesPending) {
     texturesPending = false;
+    // New maps mean new shader variants; compile the lit and unlit ones here rather than on
+    // the first step into a room.
+    warmPrograms();
     requestRender(3);
   }
   if (framesLeft > 0) {
@@ -765,12 +852,16 @@ function pick(e, opts) {
   const hits = raycaster.intersectObjects(targets, true);
   for (const h of hits) {
     if (!isVisibleChain(h.object)) continue;
-    if (h.object.userData && h.object.userData.pickBox && !opts.scans) continue;
+    const ud = h.object.userData || {};
+    // A scan's invisible pick box and selection-box helper are proxies, never surfaces: the
+    // points / mesh underneath are what a click, a measurement or a pin should land on.
+    if (ud.pickBox || ud.helper) continue;
+    if (clippedAway(h)) continue;
     let o = h.object;
     while (o && (!o.userData || !o.userData.kind)) o = o.parent;
     if (!o) continue;
     if (o.userData.kind === 'grid') continue;
-    if (opts.surfaceOnly && ['pin', 'scan'].includes(o.userData.kind)) continue;
+    if (opts.surfaceOnly && o.userData.kind === 'pin') continue;
     const n = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : new THREE.Vector3(0, 1, 0);
     return { kind: o.userData.kind, id: o.userData.id, point: h.point, normal: n, object: o, wallId: o.userData.wallId };
   }
@@ -925,6 +1016,7 @@ function addMeasurePoint(e) {
   requestRender(2);
 }
 function clearMeasures() {
+  if (!measureRoot) return;
   for (const m of measures) {
     measureRoot.remove(m.line); m.line.geometry.dispose(); m.line.material.dispose();
     for (const d of m.dots) { measureRoot.remove(d); d.geometry.dispose(); d.material.dispose(); }
@@ -977,7 +1069,9 @@ function buildPin(photo) {
   lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3));
   const line = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, depthTest: false }));
   line.renderOrder = 990;
-  line.userData = { kind: 'pin', id: photo.id };
+  // The leader is decoration: only the card and the anchor dot pick as the pin, otherwise the
+  // line's pick corridor would steal clicks from the wall around every pinned photo.
+  line.raycast = () => {};
   group.add(line);
   const dot = new THREE.Mesh(new THREE.CircleGeometry(0.035, 20), new THREE.MeshBasicMaterial({ color: 0xe8973a, side: THREE.DoubleSide }));
   dot.userData = { kind: 'pin', id: photo.id };
@@ -1081,7 +1175,7 @@ async function openLightbox(photoId) {
   const url = await photoUrl(photoId);
   const box = document.createElement('div');
   box.className = 'v-lightbox';
-  box.innerHTML = `<img alt="" src="${url || ph.thumb}"><div class="v-lb-cap">${escapeHtml(ph.name || '')}${ph.notes ? ' - ' + escapeHtml(ph.notes) : ''}</div><button class="v-lb-close">CLOSE</button>`;
+  box.innerHTML = `<img alt="" src="${escapeHtml(url || ph.thumb)}"><div class="v-lb-cap">${escapeHtml(ph.name || '')}${ph.notes ? ' - ' + escapeHtml(ph.notes) : ''}</div><button class="v-lb-close">CLOSE</button>`;
   const close = () => { box.remove(); window.removeEventListener('keydown', onKey); };
   const onKey = e => { if (e.key === 'Escape') close(); };
   box.onclick = close;
@@ -1097,39 +1191,66 @@ const hooks = {
   get scene() { return scene; },
   requestRender() { requestRender(3); },
 };
+const errMsg = e => String(e && e.message || e);
+function scanSelected(id) { return selection && selection.kind === 'scan' && selection.id === id; }
+function setScanState(id, state) {
+  scanState[id] = state;
+  // The inspector captured the object (or its absence) when it rendered: refresh it.
+  if (scanSelected(id)) renderInspector();
+}
+// Load a scan record into the scene. Resolves null when the bytes are missing, the record was
+// deleted while parsing, or the view was unmounted (the parsed object is disposed, not leaked).
 async function addScanToScene(scan) {
-  const obj = await loadScanObject(scan, hooks);
-  if (!obj || !scene) return null;
+  const token = mountId;
+  setScanState(scan.id, 'loading');
+  let obj = null;
+  try { obj = await loadScanObject(scan, hooks); }
+  catch (e) { if (token === mountId) setScanState(scan.id, 'failed'); throw e; }
+  if (token !== mountId || !scene) { disposeScanObject(obj); return null; }
+  if (!prop.scans.some(s => s.id === scan.id)) { disposeScanObject(obj); delete scanState[scan.id]; return null; }
+  if (!obj) { setScanState(scan.id, 'missing'); return null; }
   if (scanObjs[scan.id]) { scanRoot.remove(scanObjs[scan.id]); disposeScanObject(scanObjs[scan.id]); }
   scanObjs[scan.id] = obj;
   applyScanTransform(scan, obj);
   scanRoot.add(obj);
   applySection();
   updateOutlineTargets();
+  setScanState(scan.id, 'ready');
   requestRender(scan.kind === 'splat' ? 8 : 3);
   return obj;
 }
 async function loadAllScans() {
-  for (const scan of prop.scans) {
+  const token = mountId;
+  for (const scan of prop.scans.slice()) {
     try { await addScanToScene(scan); }
-    catch (e) { console.error(e); toast('Could not load scan ' + scan.name + ': ' + e.message, 'error'); }
-    if (!scene) return;
+    catch (e) { console.error(e); if (token === mountId) toast('Could not load scan ' + scan.name + ': ' + errMsg(e), 'error'); }
+    if (token !== mountId || !scene) return;
   }
   renderToolCol();
 }
 async function onImportScan(file) {
   if (!file) return;
+  const token = mountId;
   let scan = null;
   try { scan = await importScanFile(file, prop, hooks); }
-  catch (e) { console.error(e); toast('Import failed: ' + e.message, 'error'); showProgress(null); return; }
-  if (!scan || !scene) return;
+  catch (e) { console.error(e); if (token === mountId) { toast('Import failed: ' + errMsg(e), 'error'); showProgress(null); } return; }
+  if (!scan || token !== mountId || !scene) return;
   try {
     const obj = await addScanToScene(scan);
+    if (token !== mountId) return;
     if (obj) { centerScanOnModel(scan, obj, modelBounds(prop)); applyScanTransform(scan, obj); touch(); }
     setSelection({ kind: 'scan', id: scan.id });
     toast('Imported ' + scan.name + ' (' + scanStats(obj).label + ').', 'ok');
   } catch (e) {
-    console.error(e); toast('Could not display ' + scan.name + ': ' + e.message, 'error');
+    console.error(e);
+    if (token !== mountId) return;
+    // A record whose bytes cannot be displayed would only ever show an error again: drop it.
+    prop.scans = prop.scans.filter(s => s.id !== scan.id);
+    delete scanState[scan.id];
+    try { await deleteFile(scan.id); } catch (e2) { console.error(e2); }
+    touch();
+    if (scanSelected(scan.id)) setSelection(null);
+    toast('Could not display ' + scan.name + ': ' + errMsg(e), 'error', 6000);
   }
   showProgress(null);
   renderToolCol();
@@ -1205,6 +1326,7 @@ function toggleSection() {
 function toggleXray() { xray = !xray; rebuildModel(); renderHud(); renderToolCol(); }
 
 // ---------- environment panel ----------
+function sunLabel(el) { return el >= 0 ? 'SUN ' + Math.round(el) + '&deg;' : (el > -6 ? 'TWILIGHT' : 'NIGHT'); }
 function renderEnvPanel() {
   const p = hud.env;
   if (!p) return;
@@ -1214,15 +1336,15 @@ function renderEnvPanel() {
   const hh = Math.floor(env.time), mm = Math.round((env.time - hh) * 60);
   const timeLabel = String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
   p.innerHTML = `
-    <button class="v-env-head" data-toggle><span>ENVIRONMENT</span><span class="v-env-sun">${el < 0 ? 'NIGHT' : 'SUN ' + Math.round(el) + '&deg;'} &middot; ${timeLabel}</span><span class="v-env-caret">${p.classList.contains('open') ? '&#9662;' : '&#9656;'}</span></button>
+    <button class="v-env-head" data-toggle><span>ENVIRONMENT</span><span class="v-env-sun">${sunLabel(el)} &middot; ${timeLabel}</span><span class="v-env-caret">${p.classList.contains('open') ? '&#9662;' : '&#9656;'}</span></button>
     <div class="v-env-body">
-      <label class="v-row"><span>TIME</span><input type="range" min="0" max="24" step="0.1" value="${env.time}" data-env="time"><b class="v-arc"><i style="left:${(env.time / 24 * 100).toFixed(1)}%"></i></b></label>
-      <label class="v-row"><span>SUN AZIMUTH</span><input type="range" min="0" max="360" step="1" value="${env.azimuth}" data-env="azimuth"><em>${Math.round(env.azimuth)}&deg;</em></label>
-      <label class="v-row"><span>NORTH</span><input type="range" min="0" max="360" step="1" value="${env.north}" data-env="north"><em>${Math.round(env.north)}&deg;</em></label>
-      <label class="v-row"><span>EXPOSURE</span><input type="range" min="0.3" max="2.2" step="0.05" value="${env.exposure}" data-env="exposure"><em>${Number(env.exposure).toFixed(2)}</em></label>
+      <label class="v-row"><span>TIME</span><input type="range" min="0" max="24" step="0.1" value="${finiteNum(env.time, 14.5)}" data-env="time"><b class="v-arc"><i style="left:${(finiteNum(env.time, 14.5) / 24 * 100).toFixed(1)}%"></i></b></label>
+      <label class="v-row"><span>SUN AZIMUTH</span><input type="range" min="0" max="360" step="1" value="${finiteNum(env.azimuth, 200)}" data-env="azimuth"><em>${Math.round(finiteNum(env.azimuth, 200))}&deg;</em></label>
+      <label class="v-row"><span>NORTH</span><input type="range" min="0" max="360" step="1" value="${finiteNum(env.north, 0)}" data-env="north"><em>${Math.round(finiteNum(env.north, 0))}&deg;</em></label>
+      <label class="v-row"><span>EXPOSURE</span><input type="range" min="0.3" max="2.2" step="0.05" value="${finiteNum(env.exposure, 1)}" data-env="exposure"><em>${finiteNum(env.exposure, 1).toFixed(2)}</em></label>
       <div class="v-row v-row-sel"><span>SKY</span>
         <select data-env="sky"><option value="dynamic" ${env.sky === 'dynamic' ? 'selected' : ''}>Dynamic sun</option><option value="studio" ${env.sky === 'studio' ? 'selected' : ''}>Studio</option><option value="pano" ${env.sky === 'pano' ? 'selected' : ''}>Panorama</option></select>
-        ${env.sky === 'pano' ? `<select data-env="panoPhotoId"><option value="">(choose pano)</option>${panos.map(ph => `<option value="${ph.id}" ${ph.id === env.panoPhotoId ? 'selected' : ''}>${escapeHtml(ph.name)}</option>`).join('')}</select>` : ''}
+        ${env.sky === 'pano' ? `<select data-env="panoPhotoId"><option value="">(choose pano)</option>${panos.map(ph => `<option value="${escapeHtml(ph.id)}" ${ph.id === env.panoPhotoId ? 'selected' : ''}>${escapeHtml(ph.name)}</option>`).join('')}</select>` : ''}
       </div>
       <div class="v-row v-row-sel"><span>QUALITY</span>
         <select data-env="quality"><option value="high" ${env.quality === 'high' ? 'selected' : ''}>High (AO + bloom)</option><option value="medium" ${env.quality === 'medium' ? 'selected' : ''}>Medium</option><option value="low" ${env.quality === 'low' ? 'selected' : ''}>Low</option></select>
@@ -1245,7 +1367,7 @@ function renderEnvPanel() {
       if (r.dataset.env === 'time') {
         const arc = r.parentElement.querySelector('.v-arc i'); if (arc) arc.style.left = (env.time / 24 * 100).toFixed(1) + '%';
         const e2 = sunElevation(env.time); const h2 = Math.floor(env.time), m2 = Math.round((env.time - h2) * 60);
-        p.querySelector('.v-env-sun').innerHTML = (e2 < 0 ? 'NIGHT' : 'SUN ' + Math.round(e2) + '&deg;') + ' &middot; ' + String(h2).padStart(2, '0') + ':' + String(m2).padStart(2, '0');
+        p.querySelector('.v-env-sun').innerHTML = sunLabel(e2) + ' &middot; ' + String(h2).padStart(2, '0') + ':' + String(m2).padStart(2, '0');
       }
       applyEnvironment();
       commit();
@@ -1256,6 +1378,7 @@ function renderEnvPanel() {
       env[s.dataset.env] = s.value || null;
       if (s.dataset.env === 'quality') applyQuality();
       if (s.dataset.env === 'sky') rebuildGround();
+      if (s.dataset.env === 'panoPhotoId') panoMissing = null;   // a fresh choice gets a fresh try
       applyEnvironment();
       touch();
       renderEnvPanel();
@@ -1273,15 +1396,17 @@ function renderEnvPanel() {
 }
 
 // ---------- inspector ----------
+// Numbers from saved data go into attributes: anything that is not a finite number becomes the fallback.
+function finiteNum(v, fallback) { const n = Number(v); return Number.isFinite(n) ? n : fallback; }
 function scopeAssignHtml(elementId) {
   let current = '';
   for (const pr of ws.data.projects) for (const it of pr.items) if ((it.elementIds || []).includes(elementId)) current = it.id;
   const groups = ws.data.projects.map(pr => {
-    const opts = pr.items.map(it => `<option value="${it.id}" ${it.id === current ? 'selected' : ''}>${escapeHtml(it.name)}</option>`).join('');
+    const opts = pr.items.map(it => `<option value="${escapeHtml(it.id)}" ${it.id === current ? 'selected' : ''}>${escapeHtml(it.name)}</option>`).join('');
     return opts ? `<optgroup label="${escapeHtml(pr.name)}">${opts}</optgroup>` : '';
   }).join('');
   return `<div class="field"><label>Scope item (digital twin link)</label>
-    <select data-assign="${elementId}"><option value="">(not assigned)</option>${groups}</select></div>`;
+    <select data-assign="${escapeHtml(elementId)}"><option value="">(not assigned)</option>${groups}</select></div>`;
 }
 function linkedProductsHtml(elementId) {
   const linked = [];
@@ -1311,7 +1436,7 @@ function photoLinksHtml(elementId) {
   const linked = prop.photos.filter(ph => (ph.elementIds || []).includes(elementId) || ph.roomId === elementId);
   if (!linked.length) return '';
   return `<div class="field"><label>Photos</label><div class="v-thumbs small">${linked.map(ph =>
-    `<button class="v-thumb" data-open-photo="${ph.id}" title="${escapeHtml(ph.name)}"><img src="${ph.thumb}" alt=""></button>`).join('')}</div></div>`;
+    `<button class="v-thumb" data-open-photo="${escapeHtml(ph.id)}" title="${escapeHtml(ph.name)}"><img src="${escapeHtml(ph.thumb)}" alt=""></button>`).join('')}</div></div>`;
 }
 function bindPhotoLinks(root) {
   root.querySelectorAll('[data-open-photo]').forEach(b => b.onclick = () => openLightbox(b.dataset.openPhoto));
@@ -1322,10 +1447,10 @@ function pinsListHtml() {
   if (!pinned.length) return '';
   return `<h3 style="margin-top:14px">PHOTO PINS</h3>` + pinned.map(ph => `
     <div class="v-pin-row">
-      <img src="${ph.thumb}" alt="">
+      <img src="${escapeHtml(ph.thumb)}" alt="">
       <span class="v-pin-name">${escapeHtml(ph.name)}</span>
-      <button class="btn small" data-locate="${ph.id}" title="Fly to pin">LOCATE</button>
-      <button class="btn small danger" data-unpin="${ph.id}" title="Remove pin">&times;</button>
+      <button class="btn small" data-locate="${escapeHtml(ph.id)}" title="Fly to pin">LOCATE</button>
+      <button class="btn small danger" data-unpin="${escapeHtml(ph.id)}" title="Remove pin">&times;</button>
     </div>`).join('');
 }
 function bindPinsList(root) {
@@ -1344,8 +1469,8 @@ function unpin(id) {
 
 function renderPinPanel() {
   inspEl.innerHTML = `<h3>PIN PHOTO</h3>
-    <div class="empty">Pick a photo, then click any wall, floor, ground or scan surface to pin it there.</div>
-    <div class="v-thumbs">${prop.photos.map(ph => `<button class="v-thumb ${ph.id === pinPhotoId ? 'active' : ''}" data-pick="${ph.id}" title="${escapeHtml(ph.name)}"><img src="${ph.thumb}" alt="">${ph.pin ? '<i class="v-pinned">PINNED</i>' : ''}</button>`).join('')}</div>
+    <div class="empty">Pick a photo, then click any wall, floor, ground, point cloud or mesh surface to pin it there. Gaussian splats have no pickable surface; a click on one lands on whatever is behind it.</div>
+    <div class="v-thumbs">${prop.photos.map(ph => `<button class="v-thumb ${ph.id === pinPhotoId ? 'active' : ''}" data-pick="${escapeHtml(ph.id)}" title="${escapeHtml(ph.name)}"><img src="${escapeHtml(ph.thumb)}" alt="">${ph.pin ? '<i class="v-pinned">PINNED</i>' : ''}</button>`).join('')}</div>
     ${prop.photos.length ? '' : '<div class="empty" style="margin-top:8px">No photos on this property yet.</div>'}
     <button class="btn primary" data-add>ADD PHOTO</button>
     <input type="file" class="hidden-file" accept="image/*" multiple>
@@ -1395,6 +1520,7 @@ function renderInspector() {
       <div class="field"><label>Thickness</label><input type="text" data-th value="${escapeHtml(fmtLen(w.thickness))}"></div>
       <div class="field"><label>Height (blank = default)</label><input type="text" data-h value="${w.height ? escapeHtml(fmtLen(w.height)) : ''}" placeholder="${escapeHtml(fmtLen(prop.wallHeight))}"></div>
       <div class="field"><label>Material</label>${materialSelectHtml('wall', w.material, 'data-mat')}</div>
+      <div class="field"><label>Interior face material</label>${materialSelectHtml('wall', w.materialIn, 'data-matin').replace('(none)', 'Automatic')}</div>
       ${scopeAssignHtml(w.id)}
       ${linkedProductsHtml(w.id)}
       ${photoLinksHtml(w.id)}
@@ -1412,6 +1538,8 @@ function renderInspector() {
       touch(); rebuildModel(); renderInspector();
     };
     inspEl.querySelector('[data-mat]').onchange = e => { w.material = e.target.value || null; touch(); rebuildModel(); };
+    // Room-facing faces only; blank = automatic (drywall on exterior walls, the wall material otherwise).
+    inspEl.querySelector('[data-matin]').onchange = e => { w.materialIn = e.target.value || null; touch(); rebuildModel(); };
     inspEl.querySelector('[data-walk]').onclick = () => setMode('walk');
     inspEl.querySelector('[data-del]').onclick = () => {
       prop.walls = prop.walls.filter(x => x.id !== w.id);
@@ -1432,7 +1560,7 @@ function renderInspector() {
         <div class="field"><label>Height</label><input type="text" data-hh value="${escapeHtml(fmtLen(o.height))}"></div>
       </div>
       ${o.type === 'window' ? `<div class="field"><label>Sill height</label><input type="text" data-s value="${escapeHtml(fmtLen(o.sill || 0))}"></div>` : ''}
-      <div class="field"><label>Position along wall</label><input type="range" min="0.02" max="0.98" step="0.005" value="${o.t}" data-t></div>
+      <div class="field"><label>Position along wall</label><input type="range" min="0.02" max="0.98" step="0.005" value="${finiteNum(o.t, 0.5)}" data-t></div>
       <div class="empty">Doors wider than 4 ft become cased openings. Interior doors stand ajar so you can see through rooms.</div>
       <button class="btn" data-wall>SELECT WALL</button>
       <button class="btn danger" data-del>DELETE OPENING</button>`;
@@ -1474,10 +1602,10 @@ function renderInspector() {
     const ph = photoById(prop, selection.id);
     if (!ph || !ph.pin) { selection = null; return renderInspector(); }
     inspEl.innerHTML = `<h3>PHOTO PIN</h3>
-      <button class="v-thumb big" data-open><img src="${ph.thumb}" alt=""></button>
-      <div class="stat-line"><span>${escapeHtml(ph.name)}</span><b>${ph.w || '?'} x ${ph.h || '?'}</b></div>
+      <button class="v-thumb big" data-open><img src="${escapeHtml(ph.thumb)}" alt=""></button>
+      <div class="stat-line"><span>${escapeHtml(ph.name)}</span><b>${finiteNum(ph.w, '?')} x ${finiteNum(ph.h, '?')}</b></div>
       <div class="field"><label>Notes</label><textarea data-notes>${escapeHtml(ph.notes || '')}</textarea></div>
-      <div class="field"><label>Card size</label><input type="range" min="0.25" max="2.5" step="0.05" value="${ph.pin.size || 0.6}" data-size></div>
+      <div class="field"><label>Card size</label><input type="range" min="0.25" max="2.5" step="0.05" value="${finiteNum(ph.pin.size, 0.6)}" data-size></div>
       <button class="btn" data-open2>OPEN FULL SIZE</button>
       <button class="btn" data-locate>LOCATE</button>
       <button class="btn" data-move>MOVE PIN</button>
@@ -1495,33 +1623,37 @@ function renderInspector() {
   if (selection.kind === 'scan') {
     const s = prop.scans.find(s => s.id === selection.id);
     if (!s) { selection = null; return renderInspector(); }
-    const obj = scanObjs[s.id];
-    const st = obj ? scanStats(obj) : { label: 'loading' };
+    const obj = scanObjs[s.id] || null;
+    const state = obj ? 'ready' : (scanState[s.id] || 'loading');
+    const st = obj ? scanStats(obj) : { label: { missing: 'missing from storage - re-import it', failed: 'could not be loaded', loading: 'loading' }[state] || 'loading' };
     const rot = s.rot || [0, s.rotY || 0, 0];
     const isPts = s.kind === 'points', isSplat = s.kind === 'splat';
+    // Nothing to frame, drop or centre until the object exists; deleting mid-parse would race the loader.
+    const dis = obj ? '' : 'disabled', disDel = state === 'loading' ? 'disabled' : '';
     inspEl.innerHTML = `<h3>SCAN</h3>
       <div class="stat-line"><span>File</span><b title="${escapeHtml(s.name)}">${escapeHtml(s.name.length > 22 ? s.name.slice(0, 20) + '...' : s.name)}</b></div>
       <div class="stat-line"><span>Kind</span><b>${escapeHtml(s.kind || '?')} &middot; ${escapeHtml((s.format || '').toUpperCase())}</b></div>
       <div class="stat-line"><span>${isSplat ? 'Splats' : (isPts ? 'Points' : 'Triangles')}</span><b>${escapeHtml(st.label)}</b></div>
+      ${state === 'missing' ? '<div class="empty" style="margin:6px 0">The file bytes are not in this browser\'s storage (they do not travel in a .json export). Import the file again, or delete this record.</div>' : ''}
       <div class="field-row">
-        <div class="field"><label>X</label><input type="number" step="0.1" data-p="0" value="${s.pos[0]}"></div>
-        <div class="field"><label>Y (up)</label><input type="number" step="0.1" data-p="1" value="${s.pos[1]}"></div>
-        <div class="field"><label>Z</label><input type="number" step="0.1" data-p="2" value="${s.pos[2]}"></div>
+        <div class="field"><label>X</label><input type="number" step="0.1" data-p="0" value="${finiteNum(s.pos[0], 0)}"></div>
+        <div class="field"><label>Y (up)</label><input type="number" step="0.1" data-p="1" value="${finiteNum(s.pos[1], 0)}"></div>
+        <div class="field"><label>Z</label><input type="number" step="0.1" data-p="2" value="${finiteNum(s.pos[2], 0)}"></div>
       </div>
       <div class="field-row">
-        <div class="field"><label>Rot X</label><input type="number" step="5" data-r="0" value="${rot[0]}"></div>
-        <div class="field"><label>Rot Y</label><input type="number" step="5" data-r="1" value="${rot[1]}"></div>
-        <div class="field"><label>Rot Z</label><input type="number" step="5" data-r="2" value="${rot[2]}"></div>
+        <div class="field"><label>Rot X</label><input type="number" step="5" data-r="0" value="${finiteNum(rot[0], 0)}"></div>
+        <div class="field"><label>Rot Y</label><input type="number" step="5" data-r="1" value="${finiteNum(rot[1], 0)}"></div>
+        <div class="field"><label>Rot Z</label><input type="number" step="5" data-r="2" value="${finiteNum(rot[2], 0)}"></div>
       </div>
-      <div class="field"><label>Scale</label><input type="number" step="0.05" data-scale value="${s.scale || 1}"></div>
-      ${isPts ? `<div class="field"><label>Point size</label><input type="range" min="0.002" max="0.08" step="0.001" value="${s.pointSize || 0.012}" data-ps></div>
+      <div class="field"><label>Scale</label><input type="number" step="0.05" data-scale value="${finiteNum(s.scale, 1) || 1}"></div>
+      ${isPts ? `<div class="field"><label>Point size</label><input type="range" min="0.002" max="0.08" step="0.001" value="${finiteNum(s.pointSize, 0.012)}" data-ps></div>
       <div class="field"><label>Colour</label><select data-pc><option value="rgb" ${s.pointColor === 'rgb' ? 'selected' : ''}>Scan colours</option><option value="height" ${s.pointColor === 'height' ? 'selected' : ''}>Height ramp</option><option value="solid" ${s.pointColor === 'solid' ? 'selected' : ''}>Solid amber</option></select></div>` : ''}
-      ${isSplat ? `<button class="btn" data-flip>FLIP UP AXIS</button>` : ''}
+      ${isSplat ? `<button class="btn" data-flip ${dis}>FLIP UP AXIS</button>` : ''}
       <label class="tool-check"><input type="checkbox" ${s.visible !== false ? 'checked' : ''} data-vis> VISIBLE</label>
-      <button class="btn" data-frame>FRAME SCAN</button>
-      <button class="btn" data-floor>DROP TO FLOOR</button>
-      <button class="btn" data-center>CENTER ON MODEL</button>
-      <button class="btn danger" data-del>DELETE SCAN</button>`;
+      <button class="btn" data-frame ${dis}>FRAME SCAN</button>
+      <button class="btn" data-floor ${dis}>DROP TO FLOOR</button>
+      <button class="btn" data-center ${dis}>CENTER ON MODEL</button>
+      <button class="btn danger" data-del ${disDel} title="${disDel ? 'Wait for the scan to finish loading' : ''}">DELETE SCAN</button>`;
     const upd = () => { applyScanTransform(s, obj); touch(); requestRender(3); };
     inspEl.querySelectorAll('[data-p]').forEach(i => i.onchange = () => { s.pos[+i.dataset.p] = parseFloat(i.value) || 0; upd(); });
     inspEl.querySelectorAll('[data-r]').forEach(i => i.onchange = () => {
@@ -1543,12 +1675,15 @@ function renderInspector() {
     inspEl.querySelector('[data-floor]').onclick = () => { if (obj) { dropScanToFloor(s, obj); upd(); renderInspector(); } };
     inspEl.querySelector('[data-center]').onclick = () => { if (obj) { centerScanOnModel(s, obj, modelBounds(prop)); upd(); renderInspector(); } };
     inspEl.querySelector('[data-del]').onclick = async () => {
+      if (scanState[s.id] === 'loading' && !obj) return;
       prop.scans = prop.scans.filter(x => x.id !== s.id);
       if (obj) { scanRoot.remove(obj); disposeScanObject(obj); delete scanObjs[s.id]; }
-      await deleteFile(s.id);
+      delete scanState[s.id];
       setSelection(null);
       touch();
       renderToolCol();
+      try { await deleteFile(s.id); }
+      catch (e) { console.error(e); toast('The scan record is gone but its bytes could not be removed from browser storage: ' + errMsg(e), 'warn'); }
     };
     return;
   }
@@ -1562,7 +1697,8 @@ function renderToolCol() {
   const tb = (act, ic, label, key, active) =>
     `<button class="tool-btn ${active ? 'active' : ''}" data-act="${act}" title="${label}${key ? ' (' + key + ')' : ''}">` +
     `${icon(ic)}<span class="tb-text">${label}</span>${key ? `<kbd class="key">${key}</kbd>` : ''}</button>`;
-  const scanRows = prop.scans.map(s => `<button class="tool-btn v-scan-row ${selection && selection.kind === 'scan' && selection.id === s.id ? 'active' : ''}" data-scan="${s.id}" title="${escapeHtml(s.name)}">${icon(s.kind === 'splat' ? 'splat' : s.kind === 'mesh' ? 'model' : 'scan')}<span class="tb-text">${escapeHtml(s.name.length > 14 ? s.name.slice(0, 12) + '..' : s.name)}</span><kbd class="key">${escapeHtml((s.kind || '').toUpperCase().slice(0, 5))}</kbd></button>`).join('');
+  const scanBadge = s => scanObjs[s.id] ? (s.kind || '').toUpperCase().slice(0, 5) : ({ missing: 'GONE', failed: 'ERR' }[scanState[s.id]] || '...');
+  const scanRows = prop.scans.map(s => `<button class="tool-btn v-scan-row ${scanSelected(s.id) ? 'active' : ''}" data-scan="${escapeHtml(s.id)}" title="${escapeHtml(s.name)}${scanObjs[s.id] ? '' : ' (' + escapeHtml(scanState[s.id] || 'loading') + ')'}">${icon(s.kind === 'splat' ? 'splat' : s.kind === 'mesh' ? 'model' : 'scan')}<span class="tb-text">${escapeHtml(s.name.length > 14 ? s.name.slice(0, 12) + '..' : s.name)}</span><kbd class="key">${escapeHtml(scanBadge(s))}</kbd></button>`).join('');
   tc.innerHTML = `
     <div class="tool-head">VIEW</div>
     ${tb('frame', 'frame', 'FRAME', 'F')}
@@ -1658,6 +1794,8 @@ function onKeyDown(e) {
   e.preventDefault();
 }
 function onKeyUp(e) { delete walkKeys[e.code]; }
+function onPointerLeave() { if (hoverTarget) { hoverTarget = null; updateOutlineTargets(); requestRender(2); } }
+function onContextMenu(e) { e.preventDefault(); }
 
 // ---------- mount / unmount ----------
 export function mount(root) {
@@ -1688,7 +1826,10 @@ export function mount(root) {
     modes: wrapEl.querySelector('.v-modes'), compass: wrapEl.querySelector('.v-rose'), env: wrapEl.querySelector('.v-env'),
     progress: wrapEl.querySelector('.v-progress'), toast: wrapEl.querySelector('.v-toast'), hint: wrapEl.querySelector('.v-hint'),
   };
-  mode = 'orbit'; tool = 'select'; selection = null; hoverTarget = null; tween = null; measureDraft = null; pinPhotoId = null; panoNagged = false;
+  mode = 'orbit'; tool = 'select'; selection = null; hoverTarget = null; tween = null; measureDraft = null; pinPhotoId = null;
+  panoNagged = false; panoPending = null; panoMissing = null;
+  for (const k of Object.keys(scanState)) delete scanState[k];
+  mountId++;
 
   ensureRenderer();
   wrapEl.insertBefore(renderer.domElement, wrapEl.firstChild);
@@ -1710,13 +1851,14 @@ export function mount(root) {
   c.addEventListener('pointerdown', onPointerDown);
   c.addEventListener('pointerup', onPointerUp);
   c.addEventListener('pointermove', onPointerMove);
-  c.addEventListener('pointerleave', () => { if (hoverTarget) { hoverTarget = null; updateOutlineTargets(); requestRender(2); } });
-  c.addEventListener('contextmenu', e => e.preventDefault());
+  c.addEventListener('pointerleave', onPointerLeave);
+  c.addEventListener('contextmenu', onContextMenu);
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
   resizeObs = new ResizeObserver(resize);
   resizeObs.observe(wrapEl);
   resize();
+  programsWarm = false;
   lastT = 0;
   renderer.setAnimationLoop(tick);
   requestRender(4);
@@ -1724,13 +1866,52 @@ export function mount(root) {
   loadAllScans();
   // Deep link from the PHOTOS view: #/model?pin=<photoId> enters PIN PHOTO for that photo.
   const m = /[?&]pin=([^&]+)/.exec(location.hash);
-  if (m && photoById(prop, decodeURIComponent(m[1]))) startPinMode(decodeURIComponent(m[1]));
+  if (m) {
+    if (photoById(prop, decodeURIComponent(m[1]))) startPinMode(decodeURIComponent(m[1]));
+    // Consume the query so a reload, Back or a bookmark returns to the plain model view
+    // (replaceState does not fire hashchange, so the router is not re-entered).
+    history.replaceState(null, '', '#/model');
+  }
+}
+
+// three keys shader programs by light count, so the first time the room lights switch on
+// (walking into a room, or dusk) every lit material would compile a second variant and the
+// view would freeze mid-interaction. Compile both variants off the interaction path instead:
+// after the first environment bake and again whenever procedural textures have landed.
+function warmPrograms() {
+  if (!scene || !camera || !lightRoot || !composer) return;
+  const was = lightRoot.visible;
+  // Scans stay out of it: Spark builds its splat shaders on its own schedule.
+  const hadScans = scanRoot.parent === scene;
+  if (hadScans) scene.remove(scanRoot);
+  // Programs are keyed by the bound target too (tone mapping and output colour space are off
+  // when drawing into the composer's buffers), so compile against the buffer the render pass uses.
+  const prevTarget = renderer.getRenderTarget();
+  renderer.setRenderTarget(composer.writeBuffer);
+  for (const lit of [true, false]) {
+    lightRoot.visible = lit;
+    try { renderer.compile(scene, camera); } catch (e) { console.error(e); }
+  }
+  renderer.setRenderTarget(prevTarget);
+  lightRoot.visible = was;
+  if (hadScans) scene.add(scanRoot);
 }
 
 export function unmount() {
   if (renderer) renderer.setAnimationLoop(null);
+  mountId++;
+  // mount() bails out before building anything when there is no property; there is nothing to tear down.
+  if (!scene) { el = wrapEl = inspEl = null; hud = {}; return; }
   window.removeEventListener('keydown', onKeyDown);
   window.removeEventListener('keyup', onKeyUp);
+  if (renderer) {
+    const c = renderer.domElement;
+    c.removeEventListener('pointerdown', onPointerDown);
+    c.removeEventListener('pointerup', onPointerUp);
+    c.removeEventListener('pointermove', onPointerMove);
+    c.removeEventListener('pointerleave', onPointerLeave);
+    c.removeEventListener('contextmenu', onContextMenu);
+  }
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
   clearTimeout(pmremTimer);
   if (mode === 'walk' && walk) { if (walkLocked) walk.unlock(); }
@@ -1745,6 +1926,7 @@ export function unmount() {
   clearMeasures();
   for (const id of Object.keys(pinObjs)) removePin(id);
   for (const id of Object.keys(scanObjs)) { disposeScanObject(scanObjs[id]); delete scanObjs[id]; }
+  for (const id of Object.keys(scanState)) delete scanState[id];
   releaseSplatRenderer();
   if (composer) {
     for (const p of Object.values(passes)) if (p.dispose) p.dispose();
