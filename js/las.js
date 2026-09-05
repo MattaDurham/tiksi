@@ -1,13 +1,19 @@
-// Dependency-free binary parsers for scan files: uncompressed LAS 1.2-1.4 (point formats
-// 0-10) and PLY point clouds (ascii / binary, either endianness). Nothing here imports
-// three.js on purpose: the same module is loaded inside a Worker (see workerMain) so
-// multi-million point files parse without freezing the console.
+// Dependency-free parsers for scan files: uncompressed LAS 1.2-1.4 (point formats 0-10),
+// PLY point clouds (ascii / binary, either endianness) and XYZ/TXT text columns. Nothing
+// here imports three.js on purpose: the same module is loaded inside a Worker (see
+// workerMain) so multi-million point files parse without freezing the console.
 //
-// Output convention: positions are Float32 triplets already in the viewer's frame
-// (x east, y up, z south), re-centred so the cloud sits near the origin with its lowest
-// point at y = 0; colours are Uint8 RGB triplets or null.
+// Output convention: positions are Float32 triplets in the viewer's frame (x east, y up,
+// z south); `count` is always the number of points actually written (a truncated file or
+// an over-claiming header never yields phantom points). Georeferenced inputs are shifted
+// by a double-precision `origin` before they touch a Float32Array, so UTM-scale
+// coordinates keep their centimetres; recentre() then moves the cloud to the viewer origin
+// with its lowest point at y = 0. Colours are Uint8 RGB triplets or null.
 
 const LAS_RGB_OFFSET = { 2: 20, 3: 28, 5: 28, 7: 30, 8: 30, 10: 30 };
+// A header centre further than this from the first point is not describing this file's
+// points (stale bounds copied from another tile): fall back to the first point instead.
+const HEADER_ORIGIN_TOLERANCE = 1e4;
 
 export function isLAS(buffer) {
   if (buffer.byteLength < 227) return false;
@@ -50,15 +56,19 @@ export function parseLAS(buffer, opts) {
   const positions = new Float32Array(count * 3);
   const colors = new Uint8Array(count * 3);
   // Re-centre in double precision: UTM-scale coordinates would lose centimetres in float32.
-  const cx = (h.min[0] + h.max[0]) / 2, cy = (h.min[1] + h.max[1]) / 2, cz = h.min[2];
-  const useHeaderCentre = isFinite(cx) && isFinite(cy) && isFinite(cz) && h.max[0] >= h.min[0];
+  // The header bounds are used when they look real (finite, not the all-zero placeholder
+  // some writers leave, and near the first point); otherwise the first point is the origin.
   let ox = 0, oy = 0, oz = 0;
-  if (useHeaderCentre) { ox = cx; oy = cy; oz = cz; }
-  else if (count) {
+  if (count) {
     ox = dv.getInt32(h.offset, true) * h.scale[0] + h.off[0];
     oy = dv.getInt32(h.offset + 4, true) * h.scale[1] + h.off[1];
     oz = dv.getInt32(h.offset + 8, true) * h.scale[2] + h.off[2];
   }
+  const cx = (h.min[0] + h.max[0]) / 2, cy = (h.min[1] + h.max[1]) / 2, cz = h.min[2];
+  const useHeaderCentre = isFinite(cx) && isFinite(cy) && isFinite(cz)
+    && (h.max[0] > h.min[0] || h.max[1] > h.min[1] || h.max[2] > h.min[2])
+    && Math.abs(cx - ox) < HEADER_ORIGIN_TOLERANCE && Math.abs(cy - oy) < HEADER_ORIGIN_TOLERANCE && Math.abs(cz - oz) < HEADER_ORIGIN_TOLERANCE;
+  if (useHeaderCentre) { ox = cx; oy = cy; oz = cz; }
   let maxRgb = 0, maxI = 1;
   let p = h.offset;
   for (let i = 0; i < count; i++, p += h.recordLength) {
@@ -97,7 +107,8 @@ export function parseLAS(buffer, opts) {
     }
   }
   if (opts.onProgress) opts.onProgress(1);
-  return { positions, colors, count, hasColor: rgbAt != null };
+  // origin: what was subtracted, expressed in the viewer frame (x, z-up -> y, north -> -z).
+  return { positions, colors, count, hasColor: rgbAt != null, origin: [ox, oz, -oy] };
 }
 
 // ---------- PLY ----------
@@ -133,7 +144,9 @@ export function parsePLYHeader(buffer) {
   }
   const v = out.elements.find(e => e.name === 'vertex');
   const names = new Set(v ? v.props.map(p => p.name) : []);
-  out.isGaussian = names.has('f_dc_0') || names.has('opacity') || names.has('scale_0');
+  // A 3DGS export always carries scale, rotation and colour/opacity together; a plain cloud
+  // that happens to have an 'opacity' scalar must not be sent to the splat renderer.
+  out.isGaussian = names.has('scale_0') && names.has('rot_0') && (names.has('f_dc_0') || names.has('opacity'));
   const f = out.elements.find(e => e.name === 'face');
   out.hasFaces = !!(f && f.count > 0);
   out.vertexCount = v ? v.count : 0;
@@ -155,39 +168,52 @@ function reader(dv, type, little) {
 }
 
 // Vertices only (faces are skipped); colours from red/green/blue or r/g/b in any width.
+// Storage is sized from the bytes actually present, not the header count, so a truncated
+// or over-claiming file neither allocates gigabytes nor yields a stack of phantom points.
 export function parsePLYPoints(buffer, header, opts) {
   opts = opts || {};
   header = header || parsePLYHeader(buffer);
   const vert = header.elements.find(e => e.name === 'vertex');
   if (!vert) throw new Error('PLY has no vertex element');
-  const count = vert.count;
-  const positions = new Float32Array(count * 3);
   const idx = name => vert.props.findIndex(p => p.name === name);
   const ix = idx('x'), iy = idx('y'), iz = idx('z');
   if (ix < 0 || iy < 0 || iz < 0) throw new Error('PLY vertices lack x/y/z');
   let ir = idx('red'), ig = idx('green'), ib = idx('blue');
   if (ir < 0) { ir = idx('r'); ig = idx('g'); ib = idx('b'); }
   const hasColor = ir >= 0 && ig >= 0 && ib >= 0;
-  const colors = hasColor ? new Uint8Array(count * 3) : null;
   const colorScale = hasColor ? (vert.props[ir].type === 'float32' || vert.props[ir].type === 'float64' ? 255 : (vert.props[ir].type === 'uint16' ? 1 / 257 : 1)) : 1;
   // Vertex is always the first element in practice; if not, we cannot skip unknown list data cheaply.
   if (header.elements[0] !== vert) throw new Error('PLY vertex element must come first');
+  const body = Math.max(0, buffer.byteLength - header.headerLength);
+  let positions, colors = null, n = 0, i = 0;
+  // The first finite vertex is subtracted in double precision (see the header comment).
+  const origin = [0, 0, 0];
+  let originSet = false;
+  const setOrigin = (x, y, z) => { if (isFinite(x) && isFinite(y) && isFinite(z)) { origin[0] = x; origin[1] = y; origin[2] = z; } originSet = true; };
 
   if (header.format === 'ascii') {
     const text = new TextDecoder().decode(new Uint8Array(buffer, header.headerLength));
-    let pos = 0, i = 0;
-    const n = text.length;
-    while (i < count && pos < n) {
+    // A vertex line is at least "0 0 0" plus its newline: cap the allocation by the text size.
+    n = Math.min(vert.count, Math.floor((text.length + 1) / 6));
+    positions = new Float32Array(n * 3);
+    colors = hasColor ? new Uint8Array(n * 3) : null;
+    let pos = 0;
+    const len = text.length, need = vert.props.length;
+    while (i < n && pos < len) {
       let end = text.indexOf('\n', pos);
-      if (end < 0) end = n;
+      if (end < 0) end = len;
       const line = text.slice(pos, end).trim();
       pos = end + 1;
       if (!line) continue;
       const t = line.split(/\s+/);
-      positions[i * 3] = +t[ix]; positions[i * 3 + 1] = +t[iy]; positions[i * 3 + 2] = +t[iz];
+      const x = +t[ix], y = +t[iy], z = +t[iz];
+      // A short or non-numeric line is a cut-off tail (or junk): skip it rather than store NaN.
+      if (t.length < need || !isFinite(x) || !isFinite(y) || !isFinite(z)) continue;
+      if (!originSet) setOrigin(x, y, z);
+      positions[i * 3] = x - origin[0]; positions[i * 3 + 1] = y - origin[1]; positions[i * 3 + 2] = z - origin[2];
       if (hasColor) { colors[i * 3] = +t[ir] * colorScale; colors[i * 3 + 1] = +t[ig] * colorScale; colors[i * 3 + 2] = +t[ib] * colorScale; }
       i++;
-      if (opts.onProgress && (i & 0x3ffff) === 0) opts.onProgress(i / count);
+      if (opts.onProgress && (i & 0x3ffff) === 0) opts.onProgress(i / n);
     }
   } else {
     const little = header.format === 'binary_little_endian';
@@ -201,17 +227,20 @@ export function parsePLYPoints(buffer, header, opts) {
     const rb = hasColor ? reader(dv, vert.props[ib].type, little) : null;
     const ox = offsets[ix], oy = offsets[iy], oz = offsets[iz];
     const or = offsets[ir], og = offsets[ig], ob = offsets[ib];
-    const avail = Math.floor((buffer.byteLength - header.headerLength) / stride);
-    const n = Math.min(count, avail);
+    n = Math.min(vert.count, Math.floor(body / stride));
+    positions = new Float32Array(n * 3);
+    colors = hasColor ? new Uint8Array(n * 3) : null;
     let p = header.headerLength;
-    for (let i = 0; i < n; i++, p += stride) {
-      positions[i * 3] = rx(p + ox); positions[i * 3 + 1] = ry(p + oy); positions[i * 3 + 2] = rz(p + oz);
+    if (n > 0) setOrigin(rx(p + ox), ry(p + oy), rz(p + oz));
+    for (; i < n; i++, p += stride) {
+      positions[i * 3] = rx(p + ox) - origin[0]; positions[i * 3 + 1] = ry(p + oy) - origin[1]; positions[i * 3 + 2] = rz(p + oz) - origin[2];
       if (hasColor) { colors[i * 3] = rr(p + or) * colorScale; colors[i * 3 + 1] = rg(p + og) * colorScale; colors[i * 3 + 2] = rb(p + ob) * colorScale; }
       if (opts.onProgress && (i & 0x3ffff) === 0) opts.onProgress(i / n);
     }
   }
+  if (i < n) { positions = positions.slice(0, i * 3); if (colors) colors = colors.slice(0, i * 3); }
   if (opts.onProgress) opts.onProgress(1);
-  return { positions, colors, count, hasColor };
+  return { positions, colors, count: i, hasColor, origin };
 }
 
 // Recentre any point set: x/z about the bounding centre, y so the lowest point sits at 0.
@@ -229,21 +258,73 @@ export function recentre(positions) {
   return { shift: [sx, sy, sz] };
 }
 
+// ---------- XYZ / TXT ----------
+// Text columns separated by whitespace, commas or semicolons. The first three columns are
+// x y z; three trailing integers in 0-255 are r g b (so "x y z i r g b" and "x y z r g b"
+// both colour, "x y z intensity" does not). Header, comment and blank lines are skipped.
+// Survey and CloudCompare exports vary in exactly these ways, which three's XYZLoader
+// (whitespace only, exactly 3 or 6 columns) silently turned into empty clouds.
+export function parseXYZ(text, opts) {
+  opts = opts || {};
+  let cap = 4096, n = 0, coloured = 0;
+  let positions = new Float32Array(cap * 3), colors = new Uint8Array(cap * 3).fill(200);   // rows without rgb stay neutral grey
+  const origin = [0, 0, 0];
+  const isByte = v => Number.isInteger(v) && v >= 0 && v <= 255;
+  const len = text.length;
+  let pos = 0, seen = 0;
+  while (pos < len) {
+    let end = text.indexOf('\n', pos);
+    if (end < 0) end = len;
+    const line = text.slice(pos, end).trim();
+    pos = end + 1;
+    if (!line || line[0] === '#' || (line[0] === '/' && line[1] === '/')) continue;
+    const t = line.split(/[\s,;]+/);
+    if (t.length < 3) continue;
+    const x = +t[0], y = +t[1], z = +t[2];
+    if (!isFinite(x) || !isFinite(y) || !isFinite(z)) continue;   // a column-name header line
+    if (n === 0) { origin[0] = x; origin[1] = y; origin[2] = z; }   // double-precision shift, as for PLY
+    if (n === cap) {
+      cap *= 2;
+      const p2 = new Float32Array(cap * 3); p2.set(positions); positions = p2;
+      const c2 = new Uint8Array(cap * 3).fill(200); c2.set(colors); colors = c2;
+    }
+    positions[n * 3] = x - origin[0]; positions[n * 3 + 1] = y - origin[1]; positions[n * 3 + 2] = z - origin[2];
+    if (t.length >= 6) {
+      const r = +t[t.length - 3], g = +t[t.length - 2], b = +t[t.length - 1];
+      if (isByte(r) && isByte(g) && isByte(b)) { colors[n * 3] = r; colors[n * 3 + 1] = g; colors[n * 3 + 2] = b; coloured++; }
+    }
+    n++;
+    if (opts.onProgress && (++seen & 0x3ffff) === 0) opts.onProgress(pos / len);
+  }
+  if (opts.onProgress) opts.onProgress(1);
+  return { positions: positions.slice(0, n * 3), colors: coloured ? colors.slice(0, n * 3) : null, count: n, hasColor: coloured > 0, origin };
+}
+
+// Parse by format ('las', 'ply' or 'xyz') and move the cloud to the viewer origin. The
+// returned shift is the total offset removed (parser origin plus recentre), in the viewer frame.
+export function parseAndRecentre(format, buffer, onProgress) {
+  let res;
+  if (format === 'las') res = parseLAS(buffer, { onProgress });
+  else if (format === 'xyz') res = parseXYZ(new TextDecoder().decode(new Uint8Array(buffer)), { onProgress });
+  else res = parsePLYPoints(buffer, null, { onProgress });
+  const shift = recentre(res.positions).shift;
+  const o = res.origin || [0, 0, 0];
+  res.shift = [shift[0] + o[0], shift[1] + o[1], shift[2] + o[2]];
+  return res;
+}
+
 // Worker entry: the viewer spawns a module Worker from a Blob that imports this file.
 export function workerMain(self) {
   self.onmessage = e => {
-    const { id, format, buffer, recentreLas } = e.data;
+    const { id, format, buffer } = e.data;
     const onProgress = f => self.postMessage({ id, progress: f });
     try {
-      let res;
-      if (format === 'las') res = parseLAS(buffer, { onProgress });
-      else res = parsePLYPoints(buffer, null, { onProgress });
-      if (recentreLas !== false) res.shift = recentre(res.positions).shift;
+      const res = parseAndRecentre(format, buffer, onProgress);
       const transfer = [res.positions.buffer];
       if (res.colors) transfer.push(res.colors.buffer);
       self.postMessage({ id, ok: true, positions: res.positions, colors: res.colors, count: res.count, hasColor: res.hasColor, shift: res.shift }, transfer);
     } catch (err) {
-      self.postMessage({ id, ok: false, error: err && err.message ? err.message : String(err) });
+      self.postMessage({ id, ok: false, error: String(err && err.message || err) });
     }
   };
 }
