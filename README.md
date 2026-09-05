@@ -11,7 +11,7 @@ reference frame every level, grid and measurement hangs from. The myth fits the
 tool twice over: at Tiwanaku, Viracocha is said to have sculpted humanity as
 stone models first, then brought them to life. Model first, then build.
 
-Live app: https://helladuckets.github.io/tiksi/
+Live app: https://mattadurham.github.io/tiksi/
 
 ## What it does
 

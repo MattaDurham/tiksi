@@ -27,22 +27,51 @@ export function setSaveStatus(text, busy) {
   el.classList.toggle('busy', !!busy);
 }
 
+let saveFailed = false;
+let savePending = false;
 export function save() {
+  // Never write a copy with inline thumbnails while hydrateThumbs() is still moving them into
+  // IndexedDB: a freshly imported gallery would not fit and would raise the quota alert for nothing.
+  if (hydration) {
+    if (!savePending) { savePending = true; hydration.then(() => { savePending = false; save(); }); }
+    return;
+  }
   try {
-    localStorage.setItem(LS_KEY, JSON.stringify(ws.data));
+    localStorage.setItem(LS_KEY, JSON.stringify(persistable(ws.data)));
+    saveFailed = false;
     const t = new Date();
     setSaveStatus('SAVED ' + String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0'), false);
   } catch (e) {
     console.error('save failed', e);
     setSaveStatus('SAVE FAILED', true);
-    alert('Autosave failed (storage quota?). Export your workspace now to avoid losing work.');
+    // One alert per failure streak: autosave runs after every edit, and a modal per keystroke
+    // would make the recovery steps (export, delete photos or scans) impossible to carry out.
+    if (!saveFailed) alert('Autosave failed: browser storage is full. Use EXPORT to save your workspace now, then delete photos or scans to free space.');
+    saveFailed = true;
   }
+}
+
+// The localStorage copy of the workspace. Photo thumbnails are the only bulky per-record data
+// in the JSON (20-35 KB each), and the ~5 MB localStorage limit would cap a gallery at a
+// couple of hundred photos; so wherever IndexedDB is confirmed to hold a thumbnail the copy
+// carries an empty `thumb` and hydrateThumbs() fills it back in on load. In-memory records
+// and JSON/bundle exports always keep the thumbnail, so every consumer of `ph.thumb` and
+// every export stays portable. Only the objects on the path to photo records are copied.
+function persistable(d) {
+  const strip = ph => !!ph.thumb && thumbsStored.has(ph.id);
+  return Object.assign({}, d, {
+    properties: (d.properties || []).map(p => {
+      const photos = p.photos || [];
+      if (!photos.some(strip)) return p;
+      return Object.assign({}, p, { photos: photos.map(ph => strip(ph) ? Object.assign({}, ph, { thumb: '' }) : ph) });
+    }),
+  });
 }
 
 export function load() {
   try {
     const raw = localStorage.getItem(LS_KEY);
-    if (raw) { ws.data = migrate(JSON.parse(raw)); return true; }
+    if (raw) { ws.data = migrate(JSON.parse(raw)); thumbsStored.clear(); hydrateThumbs(); return true; }
   } catch (e) { console.error('load failed', e); }
   ws.data = emptyWorkspace();
   return false;
@@ -50,8 +79,65 @@ export function load() {
 
 export function replaceWorkspace(data) {
   ws.data = migrate(data);
-  save();
+  // Thumbnails arrive inline (JSON/bundle); hydrateThumbs() copies them into IndexedDB and
+  // save() waits for it, so the first localStorage copy is already the slim one.
+  thumbsStored.clear();
+  hydrateThumbs();
   touch();
+}
+
+// ---------- photo thumbnails (IndexedDB copy) ----------
+
+const THUMB_PREFIX = 'thumb-';
+const thumbsStored = new Set();   // photo ids whose thumbnail is confirmed in IndexedDB
+let hydration = null;             // pending hydrateThumbs() run, if any
+
+export function thumbKey(id) { return THUMB_PREFIX + id; }
+
+// Resolves once the current workspace's thumbnails are back in memory (boot waits for it
+// before the first render so galleries never paint empty images).
+export function whenHydrated() { return hydration || Promise.resolve(); }
+
+export async function storeThumb(id, thumb) {
+  await putFile(thumbKey(id), null, { kind: 'thumb', thumb });
+  thumbsStored.add(id);
+}
+
+export async function deleteThumb(id) {
+  thumbsStored.delete(id);
+  await deleteFile(thumbKey(id));
+}
+
+// Reconcile in-memory photo records with the thumbnail store: records loaded from the slim
+// localStorage copy get their thumbnail back, records that still carry one inline (older
+// saves, imports) get it copied over so the next save can drop it. Bails out quietly when
+// IndexedDB is unavailable: thumbnails then simply stay inline as they always did.
+function hydrateThumbs() {
+  const d = ws.data;
+  const run = (async () => {
+    const photos = [];
+    for (const p of d.properties || []) for (const ph of p.photos || []) photos.push(ph);
+    if (!photos.length) return;
+    let stored;
+    try { stored = await getAllThumbs(); } catch (e) { console.error('thumbnail store unavailable', e); return; }
+    for (const ph of photos) {
+      if (ws.data !== d) return;   // workspace replaced meanwhile; the new one runs its own pass
+      const have = stored.get(ph.id);
+      if (ph.thumb) {
+        if (have === ph.thumb) { thumbsStored.add(ph.id); continue; }
+        try {
+          await putFile(thumbKey(ph.id), null, { kind: 'thumb', thumb: ph.thumb });
+          if (ws.data === d) thumbsStored.add(ph.id);
+        } catch (e) { /* stays inline in localStorage for this record */ }
+      } else if (have) {
+        ph.thumb = have;
+        thumbsStored.add(ph.id);
+      }
+    }
+  })();
+  const p = run.catch(e => console.error('thumbnail hydration failed', e)).then(() => { if (hydration === p) hydration = null; });
+  hydration = p;
+  return p;
 }
 
 // ---------- schema defaults (v2) ----------
@@ -83,6 +169,52 @@ export function propertyTemplate(name) {
     id: uid('prop'), name: name || 'New property', notes: '', wallHeight: 2.44,
     plan: null, walls: [], openings: [], rooms: [], scans: [], photos: [], env: defaultEnv(),
   };
+}
+
+// Ids land in element attributes and thumbnails in <img src>, and both can come from a
+// hand-edited or hostile file: an id that does not look like one is regenerated (with every
+// reference following it), a thumbnail that is not a plain base64 image is dropped.
+const ID_RE = /^[\w.:-]{1,80}$/;
+const THUMB_RE = /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+
+function sanitiseIds(d) {
+  const renamed = new Map();
+  const fix = (rec, prefix) => {
+    if (!rec || typeof rec !== 'object') return;
+    if (typeof rec.id === 'string' && ID_RE.test(rec.id)) return;
+    const id = uid(prefix);
+    if (typeof rec.id === 'string' && rec.id) renamed.set(rec.id, id);
+    rec.id = id;
+  };
+  for (const p of d.properties) {
+    fix(p, 'prop');
+    for (const w of p.walls) fix(w, 'w');
+    for (const o of p.openings) fix(o, 'o');
+    for (const r of p.rooms) fix(r, 'r');
+    for (const s of p.scans) fix(s, 'scan');
+    for (const ph of p.photos) fix(ph, 'ph');
+  }
+  for (const m of d.materials) fix(m, 'mat');
+  for (const pr of d.products) fix(pr, 'prod');
+  for (const pr of d.projects) { fix(pr, 'proj'); for (const it of pr.items) fix(it, 'it'); }
+  if (renamed.size) remapIds(d, renamed);
+}
+
+// References are plain id strings wherever they sit (wall.material, opening.wallId,
+// item.elementIds, photo.roomId, settings.activePropertyId, ...), so walk everything.
+function remapIds(node, renamed) {
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      if (typeof node[i] === 'string') { if (renamed.has(node[i])) node[i] = renamed.get(node[i]); }
+      else remapIds(node[i], renamed);
+    }
+  } else if (node && typeof node === 'object') {
+    for (const k of Object.keys(node)) {
+      const v = node[k];
+      if (typeof v === 'string') { if (k !== 'id' && renamed.has(v)) node[k] = renamed.get(v); }
+      else remapIds(v, renamed);
+    }
+  }
 }
 
 function migrate(d) {
@@ -127,9 +259,12 @@ function migrate(d) {
       if (!Array.isArray(ph.itemIds)) ph.itemIds = [];
       if (ph.pin === undefined) ph.pin = null;
       if (!ph.createdAt) ph.createdAt = new Date(0).toISOString();
+      // '' is the slim localStorage form (thumbnail lives in IndexedDB, see persistable).
+      if (typeof ph.thumb !== 'string' || (ph.thumb && !THUMB_RE.test(ph.thumb))) ph.thumb = '';
     }
   }
   for (const pr of d.projects) pr.items = pr.items || [];
+  sanitiseIds(d);
   d.version = SCHEMA_VERSION;
   return d;
 }
@@ -326,13 +461,32 @@ function db() {
   return dbPromise;
 }
 
+// Settle a write transaction on every path with a real Error. A request failure (quota,
+// constraint) reaches tx.onerror before tx.error is set, and Chromium reports a quota overrun
+// with an abort event only; callers show e.message, so null must never escape here.
+function settleWrite(tx, resolve, reject, what) {
+  tx.oncomplete = () => resolve();
+  tx.onerror = e => reject(ioError((e.target && e.target.error) || tx.error, 'IndexedDB ' + what + ' failed'));
+  tx.onabort = () => reject(ioError(tx.error, 'IndexedDB ' + what + ' aborted'));
+}
+
+// Chromium's QuotaExceededError (and some other DOMExceptions) come with an empty message,
+// which would leave a toast reading "Import failed: ". Give those a message worth showing.
+function ioError(err, fallback) {
+  if (err && err.message) return err;
+  const name = err && err.name;
+  const msg = name === 'QuotaExceededError'
+    ? 'browser storage is full; delete scans or photos (or clear leftovers with EXPORT > CLEAN STORAGE) and try again'
+    : fallback + (name ? ' (' + name + ')' : '');
+  return Object.assign(new Error(msg), { name: name || 'Error', cause: err });
+}
+
 export async function putFile(id, buffer, meta) {
   const d = await db();
   return new Promise((resolve, reject) => {
     const tx = d.transaction('files', 'readwrite');
     tx.objectStore('files').put(Object.assign({ id, buffer }, meta || {}));
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
+    settleWrite(tx, resolve, reject, 'write');
   });
 }
 
@@ -341,17 +495,45 @@ export async function getFile(id) {
   return new Promise((resolve, reject) => {
     const req = d.transaction('files').objectStore('files').get(id);
     req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => reject(req.error);
+    req.onerror = () => reject(req.error || new Error('IndexedDB read failed'));
   });
 }
 
-export async function deleteFile(id) {
+export async function deleteFiles(ids) {
+  if (!ids.length) return;
   const d = await db();
   return new Promise((resolve, reject) => {
     const tx = d.transaction('files', 'readwrite');
-    tx.objectStore('files').delete(id);
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
+    const store = tx.objectStore('files');
+    for (const id of ids) store.delete(id);
+    settleWrite(tx, resolve, reject, 'delete');
+  });
+}
+
+export function deleteFile(id) { return deleteFiles([id]); }
+
+// Every key in the store: scans, photos and thumbnails, referenced or not.
+export async function storedFileIds() {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const req = d.transaction('files').objectStore('files').getAllKeys();
+    req.onsuccess = () => resolve((req.result || []).map(String));
+    req.onerror = () => reject(req.error || new Error('IndexedDB read failed'));
+  });
+}
+
+// photo id -> thumbnail data URL for every stored thumbnail. Keys share a prefix, so one
+// ranged getAll fetches them without touching the (large) scan and photo records.
+async function getAllThumbs() {
+  const d = await db();
+  return new Promise((resolve, reject) => {
+    const req = d.transaction('files').objectStore('files').getAll(IDBKeyRange.bound(THUMB_PREFIX, THUMB_PREFIX + '\uffff'));
+    req.onsuccess = () => {
+      const out = new Map();
+      for (const r of req.result || []) if (r && typeof r.thumb === 'string') out.set(String(r.id).slice(THUMB_PREFIX.length), r.thumb);
+      resolve(out);
+    };
+    req.onerror = () => reject(req.error || new Error('IndexedDB read failed'));
   });
 }
 
@@ -365,6 +547,25 @@ export function listAllFileIds(data) {
     for (const ph of p.photos || []) ids.push(ph.id);
   }
   return ids;
+}
+
+// Stored files nothing in the current workspace references. IMPORT and DEMO swap the
+// workspace but keep the bytes, so a JSON-only export of the previous one still finds them
+// on this machine; these are what CLEAN STORAGE offers to remove. Returns { ids, bytes };
+// `bytes` is only computed with opts.sizes, since it reads every orphan record.
+export async function orphanFiles(opts) {
+  const keep = new Set();
+  for (const id of listAllFileIds()) { keep.add(id); keep.add(thumbKey(id)); }
+  const ids = (await storedFileIds()).filter(id => !keep.has(id));
+  let bytes = 0;
+  if (opts && opts.sizes) {
+    for (const id of ids) {
+      const rec = await getFile(id);
+      if (rec && rec.buffer) bytes += rec.buffer.byteLength;
+      else if (rec && typeof rec.thumb === 'string') bytes += rec.thumb.length;
+    }
+  }
+  return { ids, bytes };
 }
 
 export function readFileAsArrayBuffer(file) {
@@ -478,9 +679,12 @@ export async function readBundle(file) {
     const mime = MIME_BY_EXT[ext];
     return mime ? { id, kind: 'photo', path, name: base, mime } : { id, kind: 'scan', path, name: base, format: ext };
   });
+  // Only files the workspace actually references get stored: anything else in the archive
+  // would be an orphan from the moment it lands (and an odd id would never be a valid key).
+  const referenced = new Set(listAllFileIds(data).filter(id => typeof id === 'string' && ID_RE.test(id)));
   const files = [], missing = [];
   for (const m of list) {
-    if (!m || typeof m.id !== 'string' || typeof m.path !== 'string') continue;
+    if (!m || typeof m.id !== 'string' || typeof m.path !== 'string' || !referenced.has(m.id)) continue;
     const u8 = zipped[m.path];
     if (!u8) { missing.push(m.id); continue; }
     const meta = m.kind === 'photo'

@@ -2,7 +2,8 @@
 
 import {
   ws, load, save, touch, onChange, activeProperty, replaceWorkspace, propertyTemplate,
-  exportWorkspace, exportBundle, importBundle, listAllFileIds, setSaveStatus, escapeHtml,
+  exportWorkspace, exportBundle, importBundle, listAllFileIds, orphanFiles, deleteFiles, whenHydrated,
+  setSaveStatus, fmtBytes, escapeHtml,
 } from './store.js';
 import { ensureBuiltinMaterials } from './materials.js';
 import { disposeMaterials } from './textures.js';
@@ -33,13 +34,15 @@ const VIEWS = {
 let currentView = null;
 let currentName = '';
 
-function boot() {
+async function boot() {
   const had = load();
   if (!had || ws.data.properties.length === 0 && ws.data.projects.length === 0) {
     replaceWorkspace(demoWorkspace());
   }
   ensureBuiltinMaterials();
   save();
+  // Photo thumbnails come back from IndexedDB asynchronously; the first render waits for them.
+  await whenHydrated();
 
   bindTopbar();
   refreshTopbar();
@@ -49,11 +52,17 @@ function boot() {
   route();
 }
 
+// A view that throws while tearing down must never wedge navigation: log it and move on.
+function unmountCurrent() {
+  if (!currentView || !currentView.unmount) return;
+  try { currentView.unmount(); } catch (e) { console.error('unmount failed', e); }
+}
+
 function route() {
   // Views may carry a query (#/model?pin=<photoId>); the view reads it from location.hash itself.
   const name = (location.hash.replace(/^#\//, '').split('?')[0] || 'plan');
   const view = VIEWS[name] || VIEWS.plan;
-  if (currentView && currentView.unmount) currentView.unmount();
+  unmountCurrent();
   currentName = VIEWS[name] ? name : 'plan';
   currentView = view;
   document.querySelectorAll('#rail a[data-view]').forEach(a =>
@@ -64,7 +73,7 @@ function route() {
 }
 
 function remountView() {
-  if (currentView && currentView.unmount) currentView.unmount();
+  unmountCurrent();
   const root = document.getElementById('view');
   root.innerHTML = '';
   currentView.mount(root);
@@ -77,6 +86,31 @@ function afterWorkspaceReplaced() {
   revokePhotoUrls();
   ensureBuiltinMaterials();
   remountView();
+  offerStorageCleanup(true);
+}
+
+// IMPORT and DEMO leave the previous workspace's scans and photos in IndexedDB on purpose
+// (a JSON-only export of it, re-imported on this machine, still finds them), so removing
+// them is always the user's call: offered right after a replacement, and any time later
+// from EXPORT > CLEAN STORAGE.
+async function offerStorageCleanup(afterReplace) {
+  let orphans;
+  try { orphans = await orphanFiles({ sizes: true }); } catch (e) { console.error(e); return; }
+  const n = orphans.ids.length;
+  if (!n) { if (!afterReplace) setSaveStatus('STORAGE CLEAN', false); return; }
+  const them = n === 1 ? 'it' : 'them';
+  const msg = n + ' stored file' + (n === 1 ? '' : 's') + ' (' + fmtBytes(orphans.bytes) + ') ' +
+    (afterReplace ? 'belonged to the previous workspace and nothing here references ' + them : (n === 1 ? 'is' : 'are') + ' not referenced by this workspace') + '.\n\n' +
+    'Remove ' + them + ' from browser storage? Keep ' + them + ' if you plan to re-import a JSON-only export of the workspace that used ' + them + ' on this machine' +
+    (afterReplace ? ' (EXPORT > CLEAN STORAGE can remove ' + them + ' later).' : '.');
+  if (!confirm(msg)) return;
+  try {
+    await deleteFiles(orphans.ids);
+    setSaveStatus('FREED ' + fmtBytes(orphans.bytes), false);
+  } catch (e) {
+    console.error('storage cleanup failed', e);
+    alert('Could not remove the files: ' + String(e && e.message || e));
+  }
 }
 
 // ---------- topbar ----------
@@ -105,15 +139,19 @@ function bindTopbar() {
   });
 
   const exportBtn = document.getElementById('btn-export');
-  exportBtn.onclick = () => {
+  exportBtn.onclick = async () => {
     // No binary files: a JSON export is complete on its own. With scans or photos, offer the
-    // bundle (recommended) or the light JSON-only export.
+    // bundle (recommended) or the light JSON-only export; with leftovers in storage, cleanup.
     const n = listAllFileIds().length;
-    if (!n) { exportWorkspace(); return; }
-    openMenu(exportBtn, [
+    let stray = 0;
+    try { stray = (await orphanFiles()).ids.length; } catch (e) { /* storage unavailable: nothing to clean */ }
+    if (!n && !stray) { exportWorkspace(); return; }
+    const items = n ? [
       { label: 'BUNDLE (.zip)', hint: 'workspace + ' + n + ' scan/photo file' + (n === 1 ? '' : 's'), primary: true, run: runExportBundle },
       { label: 'WORKSPACE ONLY (.json)', hint: 'no binary files', run: exportWorkspace },
-    ]);
+    ] : [{ label: 'WORKSPACE (.json)', primary: true, run: exportWorkspace }];
+    if (stray) items.push({ label: 'CLEAN STORAGE', hint: stray + ' stored file' + (stray === 1 ? '' : 's') + ' nothing here uses', run: () => offerStorageCleanup(false) });
+    openMenu(exportBtn, items);
   };
 
   const importFile = document.getElementById('import-file');
@@ -202,7 +240,7 @@ function refreshTopbar() {
   const d = ws.data;
   const active = activeProperty();
   sel.innerHTML = d.properties.map(p =>
-    `<option value="${p.id}" ${active && p.id === active.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')
+    `<option value="${escapeHtml(p.id)}" ${active && p.id === active.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')
     || '<option value="">(no property)</option>';
   document.querySelectorAll('#units-seg .seg-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.units === d.settings.units));
