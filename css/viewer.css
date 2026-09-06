@@ -1,0 +1,179 @@
+/* tiksi - 3D viewer HUD, inspector and environment panel styles. */
+/* Glassy panels over the render, amber accent, mono chrome; tokens from console.css. */
+
+/* The canvas is a size container so the HUD can compact itself on narrow layouts. */
+.v-wrap { position: relative; overflow: hidden; background: var(--bg); container-type: inline-size; }
+.v-wrap canvas.v-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; cursor: default; outline: none; }
+
+.v-glass {
+  background: rgba(12, 16, 19, 0.66);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  backdrop-filter: blur(12px) saturate(1.2);
+  border: 1px solid rgba(139, 154, 167, 0.22);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* ---------- mode bar (top centre) ---------- */
+.v-modes {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 2px; padding: 4px;
+  border-radius: 999px; z-index: 5;
+  background: rgba(12, 16, 19, 0.66);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2); backdrop-filter: blur(12px) saturate(1.2);
+  border: 1px solid rgba(139, 154, 167, 0.22);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.v-pill {
+  background: transparent; border: 0; color: var(--dim); cursor: pointer; white-space: nowrap;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; padding: 6px 12px; border-radius: 999px;
+  transition: background 0.12s, color 0.12s;
+}
+.v-pill:hover { color: var(--ink); background: rgba(255, 255, 255, 0.06); }
+.v-pill.active { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.v-pill-sep { flex: none; width: 1px; height: 16px; background: rgba(139, 154, 167, 0.3); margin: 0 4px; }
+.v-section-range { width: 120px; accent-color: var(--accent); margin: 0 4px; }
+.v-section-val { font-family: var(--mono); font-size: 10px; color: var(--accent); min-width: 44px; padding-right: 6px; white-space: nowrap; }
+
+/* ---------- compass (top right) ---------- */
+.v-compass {
+  position: absolute; top: 12px; right: 14px; width: 60px; height: 60px; border-radius: 50%; z-index: 5;
+  background: rgba(12, 16, 19, 0.66);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  border: 1px solid rgba(139, 154, 167, 0.22);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.v-compass::before {
+  content: ''; position: absolute; inset: 8px; border-radius: 50%; border: 1px dashed rgba(139, 154, 167, 0.35);
+}
+.v-rose { position: absolute; inset: 0; transition: transform 0.08s linear; }
+.v-rose span {
+  position: absolute; font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.05em; color: var(--dim);
+  width: 12px; text-align: center; line-height: 12px;
+}
+.v-rose .n { top: 3px; left: 50%; margin-left: -6px; color: var(--accent); font-weight: 700; }
+.v-rose .s { bottom: 3px; left: 50%; margin-left: -6px; }
+.v-rose .e { right: 4px; top: 50%; margin-top: -6px; }
+.v-rose .w { left: 4px; top: 50%; margin-top: -6px; }
+.v-rose i {
+  position: absolute; left: 50%; top: 50%; width: 0; height: 0; margin-left: -4px; margin-top: -16px;
+  border-left: 4px solid transparent; border-right: 4px solid transparent; border-bottom: 16px solid var(--accent);
+}
+.v-rose i::after {
+  content: ''; position: absolute; left: -4px; top: 16px; width: 0; height: 0;
+  border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 16px solid rgba(139, 154, 167, 0.5);
+}
+
+/* ---------- environment panel (bottom left) ---------- */
+.v-env {
+  position: absolute; left: 12px; bottom: 34px; width: 300px; z-index: 5; border-radius: 8px; overflow: hidden;
+  background: rgba(12, 16, 19, 0.7);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2); backdrop-filter: blur(14px) saturate(1.2);
+  border: 1px solid rgba(139, 154, 167, 0.22);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.v-env-head {
+  display: flex; align-items: center; gap: 8px; width: 100%; background: transparent; border: 0; cursor: pointer;
+  padding: 8px 12px; color: var(--accent); font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-align: left;
+}
+.v-env-head .v-env-sun { color: var(--dim); letter-spacing: 0.06em; margin-left: auto; }
+.v-env-head .v-env-caret { color: var(--faint); font-size: 11px; }
+.v-env-body { display: none; padding: 4px 12px 12px; border-top: 1px solid rgba(139, 154, 167, 0.18); }
+.v-env.open .v-env-body { display: block; }
+.v-row { display: grid; grid-template-columns: 78px 1fr 40px; align-items: center; gap: 8px; margin: 6px 0; }
+.v-row > span { font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; color: var(--faint); }
+.v-row > em { font-family: var(--mono); font-size: 10px; color: var(--dim); font-style: normal; text-align: right; }
+.v-row input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
+.v-row-sel { grid-template-columns: 78px 1fr; }
+.v-row-sel select { width: 100%; font-size: 11px; padding: 3px 5px; }
+.v-row-sel select + select { grid-column: 2; margin-top: 4px; }
+.v-arc { position: relative; height: 6px; border-radius: 3px; overflow: visible;
+  background: linear-gradient(90deg, #0d1522 0%, #0d1522 22%, #e3b78a 27%, #cfe0f2 50%, #e3b78a 81%, #0d1522 86%, #0d1522 100%); }
+.v-arc i { position: absolute; top: -3px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.v-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; margin-top: 8px; }
+.v-checks label { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; color: var(--dim); cursor: pointer; }
+
+/* ---------- hint, toast, progress ---------- */
+.v-hint {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: 7px 14px 6px; pointer-events: none; z-index: 4;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; color: var(--dim);
+  background: linear-gradient(180deg, rgba(12, 16, 19, 0) 0%, rgba(12, 16, 19, 0.85) 100%);
+  text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Toasts sit under the mode bar, clear of the ENVIRONMENT panel at the bottom left; when a
+   progress card is showing they stack beneath it. */
+.v-toast {
+  position: absolute; left: 50%; top: 60px; transform: translate(-50%, -8px); opacity: 0; pointer-events: none; z-index: 6;
+  max-width: 70%; padding: 8px 14px; border-radius: 6px; font-size: 12px; color: var(--ink);
+  background: rgba(12, 16, 19, 0.86); border: 1px solid var(--line-2);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  transition: opacity 0.18s, transform 0.18s;
+}
+.v-toast.show { opacity: 1; transform: translate(-50%, 0); }
+.v-progress.show ~ .v-toast { top: 112px; }
+.v-toast.ok { border-color: var(--green); }
+.v-toast.warn { border-color: var(--accent); }
+.v-toast.error { border-color: var(--red); }
+.v-progress {
+  position: absolute; top: 60px; left: 50%; transform: translateX(-50%); width: 280px; display: none; z-index: 6;
+  padding: 8px 12px; border-radius: 6px; background: rgba(12, 16, 19, 0.8); border: 1px solid var(--line-2);
+}
+.v-progress.show { display: block; }
+.v-prog-label { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em; color: var(--dim); margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v-prog-bar { height: 4px; border-radius: 2px; background: var(--panel-3); overflow: hidden; }
+.v-prog-fill { height: 100%; width: 0; background: var(--accent); transition: width 0.15s; box-shadow: 0 0 8px var(--accent); }
+
+/* Narrow canvas (1024-wide windows): tighter pills, a shorter slider, and the compass drops
+   under the bar so the two never share the top strip. Kept after the rules it overrides. */
+@container (max-width: 760px) {
+  .v-pill { padding: 6px 8px; letter-spacing: 0.08em; }
+  .v-pill-sep { margin: 0 2px; }
+  .v-section-range { width: 76px; margin: 0 2px; }
+  .v-section-val { min-width: 40px; padding-right: 4px; }
+  .v-compass { top: 62px; }
+  .v-toast { max-width: calc(100% - 200px); }
+}
+
+/* ---------- measure labels ---------- */
+.v-mlabel {
+  position: absolute; top: 0; left: 0; pointer-events: none; z-index: 4;
+  font-family: var(--mono); font-size: 11px; color: var(--accent); padding: 2px 7px; border-radius: 4px;
+  background: rgba(12, 16, 19, 0.85); border: 1px solid var(--accent); white-space: nowrap;
+}
+
+/* ---------- lightbox ---------- */
+.v-lightbox {
+  position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px;
+  background: rgba(6, 8, 10, 0.93); cursor: zoom-out;
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+.v-lightbox img { max-width: 92vw; max-height: 84vh; object-fit: contain; box-shadow: 0 20px 80px rgba(0, 0, 0, 0.7); border: 6px solid #fff; background: #fff; }
+.v-lb-cap { font-family: var(--mono); font-size: 11px; color: var(--dim); letter-spacing: 0.06em; max-width: 80vw; text-align: center; }
+.v-lb-close {
+  position: absolute; top: 14px; right: 18px; background: transparent; color: var(--dim); border: 1px solid var(--line-2);
+  border-radius: 4px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; padding: 5px 10px; cursor: pointer;
+}
+.v-lb-close:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ---------- inspector bits: thumbs, pins, scans ---------- */
+.v-thumbs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 8px 0; }
+.v-thumbs.small { grid-template-columns: repeat(4, 1fr); }
+.v-thumb {
+  position: relative; display: block; padding: 0; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 4px;
+  overflow: hidden; cursor: pointer; aspect-ratio: 4 / 3; width: 100%;
+}
+.v-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.v-thumb:hover { border-color: var(--accent); }
+.v-thumb.active { outline: 2px solid var(--accent); outline-offset: -1px; }
+.v-thumb.big { aspect-ratio: 3 / 2; margin-bottom: 8px; }
+.v-thumb .v-pinned {
+  position: absolute; left: 4px; bottom: 4px; font-style: normal; font-family: var(--mono); font-size: 8px; letter-spacing: 0.1em;
+  color: var(--accent-ink); background: var(--accent); padding: 1px 5px; border-radius: 3px;
+}
+.v-pin-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); }
+.v-pin-row img { width: 40px; height: 30px; object-fit: cover; border-radius: 3px; border: 1px solid var(--line-2); }
+.v-pin-row .v-pin-name { flex: 1; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v-pin-row .btn { width: auto; margin: 0; }
+.tool-col .v-scan-row { font-size: 10px; }
+.inspector .field input[type=range] { width: 100%; accent-color: var(--accent); }
+.inspector .field textarea { min-height: 44px; }

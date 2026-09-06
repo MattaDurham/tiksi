@@ -5,6 +5,7 @@ import {
   ws, touch, fmtMoney, parseMoney, escapeHtml, projectTotals, selectedTotals,
   fmtDate, isoToday,
 } from './store.js';
+import { icon } from './icons.js';
 
 let el = null;
 export function mount(root) { el = root; render(); }
@@ -37,14 +38,14 @@ function render() {
         <span class="view-title">BUDGET</span>
         <span class="view-sub">select and deselect projects to fit the cap; totals update live</span>
         <span style="flex:1"></span>
-        <button class="btn primary" id="print-report">PRINT REPORT</button>
+        <button class="btn primary" id="print-report">${icon('print')}PRINT REPORT</button>
       </div>
 
       <div class="kpi-band">
         <div class="kpi">
           <div class="k-label">Budget cap</div>
           <div class="k-value"><input type="text" id="cap-input" value="${fmtMoney(cap)}"
-            style="background:transparent;border:none;color:var(--ink);font:inherit;width:130px;outline:none;border-bottom:1px dashed var(--line-2)"></div>
+            style="background:transparent;border:none;color:var(--ink);font:inherit;width:130px;border-bottom:1px dashed var(--line-2)"></div>
           <div class="k-sub">click to edit</div>
         </div>
         <div class="kpi accent">
@@ -58,12 +59,12 @@ function render() {
           <div class="k-sub">${selectedProjects.length} of ${d.projects.length} projects selected</div>
         </div>
       </div>
-      <div class="capbar" style="max-width:640px">
+      <div class="capbar" style="max-width:640px; margin-top:26px">
         <div class="fill ${sel.likely > cap ? 'over' : ''}" style="width:${Math.min(pct / 1.4 * 100, 100)}%"></div>
-        ${cap > 0 ? `<div class="mark" style="left:${(1 / 1.4) * 100}%"></div>` : ''}
+        ${cap > 0 ? `<div class="mark" style="left:${(1 / 1.4) * 100}%"><span class="mark-label">CAP ${fmtMoney(cap)}</span></div>` : ''}
       </div>
-      <div class="mono faint" style="font-size:10px; margin-bottom:18px; max-width:640px; display:flex; justify-content:space-between">
-        <span>0</span><span>cap ${fmtMoney(cap)}</span>
+      <div class="capbar-scale" style="max-width:640px">
+        <span>$0</span><span>${cap > 0 ? '+40% ' + fmtMoney(cap * 1.4) : ''}</span>
       </div>
 
       <div class="kicker">PROGRAM (SELECTED)</div>
@@ -81,7 +82,7 @@ function render() {
       <table class="grid" style="max-width:640px">
         <thead><tr><th>Category</th><th class="num">Projects</th><th class="num">Low</th><th class="num">Likely</th><th class="num">High</th></tr></thead>
         <tbody>${Object.entries(byCat).sort((a, b) => b[1].likely - a[1].likely).map(([c, t]) =>
-          `<tr><td>${c}</td><td class="num">${t.n}</td><td class="num">${fmtMoney(t.low)}</td>
+          `<tr><td>${escapeHtml(c)}</td><td class="num">${t.n}</td><td class="num">${fmtMoney(t.low)}</td>
            <td class="num">${fmtMoney(t.likely)}</td><td class="num">${fmtMoney(t.high)}</td></tr>`).join('') ||
           '<tr><td colspan="5" class="muted">No selected projects.</td></tr>'}
         </tbody>
@@ -89,7 +90,9 @@ function render() {
 
       <div class="kicker" style="margin-top:26px">PARKED (NOT IN PROGRAM)</div>
       <table class="grid" style="max-width:980px">
-        <tbody>${parked.map(p => projRow(p, maxLikely)).join('') || '<tr><td class="muted">Everything is selected.</td></tr>'}</tbody>
+        <thead><tr><th></th><th>Project</th><th>Status</th><th>Category</th>
+          <th class="num">Low</th><th class="num">Likely</th><th class="num">High</th><th style="width:26%"></th></tr></thead>
+        <tbody>${parked.map(p => projRow(p, maxLikely)).join('') || '<tr><td colspan="8" class="muted">Everything is selected.</td></tr>'}</tbody>
       </table>
     </div>`;
 
@@ -107,14 +110,14 @@ function projRow(p, maxLikely) {
   const t = projectTotals(p);
   const w = Math.round(t.likely / maxLikely * 100);
   return `<tr>
-    <td style="width:30px"><input type="checkbox" ${p.selected ? 'checked' : ''} data-sel="${p.id}"></td>
+    <td style="width:30px"><input type="checkbox" ${p.selected ? 'checked' : ''} data-sel="${escapeHtml(p.id)}"></td>
     <td><b>${escapeHtml(p.name)}</b></td>
-    <td><span class="chip status-${p.status}">${p.status}</span></td>
-    <td class="muted">${p.category}</td>
+    <td><span class="chip status-${escapeHtml(p.status)}">${escapeHtml(p.status)}</span></td>
+    <td class="muted">${escapeHtml(p.category)}</td>
     <td class="num">${fmtMoney(t.low)}</td>
     <td class="num">${fmtMoney(t.likely)}</td>
     <td class="num">${fmtMoney(t.high)}</td>
-    <td><div style="height:8px;border-radius:4px;background:${p.selected ? 'var(--accent)' : 'var(--line-2)'};width:${Math.max(w, 2)}%"></div></td>
+    <td><div class="bar ${p.selected ? 'on' : ''}" style="width:${Math.max(w, 2)}%"></div></td>
   </tr>`;
 }
 
@@ -157,14 +160,14 @@ export function budgetReportHtml() {
     <table><thead><tr><th>Project / item</th><th class="num">Qty</th><th class="num">Low</th><th class="num">Likely</th><th class="num">High</th></tr></thead>
       <tbody>${selectedProjects.map(p => {
         const t = projectTotals(p);
-        return `<tr><td><b>${escapeHtml(p.name)}</b> <span style="color:#888">(${p.status})</span></td><td></td>
+        return `<tr><td><b>${escapeHtml(p.name)}</b> <span style="color:#888">(${escapeHtml(p.status)})</span></td><td></td>
           <td class="num"><b>${fmtMoney(t.low)}</b></td><td class="num"><b>${fmtMoney(t.likely)}</b></td><td class="num"><b>${fmtMoney(t.high)}</b></td></tr>` + itemRows(p);
       }).join('')}</tbody></table>
 
     <h2>By category</h2>
     <table><thead><tr><th>Category</th><th class="num">Projects</th><th class="num">Likely</th></tr></thead>
       <tbody>${Object.entries(byCat).sort((a, b) => b[1].likely - a[1].likely).map(([c, t]) =>
-        `<tr><td>${c}</td><td class="num">${t.n}</td><td class="num">${fmtMoney(t.likely)}</td></tr>`).join('')}</tbody></table>
+        `<tr><td>${escapeHtml(c)}</td><td class="num">${t.n}</td><td class="num">${fmtMoney(t.likely)}</td></tr>`).join('')}</tbody></table>
 
     ${parked.length ? `<h2>Parked (not in program)</h2>
     <table><tbody>${parked.map(p => `<tr><td>${escapeHtml(p.name)}</td>
