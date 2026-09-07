@@ -22,6 +22,9 @@ import { loadMesh } from './scans.js';
 const SECTION = { low: 0.35, sill: 0.8, mid: 1.25, high: 1.75, top: 2.15 };
 const CELL = 0.025;                 // occupancy grid resolution, meters
 const INT_THICK = 0.114;            // default thickness for a wall seen from one side only
+// A scanned surface wobbles by a few millimetres; a model face placed exactly on it would
+// poke through in patches. Single-sided walls sit this far behind the scan instead.
+const CLEARANCE = 0.012;
 const DOOR_H = 2.032, WIN_H = 1.219;
 const MAX_TRIANGLES = 4000000;      // beyond this the analysis subsamples triangles
 
@@ -393,7 +396,7 @@ function pairAxis(faces, floorGrid, walls) {
         : floorGrid.fraction(f.s0, f.s1, f.c + side * 0.05, f.c + side * 0.3);
       const plus = band(1), minus = band(-1);
       const body = plus < minus ? 1 : -1;   // the wall body is on the side without floor
-      walls.push({ axis: f.axis, c: f.c + body * INT_THICK / 2, s0: f.s0, s1: f.s1, thickness: INT_THICK, faces: [f.c], paired: false, interior: -body });
+      walls.push({ axis: f.axis, c: f.c + body * (INT_THICK / 2 + CLEARANCE), s0: f.s0, s1: f.s1, thickness: INT_THICK, faces: [f.c], paired: false, interior: -body });
     }
   }
 }
