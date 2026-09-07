@@ -5,10 +5,13 @@
 
 import {
   ws, activeProperty, uid, touch, onChange, fmtLen, parseLen, fmtArea, polyArea,
-  escapeHtml, itemById,
+  escapeHtml, itemById, getFile,
 } from './store.js';
 import { materialSelectHtml } from './materials.js';
 import { icon } from './icons.js';
+import { SCAN_ACCEPT } from './scans.js';
+import { attachScanFileToProperty } from './newproperty.js';
+import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 
 const PRESETS = {
   interior: { thickness: 0.114, material: 'mat-drywall' },   // 4.5 in stud wall
@@ -1449,6 +1452,76 @@ function lenField(label, value, key, placeholder) {
 
 function head(ic, text) { return `<h3>${icon(ic)}${text}</h3>`; }
 
+// Where the property came from and what the scan can still do for the plan: a mesh scan
+// can (re)propose the whole plan; a property made from a link that the browser could not
+// fetch takes the downloaded file here.
+function meshScan() { return (prop.scans || []).find(s => s.kind === 'mesh') || null; }
+function sourceCardHtml() {
+  const src = prop.source;
+  const scan = meshScan();
+  if (!src && !scan) return '';
+  const label = src && src.kind === 'polycam' ? 'FROM POLYCAM' : 'SCAN';
+  return `<div class="src-card">
+    <span class="np-kicker">${label}</span>
+    ${src && src.url ? `<a href="${escapeHtml(src.url)}" target="_blank" rel="noopener" title="${escapeHtml(src.url)}">${escapeHtml(src.title || src.url.replace(/^https?:\/\//, ''))}</a>` : ''}
+    ${scan ? `<button class="btn" data-src-plan title="Square the scan up and propose walls, rooms, doors, windows and the underlay again">${icon('scan')}PROPOSE PLAN FROM SCAN</button>`
+           : `<button class="btn primary" data-src-attach title="Attach the GLB/OBJ/PLY you downloaded from Polycam; the plan is proposed from it">${icon('upload')}ATTACH SCAN FILE</button><input type="file" class="hidden-file" data-src-file accept="${SCAN_ACCEPT}">`}
+    <div class="empty" data-src-status></div>
+  </div>`;
+}
+let sourceBusy = false;
+function bindSourceCard(insp) {
+  const status = insp.querySelector('[data-src-status]');
+  const say = (m, busy) => { if (status) { status.textContent = m || ''; status.style.color = busy ? 'var(--accent)' : ''; } };
+  const viewHooks = { progress: (l, f) => say(l ? l + (f != null ? ' ' + Math.round(f * 100) + '%' : '') : '', true), toast: (m) => say(m, false) };
+  const afterPlan = (result, applied) => {
+    selection = null; hover = null; calib = null;
+    vs.planSrc = planKey(prop);
+    fitView();
+    touch(); renderToolCol(); renderInspector(); updateHint(); invalidate();
+    // renderInspector() rebuilt the card: report on the fresh status line.
+    const s = inspEl && inspEl.querySelector('[data-src-status]');
+    if (s) s.textContent = 'Proposed: ' + proposalSummary(result, applied) + '.';
+  };
+  const planBtn = insp.querySelector('[data-src-plan]');
+  if (planBtn) planBtn.onclick = async () => {
+    if (sourceBusy) return;
+    const scan = meshScan();
+    if (!scan) return;
+    if ((prop.walls.length || prop.rooms.length) && !confirm('Replace the ' + prop.walls.length + ' traced wall(s) and ' + prop.rooms.length + ' room(s) with a plan proposed from "' + scan.name + '"? Undo brings the traced plan back.')) return;
+    sourceBusy = true;
+    try {
+      const rec = await getFile(scan.id);
+      if (!rec || !rec.buffer) throw new Error('the scan bytes are not in this browser (re-import the file)');
+      pushUndo();
+      const { result, applied } = await planFromScanBytes(prop, scan, rec.buffer, viewHooks);
+      if (applied && !ws.data.projects.some(p => p.propertyId === prop.id && /scope from scan/i.test(p.name))) {
+        const project = seedProject(prop, applied, prop.name + ': scope from scan');
+        if (project) ws.data.projects.push(project);
+      }
+      afterPlan(result, applied);
+    } catch (e) { console.error(e); say('Could not propose a plan: ' + String(e && e.message || e), false); }
+    finally { sourceBusy = false; }
+  };
+  const attach = insp.querySelector('[data-src-attach]');
+  const file = insp.querySelector('[data-src-file]');
+  if (attach && file) {
+    attach.onclick = () => file.click();
+    file.onchange = async () => {
+      const f = file.files[0]; file.value = '';
+      if (!f || sourceBusy) return;
+      sourceBusy = true;
+      try {
+        pushUndo();
+        const out = await attachScanFileToProperty(prop, f, viewHooks);
+        if (!out) throw new Error('not a scan tiksi can read');
+        afterPlan(out.result, out.applied);
+      } catch (e) { console.error(e); say('Could not use that file: ' + String(e && e.message || e), false); }
+      finally { sourceBusy = false; }
+    };
+  }
+}
+
 function renderInspector() {
   if (!inspEl) return;
   const insp = inspEl;
@@ -1496,6 +1569,7 @@ function renderInspector() {
       <div class="stat-line"><span>Rooms</span><b>${prop.rooms.length}</b></div>
       <div class="stat-line"><span>Total wall run</span><b>${fmtLen(totalWall)}</b></div>
       <div class="stat-line"><span>Floor area</span><b>${fmtArea(floorArea)}</b></div>
+      ${sourceCardHtml()}
       <div class="empty" style="margin-top:14px">Select an element to edit it, or use the tools to draw.<br><br>
         <span class="kbd-hint"><kbd>W</kbd> wall</span> <span class="kbd-hint"><kbd>D</kbd> door</span> <span class="kbd-hint"><kbd>N</kbd> window</span> <span class="kbd-hint"><kbd>R</kbd> room</span></div>`;
     insp.querySelector('[data-prop-name]').onchange = e => { prop.name = e.target.value; touch(); };
@@ -1504,6 +1578,7 @@ function renderInspector() {
       if (!isNaN(v) && v > 0.5) { prop.wallHeight = v; touch(); }
       renderInspector();
     };
+    bindSourceCard(insp);
     return;
   }
 

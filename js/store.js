@@ -167,7 +167,7 @@ export function scanKindFor(format) {
 export function propertyTemplate(name) {
   return {
     id: uid('prop'), name: name || 'New property', notes: '', wallHeight: 2.44,
-    plan: null, walls: [], openings: [], rooms: [], scans: [], photos: [], env: defaultEnv(),
+    plan: null, walls: [], openings: [], rooms: [], scans: [], photos: [], env: defaultEnv(), source: null,
   };
 }
 
@@ -235,6 +235,8 @@ function migrate(d) {
     // so partially filled objects from hand-edited or older exports keep their values.
     p.photos = p.photos || [];
     p.env = Object.assign(defaultEnv(), p.env || {});
+    // Where the property came from (a Polycam share link, say); null for a hand-made one.
+    if (p.source === undefined) p.source = null;
     for (const s of p.scans) {
       if (!s.kind) s.kind = scanKindFor(s.format);
       if (!Array.isArray(s.pos)) s.pos = [0, 0, 0];

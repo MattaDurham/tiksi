@@ -23,8 +23,9 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 import {
   ws, activeProperty, uid, touch, fmtLen, parseLen, fmtArea, polyArea,
-  escapeHtml, deleteFile, itemById, isoToday,
+  escapeHtml, deleteFile, getFile, itemById, isoToday,
 } from './store.js';
+import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import { materialSelectHtml } from './materials.js';
 import { pendingTextureJobs } from './textures.js';
 import { icon } from './icons.js';
@@ -1256,6 +1257,39 @@ async function onImportScan(file) {
   renderToolCol();
 }
 
+// Scan to plan on a mesh scan that is already here: replaces the traced plan with the
+// proposal (after asking, when there is one), moves the scan onto it and rebuilds the model.
+let planning = false;
+async function proposePlanFromScan(s) {
+  if (planning) return;
+  const traced = prop.walls.length + prop.rooms.length;
+  if (traced && !confirm('Replace the ' + prop.walls.length + ' traced wall(s) and ' + prop.rooms.length + ' room(s) with a plan proposed from "' + s.name + '"? The scan and photos stay; scope links to old elements are dropped.')) return;
+  const token = mountId;
+  planning = true;
+  try {
+    const rec = await getFile(s.id);
+    if (!rec || !rec.buffer) throw new Error('the scan bytes are not in this browser');
+    const { result, applied } = await planFromScanBytes(prop, s, rec.buffer, hooks);
+    if (token !== mountId) return;
+    if (applied) {
+      const project = seedProject(prop, applied, prop.name + ': scope from scan');
+      if (project && !ws.data.projects.some(p => p.propertyId === prop.id && /scope from scan/i.test(p.name))) { ws.data.projects.push(project); touch(); }
+    }
+    const obj = scanObjs[s.id];
+    if (obj) applyScanTransform(s, obj);
+    rebuildModel(); rebuildGround(); buildAllPins();
+    presetView('frame');
+    renderToolCol(); renderInspector();
+    toast('Proposed: ' + proposalSummary(result, applied) + '.', applied ? 'ok' : 'warn', 6000);
+  } catch (e) {
+    console.error(e);
+    if (token === mountId) toast('Could not propose a plan: ' + errMsg(e), 'error', 6000);
+  } finally {
+    planning = false;
+    if (token === mountId) showProgress(null);
+  }
+}
+
 // ---------- HUD ----------
 function toast(msg, kind, ms) {
   const t = hud.toast;
@@ -1653,6 +1687,8 @@ function renderInspector() {
       <button class="btn" data-frame ${dis}>FRAME SCAN</button>
       <button class="btn" data-floor ${dis}>DROP TO FLOOR</button>
       <button class="btn" data-center ${dis}>CENTER ON MODEL</button>
+      ${s.kind === 'mesh' ? `<button class="btn" data-plan ${dis} title="Find the floor and ceiling, square the scan up, propose walls, rooms, doors and windows, and render the plan underlay from the scan">${icon('plan')}PROPOSE PLAN FROM SCAN</button>` : ''}
+      ${s.source && s.source.url ? `<a class="btn" href="${escapeHtml(s.source.url)}" target="_blank" rel="noopener" style="display:flex; text-decoration:none; justify-content:center">${icon('link')}OPEN ON POLYCAM</a>` : ''}
       <button class="btn danger" data-del ${disDel} title="${disDel ? 'Wait for the scan to finish loading' : ''}">DELETE SCAN</button>`;
     const upd = () => { applyScanTransform(s, obj); touch(); requestRender(3); };
     inspEl.querySelectorAll('[data-p]').forEach(i => i.onchange = () => { s.pos[+i.dataset.p] = parseFloat(i.value) || 0; upd(); });
@@ -1674,6 +1710,8 @@ function renderInspector() {
     inspEl.querySelector('[data-frame]').onclick = () => { if (obj) frameObject(obj); };
     inspEl.querySelector('[data-floor]').onclick = () => { if (obj) { dropScanToFloor(s, obj); upd(); renderInspector(); } };
     inspEl.querySelector('[data-center]').onclick = () => { if (obj) { centerScanOnModel(s, obj, modelBounds(prop)); upd(); renderInspector(); } };
+    const planBtn = inspEl.querySelector('[data-plan]');
+    if (planBtn) planBtn.onclick = () => proposePlanFromScan(s);
     inspEl.querySelector('[data-del]').onclick = async () => {
       if (scanState[s.id] === 'loading' && !obj) return;
       prop.scans = prop.scans.filter(x => x.id !== s.id);

@@ -66,7 +66,7 @@ export function sniffKind(extension, buffer) {
 // ---------- import ----------
 // Nothing is stored and no record is created until the bytes have at least been sniffed, so a
 // file that is not what its extension claims never leaves a record that errors on every mount.
-export async function importScanFile(file, prop, hooks) {
+export async function importScanFile(file, prop, hooks, extra) {
   if (!file) return null;
   const name = file.name;
   const e = ext(name);
@@ -77,6 +77,16 @@ export async function importScanFile(file, prop, hooks) {
   if (!SCAN_ACCEPT.split(',').includes('.' + e)) { say('Unsupported file type .' + e + '. Supported: ' + SCAN_ACCEPT.replace(/\./g, '').replace(/,/g, ' '), 'warn'); return null; }
   progress('Reading ' + name, 0.1);
   const buffer = await file.arrayBuffer();
+  return importScanBytes(buffer, name, prop, hooks, extra);
+}
+
+// Same contract for bytes that did not arrive as a File (a download from a share link).
+// `extra` is merged into the record (a source link, for instance). Throws on a file the
+// sniffer refuses; returns null for a supported-but-not-yet type after a toast.
+export async function importScanBytes(buffer, name, prop, hooks, extra) {
+  const e = ext(name);
+  const say = (m, k) => hooks && hooks.toast && hooks.toast(m, k);
+  const progress = (l, f) => hooks && hooks.progress && hooks.progress(l, f);
   if (e === 'las' && isLAS(buffer) && lasHeader(buffer).compressed) { say('This LAS is LAZ-compressed inside; export it uncompressed.', 'warn'); progress(null); return null; }
   let kind;
   try { kind = sniffKind(e, buffer); }
@@ -84,10 +94,10 @@ export async function importScanFile(file, prop, hooks) {
   const id = uid('scan');
   progress('Storing ' + name, 0.3);
   await putFile(id, buffer, { name, format: e, kind });
-  const scan = {
+  const scan = Object.assign({
     id, name, format: e, kind, pos: [0, 0, 0], rotY: 0, rot: [0, 0, 0], scale: 1, visible: true,
     pointSize: 0.02, pointColor: 'rgb', budget: DEFAULT_BUDGET, flip: kind === 'splat',
-  };
+  }, extra || {});
   prop.scans = prop.scans || [];
   prop.scans.push(scan);
   touch();
@@ -167,20 +177,29 @@ async function parsePoints(buffer, e, name, hooks) {
   }
 }
 
-async function loadMesh(buffer, e) {
+export async function loadMesh(buffer, e) {
+  let obj;
   if (e === 'ply') {
     const geo = new PLYLoader().parse(buffer);
     const hasColor = !!geo.getAttribute('color');
     if (!geo.getAttribute('normal')) geo.computeVertexNormals();
-    return new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: hasColor ? 0xffffff : 0x9fb3c2, vertexColors: hasColor, roughness: 0.9 }));
-  }
-  if (e === 'obj') {
-    const obj = new OBJLoader().parse(new TextDecoder().decode(buffer));
+    obj = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: hasColor ? 0xffffff : 0x9fb3c2, vertexColors: hasColor, roughness: 0.9 }));
+  } else if (e === 'obj') {
+    obj = new OBJLoader().parse(new TextDecoder().decode(buffer));
     obj.traverse(o => { if (o.isMesh) o.material = new THREE.MeshStandardMaterial({ color: 0x9fb3c2, roughness: 0.9 }); });
-    return obj;
+  } else {
+    obj = (await new GLTFLoader().parseAsync(buffer, '')).scene;
   }
-  const gltf = await new GLTFLoader().parseAsync(buffer, '');
-  return gltf.scene;
+  // A plan proposed from the scan puts model faces exactly on the scanned surfaces; the
+  // scan wins those coplanar fights so the reference reads through instead of speckling.
+  obj.traverse(o => {
+    if (!o.isMesh) return;
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+      if (!m) continue;
+      m.polygonOffset = true; m.polygonOffsetFactor = -1; m.polygonOffsetUnits = -2;
+    }
+  });
+  return obj;
 }
 
 // ---------- scene objects ----------

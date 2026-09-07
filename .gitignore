@@ -3,3 +3,4 @@
 local-data/
 node_modules/
 .claude/worktrees/
+tools/fixtures/

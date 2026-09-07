@@ -1,7 +1,7 @@
 // App shell: routing, topbar, property management, persistence wiring.
 
 import {
-  ws, load, save, touch, onChange, activeProperty, replaceWorkspace, propertyTemplate,
+  ws, load, save, touch, onChange, activeProperty, replaceWorkspace,
   exportWorkspace, exportBundle, importBundle, listAllFileIds, orphanFiles, deleteFiles, whenHydrated,
   setSaveStatus, fmtBytes, escapeHtml,
 } from './store.js';
@@ -18,6 +18,8 @@ import * as products from './products.js';
 import * as budget from './budget.js';
 import * as schedule from './schedule.js';
 import * as cutsheets from './cutsheets.js';
+import { initNewProperty, openNewPropertyDialog, dialogOpen } from './newproperty.js';
+import { parseCaptureUrl } from './polycam.js';
 
 const VIEWS = {
   plan: plan2d,
@@ -47,9 +49,48 @@ async function boot() {
   bindTopbar();
   refreshTopbar();
   onChange(refreshTopbar);
+  initNewProperty({ remount: remountView, refresh: refreshTopbar });
+  bindLinkIntake();
 
   window.addEventListener('hashchange', route);
   route();
+}
+
+// A Polycam link can arrive three ways besides the dialog: pasted anywhere in the console,
+// dropped on it from another window, or in the address bar (#/import?url=...), which is
+// what makes "share the link with tiksi" a single step.
+function bindLinkIntake() {
+  const editable = t => t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+  document.addEventListener('paste', e => {
+    if (dialogOpen() || editable(e.target)) return;
+    const text = e.clipboardData && e.clipboardData.getData('text/plain');
+    if (!parseCaptureUrl(text)) return;
+    e.preventDefault();
+    openNewPropertyDialog({ url: parseCaptureUrl(text).url });
+  });
+  const hasUrl = e => e.dataTransfer && Array.from(e.dataTransfer.types || []).some(t => t === 'text/uri-list' || t === 'text/plain') && !Array.from(e.dataTransfer.types || []).includes('Files');
+  window.addEventListener('dragover', e => { if (hasUrl(e) && !dialogOpen()) { e.preventDefault(); e.dataTransfer.dropEffect = 'link'; } });
+  window.addEventListener('drop', e => {
+    if (!hasUrl(e) || dialogOpen()) return;
+    const text = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
+    const link = parseCaptureUrl(text);
+    if (!link) return;
+    e.preventDefault();
+    openNewPropertyDialog({ url: link.url });
+  });
+}
+
+// #/import?url=<share link> (or #/new?url=): consume the query, then start the import.
+function importFromHash() {
+  const m = /^#\/(?:import|new)(?:\?(.*))?$/.exec(location.hash);
+  if (!m) return false;
+  const params = new URLSearchParams(m[1] || '');
+  const raw = params.get('url') || params.get('polycam') || '';
+  history.replaceState(null, '', '#/plan');
+  const link = parseCaptureUrl(raw);
+  if (link) openNewPropertyDialog({ url: link.url, autoStart: true });
+  else openNewPropertyDialog({ url: raw });
+  return true;
 }
 
 // A view that throws while tearing down must never wedge navigation: log it and move on.
@@ -61,6 +102,7 @@ function unmountCurrent() {
 function route() {
   // Views may carry a query (#/model?pin=<photoId>); the view reads it from location.hash itself.
   const name = (location.hash.replace(/^#\//, '').split('?')[0] || 'plan');
+  if ((name === 'import' || name === 'new') && importFromHash()) { if (!currentView) route(); return; }
   const view = VIEWS[name] || VIEWS.plan;
   unmountCurrent();
   currentName = VIEWS[name] ? name : 'plan';
@@ -122,15 +164,7 @@ function bindTopbar() {
     remountView();
   };
 
-  document.getElementById('property-new').onclick = () => {
-    const name = prompt('New property name (street address or nickname):');
-    if (!name) return;
-    const p = propertyTemplate(name);
-    ws.data.properties.push(p);
-    ws.data.settings.activePropertyId = p.id;
-    touch();
-    remountView();
-  };
+  document.getElementById('property-new').onclick = () => openNewPropertyDialog();
 
   document.querySelectorAll('#units-seg .seg-btn').forEach(b => b.onclick = () => {
     ws.data.settings.units = b.dataset.units;
