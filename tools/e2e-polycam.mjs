@@ -61,7 +61,7 @@ const mock = { cors: true, hits: [] };
 const mockServer = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   mock.hits.push(url.pathname);
-  const cors = h => mock.cors ? Object.assign(h, { 'access-control-allow-origin': '*' }) : h;
+  const cors = h => Object.assign(h, { 'cache-control': 'no-store' }, mock.cors ? { 'access-control-allow-origin': '*' } : {});
   if (url.pathname === '/relay') {
     // A relay is a fetch on the user's behalf plus the missing permission header.
     const target = url.searchParams.get('url') || '';
@@ -99,22 +99,21 @@ const RELAY = 'http://127.0.0.1:' + MOCK_PORT + '/relay?url={url}';
 
 // ---------- browser ----------
 const browser = await chromium.launch({ headless: !headed, args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
-const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
-const page = await context.newPage();
 const errors = [];
-page.on('pageerror', e => errors.push('pageerror: ' + e.message));
-page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
+let context = null, page = null;
 
 const failures = [];
 const check = (ok, msg) => { if (ok) console.log('  ok   ' + msg); else { failures.push(msg); console.log('  FAIL ' + msg); } };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// A new browser context per scenario: its own localStorage, IndexedDB and HTTP cache, so
+// nothing from the previous scenario (a saved property, a cached CORS header) leaks in.
 async function freshApp() {
-  await page.goto(APP + '#/plan', { waitUntil: 'load' });
-  await page.evaluate(async () => {
-    localStorage.clear();
-    await new Promise(r => { const q = indexedDB.deleteDatabase('tiksi-files'); q.onsuccess = q.onerror = q.onblocked = () => r(); });
-  });
+  if (context) await context.close();
+  context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
+  page = await context.newPage();
+  page.on('pageerror', e => errors.push('pageerror: ' + e.message));
+  page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
   await page.goto(APP + '#/plan', { waitUntil: 'load' });
   await page.waitForSelector('#property-select option', { state: 'attached' });
 }
@@ -271,7 +270,7 @@ try {
 } catch (e) {
   failures.push('exception: ' + (e && e.stack || e));
   console.error(e);
-  try { await page.screenshot({ path: resolve(outDir, 'e2e-failure.png') }); } catch (e2) { /* nothing */ }
+  try { if (page) await page.screenshot({ path: resolve(outDir, 'e2e-failure.png') }); } catch (e2) { /* nothing */ }
 }
 
 const realErrors = errors.filter(e => !/favicon|net::ERR_FAILED|Failed to load resource|CORS|Access to fetch|blocked by CORS|WebGL|GPU|GroupMarkerNotSet|swiftshader/i.test(e));
