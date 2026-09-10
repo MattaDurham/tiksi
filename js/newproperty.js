@@ -8,7 +8,7 @@
 // the file the user downloads from Polycam and drops here.
 
 import { ws, touch, propertyTemplate, escapeHtml, fmtBytes, fmtLen, fmtArea, polyArea, getFile } from './store.js';
-import { parseCaptureUrl, resolveCapture, downloadAsset, fetchCover, relaysFor, DEFAULT_RELAYS } from './polycam.js';
+import { parseCaptureUrl, resolveCapture, downloadAsset, fetchCover, fetchCaptureDirect, fetchCoverDirect, relaysFor, DEFAULT_RELAYS } from './polycam.js';
 import { importScanBytes, SCAN_ACCEPT } from './scans.js';
 import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import { addPhotoFromFile } from './photos-store.js';
@@ -212,42 +212,65 @@ async function startLinkImport(link) {
       finish(prop, null, null);
       return;
     }
-    // 1. The share page: title, cover, model.
-    const step1 = log('Reading the share page', 'run');
-    let page = null;
-    try {
-      page = await resolveCapture(link, { relays: relayList, signal, onRoute: via => step1.detail(via === 'direct' ? 'asking Polycam directly' : 'through a relay') });
-      if (page.title) { prop.name = page.title; prop.source.title = page.title; touch(); app.refresh(); dlg.querySelector('[data-np-name]').textContent = prop.name; }
-      step1.ok((page.title ? '"' + page.title + '"' : 'no title') + (page.via === 'direct' ? '' : ' via relay') + (page.assets.length ? ', model found' : ', no model link on the page'));
-    } catch (e) {
-      if (signal.aborted) throw e;
-      step1.warn(e.blocked ? 'blocked by the browser (' + e.message + ')' : e.message);
-    }
-    // 2. The model.
     let bytes = null;
-    if (page && page.assets.length && !scan) {
-      const asset = page.assets[0];
-      const step2 = log('Downloading the model', 'run', asset.url.replace(/^https?:\/\//, '').slice(0, 80));
+    // 0. The model straight from the endpoint Polycam's own viewer uses (open CORS, no relay).
+    if (!scan) {
+      const step0 = log('Fetching the model from Polycam', 'run', 'the viewer endpoint, no relay');
       try {
-        bytes = await downloadAsset(asset, link, {
-          relays: relayList, signal,
-          onRoute: via => step2.detail(via === 'direct' ? 'direct from Polycam storage' : 'through a relay'),
-          onProgress: (got, total) => progress('Downloading ' + fmtBytes(got) + (total ? ' of ' + fmtBytes(total) : ''), total ? got / total : 0.5),
+        bytes = await fetchCaptureDirect(link, {
+          signal,
+          onProgress: (label, got, total) => progress('Downloading ' + label + ': ' + fmtBytes(got) + (total ? ' of ' + fmtBytes(total) : ''), total ? got / total : 0.5),
         });
         progress(null);
-        step2.ok(fmtBytes(bytes.size) + (bytes.via === 'direct' ? '' : ' via relay'));
+        step0.ok(fmtBytes(bytes.size) + (bytes.textures ? ', textured' : ''));
+        if (!prop.photos.some(ph => ph.source === 'polycam-cover')) {
+          const file = await fetchCoverDirect(link, { signal });
+          if (file) {
+            try { const ph = await addPhotoFromFile(prop, file); ph.source = 'polycam-cover'; ph.notes = 'Cover image from Polycam.'; touch(); log('Kept the cover image as a site photo', 'ok'); }
+            catch (e) { /* not important */ }
+          }
+        }
       } catch (e) {
         if (signal.aborted) throw e;
         progress(null);
-        step2.warn(e.message);
+        step0.warn(e.status === 404 ? 'Polycam has no raw mesh at that link (is link sharing on?)' : String(e && e.message || e));
       }
     }
-    // 3. Cover photo (best effort, never blocks).
-    if (page && page.image && !prop.photos.some(ph => ph.source === 'polycam-cover')) {
-      const file = await fetchCover(page.image, { relays: relayList, signal });
-      if (file) {
-        try { const ph = await addPhotoFromFile(prop, file); ph.source = 'polycam-cover'; ph.notes = 'Cover image from Polycam.'; touch(); log('Kept the cover image as a site photo', 'ok'); }
-        catch (e) { /* not important */ }
+    // 1-3. Otherwise the share page: title, cover, model (direct, then through a relay if allowed).
+    let page = null;
+    if (!bytes && !scan) {
+      const step1 = log('Reading the share page', 'run');
+      try {
+        page = await resolveCapture(link, { relays: relayList, signal, onRoute: via => step1.detail(via === 'direct' ? 'asking Polycam directly' : 'through a relay') });
+        if (page.title) { prop.name = page.title; prop.source.title = page.title; touch(); app.refresh(); dlg.querySelector('[data-np-name]').textContent = prop.name; }
+        step1.ok((page.title ? '"' + page.title + '"' : 'no title') + (page.via === 'direct' ? '' : ' via relay') + (page.assets.length ? ', model found' : ', no model link on the page'));
+      } catch (e) {
+        if (signal.aborted) throw e;
+        step1.warn(e.blocked ? 'blocked by the browser (' + e.message + ')' : e.message);
+      }
+      if (page && page.assets.length) {
+        const asset = page.assets[0];
+        const step2 = log('Downloading the model', 'run', asset.url.replace(/^https?:\/\//, '').slice(0, 80));
+        try {
+          bytes = await downloadAsset(asset, link, {
+            relays: relayList, signal,
+            onRoute: via => step2.detail(via === 'direct' ? 'direct from Polycam storage' : 'through a relay'),
+            onProgress: (got, total) => progress('Downloading ' + fmtBytes(got) + (total ? ' of ' + fmtBytes(total) : ''), total ? got / total : 0.5),
+          });
+          progress(null);
+          step2.ok(fmtBytes(bytes.size) + (bytes.via === 'direct' ? '' : ' via relay'));
+        } catch (e) {
+          if (signal.aborted) throw e;
+          progress(null);
+          step2.warn(e.message);
+        }
+      }
+      if (page && page.image && !prop.photos.some(ph => ph.source === 'polycam-cover')) {
+        const file = await fetchCover(page.image, { relays: relayList, signal });
+        if (file) {
+          try { const ph = await addPhotoFromFile(prop, file); ph.source = 'polycam-cover'; ph.notes = 'Cover image from Polycam.'; touch(); log('Kept the cover image as a site photo', 'ok'); }
+          catch (e) { /* not important */ }
+        }
       }
     }
     if (!bytes && !scan) {
@@ -300,6 +323,7 @@ function finish(prop, result, applied) {
   app.refresh();
   const box = dlg.querySelector('[data-np-result]');
   const floor = prop.rooms.reduce((n, r) => n + polyArea(r.pts), 0);
+  const levels = prop.levels || [];
   box.hidden = false;
   box.innerHTML = `
     <div class="np-summary">
@@ -307,7 +331,9 @@ function finish(prop, result, applied) {
       <div class="kpi"><span class="k-label">ROOMS</span><span class="k-value">${prop.rooms.length}</span></div>
       <div class="kpi"><span class="k-label">OPENINGS</span><span class="k-value">${prop.openings.length}</span></div>
       <div class="kpi"><span class="k-label">FLOOR</span><span class="k-value small">${escapeHtml(fmtArea(floor))}</span></div>
-      <div class="kpi"><span class="k-label">CEILING</span><span class="k-value small">${escapeHtml(fmtLen(prop.wallHeight))}</span></div>
+      ${levels.length > 1
+        ? `<div class="kpi"><span class="k-label">LEVELS</span><span class="k-value">${levels.length}</span></div>`
+        : `<div class="kpi"><span class="k-label">CEILING</span><span class="k-value small">${escapeHtml(fmtLen(levels[0] ? levels[0].height : prop.wallHeight))}</span></div>`}
     </div>
     <div class="np-actions">
       <button class="btn primary" data-np-go="plan">${icon('plan')}OPEN PLAN</button>
@@ -315,7 +341,7 @@ function finish(prop, result, applied) {
     </div>`;
   box.querySelectorAll('[data-np-go]').forEach(b => b.onclick = () => { closeDialog(); location.hash = '#/' + b.dataset.npGo; app.remount(); });
   showCloseOnly();
-  setStatus(applied ? 'Done. Every proposed element is editable; the underlay is the scan.' : 'Done.', 'ok');
+  setStatus(applied ? 'Done. Every proposed element is editable; the underlay of every level is the scan itself.' : 'Done.', 'ok');
 }
 
 function showCloseOnly() {

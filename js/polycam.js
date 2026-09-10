@@ -228,3 +228,126 @@ export async function fetchCover(url, opts) {
     return new File([blob], 'polycam-cover.' + ext, { type: blob.type });
   } catch (e) { return null; }
 }
+
+// ---------- direct route: the endpoint Polycam's own viewer uses ----------
+// The share page is not readable cross-origin, but the model its viewer draws is:
+// /api/capture/<id>/artifacts/raw.gltf (with raw_geometry.bin and textures/*.jpg) redirects
+// to Polycam's storage, which answers with open CORS. Fetched first, before any page read
+// or relay, so a public capture needs no third party at all. The parts are packed into one
+// texture-baked GLB so the scan is a single self-contained file in browser storage.
+
+export function artifactUrl(link, name) {
+  return link.origin + '/api/capture/' + link.captureId + '/artifacts/' + name;
+}
+
+function decodeDataUri(uri) {
+  const m = /^data:([^;,]*)(;base64)?,(.*)$/s.exec(uri);
+  if (!m) throw new Error('unreadable data URI');
+  if (!m[2]) return new TextEncoder().encode(decodeURIComponent(m[3])).buffer;
+  const bin = atob(m[3]);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out.buffer;
+}
+
+// Rebuild a glTF as a single self-contained GLB: one buffer, base-colour textures embedded,
+// other texture slots (normal, occlusion, emissive, metal-rough) dropped.
+export function packGlb(gltfIn, buffers, images) {
+  const gltf = JSON.parse(JSON.stringify(gltfIn));
+  const parts = [];
+  let offset = 0;
+  const pad4 = () => { const pad = (4 - (offset % 4)) % 4; if (pad) { parts.push(new Uint8Array(pad)); offset += pad; } };
+  const bufferOffsets = buffers.map(b => { const o = offset; parts.push(new Uint8Array(b)); offset += b.byteLength; pad4(); return o; });
+  gltf.bufferViews = (gltf.bufferViews || []).map(bv => Object.assign({}, bv, { buffer: 0, byteOffset: (bv.byteOffset || 0) + bufferOffsets[bv.buffer || 0] }));
+  const keptImages = new Map();
+  const newImages = [], newTextures = [];
+  for (const m of gltf.materials || []) {
+    delete m.normalTexture; delete m.occlusionTexture; delete m.emissiveTexture;
+    if (m.pbrMetallicRoughness) delete m.pbrMetallicRoughness.metallicRoughnessTexture;
+    const t = m.pbrMetallicRoughness && m.pbrMetallicRoughness.baseColorTexture;
+    if (!t) continue;
+    const tex = gltf.textures && gltf.textures[t.index];
+    const img = tex && images[tex.source];
+    if (!img) { delete m.pbrMetallicRoughness.baseColorTexture; continue; }
+    if (!keptImages.has(tex.source)) {
+      const data = new Uint8Array(img.data);
+      gltf.bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: data.byteLength });
+      parts.push(data); offset += data.byteLength; pad4();
+      keptImages.set(tex.source, newImages.length);
+      newImages.push({ bufferView: gltf.bufferViews.length - 1, mimeType: img.mime });
+    }
+    newTextures.push(Object.assign({}, tex, { source: keptImages.get(tex.source) }));
+    t.index = newTextures.length - 1;
+  }
+  gltf.images = newImages; gltf.textures = newTextures;
+  gltf.buffers = [{ byteLength: offset }];
+  gltf.asset = Object.assign({}, gltf.asset, { generator: ((gltf.asset && gltf.asset.generator) ? gltf.asset.generator + ' via ' : '') + 'tiksi' });
+  const jsonBytes = new TextEncoder().encode(JSON.stringify(gltf));
+  const jsonPad = (4 - (jsonBytes.length % 4)) % 4;
+  const total = 12 + 8 + jsonBytes.length + jsonPad + 8 + offset;
+  const out = new ArrayBuffer(total);
+  const dv = new DataView(out), u8 = new Uint8Array(out);
+  dv.setUint32(0, 0x46546C67, true); dv.setUint32(4, 2, true); dv.setUint32(8, total, true);
+  dv.setUint32(12, jsonBytes.length + jsonPad, true); dv.setUint32(16, 0x4E4F534A, true);
+  u8.set(jsonBytes, 20);
+  for (let i = 0; i < jsonPad; i++) u8[20 + jsonBytes.length + i] = 0x20;
+  let p = 20 + jsonBytes.length + jsonPad;
+  dv.setUint32(p, offset, true); dv.setUint32(p + 4, 0x004E4942, true); p += 8;
+  for (const part of parts) { u8.set(part, p); p += part.byteLength; }
+  return out;
+}
+
+// Fetch the raw mesh straight from Polycam and pack it as a GLB. Resolves
+// { buffer, name, size, via: 'direct', textures } or throws (with .status on an HTTP error);
+// a 404 means the capture is not shared or has no mesh.
+export async function fetchCaptureDirect(link, opts) {
+  opts = opts || {};
+  const say = opts.onProgress || (() => {});
+  const get = async (name, label, limit) => {
+    const t = withTimeout(opts.timeout || DOWNLOAD_TIMEOUT_MS, opts.signal);
+    try {
+      const r = await fetch(artifactUrl(link, name), { mode: 'cors', credentials: 'omit', redirect: 'follow', signal: t.signal });
+      if (!r.ok) { const e = new Error(label + ': HTTP ' + r.status); e.status = r.status; throw e; }
+      return await readBody(r, (got, total) => say(label, got, total), limit);
+    } finally { t.done(); }
+  };
+  const gltfBuf = await get('raw.gltf', 'the capture index', 8 * 1024 * 1024);
+  let gltf;
+  try { gltf = JSON.parse(new TextDecoder().decode(gltfBuf)); } catch (e) { throw new Error('the capture index is not glTF'); }
+  if (!gltf.buffers || !gltf.meshes || !gltf.meshes.length) throw new Error('the capture has no mesh (point-cloud captures are not supported yet)');
+  const buffers = [];
+  for (const b of gltf.buffers) {
+    if (!b.uri) throw new Error('the capture index references a buffer without a location');
+    buffers.push(b.uri.startsWith('data:') ? decodeDataUri(b.uri) : await get(b.uri, 'the mesh (' + (b.byteLength / 1048576).toFixed(1) + ' MB)'));
+  }
+  // Only base-colour textures are worth carrying (normal maps are large and never shown).
+  const wanted = new Set();
+  for (const m of gltf.materials || []) {
+    const t = m.pbrMetallicRoughness && m.pbrMetallicRoughness.baseColorTexture;
+    if (t && gltf.textures && gltf.textures[t.index]) wanted.add(gltf.textures[t.index].source);
+  }
+  const images = {};
+  for (const si of wanted) {
+    const img = gltf.images && gltf.images[si];
+    if (!img || img.bufferView != null || !img.uri) continue;
+    const mime = img.mimeType || (/\.png(?=$|[?#])/i.test(img.uri) ? 'image/png' : 'image/jpeg');
+    try { images[si] = { mime, data: img.uri.startsWith('data:') ? decodeDataUri(img.uri) : await get(img.uri, 'the texture') }; }
+    catch (e) { if (opts.signal && opts.signal.aborted) throw e; /* untextured is still a scan */ }
+  }
+  const buffer = packGlb(gltf, buffers, images);
+  if (buffer.byteLength < 1024) throw new Error('the packed mesh is empty');
+  return { buffer, name: 'polycam-' + link.captureId.slice(0, 8) + '.glb', size: buffer.byteLength, via: 'direct', textures: Object.keys(images).length };
+}
+
+// The capture's thumbnail from the same endpoint, as a File; null when it is not there.
+export async function fetchCoverDirect(link, opts) {
+  const t = withTimeout(20000, opts && opts.signal);
+  try {
+    const r = await fetch(artifactUrl(link, 'thumbnail.jpg'), { mode: 'cors', credentials: 'omit', redirect: 'follow', signal: t.signal });
+    if (!r.ok) return null;
+    const blob = await r.blob();
+    if (!blob.size || !/^image\//.test(blob.type || '')) return null;
+    return new File([blob], 'polycam-cover.jpg', { type: blob.type });
+  } catch (e) { return null; }
+  finally { t.done(); }
+}

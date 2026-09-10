@@ -6,6 +6,7 @@
 
 import {
   ws, activeProperty, touch, escapeHtml, allScopeItems, elementInfo, materialById, fmtLen, fmtDate,
+  activeLevel, levelOfRoom,
 } from './store.js';
 import { addPhotoFromFile, photoUrl, photoBytes, photoById, deletePhoto, isPanoramaAspect, revokePhotoUrls } from './photos-store.js';
 import { addCustomMaterial } from './materials.js';
@@ -47,6 +48,12 @@ function visiblePhotos() {
 function roomName(id) {
   const r = prop.rooms.find(r => r.id === id);
   return r ? (r.name || 'Room') : '';
+}
+// Room selectors list every room on the property; with more than one storey the level name
+// follows in parentheses so two "Bedroom"s can be told apart.
+function roomLabel(r) {
+  const name = r.name || 'Room';
+  return prop.levels && prop.levels.length > 1 ? name + ' (' + levelOfRoom(prop, r).name + ')' : name;
 }
 
 function kindLabel(p) { return p.kind === 'pano' ? '360 PANO' : 'PHOTO'; }
@@ -139,8 +146,10 @@ function onDrop(e) {
 }
 
 // ---------- actions ----------
+// The image becomes the tracing underlay of the level the PLAN editor is showing.
 async function useAsUnderlay(p) {
-  if (prop.plan && prop.plan.img && !confirm('Replace the current plan underlay with "' + p.name + '"?')) return;
+  const lvl = activeLevel(prop);
+  if (lvl.plan && lvl.plan.img && !confirm('Replace the plan underlay on "' + lvl.name + '" with "' + p.name + '"?')) return;
   const url = await photoUrl(p.id);
   if (!url) { alert('The full-resolution file for this photo is not in this browser (it came from a JSON-only export). Re-upload it to use it as an underlay.'); return; }
   let img;
@@ -151,7 +160,7 @@ async function useAsUnderlay(p) {
   c.width = cw; c.height = ch;
   c.getContext('2d').drawImage(img, 0, 0, cw, ch);
   const isPng = p.mime === 'image/png';
-  prop.plan = {
+  lvl.plan = {
     img: isPng ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.85),
     imgW: cw, imgH: ch,
     mPerPx: 18 / cw,            // assume ~18 m wide until calibrated (plan2d convention)
@@ -343,7 +352,7 @@ function bindUploadButtons(root) {
 function renderFilters() {
   const bar = el.querySelector('.ph-filters');
   if (!bar) return;
-  const rooms = prop.rooms.map(r => `<option value="${escapeHtml(r.id)}" ${filters.room === r.id ? 'selected' : ''}>${escapeHtml(r.name || 'Room')}</option>`).join('');
+  const rooms = prop.rooms.map(r => `<option value="${escapeHtml(r.id)}" ${filters.room === r.id ? 'selected' : ''}>${escapeHtml(roomLabel(r))}</option>`).join('');
   bar.innerHTML = `
     <select data-filter="kind" aria-label="Filter by kind">
       <option value="">ALL KINDS</option>
@@ -461,7 +470,7 @@ function elementOptionsHtml(p) {
     return `<option value="${escapeHtml(w.id)}" ${have.has(w.id) ? 'selected' : ''}>${escapeHtml(label)}</option>`;
   }).join('');
   const rooms = prop.rooms.map(r =>
-    `<option value="${escapeHtml(r.id)}" ${have.has(r.id) ? 'selected' : ''}>${escapeHtml(r.name || 'Room')}</option>`).join('');
+    `<option value="${escapeHtml(r.id)}" ${have.has(r.id) ? 'selected' : ''}>${escapeHtml(roomLabel(r))}</option>`).join('');
   return (rooms ? `<optgroup label="Rooms / floors">${rooms}</optgroup>` : '') + (walls ? `<optgroup label="Walls">${walls}</optgroup>` : '');
 }
 
@@ -512,7 +521,7 @@ function renderDetail() {
       </div>
       <div class="field"><label>Room</label>
         <select data-f="roomId"><option value="">(none)</option>${prop.rooms.map(r =>
-          `<option value="${escapeHtml(r.id)}" ${p.roomId === r.id ? 'selected' : ''}>${escapeHtml(r.name || 'Room')}</option>`).join('')}</select></div>
+          `<option value="${escapeHtml(r.id)}" ${p.roomId === r.id ? 'selected' : ''}>${escapeHtml(roomLabel(r))}</option>`).join('')}</select></div>
       <div class="field"><label>Notes</label><textarea data-f="notes" placeholder="What does this show? Conditions, measurements, ideas.">${escapeHtml(p.notes || '')}</textarea></div>
       <div class="field"><label>Scope items (cut sheets)</label>
         <select multiple size="4" data-multi="itemIds" aria-label="Linked scope items">${scopeOptionsHtml(p)}</select>

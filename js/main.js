@@ -82,10 +82,14 @@ function bindLinkIntake() {
 
 // #/import?url=<share link> (or #/new?url=): consume the query, then start the import.
 function importFromHash() {
-  const m = /^#\/(?:import|new)(?:\?(.*))?$/.exec(location.hash);
+  // Accepted: #/import?url=<share link>, #/import?polycam=<id>, and the shortest form,
+  // #/import/<capture id> (or a full link in that slot).
+  const m = /^#\/(?:import|new)(?:\/([^?]+))?(?:\?(.*))?$/.exec(location.hash);
   if (!m) return false;
-  const params = new URLSearchParams(m[1] || '');
-  const raw = params.get('url') || params.get('polycam') || '';
+  const params = new URLSearchParams(m[2] || '');
+  let raw = params.get('url') || params.get('polycam') || '';
+  if (!raw && m[1]) { const slot = decodeURIComponent(m[1]); raw = /^https?:\/\//i.test(slot) ? slot : 'https://poly.cam/capture/' + slot; }
+  else if (raw && !/^https?:\/\//i.test(raw)) raw = 'https://poly.cam/capture/' + raw;
   history.replaceState(null, '', '#/plan');
   const link = parseCaptureUrl(raw);
   if (link) openNewPropertyDialog({ url: link.url, autoStart: true });
@@ -102,7 +106,8 @@ function unmountCurrent() {
 function route() {
   // Views may carry a query (#/model?pin=<photoId>); the view reads it from location.hash itself.
   const name = (location.hash.replace(/^#\//, '').split('?')[0] || 'plan');
-  if ((name === 'import' || name === 'new') && importFromHash()) { if (!currentView) route(); return; }
+  const head = name.split('/')[0];
+  if ((head === 'import' || head === 'new') && importFromHash()) { if (!currentView) route(); return; }
   const view = VIEWS[name] || VIEWS.plan;
   unmountCurrent();
   currentName = VIEWS[name] ? name : 'plan';

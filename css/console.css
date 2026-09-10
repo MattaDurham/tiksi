@@ -357,6 +357,15 @@ h3.kicker { font-weight: 700; }
 /* the plan editor draws rulers along the top and left edges; move the overlays clear of them */
 .plan-canvas .canvas-badge { top: 30px; }
 .plan-canvas .canvas-hint { left: 30px; }
+/* which storey the plan canvas is showing: same glass pill as the badge, top left */
+.canvas-level {
+  position: absolute; left: 12px; top: 10px; pointer-events: none;
+  font-family: var(--mono); font-size: 10px; color: var(--accent); letter-spacing: 0.14em; font-weight: 700;
+  background: var(--glass-bg); border: 1px solid var(--glass-line); backdrop-filter: blur(8px);
+  padding: 4px 9px; border-radius: var(--radius); box-shadow: var(--shadow-1); white-space: nowrap;
+}
+.canvas-level:empty { display: none; }
+.plan-canvas .canvas-level { left: 30px; top: 30px; }
 
 .inspector {
   background: var(--panel); border-left: 1px solid var(--line);

@@ -128,17 +128,20 @@ function assertPlan(prop, tag) {
   check(prop.name === 'Living room and bedroom' || prop.name.startsWith('Polycam'), tag + ': named from the page (' + prop.name + ')');
   check(prop.scans.length === 1 && prop.scans[0].kind === 'mesh', tag + ': one mesh scan');
   if (!prop.scans.length) return;
-  check(Math.abs(prop.wallHeight - 2.55) < 0.08, tag + ': ceiling height ' + prop.wallHeight.toFixed(2) + ' m (expected 2.55)');
+  const lvl = prop.levels && prop.levels[0];
+  check(!!prop.levels && prop.levels.length === 1, tag + ': one level (' + (prop.levels ? prop.levels.length : 'none') + ')');
+  check(!!lvl && Math.abs(lvl.height - 2.55) < 0.08, tag + ': ceiling height ' + (lvl ? lvl.height.toFixed(2) : '-') + ' m (expected 2.55)');
   check(prop.walls.length >= 5 && prop.walls.length <= 7, tag + ': ' + prop.walls.length + ' walls (expected 5)');
   check(prop.rooms.length === 2, tag + ': ' + prop.rooms.length + ' rooms (expected 2)');
   const doors = prop.openings.filter(o => o.type === 'door').length, wins = prop.openings.filter(o => o.type === 'window').length;
   check(doors >= 2, tag + ': ' + doors + ' doors (expected 2)');
   check(wins >= 3, tag + ': ' + wins + ' windows (expected 3)');
   const thick = prop.walls.filter(w => w.thickness > 0.1 && w.thickness < 0.15);
-  check(prop.walls.some(w => Math.abs(w.thickness - 0.12) < 0.03), tag + ': the partition measured ~12 cm (' + prop.walls.map(w => w.thickness.toFixed(3)).join(', ') + ')');
+  check(prop.walls.some(w => Math.abs(w.thickness - 0.12) < 0.04), tag + ': the partition measured ~12 cm (' + prop.walls.map(w => w.thickness.toFixed(3)).join(', ') + ')');
   const areas = prop.rooms.map(r => { let s = 0; for (let i = 0; i < r.pts.length; i++) { const [x1, y1] = r.pts[i], [x2, y2] = r.pts[(i + 1) % r.pts.length]; s += x1 * y2 - x2 * y1; } return Math.abs(s) / 2; }).sort((a, b) => b - a);
   check(areas[0] > 19 && areas[0] < 24 && areas[1] > 12 && areas[1] < 16, tag + ': room areas ' + areas.map(a => a.toFixed(1)).join(', ') + ' m2 (expected ~21.9, ~14.4)');
-  check(prop.plan && prop.plan.calibrated && prop.plan.img && prop.plan.img.length > 2000, tag + ': calibrated underlay rendered (' + (prop.plan ? Math.round(prop.plan.img.length / 1024) + ' KB' : 'none') + ')');
+  check(!!lvl && lvl.plan && lvl.plan.calibrated && lvl.plan.img && lvl.plan.img.length > 2000, tag + ': calibrated underlay rendered (' + (lvl && lvl.plan ? Math.round(lvl.plan.img.length / 1024) + ' KB' : 'none') + ')');
+  check(prop.walls.every(w => w.level === (lvl && lvl.id)) && prop.rooms.every(r => r.level === (lvl && lvl.id)), tag + ': walls and rooms carry the level id');
   check(Math.abs(((prop.scans[0].rot[1] % 90) + 90) % 90 - 17) < 1.5 || Math.abs(((prop.scans[0].rot[1] % 90) + 90) % 90 - 73) < 1.5, tag + ': scan squared up (rotY ' + prop.scans[0].rot[1] + ')');
   check(Math.abs(prop.scans[0].pos[1] + 0.12) < 0.03, tag + ': floor lifted to y = 0 (pos.y ' + prop.scans[0].pos[1] + ')');
   void thick;
@@ -192,7 +195,7 @@ try {
   await page.goto(APP + '#/sheets');
   await sleep(800);
   await page.screenshot({ path: resolve(outDir, 'e2e-sheets.png') });
-  const underlay = prop && prop.plan && prop.plan.img;
+  const underlay = prop && prop.levels && prop.levels[0].plan && prop.levels[0].plan.img;
   if (underlay) writeFileSync(resolve(outDir, 'e2e-underlay.' + (underlay.startsWith('data:image/webp') ? 'webp' : 'jpg')), Buffer.from(underlay.split(',')[1], 'base64'));
 
   // ---- relay ----

@@ -15,7 +15,7 @@
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { materialById } from './store.js';
+import { materialById, ensureLevels, levelHeight, levelOfRoom, wallsOn, roomsOn, openingsOn } from './store.js';
 import { materialFor } from './textures.js';
 
 const FALLBACK_WALL = '#d8d4cc';
@@ -574,9 +574,12 @@ function buildWindow(o, s0, s1, v0, v1, th, sides, ctx) {
 }
 
 // ---------- walls ----------
+// `property` is the level view the wall sits on: { walls, rooms, wallHeight } for that level
+// (buildPropertyGroup makes one per level), so joints and room faces only consider neighbours
+// on the same storey. Local y runs from the level's floor; the level group carries the elevation.
 export function buildWallGroup(wall, openings, property, ctx) {
   ctx = ctx || {};
-  const { solids, L, H } = wallSolids(wall, openings, property.wallHeight);
+  const { solids, L, H } = wallSolids(wall, openings, property.wallHeight || 2.44);
   const group = new THREE.Group();
   group.userData = { kind: 'wall', id: wall.id };
   if (L < 0.01) return group;
@@ -727,43 +730,67 @@ export function roomInteriorPoint(pts) {
   return best || { x: cx, y: cy };
 }
 
+// One entry per room with a point inside it (plan coords) and where its level sits in world
+// Y: `y` is the floor, `top` the ceiling, so a lamp or a label can hang at the right height.
 export function roomCentres(property) {
   const out = [];
   for (const r of property.rooms || []) {
     if (!r.pts || r.pts.length < 3) continue;
     const p = roomInteriorPoint(r.pts);
-    out.push({ id: r.id, name: r.name, x: p.x, z: p.y });
+    const lvl = levelOfRoom(property, r);
+    out.push({ id: r.id, name: r.name, x: p.x, z: p.y, level: lvl.id, y: lvl.elevation, top: lvl.elevation + levelHeight(property, lvl.id) });
   }
   return out;
 }
 
 // ---------- property ----------
-// opts: { xray: bool }
+// opts: { xray: bool, hiddenLevels: Set of level ids }
+// One group per level, lifted to its elevation, holding that level's floors, walls and a
+// ceilings group; element groups keep their { kind, id } userData for picking. The root's
+// userData lists the levels ({ id, name, group, ceilings, elevation, top }) and the shared glass.
 export function buildPropertyGroup(property, opts) {
   opts = opts || {};
+  if (!Array.isArray(property.levels) || !property.levels.length) ensureLevels(property);
   const root = new THREE.Group();
   root.name = 'property';
   const matOpts = opts.xray ? { transparent: true, opacity: 0.35 } : undefined;
   const glass = glassMat();
   if (opts.xray) { glass.transmission = 0; glass.opacity = 0.25; }
   const ctx = { matOpts, glass };
+  const hidden = opts.hiddenLevels || null;
+  const levels = [];
 
-  for (const room of property.rooms || []) {
-    const g = buildRoomFloor(room, ctx);
-    if (g) root.add(g);
+  for (const lvl of property.levels) {
+    const H = levelHeight(property, lvl.id);
+    const view = { walls: wallsOn(property, lvl.id), rooms: roomsOn(property, lvl.id), wallHeight: H };
+    const openings = openingsOn(property, lvl.id);
+    const lg = new THREE.Group();
+    lg.name = 'level:' + lvl.id;
+    lg.userData = { kind: 'level', id: lvl.id, name: lvl.name };
+    lg.position.y = lvl.elevation;
+    lg.visible = !(hidden && hidden.has(lvl.id));
+
+    for (const room of view.rooms) {
+      const g = buildRoomFloor(room, ctx);
+      if (g) lg.add(g);
+    }
+    view.walls.forEach((wall, index) => {
+      lg.add(buildWallGroup(wall, openings, view, Object.assign({ index }, ctx)));
+    });
+    const ceilings = new THREE.Group();
+    ceilings.name = 'ceilings';
+    ceilings.userData = { ceilings: true, level: lvl.id };
+    for (const room of view.rooms) {
+      const m = buildRoomCeiling(room, H, ctx);
+      if (m) ceilings.add(m);
+    }
+    lg.add(ceilings);
+    lg.userData.ceilings = ceilings;
+    lg.userData.top = lvl.elevation + H;
+    root.add(lg);
+    levels.push({ id: lvl.id, name: lvl.name, group: lg, ceilings, elevation: lvl.elevation, top: lvl.elevation + H });
   }
-  (property.walls || []).forEach((wall, index) => {
-    root.add(buildWallGroup(wall, property.openings || [], property, Object.assign({ index }, ctx)));
-  });
-  const ceilings = new THREE.Group();
-  ceilings.name = 'ceilings';
-  ceilings.userData = { ceilings: true };
-  for (const room of property.rooms || []) {
-    const m = buildRoomCeiling(room, property.wallHeight || 2.44, ctx);
-    if (m) ceilings.add(m);
-  }
-  root.add(ceilings);
-  root.userData = { ceilings, glass };
+  root.userData = { levels, glass };
   return root;
 }
 
@@ -842,20 +869,31 @@ export function buildGround(property, opts) {
 }
 
 // Plan-space quads (4 corners, world x/z) covering every wall solid that a horizontal cut at
-// `height` passes through; the viewer draws these as dark section caps over the clipped walls.
-export function wallCapRects(property, height) {
+// world `height` passes through, on every level the cut runs through (a wall spans its level's
+// elevation to elevation + height); the viewer draws these as dark section caps over the
+// clipped walls. opts.hiddenLevels (Set of level ids) leaves those levels out.
+export function wallCapRects(property, height, opts) {
   const rects = [];
-  const walls = property.walls || [];
-  for (const wall of walls) {
-    const { solids, L } = wallSolids(wall, property.openings || [], property.wallHeight || 2.44);
-    if (L < 0.01) continue;
-    const f = wallFrame(wall);
-    const ends = wallEnds(wall, walls, 0);
-    for (const s of solids) {
-      if (s.v0 > height || s.v1 < height) continue;
-      const fp = solidFootprint(s, L, f.h, ends).map(([x, z]) => [wall.ax + f.ux * x + f.nx * z, wall.ay + f.uy * x + f.ny * z]);
-      // The viewer draws four-corner quads: fan a pointed footprint into quads, repeating the last corner.
-      for (let i = 1; i + 1 < fp.length; i += 2) rects.push([fp[0], fp[i], fp[i + 1], fp[Math.min(i + 2, fp.length - 1)]]);
+  if (!Array.isArray(property.levels) || !property.levels.length) ensureLevels(property);
+  const hidden = opts && opts.hiddenLevels;
+  for (const lvl of property.levels) {
+    if (hidden && hidden.has(lvl.id)) continue;
+    const local = height - lvl.elevation;           // cut height in the level's own frame
+    const H = levelHeight(property, lvl.id);
+    if (local < 0 || local > H) continue;
+    const walls = wallsOn(property, lvl.id);
+    const openings = openingsOn(property, lvl.id);
+    for (const wall of walls) {
+      const { solids, L } = wallSolids(wall, openings, H);
+      if (L < 0.01) continue;
+      const f = wallFrame(wall);
+      const ends = wallEnds(wall, walls, 0);
+      for (const s of solids) {
+        if (s.v0 > local || s.v1 < local) continue;
+        const fp = solidFootprint(s, L, f.h, ends).map(([x, z]) => [wall.ax + f.ux * x + f.nx * z, wall.ay + f.uy * x + f.ny * z]);
+        // The viewer draws four-corner quads: fan a pointed footprint into quads, repeating the last corner.
+        for (let i = 1; i + 1 < fp.length; i += 2) rects.push([fp[0], fp[i], fp[i + 1], fp[Math.min(i + 2, fp.length - 1)]]);
+      }
     }
   }
   return rects;
@@ -872,10 +910,14 @@ export function modelBounds(property, opts) {
   };
   for (const w of property.walls || []) { eat(w.ax, w.ay); eat(w.bx, w.by); }
   for (const r of property.rooms || []) for (const [x, y] of r.pts || []) eat(x, y);
-  if (property.plan && property.plan.img && (minX === Infinity || (opts && opts.plan))) {
-    eat(property.plan.offsetX || 0, property.plan.offsetY || 0);
-    eat((property.plan.offsetX || 0) + property.plan.imgW * property.plan.mPerPx,
-        (property.plan.offsetY || 0) + property.plan.imgH * property.plan.mPerPx);
+  if (minX === Infinity || (opts && opts.plan)) {
+    // Underlays live on the levels (and on the property itself in pre-level data).
+    const plans = (property.levels || []).map(l => l && l.plan).concat([property.plan]);
+    for (const pl of plans) {
+      if (!pl || !pl.img) continue;
+      eat(pl.offsetX || 0, pl.offsetY || 0);
+      eat((pl.offsetX || 0) + pl.imgW * pl.mPerPx, (pl.offsetY || 0) + pl.imgH * pl.mPerPx);
+    }
   }
   if (minX === Infinity) return { minX: -5, minY: -5, maxX: 5, maxY: 5 };
   return { minX, minY, maxX, maxY };

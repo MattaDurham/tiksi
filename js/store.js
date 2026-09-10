@@ -167,8 +167,141 @@ export function scanKindFor(format) {
 export function propertyTemplate(name) {
   return {
     id: uid('prop'), name: name || 'New property', notes: '', wallHeight: 2.44,
-    plan: null, walls: [], openings: [], rooms: [], scans: [], photos: [], env: defaultEnv(), source: null,
+    levels: [levelTemplate('lvl-0', 'Main level', 0, 2.44)], activeLevelId: 'lvl-0',
+    walls: [], openings: [], rooms: [], scans: [], photos: [], env: defaultEnv(), source: null,
   };
+}
+
+// ---------- levels (storeys) ----------
+// A property is a stack of levels sorted by elevation (the floor's world Y, in meters); each
+// level carries its default wall height and its own tracing underlay. Walls and rooms name
+// their level by id; openings sit on a wall and so live on the wall's level. Plan x/y are one
+// frame shared by every level, so a wall on the second floor traces straight over the first.
+// `wallHeight` on the property is only a fallback for records that predate levels.
+
+function levelTemplate(id, name, elevation, height) {
+  return { id, name, elevation, height, plan: null };
+}
+
+function num(v, fallback) { const n = Number(v); return Number.isFinite(n) ? n : fallback; }
+
+export function sortLevels(prop) {
+  prop.levels.sort((a, b) => a.elevation - b.elevation);
+  return prop.levels;
+}
+
+function lowestLevel(prop) {
+  let best = null;
+  for (const l of prop.levels) if (!best || l.elevation < best.elevation) best = l;
+  return best;
+}
+
+// Bring a property up to the level model in place. Idempotent: a property that already has
+// levels only gets its references checked. Handles the pre-level shape (property.plan, no
+// `level` on walls and rooms), a partially filled levels array from a hand-edited file, and
+// an activeLevelId that names a level that is gone.
+export function ensureLevels(p) {
+  if (!Array.isArray(p.levels) || !p.levels.length) {
+    p.levels = [levelTemplate('lvl-0', 'Main level', 0, num(p.wallHeight, 0) || 2.44)];
+  }
+  const seen = new Set();
+  p.levels = p.levels.filter(l => l && typeof l === 'object');
+  if (!p.levels.length) p.levels = [levelTemplate('lvl-0', 'Main level', 0, num(p.wallHeight, 0) || 2.44)];
+  for (const l of p.levels) {
+    if (l.id != null && typeof l.id !== 'string') l.id = String(l.id);
+    if (l.id == null || l.id === '' || seen.has(l.id)) l.id = uid('lvl');
+    seen.add(l.id);
+    if (typeof l.name !== 'string' || !l.name) l.name = 'Level';
+    l.elevation = num(l.elevation, 0);
+    l.height = num(l.height, 0) || num(p.wallHeight, 0) || 2.44;
+    if (l.plan === undefined || !(l.plan && typeof l.plan === 'object')) l.plan = null;
+  }
+  sortLevels(p);
+  const low = lowestLevel(p);
+  // The pre-level underlay moves onto the lowest level (unless that level already has one).
+  if (p.plan && typeof p.plan === 'object' && low.plan == null) low.plan = p.plan;
+  delete p.plan;
+  const ids = seen;
+  for (const w of p.walls || []) if (!ids.has(w.level)) w.level = low.id;
+  for (const r of p.rooms || []) if (!ids.has(r.level)) r.level = low.id;
+  if (!ids.has(p.activeLevelId)) p.activeLevelId = low.id;
+  return p;
+}
+
+export function levelById(prop, id) {
+  return (prop && prop.levels || []).find(l => l.id === id) || null;
+}
+
+// The level the PLAN editor shows. Falls back to (and repairs the pointer to) the lowest level.
+export function activeLevel(prop) {
+  if (!prop) return null;
+  if (!Array.isArray(prop.levels) || !prop.levels.length) ensureLevels(prop);
+  let l = levelById(prop, prop.activeLevelId);
+  if (!l) { l = lowestLevel(prop); prop.activeLevelId = l.id; }
+  return l;
+}
+
+export function setActiveLevel(prop, id) {
+  const l = levelById(prop, id);
+  if (!l) return activeLevel(prop);
+  prop.activeLevelId = l.id;
+  return l;
+}
+
+// A wall or room whose `level` is missing or stale counts as being on the lowest level, the
+// same rule migration applies, so nothing ever vanishes from every view.
+export function levelOfWall(prop, wall) {
+  if (!Array.isArray(prop.levels) || !prop.levels.length) ensureLevels(prop);
+  return levelById(prop, wall && wall.level) || lowestLevel(prop);
+}
+export function levelOfRoom(prop, room) { return levelOfWall(prop, room); }
+
+export function wallsOn(prop, levelId) {
+  return (prop.walls || []).filter(w => levelOfWall(prop, w).id === levelId);
+}
+export function roomsOn(prop, levelId) {
+  return (prop.rooms || []).filter(r => levelOfRoom(prop, r).id === levelId);
+}
+// Openings whose wall is on the level.
+export function openingsOn(prop, levelId) {
+  const ids = new Set(wallsOn(prop, levelId).map(w => w.id));
+  return (prop.openings || []).filter(o => ids.has(o.wallId));
+}
+
+export function levelHeight(prop, levelId) {
+  const l = levelById(prop, levelId);
+  return (l && l.height) || prop.wallHeight || 2.44;
+}
+// Floor-to-ceiling height of one wall: its own, else its level's default, else the legacy property default.
+export function wallHeightOf(prop, wall) {
+  return (wall && wall.height) || levelOfWall(prop, wall).height || prop.wallHeight || 2.44;
+}
+
+// World Y of the top of the highest level: what a section slider or a shadow camera spans.
+export function topOfLevels(prop) {
+  if (!Array.isArray(prop.levels) || !prop.levels.length) ensureLevels(prop);
+  let top = -Infinity;
+  for (const l of prop.levels) top = Math.max(top, l.elevation + l.height);
+  return Number.isFinite(top) ? top : (prop.wallHeight || 2.44);
+}
+
+export function addLevel(prop, opts) {
+  opts = opts || {};
+  if (!Array.isArray(prop.levels) || !prop.levels.length) ensureLevels(prop);
+  const l = levelTemplate(uid('lvl'), String(opts.name || 'Level ' + (prop.levels.length + 1)), num(opts.elevation, 0), num(opts.height, 0) || 2.44);
+  prop.levels.push(l);
+  sortLevels(prop);
+  return l;
+}
+
+// False when the level still holds walls or rooms, or is the last one; otherwise removes it.
+export function deleteLevel(prop, id) {
+  const l = levelById(prop, id);
+  if (!l || prop.levels.length <= 1) return false;
+  if (wallsOn(prop, id).length || roomsOn(prop, id).length) return false;
+  prop.levels = prop.levels.filter(x => x !== l);
+  if (prop.activeLevelId === id) prop.activeLevelId = lowestLevel(prop).id;
+  return true;
 }
 
 // Ids land in element attributes and thumbnails in <img src>, and both can come from a
@@ -188,6 +321,7 @@ function sanitiseIds(d) {
   };
   for (const p of d.properties) {
     fix(p, 'prop');
+    for (const l of p.levels) fix(l, 'lvl');
     for (const w of p.walls) fix(w, 'w');
     for (const o of p.openings) fix(o, 'o');
     for (const r of p.rooms) fix(r, 'r');
@@ -225,12 +359,14 @@ function migrate(d) {
   d.products = d.products || [];
   d.projects = d.projects || [];
   for (const p of d.properties) {
-    p.wallHeight = p.wallHeight || 2.44;
-    p.plan = p.plan || null;
+    p.wallHeight = p.wallHeight || 2.44;   // legacy fallback only; levels carry the real heights
     p.walls = p.walls || [];
     p.openings = p.openings || [];
     p.rooms = p.rooms || [];
     p.scans = p.scans || [];
+    // Levels: the pre-level shape (property.plan, no `level` on walls and rooms) becomes one
+    // "Main level" at elevation 0; anything already shaped that way is only checked.
+    ensureLevels(p);
     // v2: photos, environment, richer scan and room records. Merge over whatever is there
     // so partially filled objects from hand-edited or older exports keep their values.
     p.photos = p.photos || [];
@@ -323,11 +459,11 @@ export function elementInfo(propertyId, elementId) {
   const w = p.walls.find(w => w.id === elementId);
   if (w) {
     const len = Math.hypot(w.bx - w.ax, w.by - w.ay);
-    const h = w.height || p.wallHeight;
-    return { kind: 'wall', id: w.id, label: 'Wall', length: len, height: h, area: len * h, material: w.material };
+    const h = wallHeightOf(p, w);
+    return { kind: 'wall', id: w.id, label: 'Wall', length: len, height: h, area: len * h, material: w.material, level: levelOfWall(p, w).name };
   }
   const r = p.rooms.find(r => r.id === elementId);
-  if (r) return { kind: 'room', id: r.id, label: r.name || 'Room', area: polyArea(r.pts), material: r.material };
+  if (r) return { kind: 'room', id: r.id, label: r.name || 'Room', area: polyArea(r.pts), material: r.material, level: levelOfRoom(p, r).name };
   return null;
 }
 
