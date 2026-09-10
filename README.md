@@ -138,14 +138,39 @@ gets through, the property still exists with its link and the embedded viewer, a
 the dialog (and the plan inspector) take the file you download from Polycam
 yourself: Download, GLB, drop it on the box. The same pipeline runs from there.
 
+## Saving, opening and sharing
+
+A property is a project file: `<name>.tiksi` holds the property, its projects,
+the products they specify, the custom materials it uses, and every scan and
+photo, so it opens anywhere with nothing missing. Three ways to keep it, none of
+which needs a server:
+
+- **SAVE (Cmd+S).** In Chrome and Edge the first save asks where; every later
+  save writes there silently, and the file is remembered across visits. Other
+  browsers download the file. SAVE AS (Cmd+Shift+S) picks a new file. The SAVE
+  button carries a dot while the browser copy is ahead of the file.
+- **A project folder.** FILE > LINK A PROJECT FOLDER picks a folder once; from
+  then on every property is kept there as its own `.tiksi`, rewritten a few
+  seconds after each change. Put the folder in iCloud Drive, Dropbox or OneDrive
+  and your projects follow you to the next machine, where OPEN FROM FOLDER lists
+  them. If the folder holds a newer copy than this browser (you edited elsewhere),
+  SAVE turns red and OPEN FROM FOLDER pulls it in rather than overwriting it.
+- **OPEN.** A `.tiksi` from the picker (Cmd+O), dropped on the window, chosen
+  from the folder, or hosted anywhere that allows cross-origin reads through
+  `#/open?url=<file>` (a raw GitHub or gist URL, a Dropbox direct link). Opening
+  a file replaces the property of the same id, so re-opening updates rather than
+  duplicates, and everything else in the workspace stays.
+
+The whole workspace still exports as a bundle (.zip) or plain JSON and imports
+back, from the same FILE menu.
+
 ## Where your data lives
 
-Entirely in your browser. The workspace autosaves to localStorage; scan files and
-full-resolution photos go to IndexedDB. Nothing is uploaded anywhere. EXPORT
-writes a bundle (.zip) with the workspace JSON plus every scan and photo, so a
-property moves to another machine in one file; the JSON-only export is still
-there for a light backup. IMPORT restores either. That is the entire privacy
-model: the code is public, your house is not.
+Entirely in your browser, plus the files you save. The workspace autosaves to
+localStorage; scan files, full-resolution photos, photo thumbnails and plan
+underlays go to IndexedDB, so the localStorage copy stays small. Nothing is
+uploaded anywhere. That is the entire privacy model: the code is public, your
+house is not.
 
 ## How it is built
 
@@ -177,6 +202,7 @@ and deep-linked), with a synthetic two-room lidar-style capture as the fixture:
 
 ```
 node test/scan2plan.test.mjs            # the core: levels, walls, rooms, openings
+node test/project-files.test.mjs        # project files: slice one property, merge it back
 node tools/fixture-room.mjs             # writes tools/fixtures/room.glb
 node tools/e2e-polycam.mjs              # needs Playwright with Chromium
 node tools/debug-scan2plan.mjs my.glb   # prints the proposal for any mesh file, in plain Node

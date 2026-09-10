@@ -108,9 +108,8 @@ export function decorate(elm, name) {
 function decorateChrome() {
   document.querySelectorAll('#rail a[data-view]').forEach(a => decorate(a, a.dataset.view));
   document.querySelectorAll('#rail .rail-foot a').forEach(a => decorate(a, 'github'));
-  decorate(document.getElementById('btn-export'), 'export');
-  decorate(document.getElementById('btn-import'), 'import');
-  decorate(document.getElementById('btn-demo'), 'demo');
+  decorate(document.getElementById('btn-save'), 'save');
+  decorate(document.getElementById('btn-file'), 'file');
   const add = document.getElementById('property-new');
   if (add && !add.querySelector('.ic')) add.innerHTML = icon('plus');
 }
