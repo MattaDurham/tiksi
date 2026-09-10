@@ -13,8 +13,8 @@
 // Browser autosave (localStorage + IndexedDB) stays as it was; this is the durable copy.
 
 import {
-  ws, touch, activeProperty, projectSlice, exportProjectBlob, importProject, readBundle, importBundle,
-  putFile, getFile, deleteFile, handleKey, setSaveStatus, fmtBytes,
+  ws, activeProperty, projectSlice, projectFileName, exportProjectBlob, importProject, readBundle, importBundle,
+  putFile, getFile, deleteFile, handleKey, setSaveStatus,
 } from './store.js';
 
 export const FSA = typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function';
@@ -102,28 +102,42 @@ export async function saveProject(prop, opts) {
   opts = opts || {};
   prop = prop || activeProperty();
   if (!prop) return null;
-  setSaveStatus('PACKING', true);
-  let out;
-  try { out = await exportProjectBlob(prop.id); }
-  catch (e) { setSaveStatus('SAVE FAILED', true); throw e; }
+  const pack = async () => {
+    setSaveStatus('PACKING', true);
+    try { return await exportProjectBlob(prop.id); }
+    catch (e) { setSaveStatus('SAVE FAILED', true); throw e; }
+  };
   if (!FSA) {
+    const out = await pack();
     download(out.blob, out.name);
     state.savedSig.set(prop.id, signatureOf(prop.id));
     setSaveStatus('DOWNLOADED ' + out.name.toUpperCase(), false);
     notify();
     return { via: 'download', name: out.name, bytes: out.bytes };
   }
+  // The picker needs the click's user activation, which packing a large scan would outlive:
+  // ask where first, pack second.
   let handle = opts.as ? null : (state.fileHandles.get(prop.id) || await rememberedHandle(prop.id));
   if (handle && !(await ensurePermission(handle, true))) handle = null;
+  let pickerFailed = null;
   if (!handle) {
     try {
-      handle = await window.showSaveFilePicker({ suggestedName: out.name, types: PICKER_TYPES, id: 'tiksi-projects' });
+      handle = await window.showSaveFilePicker({ suggestedName: projectFileName(prop), types: PICKER_TYPES, id: 'tiksi-projects' });
     } catch (e) {
-      setSaveStatus('SAVED', false);
-      if (e && e.name === 'AbortError') return null;
-      download(out.blob, out.name);
-      return { via: 'download', name: out.name, bytes: out.bytes };
+      if (e && e.name === 'AbortError') { setSaveStatus('SAVED', false); return null; }
+      pickerFailed = e;
     }
+  }
+  const out = await pack();
+  if (!handle) {
+    console.warn('save picker unavailable, downloading instead', pickerFailed);
+    download(out.blob, out.name);
+    state.savedSig.set(prop.id, signatureOf(prop.id));
+    setSaveStatus('DOWNLOADED ' + out.name.toUpperCase(), false);
+    notify();
+    return { via: 'download', name: out.name, bytes: out.bytes };
+  }
+  if (!state.fileHandles.has(prop.id) || state.fileHandles.get(prop.id) !== handle) {
     state.fileHandles.set(prop.id, handle);
     try { await putFile(handleKey(prop.id), null, { kind: 'handle', handle }); } catch (e) { /* remembered for this session only */ }
   }
