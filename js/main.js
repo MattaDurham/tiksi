@@ -20,6 +20,10 @@ import * as schedule from './schedule.js';
 import * as cutsheets from './cutsheets.js';
 import { initNewProperty, openNewPropertyDialog, dialogOpen } from './newproperty.js';
 import { parseCaptureUrl } from './polycam.js';
+import {
+  initFiles, bindFileIntake, saveProject, openProjectPicker, openFromUrl, linkFolder, unlinkFolder, reconnectFolder,
+  listFolder, openFromFolder, scheduleFolderSync, filesState, onFilesChange, isDirty, saveTarget, FSA, FSA_DIR,
+} from './files.js';
 
 const VIEWS = {
   plan: plan2d,
@@ -49,6 +53,13 @@ async function boot() {
   bindTopbar();
   refreshTopbar();
   onChange(refreshTopbar);
+  // Projects are files: SAVE, the FILE menu, drops, Cmd+S/Cmd+O, and the linked folder.
+  initFiles({ remount: remountView, refresh: refreshTopbar, afterReplace: afterWorkspaceReplaced });
+  bindFileIntake();
+  onChange(() => { scheduleFolderSync(); refreshSaveButton(); });
+  onFilesChange(refreshSaveButton);
+  reconnectFolder(false).then(refreshSaveButton).catch(() => refreshSaveButton());
+  refreshSaveButton();
   initNewProperty({ remount: remountView, refresh: refreshTopbar });
   bindLinkIntake();
 
@@ -97,6 +108,17 @@ function importFromHash() {
   return true;
 }
 
+// #/open?url=<project file>: open a hosted .tiksi into this workspace, then show it.
+function openFromHash() {
+  const m = /^#\/open(?:\?(.*))?$/.exec(location.hash);
+  if (!m) return false;
+  const url = new URLSearchParams(m[1] || '').get('url') || '';
+  history.replaceState(null, '', '#/plan');
+  if (!url) { openProjectPicker().catch(e => alert(e.message)); return true; }
+  openFromUrl(url).then(() => { location.hash = '#/plan'; remountView(); }).catch(e => alert('Open failed: ' + e.message));
+  return true;
+}
+
 // A view that throws while tearing down must never wedge navigation: log it and move on.
 function unmountCurrent() {
   if (!currentView || !currentView.unmount) return;
@@ -108,6 +130,7 @@ function route() {
   const name = (location.hash.replace(/^#\//, '').split('?')[0] || 'plan');
   const head = name.split('/')[0];
   if ((head === 'import' || head === 'new') && importFromHash()) { if (!currentView) route(); return; }
+  if (head === 'open' && openFromHash()) { if (!currentView) route(); return; }
   const view = VIEWS[name] || VIEWS.plan;
   unmountCurrent();
   currentName = VIEWS[name] ? name : 'plan';
@@ -177,25 +200,12 @@ function bindTopbar() {
     remountView();
   });
 
-  const exportBtn = document.getElementById('btn-export');
-  exportBtn.onclick = async () => {
-    // No binary files: a JSON export is complete on its own. With scans or photos, offer the
-    // bundle (recommended) or the light JSON-only export; with leftovers in storage, cleanup.
-    const n = listAllFileIds().length;
-    let stray = 0;
-    try { stray = (await orphanFiles()).ids.length; } catch (e) { /* storage unavailable: nothing to clean */ }
-    if (!n && !stray) { exportWorkspace(); return; }
-    const items = n ? [
-      { label: 'BUNDLE (.zip)', hint: 'workspace + ' + n + ' scan/photo file' + (n === 1 ? '' : 's'), primary: true, run: runExportBundle },
-      { label: 'WORKSPACE ONLY (.json)', hint: 'no binary files', run: exportWorkspace },
-    ] : [{ label: 'WORKSPACE (.json)', primary: true, run: exportWorkspace }];
-    if (stray) items.push({ label: 'CLEAN STORAGE', hint: stray + ' stored file' + (stray === 1 ? '' : 's') + ' nothing here uses', run: () => offerStorageCleanup(false) });
-    openMenu(exportBtn, items);
-  };
+  document.getElementById('btn-save').onclick = () => saveProject(activeProperty()).catch(e => alert(e.message));
+  const fileBtn = document.getElementById('btn-file');
+  fileBtn.onclick = () => openFileMenu(fileBtn);
 
   const importFile = document.getElementById('import-file');
   importFile.accept = '.json,.zip,application/json,application/zip';
-  document.getElementById('btn-import').onclick = () => importFile.click();
   importFile.onchange = async () => {
     const file = importFile.files[0];
     importFile.value = '';
@@ -206,7 +216,7 @@ function bindTopbar() {
       } else {
         const data = JSON.parse(await file.text());
         if (!data || !Array.isArray(data.properties)) throw new Error('not a tiksi workspace file');
-        if (!confirm('Replace the current workspace with "' + file.name + '"? Export first if you want a backup.')) return;
+        if (!confirm('Replace the current workspace with "' + file.name + '"? Save or export first if you want a backup.')) return;
         replaceWorkspace(data);
       }
       afterWorkspaceReplaced();
@@ -214,16 +224,74 @@ function bindTopbar() {
       alert('Import failed: ' + e.message);
     }
   };
+}
 
-  document.getElementById('btn-demo').onclick = () => {
-    if (!confirm('Load the demo workspace? This replaces everything currently here (export first for a backup).')) return;
+// The FILE menu: this property as a file, the project folder, and the whole workspace.
+async function openFileMenu(anchor) {
+  const st = filesState();
+  const prop = activeProperty();
+  const n = listAllFileIds().length;
+  let stray = 0;
+  try { stray = (await orphanFiles()).ids.length; } catch (e) { /* storage unavailable: nothing to clean */ }
+  const items = [];
+  items.push({ label: 'OPEN PROJECT', hint: (FSA ? 'a .tiksi file' : '.tiksi, .zip or .json') + '  (Cmd+O)', run: () => openProjectPicker().catch(e => alert(e.message)) });
+  if (prop) {
+    const target = saveTarget(prop.id);
+    items.push({ label: 'SAVE PROJECT', hint: target ? 'to ' + target.name + '  (Cmd+S)' : (FSA ? 'choose a file, then Cmd+S saves silently' : 'downloads ' + prop.name + '.tiksi'), primary: true, run: () => saveProject(prop).catch(e => alert(e.message)) });
+    if (FSA) items.push({ label: 'SAVE PROJECT AS', hint: 'choose a new file  (Cmd+Shift+S)', run: () => saveProject(prop, { as: true }).catch(e => alert(e.message)) });
+  }
+  if (FSA_DIR) {
+    if (st.folder) {
+      items.push({ label: 'OPEN FROM FOLDER', hint: st.folderName + ': every property is kept there', sep: true, run: () => openFolderList(anchor) });
+      items.push({ label: 'UNLINK FOLDER', hint: 'stop keeping projects in ' + st.folderName + ' (files stay)', run: () => unlinkFolder() });
+    } else if (st.folderNeedsPermission) {
+      items.push({ label: 'RECONNECT FOLDER', hint: st.folderName + ' needs permission again', sep: true, primary: true, run: () => reconnectFolder(true).catch(e => alert(e.message)) });
+      items.push({ label: 'UNLINK FOLDER', hint: 'forget ' + st.folderName, run: () => unlinkFolder() });
+    } else {
+      items.push({ label: 'LINK A PROJECT FOLDER', hint: 'every property auto-saved there as <name>.tiksi; put it in iCloud Drive or Dropbox to sync', sep: true, run: () => linkFolder().catch(e => alert(e.message)) });
+    }
+  }
+  items.push({ label: 'EXPORT WORKSPACE', hint: n ? 'bundle (.zip) with all ' + n + ' scan/photo file' + (n === 1 ? '' : 's') : 'workspace.json', sep: true, run: n ? runExportBundle : exportWorkspace });
+  if (n) items.push({ label: 'EXPORT WORKSPACE JSON', hint: 'no binary files', run: exportWorkspace });
+  items.push({ label: 'IMPORT WORKSPACE', hint: 'replaces everything here', run: () => document.getElementById('import-file').click() });
+  if (stray) items.push({ label: 'CLEAN STORAGE', hint: stray + ' stored file' + (stray === 1 ? '' : 's') + ' nothing here uses', run: () => offerStorageCleanup(false) });
+  items.push({ label: 'LOAD DEMO', hint: 'replaces everything here', run: () => {
+    if (!confirm('Load the demo workspace? This replaces everything currently here (save or export first for a backup).')) return;
     replaceWorkspace(demoWorkspace());
     afterWorkspaceReplaced();
-  };
+  } });
+  openMenu(anchor, items);
+}
+
+async function openFolderList(anchor) {
+  let entries;
+  try { entries = await listFolder(); } catch (e) { alert('Could not read the folder: ' + e.message); return; }
+  if (!entries.length) { openMenu(anchor, [{ label: 'NO PROJECT FILES IN ' + filesState().folderName.toUpperCase(), hint: 'save a property and it appears here', run() {} }]); return; }
+  openMenu(anchor, entries.map(en => ({
+    label: en.name.replace(/\.tiksi$/i, '').toUpperCase(),
+    hint: fmtBytes(en.size) + ', ' + new Date(en.lastModified).toLocaleString() + (en.inWorkspace ? ' (open here)' : ''),
+    run: () => openFromFolder(en).catch(e => alert('Open failed: ' + e.message)),
+  })));
+}
+
+// SAVE shows a dot when the browser copy is ahead of the file, red when the folder holds a newer file.
+function refreshSaveButton() {
+  const btn = document.getElementById('btn-save');
+  if (!btn) return;
+  const prop = activeProperty();
+  const st = filesState();
+  if (!prop) { btn.classList.remove('dirty', 'warn'); btn.title = 'Save this property as a project file (Cmd+S)'; return; }
+  const target = saveTarget(prop.id);
+  const conflict = st.conflicts.has(prop.id);
+  btn.classList.toggle('warn', conflict);
+  btn.classList.toggle('dirty', !conflict && isDirty(prop.id));
+  btn.title = conflict ? 'A newer ' + target.name + ' is in ' + st.folderName + '. FILE > OPEN FROM FOLDER pulls it in; SAVE would keep this copy.'
+    : target ? (isDirty(prop.id) ? 'Changes since the last save to ' + target.name + ' (Cmd+S)' : 'Saved to ' + target.name)
+    : 'Save this property as a project file (Cmd+S)';
 }
 
 async function runExportBundle() {
-  const btn = document.getElementById('btn-export');
+  const btn = document.getElementById('btn-file');
   btn.disabled = true;
   setSaveStatus('BUNDLING', true);
   try {
@@ -252,7 +320,7 @@ function openMenu(anchor, items) {
   menu.className = 'tb-menu';
   menu.setAttribute('role', 'menu');
   menu.innerHTML = items.map((it, i) => `
-    <button class="tb-menu-item ${it.primary ? 'primary' : ''}" role="menuitem" data-i="${i}">
+    <button class="tb-menu-item ${it.primary ? 'primary' : ''} ${it.sep ? 'sep' : ''}" role="menuitem" data-i="${i}" ${it.disabled ? 'disabled' : ''}>
       <span>${escapeHtml(it.label)}</span>${it.hint ? `<small>${escapeHtml(it.hint)}</small>` : ''}
     </button>`).join('');
   const r = anchor.getBoundingClientRect();
@@ -283,6 +351,7 @@ function refreshTopbar() {
     || '<option value="">(no property)</option>';
   document.querySelectorAll('#units-seg .seg-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.units === d.settings.units));
+  refreshSaveButton();
 }
 
 boot();
