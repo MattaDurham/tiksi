@@ -23,8 +23,10 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 import {
   ws, activeProperty, uid, touch, fmtLen, parseLen, fmtArea, polyArea,
-  escapeHtml, deleteFile, itemById, isoToday,
+  escapeHtml, deleteFile, getFile, itemById, isoToday,
+  ensureLevels, wallsOn, roomsOn, wallHeightOf, levelOfWall, levelOfRoom, levelHeight, topOfLevels,
 } from './store.js';
+import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import { materialSelectHtml } from './materials.js';
 import { pendingTextureJobs } from './textures.js';
 import { icon } from './icons.js';
@@ -68,6 +70,9 @@ const scanState = {};          // scanId -> 'loading' | 'ready' | 'missing' | 'f
 const pinObjs = {};            // photoId -> {group, sprite, line, dot, aspect}
 const walkKeys = {};
 let walkLocked = false, dragLook = null;
+let walkFloor = 0;             // elevation of the level the walk started on (eye height sits 1.6 m above)
+// Levels switched off in the LEVELS section, per property, kept across remounts.
+const hiddenLevelsByProp = {};
 let pmremTimer = 0, envDirty = true, sunDirty = true;
 let pressed = null;
 let toastTimer = 0;
@@ -82,7 +87,10 @@ const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quater
 const walkEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 
 function dpr() { return Math.min(window.devicePixelRatio || 1, MAX_DPR[prop.env.quality] || 2); }
-function wallHeight() { return prop.wallHeight || 2.44; }
+// World Y of the highest ceiling: the height the whole model spans (framing, shadows, the section range).
+function modelTop() { return topOfLevels(prop); }
+function lowestElevation() { return prop.levels.reduce((m, l) => Math.min(m, l.elevation), Infinity); }
+function hiddenLevels() { return hiddenLevelsByProp[prop.id] || (hiddenLevelsByProp[prop.id] = new Set()); }
 function requestRender(n) { framesLeft = Math.max(framesLeft, n || 2); }
 
 // ---------- defaults for old data ----------
@@ -91,6 +99,7 @@ function ensureDefaults(p) {
   p.photos = p.photos || [];
   p.scans = p.scans || [];
   p.rooms = p.rooms || []; p.walls = p.walls || []; p.openings = p.openings || [];
+  ensureLevels(p);
   for (const s of p.scans) {
     s.pos = s.pos || [0, 0, 0];
     if (s.rotY == null) s.rotY = 0;
@@ -312,7 +321,7 @@ function applyQuality() {
 // ---------- model ----------
 function rebuildModel() {
   if (modelGroup) { scene.remove(modelGroup); disposeBuilt(modelGroup); }
-  modelGroup = buildPropertyGroup(prop, { xray });
+  modelGroup = buildPropertyGroup(prop, { xray, hiddenLevels: hiddenLevels() });
   scene.add(modelGroup);
   rebuildNightLights();
   applySection();
@@ -330,19 +339,22 @@ function rebuildGround() {
   requestRender(2);
 }
 
+// One fixture per room, hung just under that room's own ceiling (its level's top); rooms on a
+// hidden level get none, so switching a storey off does not leave its lamps glowing in mid-air.
 function rebuildNightLights() {
   while (lightRoot.children.length) { const c = lightRoot.children.pop(); disposeBuilt(c); }
-  const H = wallHeight();
+  const hidden = hiddenLevels();
   const discGeo = new THREE.CircleGeometry(0.11, 24);
   discGeo.rotateX(Math.PI / 2);
   const discMat = new THREE.MeshStandardMaterial({ color: 0xfff1dc, emissive: new THREE.Color(0xffd9a8), emissiveIntensity: 5, roughness: 0.6 });
   discMat.userData.disposable = true;
   for (const r of roomCentres(prop)) {
+    if (hidden.has(r.level)) continue;
     const light = new THREE.PointLight(0xffc48a, 14, 0, 2);
-    light.position.set(r.x, H - 0.12, r.z);
+    light.position.set(r.x, r.top - 0.12, r.z);
     lightRoot.add(light);
     const disc = new THREE.Mesh(discGeo, discMat);
-    disc.position.set(r.x, H - 0.035, r.z);
+    disc.position.set(r.x, r.top - 0.035, r.z);
     disc.userData = { kind: 'ceiling', id: r.id };
     lightRoot.add(disc);
   }
@@ -351,7 +363,7 @@ function rebuildNightLights() {
 function fitShadow() {
   const b = modelBounds(prop);
   const cx = (b.minX + b.maxX) / 2, cz = (b.minY + b.maxY) / 2;
-  const H = wallHeight();
+  const H = modelTop();
   // Hug the model's bounding sphere: every unit of slack here is wasted shadow texels.
   const R = Math.max(Math.hypot(b.maxX - b.minX, b.maxY - b.minY, H) / 2 * 1.05, 4);
   sun.target.position.set(cx, H / 2, cz);
@@ -544,7 +556,7 @@ let capMesh = null;
 function rebuildCaps() {
   if (capMesh) { scene.remove(capMesh); capMesh.geometry.dispose(); capMesh = null; }
   if (!section.on || !modelGroup) return;
-  const rects = wallCapRects(prop, section.height);
+  const rects = wallCapRects(prop, section.height, { hiddenLevels: hiddenLevels() });
   if (!rects.length) return;
   const P = [], I = [];
   rects.forEach((r, i) => {
@@ -595,7 +607,7 @@ function clippedAway(h) {
 // ---------- camera framing ----------
 function boundsInfo() {
   const b = modelBounds(prop);
-  const H = wallHeight();
+  const H = modelTop();
   const cx = (b.minX + b.maxX) / 2, cz = (b.minY + b.maxY) / 2;
   const span = Math.max(b.maxX - b.minX, b.maxY - b.minY, 6);
   const radius = Math.hypot(b.maxX - b.minX, b.maxY - b.minY, H) / 2;
@@ -679,19 +691,23 @@ function startWalk() {
   const look = new THREE.Vector3(cx, 1.5, cz);
   // Start in the selected room, else the largest one: a third of the way along its long axis,
   // looking down the length of the room so the first view is the widest one.
-  const rooms = (prop.rooms || []).filter(r => r.pts && r.pts.length > 2);
+  // Rooms on a hidden level are not walkable; the floor is the chosen room's level.
+  const hidden = hiddenLevels();
+  const rooms = (prop.rooms || []).filter(r => r.pts && r.pts.length > 2 && !hidden.has(levelOfRoom(prop, r).id));
   const selRoom = selection && selection.kind === 'room' && rooms.find(r => r.id === selection.id);
   const r = selRoom || rooms.slice().sort((a, b) => polyArea(b.pts) - polyArea(a.pts))[0];
+  walkFloor = r ? levelOfRoom(prop, r).elevation : 0;
+  look.y += walkFloor;
   if (r) {
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const [x, y] of r.pts) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
     const longX = (maxX - minX) >= (maxY - minY);
     const mx = (minX + maxX) / 2, my = (minY + maxY) / 2;
-    if (longX) { sx = minX + (maxX - minX) * 0.3; sz = my; look.set(maxX, 1.45, my); }
-    else { sx = mx; sz = minY + (maxY - minY) * 0.3; look.set(mx, 1.45, maxY); }
+    if (longX) { sx = minX + (maxX - minX) * 0.3; sz = my; look.set(maxX, walkFloor + 1.45, my); }
+    else { sx = mx; sz = minY + (maxY - minY) * 0.3; look.set(mx, walkFloor + 1.45, maxY); }
   }
-  camera.position.set(sx, 1.6, sz);
-  if (look.distanceTo(camera.position) < 0.5) look.set(sx, 1.5, sz - 5);
+  camera.position.set(sx, walkFloor + 1.6, sz);
+  if (look.distanceTo(camera.position) < 0.5) look.set(sx, walkFloor + 1.5, sz - 5);
   camera.lookAt(look);
   walk.connect(renderer.domElement);
   toast('WALK: WASD / arrows move, Shift runs. Drag to look, or click the view to capture the mouse. Esc exits.', 'info', 5000);
@@ -718,7 +734,7 @@ function stepWalk(dt) {
     if (hits.length) return true;
   }
   camera.position.add(move);
-  camera.position.y = 1.6;
+  camera.position.y = walkFloor + 1.6;
   return true;
 }
 
@@ -759,11 +775,14 @@ let texturesPending = false, lastTextureRedraw = 0;
 // ambient and the room fixtures at a daytime level while the camera is within a room.
 let interiorFill = false;
 function updateInteriorFill() {
-  const H = wallHeight();
-  let inside = camera.position.y < H - 0.05;
-  if (inside) {
-    inside = false;
-    for (const r of prop.rooms || []) if (r.pts && r.pts.length > 2 && pointInPolygon(camera.position.x, camera.position.z, r.pts)) { inside = true; break; }
+  // Inside = within a room's polygon and between that room's floor and ceiling (its level's band).
+  let inside = false;
+  const y = camera.position.y;
+  for (const r of prop.rooms || []) {
+    if (!r.pts || r.pts.length < 3) continue;
+    const lvl = levelOfRoom(prop, r);
+    if (y < lvl.elevation - 0.05 || y >= lvl.elevation + levelHeight(prop, lvl.id) - 0.05) continue;
+    if (pointInPolygon(camera.position.x, camera.position.z, r.pts)) { inside = true; break; }
   }
   if (inside === interiorFill) return;
   interiorFill = inside;
@@ -780,10 +799,11 @@ function pointInPolygon(px, py, pts) {
 
 function renderFrame() {
   if (sunDirty) updateSun();
-  const H = wallHeight();
   updateInteriorFill();
-  const ceilings = modelGroup && modelGroup.userData.ceilings;
-  if (ceilings) ceilings.visible = prop.env.showCeilings !== false && (mode === 'walk' || camera.position.y < H - 0.05);
+  // Each level's ceilings show only while the camera is below that level's top (or walking),
+  // so orbiting above the house reads as a dollhouse and stepping inside closes the lid.
+  const levels = modelGroup && modelGroup.userData.levels;
+  if (levels) for (const l of levels) l.ceilings.visible = prop.env.showCeilings !== false && (mode === 'walk' || camera.position.y < l.top - 0.05);
   updatePins();
   updateMeasureLabels();
   updateCompass();
@@ -1256,6 +1276,39 @@ async function onImportScan(file) {
   renderToolCol();
 }
 
+// Scan to plan on a mesh scan that is already here: replaces the traced plan with the
+// proposal (after asking, when there is one), moves the scan onto it and rebuilds the model.
+let planning = false;
+async function proposePlanFromScan(s) {
+  if (planning) return;
+  const traced = prop.walls.length + prop.rooms.length;
+  if (traced && !confirm('Replace the ' + prop.walls.length + ' traced wall(s) and ' + prop.rooms.length + ' room(s) with a plan proposed from "' + s.name + '"? The scan and photos stay; scope links to old elements are dropped.')) return;
+  const token = mountId;
+  planning = true;
+  try {
+    const rec = await getFile(s.id);
+    if (!rec || !rec.buffer) throw new Error('the scan bytes are not in this browser');
+    const { result, applied } = await planFromScanBytes(prop, s, rec.buffer, hooks);
+    if (token !== mountId) return;
+    if (applied) {
+      const project = seedProject(prop, applied, prop.name + ': scope from scan');
+      if (project && !ws.data.projects.some(p => p.propertyId === prop.id && /scope from scan/i.test(p.name))) { ws.data.projects.push(project); touch(); }
+    }
+    const obj = scanObjs[s.id];
+    if (obj) applyScanTransform(s, obj);
+    rebuildModel(); rebuildGround(); buildAllPins();
+    presetView('frame');
+    renderToolCol(); renderInspector();
+    toast('Proposed: ' + proposalSummary(result, applied) + '.', applied ? 'ok' : 'warn', 6000);
+  } catch (e) {
+    console.error(e);
+    if (token === mountId) toast('Could not propose a plan: ' + errMsg(e), 'error', 6000);
+  } finally {
+    planning = false;
+    if (token === mountId) showProgress(null);
+  }
+}
+
 // ---------- HUD ----------
 function toast(msg, kind, ms) {
   const t = hud.toast;
@@ -1295,14 +1348,14 @@ function updateCompass() {
 function renderHud() {
   const bar = hud.modes;
   if (!bar) return;
-  const H = wallHeight();
+  const H = modelTop(), lo = Math.min(0.3, lowestElevation() + 0.3);
   bar.innerHTML = `
     <button class="v-pill ${mode === 'orbit' ? 'active' : ''}" data-mode="orbit" title="Orbit (O)">ORBIT</button>
     <button class="v-pill ${mode === 'walk' ? 'active' : ''}" data-mode="walk" title="Walk through (W)">WALK</button>
     <button class="v-pill ${mode === 'top' ? 'active' : ''}" data-mode="top" title="Top, north up (T)">TOP</button>
     <span class="v-pill-sep"></span>
     <button class="v-pill ${section.on ? 'active' : ''}" data-section title="Section cut (C)">SECTION</button>
-    ${section.on ? `<input type="range" class="v-section-range" min="0.3" max="${(H + 0.3).toFixed(2)}" step="0.05" value="${section.height}" title="Cut height">
+    ${section.on ? `<input type="range" class="v-section-range" min="${lo.toFixed(2)}" max="${(H + 0.3).toFixed(2)}" step="0.05" value="${section.height}" title="Cut height (world elevation)">
       <span class="v-section-val">${escapeHtml(fmtLen(section.height))}</span>` : ''}
     <span class="v-pill-sep"></span>
     <button class="v-pill ${xray ? 'active' : ''}" data-xray title="X-ray (X)">X-RAY</button>`;
@@ -1319,9 +1372,29 @@ function renderHud() {
 }
 function toggleSection() {
   section.on = !section.on;
-  if (section.on && section.height > wallHeight()) section.height = Math.min(1.2, wallHeight() * 0.5);
+  if (section.on && (section.height > modelTop() || section.height < lowestElevation())) {
+    // Default cut: waist height on the lowest level.
+    const lo = lowestElevation();
+    const H0 = levelHeight(prop, prop.levels.find(l => l.elevation === lo).id);
+    section.height = lo + Math.min(1.2, H0 * 0.5);
+  }
   applySection();
   renderHud();
+}
+// Show or hide one storey: the level group flips, its lamps and section caps follow, and a
+// selection that just vanished is dropped (picking already skips invisible groups).
+function toggleLevel(id) {
+  const hidden = hiddenLevels();
+  if (hidden.has(id)) hidden.delete(id); else hidden.add(id);
+  const levels = modelGroup && modelGroup.userData.levels;
+  if (levels) for (const l of levels) l.group.visible = !hidden.has(l.id);
+  rebuildNightLights();
+  applySection();
+  const sel = selectedObject();
+  if (sel && !isVisibleChain(sel)) { setSelection(null); return; }
+  updateOutlineTargets();
+  renderToolCol();
+  requestRender(3);
 }
 function toggleXray() { xray = !xray; rebuildModel(); renderHud(); renderToolCol(); }
 
@@ -1495,7 +1568,14 @@ function renderInspector() {
   if (!inspEl) return;
   if (tool === 'pin') return renderPinPanel();
   if (!selection) {
+    const hidden = hiddenLevels();
+    const levelRows = prop.levels.map(l => {
+      const nw = wallsOn(prop, l.id).length, nr = roomsOn(prop, l.id).length;
+      return `<div class="stat-line" title="Elevation ${escapeHtml(fmtLen(l.elevation))}, height ${escapeHtml(fmtLen(levelHeight(prop, l.id)))}"><span>${escapeHtml(l.name)}${hidden.has(l.id) ? ' (hidden)' : ''}</span><b>${nw} wall${nw === 1 ? '' : 's'} &middot; ${nr} room${nr === 1 ? '' : 's'}</b></div>`;
+    }).join('');
     inspEl.innerHTML = `<h3>MODEL</h3>
+      ${levelRows}
+      <div class="tool-sep"></div>
       <div class="stat-line"><span>Walls</span><b>${prop.walls.length}</b></div>
       <div class="stat-line"><span>Openings</span><b>${prop.openings.length}</b></div>
       <div class="stat-line"><span>Rooms</span><b>${prop.rooms.length}</b></div>
@@ -1511,14 +1591,16 @@ function renderInspector() {
     const w = prop.walls.find(w => w.id === selection.id);
     if (!w) { selection = null; return renderInspector(); }
     const L = Math.hypot(w.bx - w.ax, w.by - w.ay);
-    const h = w.height || prop.wallHeight;
+    const lvl = levelOfWall(prop, w);
+    const h = wallHeightOf(prop, w);
     const nOpen = prop.openings.filter(o => o.wallId === w.id).length;
     inspEl.innerHTML = `<h3>WALL</h3>
+      <div class="stat-line"><span>Level</span><b>${escapeHtml(lvl.name)}</b></div>
       <div class="stat-line"><span>Length</span><b>${fmtLen(L)}</b></div>
       <div class="stat-line"><span>Face area</span><b>${fmtArea(L * h)}</b></div>
       <div class="stat-line"><span>Openings</span><b>${nOpen}</b></div>
       <div class="field"><label>Thickness</label><input type="text" data-th value="${escapeHtml(fmtLen(w.thickness))}"></div>
-      <div class="field"><label>Height (blank = default)</label><input type="text" data-h value="${w.height ? escapeHtml(fmtLen(w.height)) : ''}" placeholder="${escapeHtml(fmtLen(prop.wallHeight))}"></div>
+      <div class="field"><label>Height (blank = level default)</label><input type="text" data-h value="${w.height ? escapeHtml(fmtLen(w.height)) : ''}" placeholder="${escapeHtml(fmtLen(levelHeight(prop, lvl.id)))}"></div>
       <div class="field"><label>Material</label>${materialSelectHtml('wall', w.material, 'data-mat')}</div>
       <div class="field"><label>Interior face material</label>${materialSelectHtml('wall', w.materialIn, 'data-matin').replace('(none)', 'Automatic')}</div>
       ${scopeAssignHtml(w.id)}
@@ -1584,6 +1666,7 @@ function renderInspector() {
     if (!r) { selection = null; return renderInspector(); }
     inspEl.innerHTML = `<h3>ROOM / FLOOR</h3>
       <div class="field"><label>Name</label><input type="text" data-name value="${escapeHtml(r.name || '')}"></div>
+      <div class="stat-line"><span>Level</span><b>${escapeHtml(levelOfRoom(prop, r).name)}</b></div>
       <div class="stat-line"><span>Area</span><b>${fmtArea(polyArea(r.pts))}</b></div>
       <div class="field"><label>Floor material</label>${materialSelectHtml('floor', r.material, 'data-mat')}</div>
       <div class="field"><label>Ceiling material</label>${materialSelectHtml('ceiling', r.ceilingMaterial, 'data-cmat')}</div>
@@ -1653,6 +1736,8 @@ function renderInspector() {
       <button class="btn" data-frame ${dis}>FRAME SCAN</button>
       <button class="btn" data-floor ${dis}>DROP TO FLOOR</button>
       <button class="btn" data-center ${dis}>CENTER ON MODEL</button>
+      ${s.kind === 'mesh' ? `<button class="btn" data-plan ${dis} title="Find the floor and ceiling, square the scan up, propose walls, rooms, doors and windows, and render the plan underlay from the scan">${icon('plan')}PROPOSE PLAN FROM SCAN</button>` : ''}
+      ${s.source && s.source.url ? `<a class="btn" href="${escapeHtml(s.source.url)}" target="_blank" rel="noopener" style="display:flex; text-decoration:none; justify-content:center">${icon('link')}OPEN ON POLYCAM</a>` : ''}
       <button class="btn danger" data-del ${disDel} title="${disDel ? 'Wait for the scan to finish loading' : ''}">DELETE SCAN</button>`;
     const upd = () => { applyScanTransform(s, obj); touch(); requestRender(3); };
     inspEl.querySelectorAll('[data-p]').forEach(i => i.onchange = () => { s.pos[+i.dataset.p] = parseFloat(i.value) || 0; upd(); });
@@ -1674,6 +1759,8 @@ function renderInspector() {
     inspEl.querySelector('[data-frame]').onclick = () => { if (obj) frameObject(obj); };
     inspEl.querySelector('[data-floor]').onclick = () => { if (obj) { dropScanToFloor(s, obj); upd(); renderInspector(); } };
     inspEl.querySelector('[data-center]').onclick = () => { if (obj) { centerScanOnModel(s, obj, modelBounds(prop)); upd(); renderInspector(); } };
+    const planBtn = inspEl.querySelector('[data-plan]');
+    if (planBtn) planBtn.onclick = () => proposePlanFromScan(s);
     inspEl.querySelector('[data-del]').onclick = async () => {
       if (scanState[s.id] === 'loading' && !obj) return;
       prop.scans = prop.scans.filter(x => x.id !== s.id);
@@ -1699,6 +1786,9 @@ function renderToolCol() {
     `${icon(ic)}<span class="tb-text">${label}</span>${key ? `<kbd class="key">${key}</kbd>` : ''}</button>`;
   const scanBadge = s => scanObjs[s.id] ? (s.kind || '').toUpperCase().slice(0, 5) : ({ missing: 'GONE', failed: 'ERR' }[scanState[s.id]] || '...');
   const scanRows = prop.scans.map(s => `<button class="tool-btn v-scan-row ${scanSelected(s.id) ? 'active' : ''}" data-scan="${escapeHtml(s.id)}" title="${escapeHtml(s.name)}${scanObjs[s.id] ? '' : ' (' + escapeHtml(scanState[s.id] || 'loading') + ')'}">${icon(s.kind === 'splat' ? 'splat' : s.kind === 'mesh' ? 'model' : 'scan')}<span class="tb-text">${escapeHtml(s.name.length > 14 ? s.name.slice(0, 12) + '..' : s.name)}</span><kbd class="key">${escapeHtml(scanBadge(s))}</kbd></button>`).join('');
+  // One toggle per storey, lit while the level is shown; the key badge is its floor elevation.
+  const hidden = hiddenLevels();
+  const levelRows = prop.levels.map(l => `<button class="tool-btn ${hidden.has(l.id) ? '' : 'active'}" data-level="${escapeHtml(l.id)}" title="${hidden.has(l.id) ? 'Show' : 'Hide'} ${escapeHtml(l.name)} (floor at ${escapeHtml(fmtLen(l.elevation))})">${icon(hidden.has(l.id) ? 'eye-off' : 'layers')}<span class="tb-text">${escapeHtml(l.name.length > 14 ? l.name.slice(0, 12) + '..' : l.name)}</span><kbd class="key">${escapeHtml(fmtLen(l.elevation, { short: true }))}</kbd></button>`).join('');
   tc.innerHTML = `
     <div class="tool-head">VIEW</div>
     ${tb('frame', 'frame', 'FRAME', 'F')}
@@ -1715,6 +1805,9 @@ function renderToolCol() {
     ${tb('pin', 'pin', 'PIN PHOTO', 'P', tool === 'pin')}
     ${tb('section', 'section', 'SECTION', 'C', section.on)}
     ${tb('xray', 'xray', 'X-RAY', 'X', xray)}
+    <div class="tool-sep"></div>
+    <div class="tool-head">LEVELS</div>
+    ${levelRows}
     <div class="tool-sep"></div>
     <div class="tool-head">RENDER</div>
     ${tb('render2', 'camera', 'STILL 2x')}
@@ -1747,6 +1840,7 @@ function renderToolCol() {
   on('scan', () => file.click());
   file.onchange = () => { onImportScan(file.files[0]); file.value = ''; };
   tc.querySelectorAll('[data-scan]').forEach(b => b.onclick = () => setSelection({ kind: 'scan', id: b.dataset.scan }));
+  tc.querySelectorAll('[data-level]').forEach(b => b.onclick = () => toggleLevel(b.dataset.level));
   on('rebuild', () => { rebuildModel(); rebuildGround(); buildAllPins(); });
 }
 function setTool(next) {

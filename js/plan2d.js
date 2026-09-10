@@ -5,10 +5,15 @@
 
 import {
   ws, activeProperty, uid, touch, onChange, fmtLen, parseLen, fmtArea, polyArea,
-  escapeHtml, itemById,
+  escapeHtml, itemById, getFile,
+  ensureLevels, activeLevel, setActiveLevel, sortLevels, wallsOn, roomsOn, openingsOn,
+  addLevel, deleteLevel, levelHeight, wallHeightOf, levelOfWall,
 } from './store.js';
 import { materialSelectHtml } from './materials.js';
 import { icon } from './icons.js';
+import { SCAN_ACCEPT } from './scans.js';
+import { attachScanFileToProperty } from './newproperty.js';
+import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 
 const PRESETS = {
   interior: { thickness: 0.114, material: 'mat-drywall' },   // 4.5 in stud wall
@@ -41,14 +46,15 @@ const C = {
   rulerText: '#7c8995',
 };
 
-// Module-persistent editor state (survives view switches).
+// Module-persistent editor state (survives view switches). Views are kept per property AND
+// per level (key prop.id + ':' + level.id): each storey remembers its own zoom and pan.
 const viewByProp = {};
 let tool = 'select';
 let wallPreset = 'interior';
 let snapOn = true;
 let dimsOn = false;
 
-let el = null, canvas = null, ctx = null, wrapEl = null, inspEl = null, hintEl = null, badgeEl = null;
+let el = null, canvas = null, ctx = null, wrapEl = null, inspEl = null, hintEl = null, badgeEl = null, levelEl = null;
 let raf = 0;
 let prop = null;
 let vs = null; // {zoom, panX, panY}
@@ -96,12 +102,24 @@ function matColor(id, fallback) {
   return (m && m.color) || fallback || '#d8d4cc';
 }
 
+// ---------- the level being edited ----------
+// The editor shows one storey at a time: every read of walls, rooms, openings and the
+// underlay goes through these, while whole-array mutations (delete, undo) keep touching the
+// full property arrays so the other levels ride along untouched.
+function lvl() { return activeLevel(prop); }
+function curWalls() { return wallsOn(prop, lvl().id); }
+function curRooms() { return roomsOn(prop, lvl().id); }
+function curOpenings() { return openingsOn(prop, lvl().id); }
+function curPlan() { return lvl().plan; }
+function levelKey() { return prop.id + ':' + lvl().id; }
+function levelHasContent(l) { return !!(l.plan && l.plan.img) || wallsOn(prop, l.id).length > 0 || roomsOn(prop, l.id).length > 0; }
+
 function bounds() {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   const eat = (x, y) => { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); };
-  for (const w of prop.walls) { eat(w.ax, w.ay); eat(w.bx, w.by); }
-  for (const r of prop.rooms) for (const [x, y] of r.pts) eat(x, y);
-  const pl = prop.plan;
+  for (const w of curWalls()) { eat(w.ax, w.ay); eat(w.bx, w.by); }
+  for (const r of curRooms()) for (const [x, y] of r.pts) eat(x, y);
+  const pl = curPlan();
   if (pl && pl.img) { eat(pl.offsetX, pl.offsetY); eat(pl.offsetX + pl.imgW * pl.mPerPx, pl.offsetY + pl.imgH * pl.mPerPx); }
   if (minX === Infinity) return { minX: -6, minY: -4, maxX: 6, maxY: 4 };
   return { minX, minY, maxX, maxY };
@@ -118,10 +136,32 @@ function fitView() {
   invalidate();
 }
 
-// Identity of the underlay image. mount() compares it with the one it saw last to spot an
-// underlay that arrived from another view (PHOTOS) and refit once for it; the in-editor
-// mutators keep it current so a plain revisit never throws the user's zoom/pan away.
-function planKey(p) { return p.plan && p.plan.img ? p.plan.img.length + ':' + p.plan.imgW + 'x' + p.plan.imgH : ''; }
+// Identity of the active level's underlay image. mount() compares it with the one it saw last
+// to spot an underlay that arrived from another view (PHOTOS) and refit once for it; the
+// in-editor mutators keep it current so a plain revisit never throws the user's zoom/pan away.
+function planKey(p) {
+  const pl = activeLevel(p).plan;
+  return pl && pl.img ? pl.img.length + ':' + pl.imgW + 'x' + pl.imgH : '';
+}
+
+// Pick (or create) the view for the active level. A level seen for the first time inherits
+// the zoom and pan of the level the user just left and, when it already has content, fits it.
+// The same path serves a level switch and a scan proposal that replaced the levels wholesale.
+function resolveLevelView() {
+  const key = levelKey();
+  const planSrc = planKey(prop);
+  let next = viewByProp[key];
+  if (!next) {
+    next = viewByProp[key] = vs ? { zoom: vs.zoom, panX: vs.panX, panY: vs.panY, planSrc } : { zoom: 60, panX: 0, panY: 0, planSrc };
+    vs = next;
+    if (wrapEl && levelHasContent(lvl())) fitView();   // an empty storey keeps the view the user was just looking at
+    invalidate();
+    return;
+  }
+  vs = next;
+  if (vs.planSrc !== planSrc) { vs.planSrc = planSrc; if (wrapEl) fitView(); }
+  invalidate();
+}
 
 // ---------- undo ----------
 function historyFor(p) {
@@ -129,13 +169,34 @@ function historyFor(p) {
   if (!byProp) historyByWs.set(ws.data, byProp = {});
   return byProp[p.id] || (byProp[p.id] = { undo: [], redo: [] });
 }
-function snapshot() { return JSON.stringify({ propId: prop.id, walls: prop.walls, openings: prop.openings, rooms: prop.rooms }); }
+// A snapshot carries the whole geometry plus the level list and the active level, so undoing
+// a scan proposal that replaced the levels brings the previous ones back. Underlay images are
+// too large to copy 80 times over: each level's `plan` object is kept by reference beside the
+// JSON and reattached on restore (the underlay was never part of undo; this keeps it that way).
+function snapshot() {
+  const plans = {};
+  for (const l of prop.levels) plans[l.id] = l.plan || null;
+  const levels = prop.levels.map(l => Object.assign({}, l, { plan: null }));
+  return { s: JSON.stringify({ propId: prop.id, walls: prop.walls, openings: prop.openings, rooms: prop.rooms, levels, activeLevelId: prop.activeLevelId }), plans };
+}
 function pushUndo() { hist.undo.push(snapshot()); if (hist.undo.length > 80) hist.undo.shift(); hist.redo.length = 0; }
-function applySnap(s) {
-  const d = JSON.parse(s);
+function applySnap(snap) {
+  const d = JSON.parse(snap.s);
   if (d.propId !== prop.id) return false;   // belt and braces: never write another property's geometry
   prop.walls = d.walls; prop.openings = d.openings; prop.rooms = d.rooms;
-  selection = null; hover = null; touch(); renderInspector(); invalidate();
+  if (Array.isArray(d.levels) && d.levels.length) {
+    // A level that survived keeps its live plan object (it may have been dragged or
+    // calibrated since); one that was deleted comes back with the plan it had.
+    const live = {};
+    for (const l of prop.levels) live[l.id] = l.plan || null;
+    for (const l of d.levels) l.plan = (l.id in live ? live[l.id] : snap.plans[l.id]) || null;
+    prop.levels = d.levels;
+    prop.activeLevelId = d.activeLevelId;
+    ensureLevels(prop);
+  }
+  selection = null; hover = null; drawing = null; roomDraft = null; calib = null;
+  resolveLevelView();
+  touch(); renderToolCol(); renderInspector(); updateLevelBadge(); updateHint(); invalidate();
   return true;
 }
 function undo() { if (!hist || !hist.undo.length) return; const cur = snapshot(); if (applySnap(hist.undo.pop())) hist.redo.push(cur); }
@@ -152,7 +213,7 @@ function snapPoint(wx, wy, opts) {
   // Endpoint snap (the SNAP switch gates every kind of snapping, as its label promises).
   if (snapOn) {
     let best = null, bestD = tolW;
-    for (const w of prop.walls) {
+    for (const w of curWalls()) {
       for (const p of [[w.ax, w.ay], [w.bx, w.by]]) {
         if (opts.excludeWall && opts.excludeWall === w.id) continue;
         const d = Math.hypot(p[0] - wx, p[1] - wy);
@@ -207,7 +268,7 @@ function openingPos(o) {
 }
 function hitTest(wx, wy) {
   // Openings first.
-  for (const o of prop.openings) {
+  for (const o of curOpenings()) {
     const p = openingPos(o);
     if (!p) continue;
     const along = Math.abs((wx - p.cx) * p.ux + (wy - p.cy) * p.uy);
@@ -224,15 +285,16 @@ function hitTest(wx, wy) {
     }
   }
   // Walls.
-  for (let i = prop.walls.length - 1; i >= 0; i--) {
-    const w = prop.walls[i];
+  const walls = curWalls();
+  for (let i = walls.length - 1; i >= 0; i--) {
+    const w = walls[i];
     const { d } = distToSeg(wx, wy, w.ax, w.ay, w.bx, w.by);
     if (d < Math.max(w.thickness / 2 + 3 / vs.zoom, 6 / vs.zoom)) return { kind: 'wall', id: w.id };
   }
   // Rooms.
-  for (const r of prop.rooms) if (pointInPoly(wx, wy, r.pts)) return { kind: 'room', id: r.id };
+  for (const r of curRooms()) if (pointInPoly(wx, wy, r.pts)) return { kind: 'room', id: r.id };
   // Underlay.
-  const pl = prop.plan;
+  const pl = curPlan();
   if (pl && pl.img &&
       wx >= pl.offsetX && wx <= pl.offsetX + pl.imgW * pl.mPerPx &&
       wy >= pl.offsetY && wy <= pl.offsetY + pl.imgH * pl.mPerPx) return { kind: 'underlay' };
@@ -243,7 +305,7 @@ function hitTest(wx, wy) {
 function addWall(a, b) {
   pushUndo();
   const p = PRESETS[wallPreset];
-  const w = { id: uid('w'), ax: a[0], ay: a[1], bx: b[0], by: b[1], thickness: p.thickness, height: null, material: p.material };
+  const w = { id: uid('w'), level: lvl().id, ax: a[0], ay: a[1], bx: b[0], by: b[1], thickness: p.thickness, height: null, material: p.material };
   prop.walls.push(w);
   touch();
   if (!selection) renderInspector();
@@ -272,7 +334,7 @@ function deleteSelection() {
   } else if (selection.kind === 'underlay') {
     // The underlay is not part of the undo snapshot, so no history entry for it. The
     // calibration form cannot outlive its image: drop it and fall back to the select tool.
-    prop.plan = null;
+    lvl().plan = null;
     vs.planSrc = planKey(prop);
     calib = null;
     if (tool === 'calibrate') { tool = 'select'; renderToolCol(); }
@@ -299,7 +361,7 @@ function uploadUnderlay(file) {
     c.getContext('2d').drawImage(img, 0, 0, cw, ch);
     const isPng = file.type === 'image/png';
     const dataUrl = isPng ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.85);
-    prop.plan = {
+    lvl().plan = {
       img: dataUrl, imgW: cw, imgH: ch,
       mPerPx: 18 / cw,           // assume ~18 m wide until calibrated
       opacity: 0.55, offsetX: 0, offsetY: 0, calibrated: false,
@@ -417,7 +479,7 @@ function tracePoly(pts) {
 // by the neighbour's half thickness at a shared endpoint fills it (drawing only, no data change).
 function endExtension(wl, px, py) {
   let ext = 0;
-  for (const o of prop.walls) {
+  for (const o of curWalls()) {
     if (o === wl) continue;
     if ((Math.abs(o.ax - px) < 0.003 && Math.abs(o.ay - py) < 0.003) ||
         (Math.abs(o.bx - px) < 0.003 && Math.abs(o.by - py) < 0.003)) ext = Math.max(ext, o.thickness / 2);
@@ -461,7 +523,7 @@ function draw() {
   drawUnderlay();
   drawRooms();
   drawWalls();
-  for (const o of prop.openings) drawOpening(o);
+  for (const o of curOpenings()) drawOpening(o);
   drawRoomLabels();
   drawDims();
   drawDrafts(w, h);
@@ -500,7 +562,7 @@ function drawGrid(w, h) {
 }
 
 function drawUnderlay() {
-  const pl = prop.plan;
+  const pl = curPlan();
   if (!pl || !pl.img) return;
   if (underlayImgSrc !== pl.img) {
     underlayImg = new Image(); underlayImg.onload = invalidate; underlayImg.src = pl.img; underlayImgSrc = pl.img;
@@ -572,7 +634,7 @@ function roomInteriorPoint(pts) {
 function roomCentroid(r) { return roomInteriorPoint(r.pts); }
 
 function drawRooms() {
-  for (const r of prop.rooms) {
+  for (const r of curRooms()) {
     if (r.pts.length < 3) continue;
     const col = matColor(r.material, '#5fb3c9');
     const sel = selection && selection.kind === 'room' && selection.id === r.id;
@@ -595,7 +657,7 @@ function drawRooms() {
 }
 
 function drawRoomLabels() {
-  for (const r of prop.rooms) {
+  for (const r of curRooms()) {
     if (r.pts.length < 3) continue;
     const col = matColor(r.material, '#5fb3c9');
     const sel = selection && selection.kind === 'room' && selection.id === r.id;
@@ -625,7 +687,7 @@ function drawRoomLabels() {
 
 function drawWalls() {
   const polys = [];
-  for (const wl of prop.walls) { const p = wallPoly(wl); if (p) polys.push([wl, p]); }
+  for (const wl of curWalls()) { const p = wallPoly(wl); if (p) polys.push([wl, p]); }
   // Thin walls first, thick walls last: at a T-junction the partition's end overlaps the
   // exterior wall, and the later (thicker) fill hides that overlap instead of showing a seam.
   polys.sort((a, b) => a[0].thickness - b[0].thickness);
@@ -787,7 +849,7 @@ function dimSideFor(wl) {
 }
 
 function drawDims() {
-  for (const wl of prop.walls) {
+  for (const wl of curWalls()) {
     const sel = selection && selection.kind === 'wall' && selection.id === wl.id;
     if (!sel && !dimsOn) continue;
     const L = Math.hypot(wl.bx - wl.ax, wl.by - wl.ay);
@@ -922,7 +984,7 @@ function drawDrafts(w, h) {
       ring(b);
       dimString(calib.a, bPt, C.accent, { side: 1, gap: 9, offset: 24 });
     }
-  } else if (tool === 'calibrate' && hoverPt && prop.plan && !drag) {
+  } else if (tool === 'calibrate' && hoverPt && curPlan() && !drag) {
     crossGuides(hoverPt, w, h, 'rgba(232,151,58,0.14)');
   }
 }
@@ -1182,7 +1244,8 @@ function onPointerDown(e) {
     return;
   }
   if (tool === 'calibrate') {
-    if (!prop.plan || !prop.plan.img) { setHint('Upload a plan image first, then calibrate.'); return; }
+    const pl = curPlan();
+    if (!pl || !pl.img) { setHint('Upload a plan image first, then calibrate.'); return; }
     if (!calib || calib.b) calib = { a: [wx, wy], b: null };
     else { calib.b = [wx, wy]; renderInspector(); }
     updateHint();
@@ -1214,7 +1277,8 @@ function onPointerDown(e) {
     const r = prop.rooms.find(r => r.id === hit.id);
     drag = { kind: 'room', id: hit.id, wx, wy, orig: r.pts.map(p => [...p]), moved: false };
   } else if (hit.kind === 'underlay') {
-    drag = { kind: 'underlay', wx, wy, ox: prop.plan.offsetX, oy: prop.plan.offsetY, moved: false };
+    const pl = curPlan();
+    drag = { kind: 'underlay', pl, wx, wy, ox: pl.offsetX, oy: pl.offsetY, moved: false };
   }
 }
 
@@ -1262,8 +1326,8 @@ function onPointerMove(e) {
     const dx = rnd(wx - drag.wx), dy = rnd(wy - drag.wy);
     r.pts = drag.orig.map(p => [p[0] + dx, p[1] + dy]);
   } else if (drag.kind === 'underlay') {
-    prop.plan.offsetX = drag.ox + (wx - drag.wx);
-    prop.plan.offsetY = drag.oy + (wy - drag.wy);
+    drag.pl.offsetX = drag.ox + (wx - drag.wx);
+    drag.pl.offsetY = drag.oy + (wy - drag.wy);
   }
 }
 
@@ -1295,7 +1359,7 @@ function closeRoom() {
   roomDraft = null;
   if (pts.length < 3) { updateHint(); return; }
   pushUndo();
-  const r = { id: uid('r'), name: 'Room ' + (prop.rooms.length + 1), pts, material: 'mat-oak' };
+  const r = { id: uid('r'), level: lvl().id, name: 'Room ' + (prop.rooms.length + 1), pts, material: 'mat-oak' };
   prop.rooms.push(r);
   selection = { kind: 'room', id: r.id };
   touch(); renderInspector(); updateHint();
@@ -1329,6 +1393,7 @@ function onKeyDown(e) {
   const keys = { v: 'select', w: 'wall', d: 'door', n: 'window', r: 'room', c: 'calibrate' };
   if (keys[e.key.toLowerCase()] && !e.metaKey && !e.ctrlKey) { setTool(keys[e.key.toLowerCase()]); return; }
   if (e.key === 'f') { fitView(); return; }
+  if (e.key === '[' || e.key === ']') { stepLevel(e.key === ']' ? 1 : -1); return; }
   if (e.key === 'Escape') {
     if (drawing) drawing = null;
     else if (roomDraft) roomDraft = null;
@@ -1362,9 +1427,39 @@ function updateHint() {
     door: 'Click on a wall to place a door.',
     window: 'Click on a wall to place a window.',
     room: roomDraft ? 'Click corners; click the first point or double-click to close the room.' : 'Click to outline a room polygon (used for floor area, materials and 3D floors).',
-    calibrate: (!prop || !prop.plan) ? 'Upload a plan image first (UNDERLAY, left panel).' : 'Click two points a known distance apart on the plan image, then enter the real distance.',
+    calibrate: (!prop || !curPlan()) ? 'Upload a plan image first (UNDERLAY, left panel).' : 'Click two points a known distance apart on the plan image, then enter the real distance.',
   };
   setHint(hints[tool] || '');
+}
+
+// ---------- levels ----------
+function updateLevelBadge() {
+  if (!levelEl || !prop) return;
+  levelEl.textContent = String(lvl().name || 'Level').toUpperCase();
+}
+// Make another storey the one on the canvas: drafts, selection and calibration belong to the
+// level they started on and are dropped; the tool stays.
+function switchLevel(id) {
+  if (!prop || id === lvl().id) return;
+  setActiveLevel(prop, id);
+  selection = null; hover = null; drawing = null; roomDraft = null; calib = null;
+  resolveLevelView();
+  touch(); renderToolCol(); renderInspector(); updateLevelBadge(); updateHint(); updateCursor(); invalidate();
+}
+function stepLevel(dir) {
+  const levels = prop.levels;
+  const i = levels.findIndex(l => l.id === lvl().id);
+  const next = levels[i + dir];
+  if (next) switchLevel(next.id);
+}
+// A new storey goes on top of the stack, one slab thickness above the current top, with the
+// top level's height, and becomes the one being edited.
+function addLevelUI() {
+  const top = prop.levels[prop.levels.length - 1];
+  const name = prompt('Name for the new level', 'Level ' + (prop.levels.length + 1));
+  if (name == null) return;
+  const l = addLevel(prop, { name: name.trim() || 'Level ' + (prop.levels.length + 1), elevation: top.elevation + levelHeight(prop, top.id) + 0.3, height: levelHeight(prop, top.id) });
+  switchLevel(l.id);
 }
 
 function toolBtn(attrs, ic, name, key, active) {
@@ -1378,9 +1473,18 @@ function renderToolCol() {
     ['window', 'WINDOW', 'N', 'window'], ['room', 'ROOM', 'R', 'room'], ['calibrate', 'CALIBRATE', 'C', 'calibrate'],
   ];
   const tc = el.querySelector('.tool-col');
+  const cur = lvl().id;
+  // One button per storey (the key badge is its floor elevation), lit for the one on the canvas.
+  const levelRows = prop.levels.map(l =>
+    `<button class="tool-btn ${l.id === cur ? 'active' : ''}" data-level="${escapeHtml(l.id)}" title="${escapeHtml(l.name)} (floor at ${escapeHtml(fmtLen(l.elevation))}, [ and ] step levels)">` +
+    `${icon('layers')}<span class="tb-text">${escapeHtml(String(l.name).toUpperCase())}</span><kbd class="key">${escapeHtml(fmtLen(l.elevation, { short: true }))}</kbd></button>`).join('');
   tc.innerHTML = `
     <div class="tool-head">Tools</div>
     ${tools.map(([id, name, key, ic]) => toolBtn(`data-tool="${id}"`, ic, name, key, tool === id)).join('')}
+    <div class="tool-sep"></div>
+    <div class="tool-head">Level</div>
+    ${levelRows}
+    ${toolBtn('data-act="add-level"', 'plus', '+ LEVEL', '', false)}
     <div class="tool-sep"></div>
     <div class="tool-head">Wall preset</div>
     <div class="seg fill" style="margin:0 4px">
@@ -1400,6 +1504,8 @@ function renderToolCol() {
     ${toolBtn('data-act="redo"', 'redo', 'REDO', '⇧' + MOD + 'Z', false)}
   `;
   tc.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => setTool(b.dataset.tool));
+  tc.querySelectorAll('[data-level]').forEach(b => b.onclick = () => switchLevel(b.dataset.level));
+  tc.querySelector('[data-act=add-level]').onclick = addLevelUI;
   tc.querySelectorAll('[data-preset]').forEach(b => b.onclick = () => { wallPreset = b.dataset.preset; renderToolCol(); });
   const file = tc.querySelector('input[type=file]');
   tc.querySelector('[data-act=upload]').onclick = () => file.click();
@@ -1449,6 +1555,80 @@ function lenField(label, value, key, placeholder) {
 
 function head(ic, text) { return `<h3>${icon(ic)}${text}</h3>`; }
 
+// Where the property came from and what the scan can still do for the plan: a mesh scan
+// can (re)propose the whole plan; a property made from a link that the browser could not
+// fetch takes the downloaded file here.
+function meshScan() { return (prop.scans || []).find(s => s.kind === 'mesh') || null; }
+function sourceCardHtml() {
+  const src = prop.source;
+  const scan = meshScan();
+  if (!src && !scan) return '';
+  const label = src && src.kind === 'polycam' ? 'FROM POLYCAM' : 'SCAN';
+  return `<div class="src-card">
+    <span class="np-kicker">${label}</span>
+    ${src && src.url ? `<a href="${escapeHtml(src.url)}" target="_blank" rel="noopener" title="${escapeHtml(src.url)}">${escapeHtml(src.title || src.url.replace(/^https?:\/\//, ''))}</a>` : ''}
+    ${scan ? `<button class="btn" data-src-plan title="Square the scan up and propose walls, rooms, doors, windows and the underlay again">${icon('scan')}PROPOSE PLAN FROM SCAN</button>`
+           : `<button class="btn primary" data-src-attach title="Attach the GLB/OBJ/PLY you downloaded from Polycam; the plan is proposed from it">${icon('upload')}ATTACH SCAN FILE</button><input type="file" class="hidden-file" data-src-file accept="${SCAN_ACCEPT}">`}
+    <div class="empty" data-src-status></div>
+  </div>`;
+}
+let sourceBusy = false;
+function bindSourceCard(insp) {
+  const status = insp.querySelector('[data-src-status]');
+  const say = (m, busy) => { if (status) { status.textContent = m || ''; status.style.color = busy ? 'var(--accent)' : ''; } };
+  const viewHooks = { progress: (l, f) => say(l ? l + (f != null ? ' ' + Math.round(f * 100) + '%' : '') : '', true), toast: (m) => say(m, false) };
+  const afterPlan = (result, applied) => {
+    selection = null; hover = null; calib = null;
+    // The proposal may have replaced the levels and the active level: resolve the level and
+    // its view the same way a level switch does, then frame what it drew.
+    resolveLevelView();
+    vs.planSrc = planKey(prop);
+    updateLevelBadge();
+    fitView();
+    touch(); renderToolCol(); renderInspector(); updateHint(); invalidate();
+    // renderInspector() rebuilt the card: report on the fresh status line.
+    const s = inspEl && inspEl.querySelector('[data-src-status]');
+    if (s) s.textContent = 'Proposed: ' + proposalSummary(result, applied) + '.';
+  };
+  const planBtn = insp.querySelector('[data-src-plan]');
+  if (planBtn) planBtn.onclick = async () => {
+    if (sourceBusy) return;
+    const scan = meshScan();
+    if (!scan) return;
+    if ((prop.walls.length || prop.rooms.length) && !confirm('Replace the ' + prop.walls.length + ' traced wall(s) and ' + prop.rooms.length + ' room(s) with a plan proposed from "' + scan.name + '"? Undo brings the traced plan back.')) return;
+    sourceBusy = true;
+    try {
+      const rec = await getFile(scan.id);
+      if (!rec || !rec.buffer) throw new Error('the scan bytes are not in this browser (re-import the file)');
+      pushUndo();
+      const { result, applied } = await planFromScanBytes(prop, scan, rec.buffer, viewHooks);
+      if (applied && !ws.data.projects.some(p => p.propertyId === prop.id && /scope from scan/i.test(p.name))) {
+        const project = seedProject(prop, applied, prop.name + ': scope from scan');
+        if (project) ws.data.projects.push(project);
+      }
+      afterPlan(result, applied);
+    } catch (e) { console.error(e); say('Could not propose a plan: ' + String(e && e.message || e), false); }
+    finally { sourceBusy = false; }
+  };
+  const attach = insp.querySelector('[data-src-attach]');
+  const file = insp.querySelector('[data-src-file]');
+  if (attach && file) {
+    attach.onclick = () => file.click();
+    file.onchange = async () => {
+      const f = file.files[0]; file.value = '';
+      if (!f || sourceBusy) return;
+      sourceBusy = true;
+      try {
+        pushUndo();
+        const out = await attachScanFileToProperty(prop, f, viewHooks);
+        if (!out) throw new Error('not a scan tiksi can read');
+        afterPlan(out.result, out.applied);
+      } catch (e) { console.error(e); say('Could not use that file: ' + String(e && e.message || e), false); }
+      finally { sourceBusy = false; }
+    };
+  }
+}
+
 function renderInspector() {
   if (!inspEl) return;
   const insp = inspEl;
@@ -1465,7 +1645,7 @@ function renderInspector() {
     // would otherwise move focus straight back to <body> (the canvas is not focusable).
     setTimeout(() => { if (input.isConnected) input.focus(); }, 0);
     const apply = () => {
-      const pl = prop.plan;
+      const pl = curPlan();
       if (!pl) { calib = null; renderInspector(); return; }   // underlay removed while the form was open
       const real = parseLen(input.value);
       if (isNaN(real) || real <= 0) { alert('Could not parse that distance. Try 12\'6", 150", or 3.8m.'); return; }
@@ -1485,25 +1665,63 @@ function renderInspector() {
   }
 
   if (!selection) {
-    const totalWall = prop.walls.reduce((n, w) => n + Math.hypot(w.bx - w.ax, w.by - w.ay), 0);
-    const floorArea = prop.rooms.reduce((n, r) => n + polyArea(r.pts), 0);
+    const L = lvl();
+    const walls = curWalls(), rooms = curRooms(), openings = curOpenings();
+    const totalWall = walls.reduce((n, w) => n + Math.hypot(w.bx - w.ax, w.by - w.ay), 0);
+    const floorArea = rooms.reduce((n, r) => n + polyArea(r.pts), 0);
+    const propertyArea = prop.rooms.reduce((n, r) => n + polyArea(r.pts), 0);
+    // DELETE LEVEL only when it would succeed; the reason sits on the disabled button.
+    const lastLevel = prop.levels.length <= 1;
+    const held = walls.length || rooms.length;
+    const delWhy = lastLevel ? 'A property keeps at least one level' : held ? 'Delete its walls and rooms first' : '';
     insp.innerHTML = `${head('home', 'PROPERTY')}
       <div class="field"><label>Name</label><input type="text" data-prop-name value="${escapeHtml(prop.name)}"></div>
-      ${lenField('Default wall height', prop.wallHeight, 'wallHeight')}
+      ${head('layers', 'LEVEL')}
+      <div class="field"><label>Name</label><input type="text" data-lvl-name value="${escapeHtml(L.name)}"></div>
+      <div class="field-row">
+        ${lenField('Elevation', L.elevation, 'elev')}
+        ${lenField('Height', levelHeight(prop, L.id), 'lvlHeight')}
+      </div>
+      <button class="btn danger" data-del-level ${delWhy ? 'disabled' : ''} title="${escapeHtml(delWhy || 'Remove this empty level')}">${icon('trash')}DELETE LEVEL</button>
+      ${delWhy ? `<div class="empty" style="margin-top:4px">${escapeHtml(delWhy)}.</div>` : ''}
       <div class="tool-sep"></div>
-      <div class="stat-line"><span>Walls</span><b>${prop.walls.length}</b></div>
-      <div class="stat-line"><span>Openings</span><b>${prop.openings.length}</b></div>
-      <div class="stat-line"><span>Rooms</span><b>${prop.rooms.length}</b></div>
+      <div class="stat-line"><span>Walls</span><b>${walls.length}</b></div>
+      <div class="stat-line"><span>Openings</span><b>${openings.length}</b></div>
+      <div class="stat-line"><span>Rooms</span><b>${rooms.length}</b></div>
       <div class="stat-line"><span>Total wall run</span><b>${fmtLen(totalWall)}</b></div>
       <div class="stat-line"><span>Floor area</span><b>${fmtArea(floorArea)}</b></div>
+      <div class="stat-line"><span>Property total</span><b>${fmtArea(propertyArea)}</b></div>
+      ${sourceCardHtml()}
       <div class="empty" style="margin-top:14px">Select an element to edit it, or use the tools to draw.<br><br>
-        <span class="kbd-hint"><kbd>W</kbd> wall</span> <span class="kbd-hint"><kbd>D</kbd> door</span> <span class="kbd-hint"><kbd>N</kbd> window</span> <span class="kbd-hint"><kbd>R</kbd> room</span></div>`;
+        <span class="kbd-hint"><kbd>W</kbd> wall</span> <span class="kbd-hint"><kbd>D</kbd> door</span> <span class="kbd-hint"><kbd>N</kbd> window</span> <span class="kbd-hint"><kbd>R</kbd> room</span> <span class="kbd-hint"><kbd>[</kbd> <kbd>]</kbd> level</span></div>`;
     insp.querySelector('[data-prop-name]').onchange = e => { prop.name = e.target.value; touch(); };
-    insp.querySelector('[data-len=wallHeight]').onchange = e => {
+    insp.querySelector('[data-lvl-name]').onchange = e => {
+      L.name = e.target.value.trim() || L.name;
+      e.target.value = L.name;
+      touch(); renderToolCol(); updateLevelBadge();
+    };
+    insp.querySelector('[data-len=elev]').onchange = e => {
       const v = parseLen(e.target.value);
-      if (!isNaN(v) && v > 0.5) { prop.wallHeight = v; touch(); }
+      // Any finite elevation is fair (a basement sits below zero); the stack re-sorts around it.
+      if (!isNaN(v)) { L.elevation = Math.round(v * 1000) / 1000; sortLevels(prop); touch(); renderToolCol(); }
       renderInspector();
     };
+    insp.querySelector('[data-len=lvlHeight]').onchange = e => {
+      const v = parseLen(e.target.value);
+      if (!isNaN(v) && v > 0.5) { L.height = v; touch(); }
+      renderInspector();
+    };
+    insp.querySelector('[data-del-level]').onclick = () => {
+      if (delWhy) return;
+      if (!confirm('Delete the level "' + L.name + '"?')) return;
+      pushUndo();
+      if (deleteLevel(prop, L.id)) {
+        selection = null; hover = null; calib = null;
+        resolveLevelView();
+        touch(); renderToolCol(); renderInspector(); updateLevelBadge(); updateHint(); invalidate();
+      }
+    };
+    bindSourceCard(insp);
     return;
   }
 
@@ -1511,16 +1729,18 @@ function renderInspector() {
     const w = prop.walls.find(w => w.id === selection.id);
     if (!w) { selection = null; return renderInspector(); }
     const L = Math.hypot(w.bx - w.ax, w.by - w.ay);
+    const wl = levelOfWall(prop, w);
     insp.innerHTML = `${head('wall', 'WALL')}
       ${lenField('Length', L, 'len')}
       <div class="field-row">
         ${lenField('Thickness', w.thickness, 'th')}
-        ${lenField('Height', w.height, 'h', fmtLen(prop.wallHeight) + ' (default)')}
+        ${lenField('Height', w.height, 'h', fmtLen(levelHeight(prop, wl.id)) + ' (level)')}
       </div>
       <div class="field"><label>Material</label>${materialSelectHtml('wall', w.material, 'data-mat')}</div>
       <div class="field"><label>Interior face material</label>${materialSelectHtml('wall', w.materialIn, 'data-matin').replace('(none)', 'Automatic')}</div>
       ${scopeAssignHtml(w.id)}
-      <div class="stat-line"><span>Face area</span><b>${fmtArea(L * (w.height || prop.wallHeight))}</b></div>
+      <div class="stat-line"><span>Level</span><b>${escapeHtml(wl.name)}</b></div>
+      <div class="stat-line"><span>Face area</span><b>${fmtArea(L * wallHeightOf(prop, w))}</b></div>
       <div class="stat-line"><span>Openings</span><b>${prop.openings.filter(o => o.wallId === w.id).length}</b></div>
       <button class="btn danger" data-del>${icon('trash')}DELETE WALL</button>`;
     insp.querySelector('[data-len=len]').onchange = e => {
@@ -1608,9 +1828,10 @@ function renderInspector() {
   }
 
   if (selection.kind === 'underlay') {
-    const pl = prop.plan;
+    const pl = curPlan();
     if (!pl) { selection = null; return renderInspector(); }
     insp.innerHTML = `${head('image', 'PLAN UNDERLAY')}
+      <div class="stat-line"><span>Level</span><b>${escapeHtml(lvl().name)}</b></div>
       <div class="field"><label>Opacity</label>
         <input type="range" min="0.1" max="1" step="0.05" value="${pl.opacity}" data-op></div>
       <div class="stat-line"><span>Image</span><b>${pl.imgW} x ${pl.imgH} px</b></div>
@@ -1634,11 +1855,13 @@ export function mount(root) {
       Create one from the PROPERTY selector in the top bar.</div></div>`;
     return;
   }
+  ensureLevels(prop);
   root.innerHTML = `
     <div class="editor-layout">
       <div class="tool-col"></div>
       <div class="canvas-wrap plan-canvas">
         <canvas></canvas>
+        <div class="canvas-level"></div>
         <div class="canvas-hint"></div>
         <div class="canvas-badge"></div>
       </div>
@@ -1650,14 +1873,16 @@ export function mount(root) {
   inspEl = root.querySelector('.inspector');
   hintEl = root.querySelector('.canvas-hint');
   badgeEl = root.querySelector('.canvas-badge');
+  levelEl = root.querySelector('.canvas-level');
   hatchCache.clear(); textWidthCache.clear(); vignetteKey = '';
   hist = historyFor(prop);
   dirty = true;
 
-  vs = viewByProp[prop.id];
+  vs = viewByProp[levelKey()];
   const planSrc = planKey(prop);
-  if (!vs) { vs = viewByProp[prop.id] = { zoom: 60, panX: 0, panY: 0, planSrc }; requestAnimationFrame(() => { if (wrapEl) fitView(); }); }
+  if (!vs) { vs = viewByProp[levelKey()] = { zoom: 60, panX: 0, panY: 0, planSrc }; requestAnimationFrame(() => { if (wrapEl) fitView(); }); }
   else if (vs.planSrc !== planSrc) { vs.planSrc = planSrc; requestAnimationFrame(() => { if (wrapEl) fitView(); }); }   // a new underlay arrived from PHOTOS
+  updateLevelBadge();
 
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointermove', onPointerMove);
@@ -1695,5 +1920,5 @@ export function unmount() {
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
   if (offChange) { offChange(); offChange = null; }
   drawing = null; roomDraft = null; drag = null; hover = null; hoverPt = null; hist = null;
-  el = null; canvas = null; ctx = null; wrapEl = null; inspEl = null; hintEl = null; badgeEl = null;
+  el = null; canvas = null; ctx = null; wrapEl = null; inspEl = null; hintEl = null; badgeEl = null; levelEl = null;
 }

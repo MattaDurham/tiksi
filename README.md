@@ -41,6 +41,18 @@ Design side:
   meshes (OBJ, GLB/GLTF from phone lidar apps like Polycam or Scaniverse) and
   Gaussian splats (3DGS PLY, .splat, .spz, .ksplat), with colour-by-height,
   point budgets and x-ray mode for alignment
+- Start a property from a Polycam share link, in one step: paste a
+  `poly.cam/capture/...` link into NEW PROPERTY (or anywhere in the console, or
+  into the address bar as `#/import/<capture id>`) and tiksi fetches the mesh
+  straight from Polycam, keeps it as a reference scan, finds every floor level,
+  squares the scan up to its walls, renders a calibrated plan underlay from the
+  scan for each level, and proposes walls, rooms, doors and windows to correct
+  rather than draw, with a starter project carrying the takeoffs
+- Multi-level plans: a property has one or more levels, each with its own
+  elevation, wall height and underlay; the plan editor works one level at a time,
+  the 3D view stacks them with per-level visibility and the section cut
+- Scan to plan for any mesh scan already in a property: PROPOSE PLAN FROM SCAN in
+  the plan inspector or the 3D scan inspector runs the same pipeline
 
 Program side:
 
@@ -73,6 +85,59 @@ Or use the hosted copy at the GitHub Pages link above. First run loads a demo
 workspace (a generic colonial with a realistic renovation program) so every view
 has something to show; replace it with your own property whenever you like.
 
+## From a Polycam link
+
+Share a capture from Polycam (link sharing on), then hand the link to tiksi:
+
+- paste it into the NEW PROPERTY dialog (the `+` next to the property selector),
+  paste it anywhere in the console, or drop it on the window from another tab
+- or open `https://mattadurham.github.io/tiksi/#/import/<capture id>` directly
+  (`#/import?url=<the link>` works too)
+
+What happens next, in the dialog's step log: the raw mesh is fetched from the
+endpoint Polycam's own viewer uses (`/api/capture/<id>/artifacts/raw.gltf`, which
+Polycam's storage serves with open CORS, so no third party is involved), packed
+into one textured GLB and stored in this browser, along with the capture's cover
+image as a site photo. Then scan to plan runs in a Web Worker:
+
+1. Wall direction: an area-weighted histogram of horizontal face normals (mod 90
+   degrees) gives the dominant axis; the scan is rotated so walls run square.
+2. Levels: peaks in the height histogram of horizontal area are floors and
+   ceilings. With a consistently oriented mesh (every phone scan) floors face up
+   and ceilings down; otherwise surfaces pair by height alone. A bottom level under
+   2.25 m becomes "Basement", a top level without a flat ceiling "Attic".
+3. Column coverage: each level is rasterized at 2 cm; every cell carries a bitmask
+   of 10 cm height slices that contain vertical geometry. A wall fills nearly every
+   slice up to the ceiling, furniture a few, a doorway none.
+4. Walls: high-coverage cells that reach the ceiling, filtered to thin straight
+   runs (thick blobs are furniture), group into axis-aligned bands; collinear bands
+   merge across door-sized gaps, exterior walls also across window-sized gaps
+   (glass returns nothing to lidar); ends extend to the perpendicular wall they
+   meet.
+5. Openings: along each wall, an empty column with floor visible under it is a
+   door; on an exterior wall an empty band with wall above it is a window.
+6. Rooms: the floor-or-ceiling footprint minus the walls, as connected components,
+   traced and simplified to rectilinear polygons snapped to the wall lines.
+
+Every level then gets a top-down orthographic render of the aligned scan, cut at
+1.3 m above its floor, as its plan underlay, calibrated by construction; a project
+is seeded with flooring, paint and opening takeoffs linked to the elements (prices
+blank). Polycam's own viewer for the capture is embedded in the dialog while this
+runs. Everything proposed is ordinary plan data afterwards: drag, retype, delete,
+undo. Expect to fix a few things by hand: walls behind tall furniture, glass
+walls and diagonal walls (only the two main axes are traced) are the usual gaps,
+and the underlay makes those edits a matter of dragging a line over a photo.
+
+If the direct endpoint has nothing (a capture that is not shared, or one without a
+mesh), the dialog falls back to reading the share page for a model file; browsers
+refuse to read another site's page unless that site allows it (CORS), so tiksi can
+then ask a public relay for the public link (the relay sees the link and returns
+the bytes; nothing from your workspace is sent). That fallback is on by default and
+can be turned off or pointed at a relay of your own in the dialog. When nothing
+gets through, the property still exists with its link and the embedded viewer, and
+the dialog (and the plan inspector) take the file you download from Polycam
+yourself: Download, GLB, drop it on the box. The same pipeline runs from there.
+
 ## Where your data lives
 
 Entirely in your browser. The workspace autosaves to localStorage; scan files and
@@ -102,12 +167,28 @@ products, photos and schedules can reference them, the way a Revit element
 carries its type, materials and quantities. IFC-class interoperability is on the
 roadmap, not faked in v1.
 
+## Testing
+
+There is no build, and the app has no test framework of its own. The scan-to-plan
+core has a dependency-free regression test on a synthetic two-storey house, and
+the share-link flow has an end-to-end check that runs the real page in headless
+Chromium against a mock Polycam share page (direct, relayed, blocked-then-dropped,
+and deep-linked), with a synthetic two-room lidar-style capture as the fixture:
+
+```
+node test/scan2plan.test.mjs            # the core: levels, walls, rooms, openings
+node tools/fixture-room.mjs             # writes tools/fixtures/room.glb
+node tools/e2e-polycam.mjs              # needs Playwright with Chromium
+node tools/debug-scan2plan.mjs my.glb   # prints the proposal for any mesh file, in plain Node
+```
+
 ## Roadmap
 
 - IFC import/export (via web-ifc) so models round-trip with Revit and friends
-- PDF floorplan import (pdf.js) and multi-level plans
+- PDF floorplan import (pdf.js)
 - Automatic wall vectorization from floorplan images
-- E57 lidar and scan-to-plan assisted tracing
+- E57 lidar; scan-to-plan for point clouds and splats (meshes are done), walls off
+  the Manhattan grid, stairs
 - Roofs, stairs, sections and elevations
 - Assisted product research (agentic lookup into the registry)
 - Cost database with per-assembly unit pricing
