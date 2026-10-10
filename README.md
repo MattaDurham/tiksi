@@ -120,6 +120,29 @@ workspace or expose its saved projects. Shared project storage would require a
 server API. The hosted GitHub Pages copy and the local copy also have separate
 browser storage; use project files or workspace bundles to transfer data.
 
+### Live material and fixture sourcing
+
+Live research needs the included local server and a current Codex CLI signed in
+on the server's host. Use `codex login`, then confirm `codex login status`
+succeeds. The research screen reports whether the local provider is ready.
+The static GitHub Pages app can display saved products but cannot launch agents.
+
+Select a material and click **SOURCE THIS MATERIAL**, select an element in the
+model, or use **RESEARCH ALTERNATIVES** on a product. Add a budget, price unit,
+region, finish, dimensions and required specifications to the brief. Choose a
+focused agent or **Deep specialist team**: three concurrent agents investigate
+specifications, suppliers and prices, and alternatives including sustainability
+and reviews. You can keep browsing while research runs, return for results, or
+cancel it. Up to two research jobs can run at once.
+
+Compare candidates and inspect their cited evidence, vendor offers, fit notes,
+conflicts and unknowns before saving them to Products and linking scope items.
+Evidence records when a source was retrieved and whether it was opened or only
+returned by search. Displayed prices require an opened vendor source with a
+matching currency and unit. Claims are extracted by agents, so confirm final
+fit and purchasing details with the source. Saving retains the research history
+in project files; it does not purchase anything.
+
 ## From a Polycam link
 
 Share a capture from Polycam (link sharing on), then hand the link to tiksi:
@@ -332,7 +355,6 @@ node tools/debug-scan2plan.mjs my.glb
 - E57 lidar; scan-to-plan for point clouds and splats (meshes are done), walls off
   the Manhattan grid, stairs
 - Roofs, stairs, sections and elevations
-- Assisted product research (agentic lookup into the registry)
 - Cost database with per-assembly unit pricing
 
 ## Built in public
