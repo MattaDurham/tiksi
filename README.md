@@ -2,7 +2,8 @@
 
 An open, local-first design console for renovation and construction programs.
 Floorplans to 3D models to materials, products, budgets, schedules and cut sheets,
-in one instrument, in the browser, with no build step and no backend.
+in one instrument, in the browser, with no frontend build step. An optional local
+server adds photo reconstruction and live material research.
 
 The name is Quechua. In the old chronicles the Andean creator god carries the
 honorific Apu Qun Tiksi Wiraqucha, and *tiksi* is the word in the middle:
@@ -37,10 +38,19 @@ Design side:
   floors and scope items; pin any photo on a surface in the 3D model; use an
   equirectangular panorama as the sky so light and reflections come from the
   actual site
-- Import scans as reference geometry: point clouds (PLY, PCD, XYZ, LAS),
-  meshes (OBJ, GLB/GLTF from phone lidar apps like Polycam or Scaniverse) and
+- Import scans as reference geometry: point clouds (PLY, PCD, XYZ, PTS, LAS),
+  meshes (OBJ, STL, GLB/GLTF from phone lidar apps like Polycam or Scaniverse) and
   Gaussian splats (3DGS PLY, .splat, .spz, .ksplat), with colour-by-height,
   point budgets and x-ray mode for alignment
+- Import complete OBJ/MTL/texture or glTF/buffer/texture ZIP bundles as portable
+  GLBs, preserving normal, roughness, ambient occlusion and emissive maps.
+  External dependencies must be bundled; compressed glTF extensions requiring
+  Draco, meshopt or Basis, and LAZ, E57, USDZ, FBX and DAE are unsupported.
+- Reconstruct a textured 3D object or outdoor scene from overlapping photographs
+  on a supported Mac using Apple Object Capture. Originals retain their exact
+  bytes. See [photo reconstruction setup and limits](RECONSTRUCTION.md).
+- Use Ultra rendering with sharper procedural materials and export independent
+  high-resolution PNGs up to the graphics hardware and memory limits.
 - Start a property from a Polycam share link, in one step: paste a
   `poly.cam/capture/...` link into NEW PROPERTY (or anywhere in the console, or
   into the address bar as `#/import/<capture id>`) and tiksi fetches the mesh
@@ -61,8 +71,9 @@ Program side:
 - Link scope items to model elements (the digital-twin thread: a wall knows which
   scope item rebuilds it, which products are specified for it, and which site
   photos document it)
-- Research products anywhere, then capture them in a registry with vendor link,
-  model number, price and specs
+- Select a material, model element or product to open live sourcing. Run a focused
+  web research agent or a specialist team, compare products, fit, suppliers,
+  pricing and evidence, and save selections with their original source history.
 - Generate printable cut sheets: per scope item (elements, takeoffs, materials,
   site photos, specified products, budget line) and per product
 - Run the current-budget report: select and deselect projects against a budget
@@ -72,7 +83,8 @@ Program side:
 
 ## Running it
 
-It is a static page. Any web server works:
+The design console works on a static server. Use the included local server for
+reconstruction and live research:
 
 ```
 git clone https://github.com/MattaDurham/tiksi
@@ -100,8 +112,9 @@ installation's paths, service label and restart instructions in the private
 
 With Tailscale connected on both devices and the Mac awake, open
 `http://<Mac-Tailscale-IP>:8642/` on your phone. Tailscale Serve can optionally
-provide an HTTPS URL once Serve/HTTPS is enabled for the tailnet. Mobile layout
-and touch improvements are still needed. Browser storage and selected project
+provide an HTTPS URL once Serve/HTTPS is enabled for the tailnet. The shell and
+forms adapt to narrow screens; detailed model editing still benefits from a
+desktop. Browser storage and selected project
 folders belong to each device: serving the app from the Mac does not sync its
 workspace or expose its saved projects. Shared project storage would require a
 server API. The hosted GitHub Pages copy and the local copy also have separate
@@ -116,9 +129,8 @@ Share a capture from Polycam (link sharing on), then hand the link to tiksi:
 - or open `https://mattadurham.github.io/tiksi/#/import/<capture id>` directly
   (`#/import?url=<the link>` works too)
 
-What happens next, in the dialog's step log: the raw mesh is fetched from the
-endpoint Polycam's own viewer uses (`/api/capture/<id>/artifacts/raw.gltf`, which
-Polycam's storage serves with open CORS, so no third party is involved), packed
+What happens next, in the dialog's step log: Tiksi tries the public edited,
+original and raw model artifacts, validates the downloaded model, packs it
 into one textured GLB and stored in this browser, along with the capture's cover
 image as a site photo. Then scan to plan runs in a Web Worker:
 
@@ -156,9 +168,12 @@ refuse to read another site's page unless that site allows it (CORS), so tiksi c
 then ask a public relay for the public link (the relay sees the link and returns
 the bytes; nothing from your workspace is sent). That fallback is on by default and
 can be turned off or pointed at a relay of your own in the dialog. When nothing
-gets through, the property still exists with its link and the embedded viewer, and
-the dialog (and the plan inspector) take the file you download from Polycam
-yourself: Download, GLB, drop it on the box. The same pipeline runs from there.
+gets through, no successful model import is claimed. The dialog explains access,
+missing-asset and format failures and accepts a model downloaded from Polycam:
+use a GLB or a complete GLTF/OBJ ZIP bundle. The same pipeline runs from there.
+A share link does not guarantee public artifact access. Polycam's authenticated
+API requires its own account entitlements; Tiksi does not silently reuse browser
+credentials.
 
 ## Saving, opening and sharing
 
@@ -188,11 +203,14 @@ back, from the same FILE menu.
 
 ## Where your data lives
 
-Entirely in your browser, plus the files you save. The workspace autosaves to
+The workspace lives in your browser, plus the files you save. It autosaves to
 localStorage; scan files, full-resolution photos, photo thumbnails and plan
 underlays go to IndexedDB, so the localStorage copy stays small. Nothing is
-uploaded anywhere. That is the entire privacy model: the code is public, your
-house is not.
+uploaded by ordinary editing. Photo reconstruction explicitly sends selected
+original photos to this Mac's local server and keeps private job files in ignored
+runtime storage. Live sourcing sends only the submitted brief and visible
+constraints to web research agents; saved evidence travels in project files.
+The code is public; projects, photos, scans and job state stay out of Git.
 
 ## How it is built
 
