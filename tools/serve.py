@@ -29,7 +29,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         # Tailscale IPs work when explicitly binding beyond loopback.
         try:
             host = urlsplit('//' + self.headers.get('Host', '')).hostname
-            if host in {'localhost', self.server.allowed_hostname}: return True
+            if host in {'localhost', self.server.allowed_hostname, *getattr(self.server, 'allowed_hosts', [])}: return True
             address = ipaddress.ip_address(host or '')
             return address.is_loopback or self.server.remote_access
         except ValueError: return False
@@ -38,8 +38,9 @@ class AppHandler(SimpleHTTPRequestHandler):
         if not self.valid_host():
             self.send_error(403, 'Host is not allowed')
             return True
-        service = getattr(self.server, 'reconstruction', None)
-        if service and service.dispatch(self): return True
+        for name in ('reconstruction', 'material_research'):
+            service = getattr(self.server, name, None)
+            if service and service.dispatch(self): return True
         return False
 
     def do_GET(self):
@@ -64,11 +65,12 @@ class AppHandler(SimpleHTTPRequestHandler):
         result = {key: metadata[key] for key in ('slug', 'branch', 'port', 'instanceId', 'head', 'live') if key in metadata}
         result.update({'pid': os.getpid(), 'port': self.server.server_port,
                        'live': metadata.get('live', self.server.server_port == 8642), 'activeJobs': 0})
-        service = getattr(self.server, 'reconstruction', None)
-        if service:
-            active = getattr(service, 'active_jobs', None)
-            # Optional adapter contract: active_jobs() is an integer count.
-            if callable(active): result['activeJobs'] = active()
+        for name in ('reconstruction', 'material_research'):
+            service = getattr(self.server, name, None)
+            if service:
+                active = getattr(service, 'active_jobs', None)
+                # Optional adapter contract: active_jobs() is an integer count.
+                if callable(active): result['activeJobs'] += active()
         return result
 
     def send_head(self):
@@ -120,16 +122,23 @@ def main():
     parser.add_argument('--port', type=int, default=8642)
     parser.add_argument('--instance-file', type=Path)
     parser.add_argument('--state-dir', type=Path, default=ROOT / '.tiksi-state')
+    parser.add_argument('--allowed-host', action='append', default=[], help='explicit trusted proxy hostname, e.g. a Tailscale Serve name')
     args = parser.parse_args()
     with AppServer((args.host, args.port), AppHandler) as server:
         server.instance_file = args.instance_file
         server.allowed_hostname = args.host
+        server.allowed_hosts = args.allowed_host
         server.remote_access = args.host not in {'127.0.0.1', 'localhost', '::1'}
         server.reconstruction = None
+        server.material_research = None
         if (ROOT / 'server/reconstruction.py').exists():
             sys.path.insert(0, str(ROOT))
             from server.reconstruction import ReconstructionService
             server.reconstruction = ReconstructionService(args.state_dir / 'reconstruction')
+        if (ROOT / 'server/material_research.py').exists():
+            sys.path.insert(0, str(ROOT))
+            from server.material_research import MaterialResearchService
+            server.material_research = MaterialResearchService(args.state_dir / 'material-research')
         def shutdown(signum, frame):
             threading.Thread(target=server.shutdown, daemon=True).start()
         signal.signal(signal.SIGTERM, shutdown)
@@ -137,6 +146,8 @@ def main():
         print(f'Tiksi listening on {args.host}:{server.server_port}', flush=True)
         try: server.serve_forever()
         finally:
-            if server.reconstruction: server.reconstruction.close()
+            for name in ('reconstruction', 'material_research'):
+                service = getattr(server, name, None)
+                if service: service.close()
 
 if __name__ == '__main__': main()
