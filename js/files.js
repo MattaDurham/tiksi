@@ -19,7 +19,8 @@ import {
 
 export const FSA = typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function';
 export const FSA_DIR = typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
-const PICKER_TYPES = [{ description: 'tiksi project', accept: { 'application/zip': ['.tiksi', '.zip'], 'application/json': ['.json'] } }];
+const PICKER_TYPES = [{ description: 'tiksi project', accept: { 'application/zip': ['.tiksi', '.zip'] } }];
+const OPEN_PICKER_TYPES = [{ description: 'tiksi project or workspace', accept: { 'application/zip': ['.tiksi', '.zip'], 'application/json': ['.json'] } }];
 const FOLDER_MAP_KEY = 'tiksi.folder.v1';
 const SYNC_DELAY_MS = 4000;
 
@@ -197,7 +198,7 @@ export async function openFromFile(file) {
 export async function openProjectPicker() {
   if (FSA) {
     let handles;
-    try { handles = await window.showOpenFilePicker({ multiple: true, types: PICKER_TYPES, id: 'tiksi-projects' }); }
+    try { handles = await window.showOpenFilePicker({ multiple: true, types: OPEN_PICKER_TYPES, id: 'tiksi-projects' }); }
     catch (e) { if (e && e.name === 'AbortError') return null; throw e; }
     const ids = [];
     for (const h of handles) {
@@ -206,7 +207,9 @@ export async function openProjectPicker() {
       if (got) {
         ids.push(...got);
         // Opening a project file makes it the Save target for that property.
-        if (got.length === 1 && (await ensurePermission(h, false))) {
+        // JSON is metadata, while SAVE produces a portable ZIP project. Never overwrite
+        // an opened JSON file with archive bytes under its original .json name.
+        if (got.length === 1 && !/\.json$/i.test(file.name) && (await ensurePermission(h, false))) {
           state.fileHandles.set(got[0], h);
           try { await putFile(handleKey(got[0]), null, { kind: 'handle', handle: h }); } catch (e) { /* session only */ }
         }
