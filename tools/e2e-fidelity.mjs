@@ -21,8 +21,67 @@ await new Promise(resolve => server.listen(0, 'localhost', resolve));
 const base = 'http://localhost:' + server.address().port;
 const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 const errors = [];
+async function bounded(promise, label, timeout = 90000) {
+  let timer;
+  try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(label + ' timed out after ' + timeout + 'ms')), timeout); })]); }
+  finally { clearTimeout(timer); }
+}
+async function captureFrame(page, name) {
+  // SwiftShader on small CI runners can keep Chromium's screenshot compositor waiting
+  // while the viewer submits more WebGL frames. Finish two real animation frames, drain
+  // GPU work, then hold only JS animation callbacks during capture. Exports remain live.
+  await bounded(page.evaluate(async () => {
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    window.fidelityFrames.pause();
+    const canvas = document.querySelector('.v-canvas');
+    const gl = canvas.getContext('webgl2');
+    gl.finish();
+  }), 'Preparing ' + name);
+  try { await page.screenshot({ path: resolve(output, name), timeout: 90000, animations: 'disabled' }); }
+  finally { await bounded(page.evaluate(() => window.fidelityFrames.resume()), 'Resuming animation'); }
+}
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, acceptDownloads: true });
+  await page.addInitScript(() => {
+    const request = window.requestAnimationFrame.bind(window);
+    const cancel = window.cancelAnimationFrame.bind(window);
+    const pending = new Map();
+    let serial = 0, paused = false;
+    const schedule = id => {
+      const entry = pending.get(id);
+      entry.nativeId = request(time => {
+        entry.nativeId = null;
+        if (paused || !pending.has(id)) return;
+        pending.delete(id);
+        entry.callback(time);
+      });
+    };
+    window.requestAnimationFrame = callback => {
+      const id = ++serial;
+      pending.set(id, { callback, nativeId: null });
+      if (!paused) schedule(id);
+      return id;
+    };
+    window.cancelAnimationFrame = id => {
+      const entry = pending.get(id);
+      if (entry?.nativeId != null) cancel(entry.nativeId);
+      pending.delete(id);
+    };
+    window.fidelityFrames = {
+      pause() {
+        paused = true;
+        for (const entry of pending.values()) {
+          if (entry.nativeId != null) cancel(entry.nativeId);
+          entry.nativeId = null;
+        }
+      },
+      resume() {
+        if (!paused) return;
+        paused = false;
+        for (const id of pending.keys()) schedule(id);
+      },
+    };
+  });
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
   // Integrated builds import research eagerly. Use the real route when present and register
@@ -39,7 +98,7 @@ try {
   await page.waitForSelector('.v-canvas');
   await page.evaluate(async () => { window.testTextures = await import('/js/textures.js'); });
   await page.waitForFunction(() => window.testTextures.pendingTextureJobs() === 0, null, { timeout: 90000 });
-  await page.screenshot({ path: resolve(output, 'high.png') });
+  await captureFrame(page, 'high.png');
   const initial = await page.locator('.v-canvas').evaluate(c => ({ width: c.width, height: c.height }));
   await page.click('.v-env-head');
   await page.selectOption('[data-env=quality]', 'ultra');
@@ -48,7 +107,7 @@ try {
   assert.ok(ultra.width > initial.width, 'Ultra increases drawing-buffer resolution at DPR 1');
   const stats = await page.evaluate(async () => (await import('/js/textures.js')).textureStats());
   assert.ok(stats.some(s => s.res === 2048 && s.status === 'ready'), 'Ultra produces 2K surface maps');
-  await page.screenshot({ path: resolve(output, 'ultra.png') });
+  await captureFrame(page, 'ultra.png');
   await page.click('[data-act=render]');
   await page.selectOption('[data-export-size]', '3840');
   const displayed = await page.locator('[data-export-dimensions]').innerText();
@@ -70,7 +129,7 @@ try {
   await page.click('[data-act=xray]');
   await page.selectOption('[data-env=quality]', 'low');
   await page.click('[data-act=top]');
-  await page.screenshot({ path: resolve(output, 'section-xray-low.png') });
+  await captureFrame(page, 'section-xray-low.png');
   await page.click('.v-env-head');
   // Pick a real floor through the viewer's raycaster; the join must carry the clicked element.
   for (const [x, y] of [[250, 350], [350, 400], [400, 450], [300, 500]]) {
