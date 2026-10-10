@@ -130,7 +130,8 @@ async function workspace() {
     return !!liveProperty && !!savedProperty
       && saved.settings.activePropertyId === current.settings.activePropertyId
       && savedProperty.source.status === liveProperty.source.status
-      && savedProperty.scans.length === liveProperty.scans.length;
+      && ['scans', 'walls', 'rooms', 'openings', 'levels'].every(key =>
+        (savedProperty[key] || []).length === (liveProperty[key] || []).length); 
   }, CAPTURE_ID, { timeout: 60000 });
   return page.evaluate(async () => {
     const data = JSON.parse(localStorage.getItem('tiksi.workspace.v1'));
