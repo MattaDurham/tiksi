@@ -118,7 +118,20 @@ async function freshApp() {
   await page.waitForSelector('#property-select option', { state: 'attached' });
 }
 async function workspace() {
-  await sleep(900);   // autosave debounce
+  // Observe the autosave result instead of assuming a fixed wall-clock delay.
+  // This must not call save(): a broken persistence path should fail the check.
+  await page.waitForFunction(async captureId => {
+    const store = await import('./js/store.js');
+    if (store.whenHydrated) await store.whenHydrated();
+    const current = store.ws.data;
+    const saved = JSON.parse(localStorage.getItem('tiksi.workspace.v1') || 'null');
+    const liveProperty = current.properties.find(p => p.source?.captureId === captureId);
+    const savedProperty = saved?.properties.find(p => p.source?.captureId === captureId);
+    return !!liveProperty && !!savedProperty
+      && saved.settings.activePropertyId === current.settings.activePropertyId
+      && savedProperty.source.status === liveProperty.source.status
+      && savedProperty.scans.length === liveProperty.scans.length;
+  }, CAPTURE_ID, { timeout: 60000 });
   return page.evaluate(async () => {
     const data = JSON.parse(localStorage.getItem('tiksi.workspace.v1'));
     const { getFile, planKey } = await import('./js/store.js');
