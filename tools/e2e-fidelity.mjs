@@ -21,67 +21,55 @@ await new Promise(resolve => server.listen(0, 'localhost', resolve));
 const base = 'http://localhost:' + server.address().port;
 const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 const errors = [];
+const captures = {};
 async function bounded(promise, label, timeout = 90000) {
   let timer;
   try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(label + ' timed out after ' + timeout + 'ms')), timeout); })]); }
   finally { clearTimeout(timer); }
 }
 async function captureFrame(page, name) {
-  // SwiftShader on small CI runners can keep Chromium's screenshot compositor waiting
-  // while the viewer submits more WebGL frames. Finish two real animation frames, drain
-  // GPU work, then hold only JS animation callbacks during capture. Exports remain live.
-  await bounded(page.evaluate(async () => {
-    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    window.fidelityFrames.pause();
-    const canvas = document.querySelector('.v-canvas');
-    const gl = canvas.getContext('webgl2');
-    gl.finish();
-  }), 'Preparing ' + name);
-  try { await page.screenshot({ path: resolve(output, name), timeout: 90000, animations: 'disabled' }); }
-  finally { await bounded(page.evaluate(() => window.fidelityFrames.resume()), 'Resuming animation'); }
+  // Read the actual viewer canvas during an animation frame, after the viewer has
+  // drawn and before Chromium clears its non-preserved WebGL drawing buffer. This
+  // uses the same synchronous canvas snapshot as PNG export, without waiting for
+  // the browser screenshot compositor (which stalls with Linux SwiftShader).
+  const capture = await bounded(page.evaluate(() => new Promise((resolve, reject) => {
+    // The viewer renders on demand. Applying the current exposure through its
+    // ordinary control requests fresh frames without changing the scene settings.
+    document.querySelector('[data-env=exposure]').dispatchEvent(new Event('input', { bubbles: true }));
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      try {
+        const source = document.querySelector('.v-canvas');
+        const canvas = document.createElement('canvas');
+        canvas.width = source.width; canvas.height = source.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(source, 0, 0);
+        const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        let samples = 0, opaque = 0, min = 255, max = 0;
+        const colors = new Set();
+        for (let i = 0; i < pixels.length; i += 4 * 37) {
+          samples++;
+          if (pixels[i + 3] === 255) opaque++;
+          min = Math.min(min, pixels[i], pixels[i + 1], pixels[i + 2]);
+          max = Math.max(max, pixels[i], pixels[i + 1], pixels[i + 2]);
+          colors.add((pixels[i] << 16) | (pixels[i + 1] << 8) | pixels[i + 2]);
+        }
+        resolve({ data: canvas.toDataURL('image/png').split(',')[1], width: canvas.width,
+          height: canvas.height, samples, opaque, min, max, colors: colors.size });
+      } catch (error) { reject(error); }
+    }));
+  })), 'Capturing ' + name);
+  assert.ok(capture.opaque > capture.samples * 0.95, name + ' has a completed opaque frame');
+  assert.ok(capture.max - capture.min > 50 && capture.colors > 32, name + ' contains rendered surface detail');
+  const { data, ...metrics } = capture;
+  const png = Buffer.from(data, 'base64');
+  assert.equal(png.readUInt32BE(16), capture.width);
+  assert.equal(png.readUInt32BE(20), capture.height);
+  await writeFile(resolve(output, name), png);
+  captures[name] = { ...metrics, bytes: png.length };
+  console.log('Captured rendered canvas:', name, capture.width + 'x' + capture.height);
 }
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, acceptDownloads: true });
-  await page.addInitScript(() => {
-    const request = window.requestAnimationFrame.bind(window);
-    const cancel = window.cancelAnimationFrame.bind(window);
-    const pending = new Map();
-    let serial = 0, paused = false;
-    const schedule = id => {
-      const entry = pending.get(id);
-      entry.nativeId = request(time => {
-        entry.nativeId = null;
-        if (paused || !pending.has(id)) return;
-        pending.delete(id);
-        entry.callback(time);
-      });
-    };
-    window.requestAnimationFrame = callback => {
-      const id = ++serial;
-      pending.set(id, { callback, nativeId: null });
-      if (!paused) schedule(id);
-      return id;
-    };
-    window.cancelAnimationFrame = id => {
-      const entry = pending.get(id);
-      if (entry?.nativeId != null) cancel(entry.nativeId);
-      pending.delete(id);
-    };
-    window.fidelityFrames = {
-      pause() {
-        paused = true;
-        for (const entry of pending.values()) {
-          if (entry.nativeId != null) cancel(entry.nativeId);
-          entry.nativeId = null;
-        }
-      },
-      resume() {
-        if (!paused) return;
-        paused = false;
-        for (const id of pending.keys()) schedule(id);
-      },
-    };
-  });
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
   // Integrated builds import research eagerly. Use the real route when present and register
@@ -180,6 +168,6 @@ try {
   assert.deepEqual(colors.byte, [128, 128, 128]);
   assert.ok(Math.abs(colors.pixel[0] - 128) <= 2, 'Point shader preserves sRGB gray in orthographic view');
   assert.deepEqual(errors, [], 'No browser or shader errors');
-  await writeFile(resolve(output, 'evidence.json'), JSON.stringify({ initial, ultra, export: { width, height, bytes: png.length }, colors, research, stats, errors }, null, 2));
+  await writeFile(resolve(output, 'evidence.json'), JSON.stringify({ initial, ultra, captures, export: { width, height, bytes: png.length }, colors, research, stats, errors }, null, 2));
   console.log('Render browser checks passed: quality, 4K PNG, restore, section, x-ray, orthographic point colors.');
 } finally { await browser.close(); await new Promise(resolve => server.close(resolve)); }
