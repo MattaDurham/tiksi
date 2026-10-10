@@ -77,13 +77,35 @@ It is a static page. Any web server works:
 ```
 git clone https://github.com/MattaDurham/tiksi
 cd tiksi
-python3 -m http.server 8642
+python3 tools/serve.py --port 8642
 # open http://localhost:8642
 ```
 
 Or use the hosted copy at the GitHub Pages link above. First run loads a demo
 workspace (a generic colonial with a realistic renovation program) so every view
 has something to show; replace it with your own property whenever you like.
+
+### Local Mac app and Tailscale
+
+For the local app, run `python3 tools/serve.py --host 0.0.0.0 --port 8642` and
+open `http://localhost:8642/` in Chrome. Install Tiksi using the install button
+in the address bar to give it its own app window and Dock launcher. This server
+serves only the app assets; repository files, saved data, and directory listings
+are excluded. Binding to `0.0.0.0` makes the app reachable on the local network
+and through the Mac's Tailscale address.
+
+For automatic startup, use your operating system's service manager. Keep the
+installation's paths, service label and restart instructions in the private
+`AGENTS.local.md` file, rather than in public source code.
+
+With Tailscale connected on both devices and the Mac awake, open
+`http://<Mac-Tailscale-IP>:8642/` on your phone. Tailscale Serve can optionally
+provide an HTTPS URL once Serve/HTTPS is enabled for the tailnet. Mobile layout
+and touch improvements are still needed. Browser storage and selected project
+folders belong to each device: serving the app from the Mac does not sync its
+workspace or expose its saved projects. Shared project storage would require a
+server API. The hosted GitHub Pages copy and the local copy also have separate
+browser storage; use project files or workspace bundles to transfer data.
 
 ## From a Polycam link
 
@@ -192,20 +214,93 @@ products, photos and schedules can reference them, the way a Revit element
 carries its type, materials and quantities. IFC-class interoperability is on the
 roadmap, not faked in v1.
 
+## Development workflow
+
+Tiksi follows the same branch-first review workflow as Vira: one feature branch,
+one isolated worktree, one independently served preview, and one draft pull
+request. The primary checkout and its port 8642 app stay available during work.
+Use the portable shell entry point from any worktree (Python 3.10+ and Node 22+):
+
+```sh
+python3 scripts/agents-local.py seed   # private operating rules, preserved on repeat
+sh scripts/install-hooks.sh           # staged private-file and credential guard
+scripts/branch.sh start better-imports
+cd .worktrees/better-imports           # use the absolute path printed by start
+npm ci
+scripts/branch.sh serve better-imports --fresh --local
+scripts/branch.sh list
+```
+
+Branches use `codex/<slug>`. New worktrees live under the ignored `.worktrees/`
+directory; `adopt [slug]` provisions a worktree created elsewhere. Every command
+finds the actual worktree through Git. `serve` prints a `localhost` URL on an
+available port from 8643 through 8699. Preview pages show their branch and commit.
+Existing previews are reused; `--fresh` stops only that verified branch preview
+and archives its previous server runtime before starting a new instance. Active
+reconstruction jobs block stop/fresh/discard. The live process is never stopped.
+
+Previews bind loopback by default; `--local` makes that intent explicit. An
+explicit `--host 0.0.0.0` exposes a preview on LAN/Tailscale interfaces for phone
+review. Each port has its own browser workspace: the live app's browser data is
+not copied. Import an owner-approved `.tiksi` project or workspace bundle through
+the preview's FILE menu for review with real projects. Preview runtime and logs,
+project files and personal operating rules remain ignored by Git. Discard archives
+private runtime under Git's private workflow directory before deleting the tree.
+
+After committing and verifying a branch:
+
+```sh
+scripts/preflight.sh
+scripts/branch.sh pr better-imports --title "Improve imports" --body-file /tmp/pr-body.txt
+# Draft by default. Watch all checks, fix failures and push updated commits.
+gh pr checks --watch
+```
+
+The owner chooses whether to merge, keep testing or discard. Only the owner's
+explicit merge instruction authorizes `pr <slug> --ready` followed by
+`merge <slug> --owner-approved`. Landing requires both trees clean, current local
+main included, an open ready PR at the exact local commit, successful Linux and
+macOS CI, and a local preflight. It merges and pushes main, then removes the spent
+worktree only when GitHub confirms Merged. It never restarts the live service.
+A failed push leaves the actual local merge visible for recovery. A PR whose head
+is in main is never closed. `discard <slug> --owner-approved` rejects dirty trees
+and preserves their files rather than offering a force-delete shortcut.
+
+Public instructions live in `AGENTS.md` and `AGENTS.local.example.md`; the
+owner's `AGENTS.local.md` is seeded once and never overwritten by template
+updates. `python3 scripts/agents-local.py diff` supports deliberate review.
+
 ## Testing
 
-There is no build, and the app has no test framework of its own. The scan-to-plan
-core has a dependency-free regression test on a synthetic two-storey house, and
-the share-link flow has an end-to-end check that runs the real page in headless
-Chromium against a mock Polycam share page (direct, relayed, blocked-then-dropped,
-and deep-linked), with a synthetic two-room lidar-style capture as the fixture:
+Install the pinned test dependencies and browser once. The app itself still has
+no build step or runtime npm dependencies:
 
+```sh
+npm ci
+npx playwright install chromium
+npm run check       # syntax and tracked private-state guard
+npm test            # Node regressions and isolated Python lifecycle/server tests
+npm run test:e2e    # every tools/e2e-*.mjs against temporary test ports
+npm run preflight  # all of the above
 ```
-node test/scan2plan.test.mjs            # the core: levels, walls, rooms, openings
-node test/project-files.test.mjs        # project files: slice one property, merge it back
-node tools/fixture-room.mjs             # writes tools/fixtures/room.glb
-node tools/e2e-polycam.mjs              # needs Playwright with Chromium
-node tools/debug-scan2plan.mjs my.glb   # prints the proposal for any mesh file, in plain Node
+
+Browser checks use synthetic scans and projects. The runner assigns temporary
+ports; tests never bind or stop the live app on 8642. CI runs preflight on macOS
+and Linux, installs headless Chromium, and retains screenshots on failure. The
+branch lifecycle tests build disposable repositories and verify dirty-tree,
+stale-PID, PR-head, CI, merged-PR and preview-service protections without touching
+the real main branch, live service or owner projects. `scripts/preflight.sh --list`
+names the enforced local checks. Local owner-specific identifiers can be listed
+in ignored `.tiksi-private-patterns`; the private guard reports only filenames,
+never the matching values.
+
+Additional focused tools remain available:
+
+```sh
+node test/scan2plan.test.mjs
+node test/project-files.test.mjs
+node tools/fixture-room.mjs
+node tools/debug-scan2plan.mjs my.glb
 ```
 
 ## Roadmap
@@ -221,8 +316,8 @@ node tools/debug-scan2plan.mjs my.glb   # prints the proposal for any mesh file,
 
 ## Built in public
 
-This tool is being built live, in the open, with Claude as the pair. The commit
-history is the build log. Issues and ideas are welcome.
+This tool is built in the open with reviewed branches and pull requests. The
+commit history is the build log. Issues and ideas are welcome.
 
 MIT licensed. Vendored three.js retains its own MIT license (THREE-LICENSE.txt),
 as does Spark (SPARK-LICENSE.txt).
