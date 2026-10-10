@@ -15,7 +15,7 @@ const html = `<!DOCTYPE html><html><head><meta name="viewport" content="width=de
 import {ws,emptyWorkspace} from '/js/store.js';
 import * as research from '/js/research.js'; import * as products from '/js/products.js';
 ws.data=emptyWorkspace(); ws.data.materials=[{id:'material-fixture',name:'Synthetic ceramic tile'}];
-ws.data.projects=[{id:'project-fixture',name:'Synthetic kitchen',propertyId:'property-fixture',items:[{id:'item-fixture',name:'Tile flooring',elementIds:['room-fixture']},{id:'item-other',name:'Other item',elementIds:[]}]}];
+ws.data.projects=[{id:'project-fixture',name:'Synthetic kitchen',propertyId:'property-fixture',items:[{id:'item-fixture',name:'Tile flooring',unit:'sf',elementIds:['room-fixture']},{id:'item-other',name:'Other item',unit:'ea',elementIds:[]}]}];
 window.research=research; window.workspace=ws;
 const root=document.querySelector('#test-root');
 window.addEventListener('hashchange',()=>{research.unmount();products.unmount();location.hash==='#/products'?products.mount(root):research.mount(root);});
@@ -94,10 +94,13 @@ try {
   assert.equal(saved.price, 8); assert.equal(saved.unit, 'sf'); assert.deepEqual(saved.itemIds, ['item-fixture']);
   assert.deepEqual(saved.materialIds, ['material-fixture']); assert.equal(saved.research.candidate.sourceEvidence[0].title, 'Synthetic manufacturer sheet');
   assert.equal(saved.research.request.constraints.region, 'Synthetic test region');
+  assert.ok(!saved.notes.includes('Confirm coverage'), 'compatible price and scope units have no mismatch warning');
+  await page.selectOption('#research-scope', ['item-other']);
   await page.click('[data-save-candidate="1"]');
   const unverified = await page.evaluate(() => workspace.data.products[0]);
   assert.equal(unverified.price, 0); assert.equal(unverified.url, ''); assert.equal(unverified.research.candidate.currency, 'EUR');
   assert.match(unverified.notes, /Not entered into the USD estimate/);
+  assert.match(unverified.notes, /Confirm coverage and conversion/);
   await page.evaluate(() => { location.hash = '#/products'; });
   await page.waitForSelector('[data-edit]'); await page.locator('[data-edit]').last().click();
   await page.locator('.prod-provenance summary').click();

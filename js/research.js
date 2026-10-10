@@ -232,6 +232,7 @@ function renderResults() {
 function productCard(p, i) {
   const evidence = array(p.sourceEvidence);
   if (ws.data.products.some(product => product.research?.jobId === job?.id && product.research?.candidateId === (p.id || String(i)))) saved.add(i);
+  const unitWarnings = scopeUnitWarnings(p, jobItemIds);
   return `<article class="card research-candidate"><div class="research-row"><h3>${esc(p.name || 'Unnamed candidate')}</h3><label class="research-pick"><input type="checkbox" data-pick="${i}" ${selected.has(i) ? 'checked' : ''}> Compare</label></div>
     <p class="faint">${esc([p.brand, p.model, p.category].filter(Boolean).join(' / '))}</p>
     <div class="research-row"><strong>${esc(money(p))}</strong>${externalLink(p.url, 'PRODUCT PAGE')}</div>
@@ -240,7 +241,7 @@ function productCard(p, i) {
     ${array(p.offers).length ? `<details><summary>Suppliers and offers (${p.offers.length})</summary>${p.offers.map(o => `<p>${externalLink(o.url, o.vendor)} / ${esc(money(o))} / ${esc(o.availability)}</p>`).join('')}</details>` : ''}
     ${array(p.sustainability).length ? `<details><summary>Sustainability evidence</summary>${p.sustainability.map(s => `<p>${esc(s.name)}: ${esc(s.value)} ${externalLink(s.sourceUrl, 'source')}</p>`).join('')}</details>` : ''}
     ${array(p.reviews).length ? `<details><summary>Reviews and limitations</summary>${p.reviews.map(r => `<p>${esc(r.summary)} ${externalLink(r.sourceUrl, 'source')}</p>`).join('')}</details>` : ''}
-    ${array(p.unknowns).length ? '<h4>Unverified / needs checking</h4>' + list(p.unknowns, 'research-unknowns') : ''}
+    ${array(p.unknowns).length || unitWarnings.length ? '<h4>Unverified / needs checking</h4>' + list([...array(p.unknowns), ...unitWarnings], 'research-unknowns') : ''}
     <details><summary>Source evidence (${evidence.length})</summary>${evidence.map(s => `<p>${externalLink(s.url, s.title)}<br>${esc(s.relevance)}${s.checkedAt ? `<br><small>Checked ${esc(s.checkedAt)}</small>` : ''}</p>`).join('')}</details>
     <button class="btn primary" data-save-candidate="${i}" ${saved.has(i) ? 'disabled' : ''}>${saved.has(i) ? 'SAVED TO PRODUCTS' : 'SAVE TO PRODUCTS'}</button>
   </article>`;
@@ -268,10 +269,17 @@ function saveCandidate(i) {
     id: uid('prod'), name: text(candidate.name) || 'Researched product', brand: text(candidate.brand), model: text(candidate.model), category: text(candidate.category) || 'other',
     url: safeResearchUrl(candidate.url), price, unit: text(candidate.unit) || 'ea', imageUrl: '', itemIds, materialIds,
     specs: array(candidate.specifications).map(s => `${text(s.name)}: ${text(s.value)}`).join('\n'),
-    notes: [...array(candidate.fitNotes), ...array(candidate.unknowns).map(u => 'Needs checking: ' + u), ...(candidate.price !== null && !price ? ['Source price: ' + money(candidate) + '. Not entered into the USD estimate.'] : [])].join('\n'),
+    notes: [...array(candidate.fitNotes), ...array(candidate.unknowns).map(u => 'Needs checking: ' + u), ...scopeUnitWarnings(candidate, itemIds), ...(candidate.price !== null && !price ? ['Source price: ' + money(candidate) + '. Not entered into the USD estimate.'] : [])].join('\n'),
     research: { jobId: job.id, candidateId: candidate.id || String(i), savedAt: new Date().toISOString(), researchedAt: job.updatedAt || job.createdAt, context: { ...jobContext }, request: job.request, candidate: JSON.parse(JSON.stringify(candidate)) },
   };
   ws.data.products.unshift(product); touch(); saved.add(i);
   notice = `Saved ${product.name} to Products${itemIds.length ? ' and linked it to ' + itemIds.length + ' scope item(s)' : ''}${materialIds.length ? ' and the selected material' : ''}. Source evidence and original pricing are preserved.`;
   renderResults();
+}
+
+function scopeUnitWarnings(candidate, itemIds) {
+  const canonical = unit => ({ 'sq ft': 'sf', sqft: 'sf', 'ft2': 'sf', 'ft²': 'sf', each: 'ea', 'linear ft': 'lf' })[text(unit).trim().toLowerCase()] || text(unit).trim().toLowerCase();
+  const unit = canonical(candidate.unit);
+  return allScopeItems().filter(({ item }) => itemIds.includes(item.id) && (!unit || canonical(item.unit) !== unit)).map(({ item }) =>
+    `Price unit ${candidate.unit || 'unverified'} differs from ${item.name}'s scope unit ${item.unit || 'unverified'}. Confirm coverage and conversion before estimating.`);
 }
