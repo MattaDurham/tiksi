@@ -17,7 +17,6 @@ import * as reconstruction from './reconstruction.js';
 import * as research from './research.js';
 import * as projects from './projects.js';
 import * as products from './products.js';
-import * as research from './research.js';
 import * as budget from './budget.js';
 import * as schedule from './schedule.js';
 import * as cutsheets from './cutsheets.js';
@@ -37,7 +36,6 @@ const VIEWS = {
   research,
   projects,
   products,
-  research,
   budget,
   schedule,
   sheets: cutsheets,
