@@ -34,9 +34,9 @@ const server = http.createServer(async (request, response) => {
   if (url.pathname.endsWith('/start') && request.method === 'POST') { job.state = 'running'; job.progress = .2; send(job); return; }
   if (url.pathname.endsWith('/cancel') && request.method === 'POST') { job.state = 'cancelled'; send(job); return; }
   if (url.pathname.startsWith('/api/')) { response.writeHead(404); response.end(); return; }
-  const file = resolve(project, '.' + decodeURIComponent(url.pathname));
-  if (!file.startsWith(project + '/') || !['.js','.css'].includes(extname(file))) { response.writeHead(404); response.end(); return; }
-  try { const bytes = await readFile(file); response.writeHead(200, { 'Content-Type': extname(file) === '.js' ? 'text/javascript' : 'text/css' }); response.end(bytes); }
+  const file = resolve(project, url.pathname === '/' ? 'index.html' : '.' + decodeURIComponent(url.pathname));
+  if (!file.startsWith(project + '/') || !['.js','.css','.html','.webmanifest'].includes(extname(file))) { response.writeHead(404); response.end(); return; }
+  try { const bytes = await readFile(file); response.writeHead(200, { 'Content-Type': { '.js': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.webmanifest': 'application/manifest+json' }[extname(file)] }); response.end(bytes); }
   catch (_) { response.writeHead(404); response.end(); }
 });
 await new Promise(resolve => server.listen(0, 'localhost', resolve));
@@ -101,6 +101,17 @@ try {
   await page.waitForFunction(()=>document.querySelector('.rc-job').textContent.includes('CANCELLED'));
   await page.setViewportSize({width:402,height:874});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+  await page.evaluate(()=>window.test.store.save());
+  await page.setViewportSize({width:1200,height:900});
+  await page.goto('http://localhost:' + server.address().port + '/#/photos');
+  await page.locator('.ph-head [data-act=reconstruct]').click();
+  await page.waitForFunction(()=>document.querySelector('.rc-engine')?.textContent.includes('ready'));
+  assert.match(page.url(), /#\/reconstruct$/);
+  assert.equal(await page.locator('#rail [data-view=reconstruct].active').count(),1);
+  await page.locator('#rail [data-view=photos]').click();
+  await page.waitForSelector('.ph-head');
+  await page.locator('#rail [data-view=reconstruct]').click();
+  await page.waitForSelector('.rc-start');
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({ ...result, uploads:uploads.length,mobileWidth:402,photoUses,panoramaSky:true,errors },null,2));
+  console.log(JSON.stringify({ ...result, uploads:uploads.length,mobileWidth:402,photoUses,panoramaSky:true,appRouting:true,errors },null,2));
 } finally { if(browser)await browser.close();await new Promise(resolve=>server.close(resolve)); }
