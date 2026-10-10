@@ -5,6 +5,8 @@
 
 import * as THREE from 'three';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import { prepareModelPackage } from './scanbundle.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { PCDLoader } from 'three/addons/loaders/PCDLoader.js';
@@ -15,7 +17,7 @@ import { ensureSpark, loadSplat, disposeSplat, splatBounds, splatDrawables, spla
 
 export { splatDrawables, splatBusy, releaseSplatRenderer };
 
-export const SCAN_ACCEPT = '.ply,.splat,.spz,.ksplat,.sog,.obj,.glb,.gltf,.pcd,.xyz,.txt,.las,.laz,.e57';
+export const SCAN_ACCEPT = '.ply,.splat,.spz,.ksplat,.sog,.obj,.glb,.gltf,.stl,.zip,.pcd,.xyz,.pts,.txt,.las';
 const DEFAULT_BUDGET = 2000000;
 const FLIP_X = new THREE.Quaternion(1, 0, 0, 0);     // 180 degrees about X: y-down captures become y-up
 const FLIP_M = new THREE.Matrix4().makeRotationX(Math.PI);
@@ -42,14 +44,23 @@ function hasXYZRow(buffer) {
 
 // Decide what a file is from its bytes, not only its extension.
 export function sniffKind(extension, buffer) {
+  if (!(buffer instanceof ArrayBuffer) || !buffer.byteLength) throw new Error('The file is empty');
+  if (buffer.byteLength > 600 * 1024 * 1024) throw new Error('Scan files must be smaller than 600 MB');
   if (['splat', 'spz', 'ksplat', 'sog'].includes(extension)) return 'splat';
-  if (['obj', 'glb', 'gltf'].includes(extension)) return 'mesh';
-  // A .las without the LASF signature can never display: refuse it here so no record is made.
+  if (['obj', 'stl'].includes(extension)) return 'mesh';
+  if (extension === 'glb' || extension === 'gltf') {
+    const gltf = inspectGltf(buffer, extension);
+    const external = [...(gltf.buffers || []), ...(gltf.images || [])].find(r => r.uri && !r.uri.startsWith('data:'));
+    if (external) throw new Error('Missing external glTF resources. Import the complete exported ZIP or a self-contained GLB.');
+    return 'mesh';
+  }
   if (extension === 'las') {
     if (!isLAS(buffer)) throw new Error('Not a LAS file (missing LASF signature)');
+    const h = lasHeader(buffer);
+    if (h.compressed) throw new Error('Compressed LAS/LAZ is not supported. Export uncompressed LAS or PLY.');
     return 'points';
   }
-  if (extension === 'xyz' || extension === 'txt') {
+  if (['xyz', 'pts', 'txt'].includes(extension)) {
     if (!hasXYZRow(buffer)) throw new Error('No x y z number columns found');
     return 'points';
   }
@@ -59,8 +70,30 @@ export function sniffKind(extension, buffer) {
     if (h.isGaussian) return 'splat';
     return h.hasFaces ? 'mesh' : 'points';
   }
-  if (isLAS(buffer)) return 'points';
-  return 'points';
+  throw new Error('Unsupported file type .' + extension + '. Import GLB, GLTF/OBJ ZIP, PLY, STL, LAS, PCD, XYZ, PTS or a supported splat.');
+}
+
+export function inspectGltf(buffer, format) {
+  let json;
+  if (format === 'glb') {
+    if (buffer.byteLength < 20) throw new Error('Truncated GLB header');
+    const dv = new DataView(buffer);
+    if (dv.getUint32(0, true) !== 0x46546c67 || dv.getUint32(4, true) !== 2) throw new Error('Not a GLB 2.0 file');
+    if (dv.getUint32(8, true) !== buffer.byteLength) throw new Error('GLB length does not match its header');
+    let offset = 12;
+    while (offset < buffer.byteLength) {
+      if (offset + 8 > buffer.byteLength) throw new Error('Truncated GLB chunk header');
+      const len = dv.getUint32(offset, true), type = dv.getUint32(offset + 4, true);
+      if (len % 4 || offset + 8 + len > buffer.byteLength) throw new Error('Truncated or unaligned GLB chunk');
+      if (offset === 12) { if (type !== 0x4e4f534a) throw new Error('GLB must begin with JSON'); json = new TextDecoder().decode(new Uint8Array(buffer, offset + 8, len)); }
+      offset += 8 + len;
+    }
+  } else json = new TextDecoder().decode(buffer);
+  let gltf; try { gltf = JSON.parse(json); } catch (e) { throw new Error('Invalid glTF JSON'); }
+  if (!gltf.asset || gltf.asset.version !== '2.0') throw new Error('Only glTF 2.0 is supported');
+  const unsupported = (gltf.extensionsRequired || []).filter(e => ['KHR_draco_mesh_compression', 'EXT_meshopt_compression', 'KHR_texture_basisu'].includes(e));
+  if (unsupported.length) throw new Error('This model requires ' + unsupported.join(', ') + '. Export an uncompressed GLTF/GLB with PNG or JPEG textures.');
+  return gltf;
 }
 
 // ---------- import ----------
@@ -84,18 +117,26 @@ export async function importScanFile(file, prop, hooks, extra) {
 // `extra` is merged into the record (a source link, for instance). Throws on a file the
 // sniffer refuses; returns null for a supported-but-not-yet type after a toast.
 export async function importScanBytes(buffer, name, prop, hooks, extra) {
-  const e = ext(name);
-  const say = (m, k) => hooks && hooks.toast && hooks.toast(m, k);
   const progress = (l, f) => hooks && hooks.progress && hooks.progress(l, f);
-  if (e === 'las' && isLAS(buffer) && lasHeader(buffer).compressed) { say('This LAS is LAZ-compressed inside; export it uncompressed.', 'warn'); progress(null); return null; }
-  let kind;
-  try { kind = sniffKind(e, buffer); }
-  catch (err) { progress(null); throw new Error(name + ': ' + errMsg(err)); }
+  const signal = hooks && hooks.signal;
+  const cancelled = () => { if (signal && signal.aborted) throw signal.reason || new Error('Import cancelled'); };
+  let e, kind, prepared;
+  try {
+    cancelled();
+    if (!(buffer instanceof ArrayBuffer) || !buffer.byteLength) throw new Error('The file is empty');
+    if (buffer.byteLength > 600 * 1024 * 1024) throw new Error('Scan files must be smaller than 600 MB');
+    prepared = await prepareModelPackage(buffer, name);
+    buffer = prepared.buffer; name = prepared.name; e = ext(name);
+    kind = sniffKind(e, buffer);
+    progress('Validating ' + name, 0.2);
+    await validateScan(buffer, e, kind, name, hooks);
+    cancelled();
+  } catch (err) { progress(null); throw new Error(name + ': ' + errMsg(err)); }
   const id = uid('scan');
   progress('Storing ' + name, 0.3);
   await putFile(id, buffer, { name, format: e, kind });
   const scan = Object.assign({
-    id, name, format: e, kind, pos: [0, 0, 0], rotY: 0, rot: [0, 0, 0], scale: 1, visible: true,
+    id, name, originalName: prepared.originalName || null, format: e, kind, pos: [0, 0, 0], rotY: 0, rot: [0, 0, 0], scale: 1, visible: true,
     pointSize: 0.02, pointColor: 'rgb', budget: DEFAULT_BUDGET, flip: kind === 'splat',
   }, extra || {});
   prop.scans = prop.scans || [];
@@ -159,6 +200,8 @@ function parseInWorker(format, buffer, name, onProgress) {
 async function parsePoints(buffer, e, name, hooks) {
   const prog = f => hooks && hooks.progress && hooks.progress('Parsing ' + name, 0.3 + f * 0.6);
   if (e === 'pcd') {
+    const header = new TextDecoder().decode(buffer.slice(0, Math.min(buffer.byteLength, 65536)));
+    if (!/^FIELDS\s+.*\bx\b.*\by\b.*\bz\b/im.test(header) || !/^DATA\s+(ascii|binary|binary_compressed)\s*$/im.test(header)) throw new Error('Invalid PCD header; expected FIELDS x y z and a DATA encoding');
     const pts = new PCDLoader().parse(buffer);
     const r = fromGeometry(pts.geometry);
     pts.geometry.dispose(); pts.material.dispose();
@@ -184,6 +227,17 @@ export async function loadMesh(buffer, e) {
     const hasColor = !!geo.getAttribute('color');
     if (!geo.getAttribute('normal')) geo.computeVertexNormals();
     obj = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: hasColor ? 0xffffff : 0x9fb3c2, vertexColors: hasColor, roughness: 0.9 }));
+  } else if (e === 'stl') {
+    // A forged triangle count must not drive STLLoader into an enormous allocation.
+    const header = new TextDecoder().decode(buffer.slice(0, Math.min(buffer.byteLength, 512)));
+    const ascii = /^\s*solid\b/i.test(header) && /\bfacet\s+normal\b/i.test(header);
+    if (!ascii) {
+      if (buffer.byteLength < 84) throw new Error('Truncated binary STL header');
+      const triangles = new DataView(buffer).getUint32(80, true);
+      if (!triangles || 84 + triangles * 50 !== buffer.byteLength) throw new Error('Binary STL triangle count does not match its length');
+    }
+    const geo = new STLLoader().parse(buffer);
+    obj = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0x9fb3c2, roughness: 0.85 }));
   } else if (e === 'obj') {
     obj = new OBJLoader().parse(new TextDecoder().decode(buffer));
     obj.traverse(o => { if (o.isMesh) o.material = new THREE.MeshStandardMaterial({ color: 0x9fb3c2, roughness: 0.9 }); });
@@ -200,6 +254,45 @@ export async function loadMesh(buffer, e) {
     }
   });
   return obj;
+}
+
+// Decode before creating a record: corrupted exports never poison the scan list.
+async function validateScan(buffer, format, kind, name, hooks) {
+  if (kind === 'points') {
+    const data = await parsePoints(buffer, format, name, hooks);
+    if (!data.count) throw new Error('No points found');
+    for (const v of data.positions) if (!Number.isFinite(v)) throw new Error('Point coordinates are not finite');
+    return;
+  }
+  if (kind === 'splat') {
+    if (format === 'splat') {
+      if (buffer.byteLength % 32) throw new Error('Truncated SPLAT file (records are 32 bytes)');
+      const dv = new DataView(buffer);
+      for (let o = 0; o < buffer.byteLength; o += 32) for (let c = 0; c < 6; c++) {
+        const value = dv.getFloat32(o + c * 4, true);
+        if (!Number.isFinite(value) || (c >= 3 && value < 0)) throw new Error('SPLAT has invalid coordinates or scale');
+      }
+    }
+    const { mesh, count } = await loadSplat(buffer, format, name, hooks);
+    disposeSplat(mesh);
+    if (!count) throw new Error('No splats found');
+    return;
+  }
+  if (format === 'obj' && /^\s*mtllib\s+/m.test(new TextDecoder().decode(buffer))) throw new Error('OBJ needs its MTL and texture files. Import the complete OBJ ZIP or export GLB.');
+  const obj = await loadMesh(buffer, format);
+  let vertices = 0;
+  try {
+    obj.traverse(o => {
+      if (!o.isMesh || !o.geometry) return;
+      const p = o.geometry.getAttribute('position');
+      if (!p) return;
+      vertices += p.count;
+      for (let i = 0; i < p.count; i++) for (let j = 0; j < 3; j++) if (!Number.isFinite(p.getComponent(i, j))) throw new Error('Mesh has invalid vertex coordinates');
+      const index = o.geometry.index;
+      if (index) for (const i of index.array) if (i < 0 || i >= p.count) throw new Error('Mesh index is outside its vertices');
+    });
+    if (!vertices) throw new Error('No mesh geometry found');
+  } finally { disposeScanObject(obj); }
 }
 
 // ---------- scene objects ----------
@@ -220,7 +313,12 @@ async function buildMesh(buffer, e, scan, inner, hooks) {
   hooks && hooks.progress && hooks.progress('Loading ' + scan.name, 0.5);
   const obj = await loadMesh(buffer, e);
   let count = 0;
-  obj.traverse(o => { if (o.isMesh) { o.receiveShadow = true; count += o.geometry.index ? o.geometry.index.count / 3 : o.geometry.getAttribute('position').count / 3; } });
+  obj.traverse(o => { if (o.isMesh) {
+    const anisotropy = hooks && hooks.renderer ? Math.min(16, hooks.renderer.capabilities.getMaxAnisotropy()) : 1;
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) for (const key of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) {
+      if (m && m[key]) { m[key].anisotropy = anisotropy; m[key].needsUpdate = true; }
+    }
+    o.receiveShadow = true; count += o.geometry.index ? o.geometry.index.count / 3 : o.geometry.getAttribute('position').count / 3; } });
   inner.add(obj);
   return { count, label: Math.round(count).toLocaleString() + ' triangles' };
 }
@@ -360,7 +458,7 @@ export function disposeScanObject(obj) {
     if (o.geometry) o.geometry.dispose();
     const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
     for (const m of mats) {
-      for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap']) if (m[k] && m[k].dispose) m[k].dispose();
+      for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap', 'bumpMap', 'alphaMap']) if (m[k] && m[k].dispose) m[k].dispose();
       m.dispose();
     }
   });

@@ -14,9 +14,9 @@
 const POLYCAM_HOSTS = /(^|\.)poly\.cam$/i;
 const LOOPBACK = /^(localhost|127\.0\.0\.1|\[::1\])$/i;
 const URL_IN_TEXT = /https?:\/\/[^\s<>"'`]+/i;
-const CAPTURE_PATH = /\/capture\/([0-9a-z][0-9a-z-]{5,})/i;
-const ASSET_EXT = /\.(glb|gltf|ply|obj|splat|spz|ksplat|las|laz|usdz|zip)(?=$|[?#])/i;
-const ASSET_RANK = { glb: 100, gltf: 90, ply: 80, obj: 70, spz: 60, splat: 58, ksplat: 56, las: 40, laz: 20, usdz: 5, zip: 3 };
+const CAPTURE_PATH = /\/capture\/([0-9a-z][0-9a-z_-]{5,})/i;
+const ASSET_EXT = /\.(glb|gltf|ply|obj|stl|pcd|xyz|pts|splat|spz|ksplat|sog|las|laz|usdz|zip)(?=$|[?#])/i;
+const ASSET_RANK = { glb: 100, gltf: 90, ply: 80, obj: 70, stl: 65, pcd: 45, xyz: 43, pts: 42, sog: 55, spz: 60, splat: 58, ksplat: 56, las: 40, laz: 20, usdz: 5, zip: 3 };
 
 export const DEFAULT_RELAYS = [
   'https://api.allorigins.win/raw?url={url}',
@@ -60,8 +60,9 @@ export function relaysFor(setting) {
 function withTimeout(ms, signal) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(new Error('timed out after ' + Math.round(ms / 1000) + ' s')), ms);
-  if (signal) signal.addEventListener('abort', () => ctl.abort(signal.reason), { once: true });
-  return { signal: ctl.signal, done: () => clearTimeout(t) };
+  const abort = () => ctl.abort(signal.reason);
+  if (signal) { if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true }); }
+  return { signal: ctl.signal, done: () => { clearTimeout(t); if (signal) signal.removeEventListener('abort', abort); } };
 }
 
 // Fetch `url` directly, then through each relay. Resolves { response, via } or throws the
@@ -81,6 +82,7 @@ export async function fetchVia(url, opts) {
       return { response, via: route.via, attempts, done: t.done };
     } catch (e) {
       t.done();
+      if (opts.signal && opts.signal.aborted) throw opts.signal.reason || e;
       // A TypeError is the browser's way of saying CORS or network; the relay may get through.
       attempts.push({ via: route.via, error: e && e.name === 'AbortError' ? String(e.message || 'timed out') : (e && e.message) || String(e) });
     }
@@ -94,8 +96,11 @@ export async function fetchVia(url, opts) {
 // Read a response body with progress; content-length may be missing (chunked or relayed).
 export async function readBody(response, onProgress, limit) {
   const total = +(response.headers.get('content-length') || 0) || 0;
+  const max = limit || MAX_BYTES;
+  if (total > max) { if (response.body) await response.body.cancel(); throw new Error('file is larger than ' + Math.round(max / 1048576) + ' MB'); }
   if (!response.body || !response.body.getReader) {
     const buf = await response.arrayBuffer();
+    if (buf.byteLength > max) throw new Error('file exceeds the size limit');
     if (onProgress) onProgress(buf.byteLength, buf.byteLength);
     return buf;
   }
@@ -107,7 +112,7 @@ export async function readBody(response, onProgress, limit) {
     if (done) break;
     chunks.push(value);
     got += value.byteLength;
-    if (got > (limit || MAX_BYTES)) { reader.cancel(); throw new Error('file is larger than ' + Math.round((limit || MAX_BYTES) / 1048576) + ' MB'); }
+    if (got > (limit || MAX_BYTES)) { await reader.cancel(); throw new Error('file is larger than ' + Math.round((limit || MAX_BYTES) / 1048576) + ' MB'); }
     if (onProgress) onProgress(got, total);
   }
   const out = new Uint8Array(got);
@@ -158,7 +163,7 @@ export function parseCapturePage(html, link) {
     const prev = seen.get(u);
     if (!prev || prev.score < score) seen.set(u, { url: u, ext: ext || 'bin', score });
   };
-  const urlRe = /https?:\/\/[^\s"'<>\\)]+?\.(?:glb|gltf|ply|obj|splat|spz|ksplat|las|laz|usdz|zip)(?:\?[^\s"'<>\\)]*)?/gi;
+  const urlRe = /https?:\/\/[^\s"'<>\\)]+?\.(?:glb|gltf|ply|obj|stl|pcd|xyz|pts|splat|spz|ksplat|sog|las|laz|usdz|zip)(?:\?[^\s"'<>\\)]*)?/gi;
   for (const m of text.matchAll(urlRe)) consider(m[0], 0);
   const keyRe = /"((?:glb|gltf|mesh|model|textured|download|asset)[A-Za-z0-9_]*(?:Url|URL|url|Uri|Href|href))"\s*:\s*"([^"]+)"/g;
   for (const m of text.matchAll(keyRe)) consider(m[2], /glb|gltf/i.test(m[1]) ? 20 : 8);
@@ -210,9 +215,17 @@ export async function downloadAsset(asset, link, opts) {
   try { buffer = await readBody(response, opts.onProgress); } finally { done(); }
   if (!buffer.byteLength) throw new Error('empty file');
   // A relay that answers with an HTML error page instead of the model must not become a scan.
-  const head = new Uint8Array(buffer, 0, Math.min(16, buffer.byteLength));
+  const head = new Uint8Array(buffer, 0, Math.min(512, buffer.byteLength));
   const ascii = String.fromCharCode.apply(null, head);
   if (/^\s*<(!doctype|html)/i.test(ascii)) throw new Error('the route returned a web page instead of the model');
+  if (/\.gltf$/i.test(name)) {
+    let gltf; try { gltf = JSON.parse(new TextDecoder().decode(buffer)); } catch (e) { throw new Error('Downloaded glTF is not valid JSON'); }
+    buffer = await bundleGltf(gltf, async uri => {
+      const resource = await fetchVia(new URL(uri, asset.url).href, { relays: opts.relays, signal: opts.signal, timeout: DOWNLOAD_TIMEOUT_MS });
+      try { return await readBody(resource.response, opts.onProgress); } finally { resource.done(); }
+    });
+    return { buffer, name: name.replace(/\.gltf$/i, '.glb'), via, size: buffer.byteLength };
+  }
   return { buffer, name, via, size: buffer.byteLength };
 }
 
@@ -232,15 +245,15 @@ export async function fetchCover(url, opts) {
 // ---------- direct route: the endpoint Polycam's own viewer uses ----------
 // The share page is not readable cross-origin, but the model its viewer draws is:
 // /api/capture/<id>/artifacts/raw.gltf (with raw_geometry.bin and textures/*.jpg) redirects
-// to Polycam's storage, which answers with open CORS. Fetched first, before any page read
-// or relay, so a public capture needs no third party at all. The parts are packed into one
-// texture-baked GLB so the scan is a single self-contained file in browser storage.
+// to storage when those artifacts are public. Availability and CORS vary by capture.
+// Try compatibility routes before page discovery; otherwise use the user's export.
+// Successful resources are packed into one GLB without stripping material detail.
 
 export function artifactUrl(link, name) {
   return link.origin + '/api/capture/' + link.captureId + '/artifacts/' + name;
 }
 
-function decodeDataUri(uri) {
+export function decodeDataUri(uri) {
   const m = /^data:([^;,]*)(;base64)?,(.*)$/s.exec(uri);
   if (!m) throw new Error('unreadable data URI');
   if (!m[2]) return new TextEncoder().encode(decodeURIComponent(m[3])).buffer;
@@ -250,51 +263,90 @@ function decodeDataUri(uri) {
   return out.buffer;
 }
 
-// Rebuild a glTF as a single self-contained GLB: one buffer, base-colour textures embedded,
-// other texture slots (normal, occlusion, emissive, metal-rough) dropped.
-export function packGlb(gltfIn, buffers, images) {
+// Embed all resources without changing geometry, materials, samplers or texture indices.
+// Already embedded images remain in their original bufferViews. Missing resources are
+// errors, never silently downgraded materials.
+export function packGlb(gltfIn, buffers, images = {}) {
   const gltf = JSON.parse(JSON.stringify(gltfIn));
+  if (!gltf.asset || gltf.asset.version !== '2.0') throw new Error('Only glTF 2.0 is supported');
+  if ((gltf.buffers || []).length !== buffers.length) throw new Error('Missing glTF geometry buffers');
   const parts = [];
   let offset = 0;
-  const pad4 = () => { const pad = (4 - (offset % 4)) % 4; if (pad) { parts.push(new Uint8Array(pad)); offset += pad; } };
-  const bufferOffsets = buffers.map(b => { const o = offset; parts.push(new Uint8Array(b)); offset += b.byteLength; pad4(); return o; });
-  gltf.bufferViews = (gltf.bufferViews || []).map(bv => Object.assign({}, bv, { buffer: 0, byteOffset: (bv.byteOffset || 0) + bufferOffsets[bv.buffer || 0] }));
-  const keptImages = new Map();
-  const newImages = [], newTextures = [];
-  for (const m of gltf.materials || []) {
-    delete m.normalTexture; delete m.occlusionTexture; delete m.emissiveTexture;
-    if (m.pbrMetallicRoughness) delete m.pbrMetallicRoughness.metallicRoughnessTexture;
-    const t = m.pbrMetallicRoughness && m.pbrMetallicRoughness.baseColorTexture;
-    if (!t) continue;
-    const tex = gltf.textures && gltf.textures[t.index];
-    const img = tex && images[tex.source];
-    if (!img) { delete m.pbrMetallicRoughness.baseColorTexture; continue; }
-    if (!keptImages.has(tex.source)) {
-      const data = new Uint8Array(img.data);
-      gltf.bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: data.byteLength });
-      parts.push(data); offset += data.byteLength; pad4();
-      keptImages.set(tex.source, newImages.length);
-      newImages.push({ bufferView: gltf.bufferViews.length - 1, mimeType: img.mime });
+  const pad4 = () => { const pad = (4 - offset % 4) % 4; if (pad) { parts.push(new Uint8Array(pad)); offset += pad; } };
+  const bufferOffsets = buffers.map((b, i) => {
+    if (!(b instanceof ArrayBuffer) || b.byteLength < gltf.buffers[i].byteLength) throw new Error('Truncated glTF buffer ' + i);
+    const o = offset; parts.push(new Uint8Array(b)); offset += b.byteLength; pad4(); return o;
+  });
+  gltf.bufferViews = (gltf.bufferViews || []).map(bv => {
+    const bi = bv.buffer || 0, start = bv.byteOffset || 0;
+    if (!buffers[bi] || !Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(bv.byteLength) || bv.byteLength < 0 || start + bv.byteLength > buffers[bi].byteLength) throw new Error('glTF bufferView is outside its buffer');
+    const out = { ...bv, buffer: 0, byteOffset: start + bufferOffsets[bi] };
+    // meshopt keeps its own buffer reference alongside the fallback bufferView.
+    const mo = out.extensions && out.extensions.EXT_meshopt_compression;
+    if (mo) {
+      if (!buffers[mo.buffer] || (mo.byteOffset || 0) + mo.byteLength > buffers[mo.buffer].byteLength) throw new Error('Invalid compressed glTF buffer');
+      mo.byteOffset = (mo.byteOffset || 0) + bufferOffsets[mo.buffer]; mo.buffer = 0;
     }
-    newTextures.push(Object.assign({}, tex, { source: keptImages.get(tex.source) }));
-    t.index = newTextures.length - 1;
-  }
-  gltf.images = newImages; gltf.textures = newTextures;
+    return out;
+  });
+  gltf.images = (gltf.images || []).map((img, i) => {
+    if (img.bufferView != null) {
+      if (!gltf.bufferViews[img.bufferView] || !img.mimeType) throw new Error('Invalid embedded glTF image ' + i);
+      const out = { ...img }; delete out.uri; return out;
+    }
+    const resource = images[i];
+    if (!resource || !resource.data || !resource.data.byteLength || !resource.mime) throw new Error('Missing glTF texture ' + (img.uri || i));
+    const data = new Uint8Array(resource.data);
+    gltf.bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: data.byteLength });
+    parts.push(data); offset += data.byteLength; pad4();
+    const out = { ...img, bufferView: gltf.bufferViews.length - 1, mimeType: resource.mime }; delete out.uri;
+    return out;
+  });
   gltf.buffers = [{ byteLength: offset }];
-  gltf.asset = Object.assign({}, gltf.asset, { generator: ((gltf.asset && gltf.asset.generator) ? gltf.asset.generator + ' via ' : '') + 'tiksi' });
+  gltf.asset.generator = ((gltf.asset.generator || '') ? gltf.asset.generator + ' via ' : '') + 'tiksi';
   const jsonBytes = new TextEncoder().encode(JSON.stringify(gltf));
-  const jsonPad = (4 - (jsonBytes.length % 4)) % 4;
+  const jsonPad = (4 - jsonBytes.length % 4) % 4;
   const total = 12 + 8 + jsonBytes.length + jsonPad + 8 + offset;
-  const out = new ArrayBuffer(total);
-  const dv = new DataView(out), u8 = new Uint8Array(out);
-  dv.setUint32(0, 0x46546C67, true); dv.setUint32(4, 2, true); dv.setUint32(8, total, true);
-  dv.setUint32(12, jsonBytes.length + jsonPad, true); dv.setUint32(16, 0x4E4F534A, true);
-  u8.set(jsonBytes, 20);
-  for (let i = 0; i < jsonPad; i++) u8[20 + jsonBytes.length + i] = 0x20;
+  if (total > MAX_BYTES) throw new Error('The combined model exceeds 600 MB');
+  const out = new ArrayBuffer(total), dv = new DataView(out), u8 = new Uint8Array(out);
+  dv.setUint32(0, 0x46546c67, true); dv.setUint32(4, 2, true); dv.setUint32(8, total, true);
+  dv.setUint32(12, jsonBytes.length + jsonPad, true); dv.setUint32(16, 0x4e4f534a, true);
+  u8.set(jsonBytes, 20); u8.fill(0x20, 20 + jsonBytes.length, 20 + jsonBytes.length + jsonPad);
   let p = 20 + jsonBytes.length + jsonPad;
-  dv.setUint32(p, offset, true); dv.setUint32(p + 4, 0x004E4942, true); p += 8;
+  dv.setUint32(p, offset, true); dv.setUint32(p + 4, 0x004e4942, true); p += 8;
   for (const part of parts) { u8.set(part, p); p += part.byteLength; }
   return out;
+}
+
+export function imageMime(uri, declared) {
+  if (declared) return declared;
+  if (/^data:/i.test(uri)) return uri.slice(5).split(/[;,]/)[0];
+  const e = String(uri).split(/[?#]/)[0].split('.').pop().toLowerCase();
+  return ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', ktx2: 'image/ktx2', avif: 'image/avif' })[e] || 'image/jpeg';
+}
+
+// resourceReader receives a URI relative to the glTF index. Callers choose network or
+// local archive lookup; no network access is implicit in a local-file import.
+export async function bundleGltf(gltf, resourceReader) {
+  let bytes = 0;
+  const read = async uri => {
+    const data = uri.startsWith('data:') ? decodeDataUri(uri) : await resourceReader(uri);
+    if (!(data instanceof ArrayBuffer) || (bytes += data.byteLength) > MAX_BYTES) throw new Error('The combined model exceeds 600 MB');
+    return data;
+  };
+  const buffers = [];
+  for (const b of gltf.buffers || []) {
+    if (!b.uri) throw new Error('glTF buffer has no resource URI');
+    buffers.push(await read(b.uri));
+  }
+  const images = {};
+  for (let i = 0; i < (gltf.images || []).length; i++) {
+    const img = gltf.images[i];
+    if (img.bufferView != null) continue;
+    if (!img.uri) throw new Error('glTF texture has no resource URI');
+    images[i] = { data: await read(img.uri), mime: imageMime(img.uri, img.mimeType) };
+  }
+  return packGlb(gltf, buffers, images);
 }
 
 // Fetch the raw mesh straight from Polycam and pack it as a GLB. Resolves
@@ -306,37 +358,25 @@ export async function fetchCaptureDirect(link, opts) {
   const get = async (name, label, limit) => {
     const t = withTimeout(opts.timeout || DOWNLOAD_TIMEOUT_MS, opts.signal);
     try {
-      const r = await fetch(artifactUrl(link, name), { mode: 'cors', credentials: 'omit', redirect: 'follow', signal: t.signal });
+      const r = await fetch(/^https?:/.test(name) ? name : artifactUrl(link, name), { mode: 'cors', credentials: 'omit', redirect: 'follow', signal: t.signal });
       if (!r.ok) { const e = new Error(label + ': HTTP ' + r.status); e.status = r.status; throw e; }
       return await readBody(r, (got, total) => say(label, got, total), limit);
     } finally { t.done(); }
   };
-  const gltfBuf = await get('raw.gltf', 'the capture index', 8 * 1024 * 1024);
+  // These are viewer compatibility routes, not Polycam's authenticated Content API.
+  // A public capture can still prohibit downloading or use a different artifact layout.
+  let gltfBuf, indexName, lastError;
+  for (const name of ['edited.gltf', 'original.gltf', 'raw.gltf']) {
+    try { gltfBuf = await get(name, 'the capture index', 8 * 1024 * 1024); indexName = name; break; }
+    catch (e) { if (opts.signal && opts.signal.aborted) throw e; lastError = e; if (e.status && ![404, 410].includes(e.status)) throw e; }
+  }
+  if (!gltfBuf) throw lastError;
   let gltf;
   try { gltf = JSON.parse(new TextDecoder().decode(gltfBuf)); } catch (e) { throw new Error('the capture index is not glTF'); }
-  if (!gltf.buffers || !gltf.meshes || !gltf.meshes.length) throw new Error('the capture has no mesh (point-cloud captures are not supported yet)');
-  const buffers = [];
-  for (const b of gltf.buffers) {
-    if (!b.uri) throw new Error('the capture index references a buffer without a location');
-    buffers.push(b.uri.startsWith('data:') ? decodeDataUri(b.uri) : await get(b.uri, 'the mesh (' + (b.byteLength / 1048576).toFixed(1) + ' MB)'));
-  }
-  // Only base-colour textures are worth carrying (normal maps are large and never shown).
-  const wanted = new Set();
-  for (const m of gltf.materials || []) {
-    const t = m.pbrMetallicRoughness && m.pbrMetallicRoughness.baseColorTexture;
-    if (t && gltf.textures && gltf.textures[t.index]) wanted.add(gltf.textures[t.index].source);
-  }
-  const images = {};
-  for (const si of wanted) {
-    const img = gltf.images && gltf.images[si];
-    if (!img || img.bufferView != null || !img.uri) continue;
-    const mime = img.mimeType || (/\.png(?=$|[?#])/i.test(img.uri) ? 'image/png' : 'image/jpeg');
-    try { images[si] = { mime, data: img.uri.startsWith('data:') ? decodeDataUri(img.uri) : await get(img.uri, 'the texture') }; }
-    catch (e) { if (opts.signal && opts.signal.aborted) throw e; /* untextured is still a scan */ }
-  }
-  const buffer = packGlb(gltf, buffers, images);
-  if (buffer.byteLength < 1024) throw new Error('the packed mesh is empty');
-  return { buffer, name: 'polycam-' + link.captureId.slice(0, 8) + '.glb', size: buffer.byteLength, via: 'direct', textures: Object.keys(images).length };
+  if (!gltf.meshes || !gltf.meshes.length) throw new Error('This capture has no downloadable mesh; export a PLY or splat file from Polycam instead.');
+  const base = artifactUrl(link, indexName);
+  const buffer = await bundleGltf(gltf, uri => get(new URL(uri, base).href, 'the model resource'));
+  return { buffer, name: 'polycam-' + link.captureId.slice(0, 8) + '.glb', size: buffer.byteLength, via: 'direct', textures: (gltf.images || []).length };
 }
 
 // The capture's thumbnail from the same endpoint, as a File; null when it is not there.
