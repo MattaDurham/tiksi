@@ -17,6 +17,13 @@ window.test={store,photoStore,photos,reconstruction,property};window.ready=true;
 </script></body></html>`;
 let job = null;
 const uploads = [];
+const modelJSON = { asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }], meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }], accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: 'VEC3', min: [0,0,0], max: [1,1,0] }], bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: 36 }], buffers: [{ byteLength: 36 }] };
+let jsonBytes=Buffer.from(JSON.stringify(modelJSON));jsonBytes=Buffer.concat([jsonBytes,Buffer.alloc((4-jsonBytes.length%4)%4,32)]);
+const geometry=Buffer.from(new Float32Array([0,0,0,1,0,0,0,1,0]).buffer);
+const header=Buffer.alloc(12);header.write('glTF');header.writeUInt32LE(2,4);header.writeUInt32LE(28+jsonBytes.length+geometry.length,8);
+const jsonHeader=Buffer.alloc(8);jsonHeader.writeUInt32LE(jsonBytes.length);jsonHeader.write('JSON',4);
+const binHeader=Buffer.alloc(8);binHeader.writeUInt32LE(geometry.length);binHeader.write('BIN\0',4);
+const model=Buffer.concat([header,jsonHeader,jsonBytes,binHeader,geometry]);
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost');
   const send = data => { response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(data)); };
@@ -33,6 +40,10 @@ const server = http.createServer(async (request, response) => {
   }
   if (url.pathname.endsWith('/start') && request.method === 'POST') { job.state = 'running'; job.progress = .2; send(job); return; }
   if (url.pathname.endsWith('/cancel') && request.method === 'POST') { job.state = 'cancelled'; send(job); return; }
+  if (url.pathname.endsWith('/model') && request.method === 'GET') {
+    // A slow download crosses a poll boundary, exercising double-import protection.
+    setTimeout(()=>{response.writeHead(200,{'Content-Type':'model/gltf-binary'});response.end(model);},3200);return;
+  }
   if (url.pathname.startsWith('/api/')) { response.writeHead(404); response.end(); return; }
   const file = resolve(project, url.pathname === '/' ? 'index.html' : '.' + decodeURIComponent(url.pathname));
   if (!file.startsWith(project + '/') || !['.js','.css','.html','.webmanifest'].includes(extname(file))) { response.writeHead(404); response.end(); return; }
@@ -113,6 +124,16 @@ try {
   await page.waitForSelector('.ph-head');
   await page.locator('#rail [data-view=reconstruct]').click();
   await page.waitForSelector('.rc-start');
+  job.state='complete';job.stats={triangles:1,textures:0,bytes:model.length};
+  await page.waitForFunction(()=>document.querySelector('.rc-job-select').textContent.includes('complete'));
+  await page.locator('.rc-job-select').selectOption(job.id);
+  await page.getByRole('button',{name:'Add to this property',exact:true}).click();
+  await page.waitForTimeout(2800);
+  assert.equal(await page.getByRole('button',{name:'Add to this property',exact:true}).isDisabled(),true);
+  await page.evaluate(async()=>{window.e2eStore=await import('/js/store.js');});
+  await page.waitForFunction(()=>window.e2eStore.activeProperty().scans.length===1);
+  const scan=await page.evaluate(()=>window.e2eStore.activeProperty().scans[0]);
+  assert.equal(scan.source,'local-photogrammetry');assert.equal(scan.format,'glb');
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({ ...result, uploads:uploads.length,mobileWidth:402,photoUses,panoramaSky:true,appRouting:true,errors },null,2));
+  console.log(JSON.stringify({ ...result, uploads:uploads.length,mobileWidth:402,photoUses,panoramaSky:true,appRouting:true,modelImportedScan:true,errors },null,2));
 } finally { if(browser)await browser.close();await new Promise(resolve=>server.close(resolve)); }
