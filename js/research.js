@@ -242,7 +242,7 @@ function productCard(p, i) {
     ${array(p.sustainability).length ? `<details><summary>Sustainability evidence</summary>${p.sustainability.map(s => `<p>${esc(s.name)}: ${esc(s.value)} ${externalLink(s.sourceUrl, 'source')}</p>`).join('')}</details>` : ''}
     ${array(p.reviews).length ? `<details><summary>Reviews and limitations</summary>${p.reviews.map(r => `<p>${esc(r.summary)} ${externalLink(r.sourceUrl, 'source')}</p>`).join('')}</details>` : ''}
     ${array(p.unknowns).length || unitWarnings.length ? '<h4>Unverified / needs checking</h4>' + list([...array(p.unknowns), ...unitWarnings], 'research-unknowns') : ''}
-    <details><summary>Source evidence (${evidence.length})</summary>${evidence.map(s => `<p>${externalLink(s.url, s.title)}<br>${esc(s.relevance)}${s.checkedAt ? `<br><small>Checked ${esc(s.checkedAt)}</small>` : ''}</p>`).join('')}</details>
+    <details><summary>Source evidence (${evidence.length})</summary>${evidence.map(s => `<p>${externalLink(s.url, s.title)} <span class="chip">${s.sourceStatus === 'opened' ? 'Opened source' : s.sourceStatus === 'search-result' ? 'Search result only' : 'Source opening unverified'}</span><br>${esc(s.relevance)}${s.checkedAt ? `<br><small>Checked ${esc(s.checkedAt)}</small>` : ''}</p>`).join('')}</details>
     <button class="btn primary" data-save-candidate="${i}" ${saved.has(i) ? 'disabled' : ''}>${saved.has(i) ? 'SAVED TO PRODUCTS' : 'SAVE TO PRODUCTS'}</button>
   </article>`;
 }
