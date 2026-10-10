@@ -256,6 +256,9 @@ scripts/branch.sh pr better-imports --title "Improve imports" --body-file /tmp/p
 gh pr checks --watch
 ```
 
+For dependent feature branches, `pr <slug> --base codex/<baseline>` reviews only
+that feature's commits; retarget to main and rerun CI before landing.
+
 The owner chooses whether to merge, keep testing or discard. Only the owner's
 explicit merge instruction authorizes `pr <slug> --ready` followed by
 `merge <slug> --owner-approved`. Landing requires both trees clean, current local

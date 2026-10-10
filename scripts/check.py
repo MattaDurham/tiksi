@@ -7,11 +7,11 @@ import sys
 
 ROOT = Path.cwd()
 failed = False
-for folder in ['js', 'scripts', 'tools', 'test']:
+for folder in ['js', 'scripts', 'tools', 'test', 'tests']:
     for path in sorted((ROOT / folder).glob('*.js')) + sorted((ROOT / folder).glob('*.mjs')):
         result = subprocess.run(['node', '--check', str(path)])
         failed = failed or bool(result.returncode)
-for folder in ['scripts', 'tools', 'server', 'test']:
+for folder in ['scripts', 'tools', 'server', 'test', 'tests']:
     for path in sorted((ROOT / folder).glob('*.py')):
         try: ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
         except SyntaxError as exc:
