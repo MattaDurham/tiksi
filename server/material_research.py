@@ -211,13 +211,21 @@ def exclude_unobserved_claims(result, observed_sources):
     validate_schema(result, RESULT_SCHEMA)
     retained = []
     for product in result["products"]:
-        public_url(product["url"])
+        try:
+            public_url(product["url"])
+        except ResearchError:
+            result["unknowns"].append(product["name"] + ": excluded because its product URL was invalid or not public")
+            continue
         if product["url"].split("#")[0] not in observed_sources:
             result["unknowns"].append(product["name"] + ": excluded because its product URL was not confirmed by live web tools")
             continue
         sources = []
         for source in product["sourceEvidence"]:
-            public_url(source["url"])
+            try:
+                public_url(source["url"])
+            except ResearchError:
+                product["unknowns"].append("Invalid or non-public source URL excluded: " + source["title"])
+                continue
             if source["url"].split("#")[0] in observed_sources:
                 sources.append(source)
             else:
@@ -230,7 +238,6 @@ def exclude_unobserved_claims(result, observed_sources):
         for field in ("specifications", "sustainability", "reviews"):
             facts = []
             for fact in product[field]:
-                public_url(fact["sourceUrl"])
                 if fact["sourceUrl"] in evidence_urls:
                     facts.append(fact)
                 else:
@@ -238,7 +245,6 @@ def exclude_unobserved_claims(result, observed_sources):
             product[field] = facts
         offers = []
         for offer in product["offers"]:
-            public_url(offer["url"])
             if offer["url"] in evidence_urls and offer["url"].split("#")[0] in observed_sources:
                 offers.append(offer)
             else:
