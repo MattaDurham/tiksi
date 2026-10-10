@@ -7,6 +7,7 @@ import { chromium } from 'playwright';
 
 const root = resolve(import.meta.dirname, '..');
 const output = resolve(root, 'tools/fixtures/fidelity');
+const realResearch = await readFile(resolve(root, 'js/research.js')).then(() => true, () => false);
 await mkdir(output, { recursive: true });
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm' };
 const server = http.createServer(async (req, res) => {
@@ -24,6 +25,16 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, acceptDownloads: true });
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+  // Integrated builds import research eagerly. Use the real route when present and register
+  // the standalone branch's seam before navigation so module caching cannot defeat it.
+  if (!realResearch) await page.route('**/js/research.js', route => route.fulfill({ contentType: 'text/javascript', body: `
+    export function mount() {}
+    export function unmount() {}
+    export function openResearch(context) {
+      sessionStorage.setItem('tiksi.research.session.v1', JSON.stringify({context}));
+      location.hash = '#/research';
+    }` }));
+  await page.route('**/api/material-research/capabilities', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ available: false, reason: 'Synthetic browser check.' }) }));
   await page.goto(base + '/#/model');
   await page.waitForSelector('.v-canvas');
   await page.evaluate(async () => { window.testTextures = await import('/js/textures.js'); });
@@ -60,7 +71,6 @@ try {
   await page.selectOption('[data-env=quality]', 'low');
   await page.click('[data-act=top]');
   await page.screenshot({ path: resolve(output, 'section-xray-low.png') });
-  await page.route('**/js/research.js', route => route.fulfill({ contentType: 'text/javascript', body: 'export function openResearch(context) { window.researchTestContext = context; }' }));
   await page.click('.v-env-head');
   // Pick a real floor through the viewer's raycaster; the join must carry the clicked element.
   for (const [x, y] of [[250, 350], [350, 400], [400, 450], [300, 500]]) {
@@ -69,8 +79,10 @@ try {
   }
   await page.waitForSelector('[data-research-role=ceiling]');
   await page.click('[data-research-role=material]');
-  await page.waitForFunction(() => !!window.researchTestContext);
-  const research = await page.evaluate(() => window.researchTestContext);
+  await page.waitForFunction(() => !!JSON.parse(sessionStorage.getItem('tiksi.research.session.v1') || 'null')?.context?.materialId);
+  const research = await page.evaluate(() => JSON.parse(sessionStorage.getItem('tiksi.research.session.v1')).context);
+  assert.equal(await page.evaluate(() => location.hash), '#/research');
+  if (realResearch) await page.waitForSelector('.research-context');
   assert.equal(research.kind, 'material');
   assert.equal(research.elementKind, 'room');
   assert.ok(research.materialId && research.elementId && research.propertyId);

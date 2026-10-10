@@ -1604,7 +1604,7 @@ function bindResearchActions(root) {
         context = { kind: 'product', id: product.id, name: product.name, itemIds: product.itemIds || [], category: product.category || '', propertyId: prop.id, elementId, elementKind };
       } else if (role === 'fixture' && opening) {
         const name = opening.type === 'window' ? 'Window' : opening.width > 1.25 ? 'Cased opening' : 'Door';
-        context = { kind: 'fixture', id: opening.id, name, category: opening.type, dimensions: { width: opening.width, height: opening.height, units: 'm' }, propertyId: prop.id, elementId, elementKind };
+        context = { kind: 'fixture', id: opening.id, name, category: opening.type, dimensions: opening.width + ' m wide × ' + opening.height + ' m high', propertyId: prop.id, elementId, elementKind };
       } else {
         const materialId = role === 'interior' ? wallInteriorMaterialId(wall, roomsOn(prop, levelOfWall(prop, wall).id)) : role === 'ceiling' ? room?.ceilingMaterial || 'mat-ceiling' : wall?.material || room?.material;
         const material = materialById(materialId);
