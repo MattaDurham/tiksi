@@ -99,9 +99,14 @@ try {
   await page.click('[data-act=render]');
   await page.selectOption('[data-export-size]', '3840');
   const displayed = await page.locator('[data-export-dimensions]').innerText();
-  const downloadPromise = page.waitForEvent('download', { timeout: 120000 });
-  await page.click('[data-export-save]');
-  const download = await downloadPromise;
+  // A 4K still can occupy SwiftShader's main thread longer than Playwright's
+  // default 30s action timeout. Keep both parts within the export's 120s budget
+  // and attach rejection handlers immediately, so cleanup cannot mask a click
+  // failure with an unhandled download-wait rejection.
+  const [download] = await Promise.all([
+    page.waitForEvent('download', { timeout: 120000 }),
+    page.click('[data-export-save]', { timeout: 120000, noWaitAfter: true }),
+  ]);
   const pngPath = resolve(output, 'export-4k.png');
   await download.saveAs(pngPath);
   const png = await readFile(pngPath);
