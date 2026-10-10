@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -35,6 +36,14 @@ class WorkflowTests(unittest.TestCase):
         self.git('commit', '-m', 'Synthetic root')
         self.workflow = branch.Workflow(self.root)
         self.children = []
+        # Concurrent suites have distinct disposable Git repositories and locks.
+        # Keep synthetic servers away from owner preview ports and each other.
+        with socket.socket() as candidate:
+            candidate.bind(('127.0.0.1', 0))
+            port = candidate.getsockname()[1]
+        port_patch = patch.multiple(branch, PORT_MIN=port, PORT_MAX=min(65535, port + 99))
+        port_patch.start()
+        self.addCleanup(port_patch.stop)
 
     def tearDown(self):
         for slug in self.children:
