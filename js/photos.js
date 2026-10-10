@@ -333,6 +333,7 @@ function renderHead() {
     </div>
     <div class="ph-head-actions">
       <span class="ph-hint">drop images anywhere - or paste</span>
+      <button class="btn" data-act="reconstruct">PHOTO TO 3D</button>
       <button class="btn" data-act="camera" title="Take a photo with the phone camera">CAMERA</button>
       <button class="btn primary" data-act="upload">UPLOAD</button>
       <input type="file" class="hidden-file" data-file="upload" accept="image/*" multiple>
@@ -342,6 +343,8 @@ function renderHead() {
 }
 
 function bindUploadButtons(root) {
+  const reconstruct = root.querySelector('[data-act=reconstruct]');
+  if (reconstruct) reconstruct.onclick = () => { location.hash = '#/reconstruct'; };
   const up = root.querySelector('[data-file=upload]'), cam = root.querySelector('[data-file=camera]');
   const upBtn = root.querySelector('[data-act=upload]'), camBtn = root.querySelector('[data-act=camera]');
   if (upBtn) upBtn.onclick = () => up.click();

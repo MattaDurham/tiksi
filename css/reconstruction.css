@@ -1,0 +1,30 @@
+.reconstruction-view { overflow: auto; padding: 22px; min-width: 0; }
+.rc-head { display: flex; justify-content: space-between; align-items: center; gap: 18px; margin-bottom: 22px; }
+.rc-head p { margin: 8px 0 0; color: var(--text-muted, #9aa3ad); }
+.rc-layout { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr); gap: 24px; max-width: 1500px; margin: auto; }
+.rc-capture, .rc-results { min-width: 0; padding: 20px; background: var(--panel, #20252d); border: 1px solid var(--line, #39404a); border-radius: 10px; }
+.rc-engine { background: #273a34; padding: 12px; border-radius: 6px; margin-bottom: 16px; overflow-wrap: anywhere; }
+.rc-recipe { padding-bottom: 12px; border-bottom: 1px solid #39404a; margin-bottom: 16px; line-height: 1.55; }
+.rc-recipe li { margin-bottom: 8px; }
+.rc-recipe p, .rc-note { font-size: 12px; line-height: 1.6; color: var(--text-muted, #9aa3ad); }
+.rc-capture > label, .rc-options label, .rc-results > label { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; min-width: 0; }
+.rc-capture input:not([type=checkbox]), .rc-capture select, .rc-results select { width: 100%; min-width: 0; padding: 10px; font-size: 14px; border: 1px solid #46505c; border-radius: 5px; background: #171b22; color: #e5e8ec; }
+.rc-options { display: flex; gap: 12px; }
+.rc-options label { flex: 1; }
+.rc-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+.rc-selection { font-weight: 600; margin-bottom: 4px; }
+.rc-file-list { font-size: 12px; max-height: 80px; overflow: auto; overflow-wrap: anywhere; color: #9aa3ad; }
+.rc-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); gap: 10px; max-height: 360px; overflow: auto; margin: 12px 0; }
+.rc-photo { display: flex; position: relative; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid #46505c; border-radius: 6px; min-width: 0; cursor: pointer; }
+.rc-photo input { position: absolute; top: 12px; left: 12px; width: 20px; height: 20px; }
+.rc-photo img { width: 100%; aspect-ratio: 1.5; object-fit: cover; border-radius: 4px; }
+.rc-photo span { font-size: 12px; overflow-wrap: anywhere; }.rc-photo small { display: block; color: #9aa3ad; }
+.rc-start { width: 100%; margin-top: 18px; min-height: 42px; }
+.rc-message { padding: 10px 0; overflow-wrap: anywhere; line-height: 1.5; }
+.rc-job h3 { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }.rc-job h3 span { color: #aec6e1; font-size: 12px; }
+.rc-job progress { width: 100%; }.rc-job details { overflow-wrap: anywhere; }
+.rc-error { color: #f7aa95; line-height: 1.5; }
+.rc-preview { position: relative; height: 420px; background: #171b22; border-radius: 6px; overflow: hidden; margin-top: 18px; }
+.rc-preview p { padding: 20px; color: #9aa3ad; }.rc-preview canvas { display: block; touch-action: none; }
+.rc-open-model { display: inline-block; margin-top: 16px; }.rc-open-model[hidden] { display: none; }
+@media (max-width: 850px) { .reconstruction-view { padding: 12px; }.rc-layout { grid-template-columns: minmax(0, 1fr); }.rc-options { flex-direction: column; gap: 0; }.rc-head { align-items: flex-start; }.rc-capture, .rc-results { padding: 14px; }.rc-capture input:not([type=checkbox]), .rc-capture select, .rc-results select { font-size: 16px; }.rc-preview { height: 320px; } }

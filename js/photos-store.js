@@ -10,9 +10,8 @@
 import { uid, touch, putFile, getFile, deleteFile, storeThumb, deleteThumb } from './store.js';
 
 const THUMB_MAX = 360;
-const FULL_MAX = 2048;
 // Object URLs for full-resolution images. Each one pins a Blob copy of the IndexedDB buffer
-// (up to a couple of MB), so keep a handful in recency order and revoke the rest.
+// (the original camera file), so keep a handful in recency order and revoke the rest.
 const URL_CACHE_MAX = 12;
 const urlCache = new Map();   // photoId -> object URL, least recently used first
 
@@ -46,23 +45,23 @@ export async function addPhotoFromFile(prop, file, opts) {
   opts = opts || {};
   const img = await decode(file);
   const w = img.width, h = img.height;
-  const fs = Math.min(1, FULL_MAX / Math.max(w, h));
-  const full = drawTo(img, Math.round(w * fs), Math.round(h * fs));
-  const isPng = file.type === 'image/png';
-  const blob = await new Promise(r => full.toBlob(r, isPng ? 'image/png' : 'image/jpeg', 0.9));
-  const buffer = await blob.arrayBuffer();
+  // Retain camera resolution, EXIF/depth metadata, transparency and original encoding.
+  // Photogrammetry needs the source bytes; gallery thumbnails are the only derived copy.
+  const buffer = await file.arrayBuffer();
+  const mime = file.type || ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+    webp: 'image/webp', heic: 'image/heic', heif: 'image/heif' }[String(file.name || '').split('.').pop().toLowerCase()] || 'application/octet-stream');
   const ts = Math.min(1, THUMB_MAX / Math.max(w, h));
   const thumb = drawTo(img, Math.round(w * ts), Math.round(h * ts)).toDataURL('image/jpeg', 0.8);
   if (img.close) img.close();
 
   const id = uid('ph');
-  await putFile(id, buffer, { name: file.name || 'photo', mime: blob.type, kind: 'photo' });
+  await putFile(id, buffer, { name: file.name || 'photo', mime, kind: 'photo', original: true });
   // The IndexedDB copy of the thumbnail keeps it out of the localStorage JSON; if that write
   // fails the record simply carries it inline, as older saves do.
   try { await storeThumb(id, thumb); } catch (e) { console.error('thumbnail store failed', e); }
   const rec = {
     id, name: file.name || 'Photo', kind: opts.kind || (isPanoramaAspect(w, h) ? 'pano' : 'photo'),
-    w: full.width, h: full.height, mime: blob.type, thumb,
+    w, h, mime, thumb, original: true, byteLength: buffer.byteLength,
     createdAt: new Date().toISOString(), notes: '', roomId: '', elementIds: [], itemIds: [], pin: null,
   };
   prop.photos = prop.photos || [];
