@@ -243,6 +243,7 @@ function productCard(p, i) {
   return `<article class="card research-candidate"><div class="research-row"><h3>${esc(p.name || 'Unnamed candidate')}</h3><label class="research-pick"><input type="checkbox" data-pick="${i}" ${selected.has(i) ? 'checked' : ''}> Compare</label></div>
     <p class="faint">${esc([p.brand, p.model, p.category].filter(Boolean).join(' / '))}</p>
     <div class="research-row"><strong>${esc(money(p))}</strong>${externalLink(p.url, 'PRODUCT PAGE')}</div>
+    ${safeResearchUrl(p.priceSourceUrl) ? `<p>${externalLink(p.priceSourceUrl, 'PRICE SOURCE')}</p>` : ''}
     ${p.availability ? `<p>${esc(p.availability)}</p>` : ''}${list(p.fitNotes)}
     ${array(p.specifications).length ? `<dl class="research-specs">${p.specifications.map(s => `<dt>${esc(s.name)}</dt><dd>${esc(s.value)} ${s.sourceUrl ? externalLink(s.sourceUrl, 'source') : ''}</dd>`).join('')}</dl>` : ''}
     ${array(p.offers).length ? `<details><summary>Suppliers and offers (${p.offers.length})</summary>${p.offers.map(o => `<p>${externalLink(o.url, o.vendor)} / ${esc(money(o))} / ${esc(o.availability)}</p>`).join('')}</details>` : ''}
@@ -274,7 +275,7 @@ function saveCandidate(i) {
   const price = candidate.priceStatus === 'verified' && candidate.currency === 'USD' && candidate.unit && Number.isFinite(candidate.price) ? candidate.price : 0;
   const product = {
     id: uid('prod'), name: text(candidate.name) || 'Researched product', brand: text(candidate.brand), model: text(candidate.model), category: text(candidate.category) || 'other',
-    url: safeResearchUrl(candidate.url), price, unit: text(candidate.unit) || 'ea', imageUrl: '', itemIds, materialIds,
+    url: safeResearchUrl(candidate.url), priceSourceUrl: safeResearchUrl(candidate.priceSourceUrl), price, unit: text(candidate.unit) || 'ea', imageUrl: '', itemIds, materialIds,
     specs: array(candidate.specifications).map(s => `${text(s.name)}: ${text(s.value)}`).join('\n'),
     notes: [...array(candidate.fitNotes), ...array(candidate.unknowns).map(u => 'Needs checking: ' + u), ...scopeUnitWarnings(candidate, itemIds), ...(candidate.price !== null && !price ? ['Source price: ' + money(candidate) + '. Not entered into the USD estimate.'] : [])].join('\n'),
     research: { jobId: job.id, candidateId: candidate.id || String(i), savedAt: new Date().toISOString(), researchedAt: job.updatedAt || job.createdAt, context: { ...jobContext }, request: job.request, candidate: JSON.parse(JSON.stringify(candidate)) },
