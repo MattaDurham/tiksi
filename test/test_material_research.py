@@ -120,6 +120,19 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(len(actual['unknowns']),3)
         self.assertIn('Unconfirmed source excluded',actual['unknowns'][0])
 
+    def test_invalid_or_missing_links_become_explicit_unknowns(self):
+        p=product(120)
+        p['sourceEvidence'].append({'url':'','title':'Unavailable document','relevance':'Unknown','checkedAt':''})
+        p['specifications'].append({'name':'Unknown dimension','value':'10 inches','sourceUrl':''})
+        p['offers'].append({'vendor':'Unverified vendor','url':'http://localhost/private','price':None,'currency':None,'unit':'','priceStatus':'unverified','availability':'Unknown','checkedAt':''})
+        observed={p['url']:{'status':'opened','checkedAt':'live-check'}}
+        actual=validate_result(exclude_unobserved_claims({'products':[p],'unknowns':[]},observed),'checked',observed)['products'][0]
+        self.assertEqual(actual['price'],120)
+        self.assertEqual(len(actual['sourceEvidence']),1)
+        self.assertEqual(len(actual['specifications']),1)
+        self.assertEqual(len(actual['offers']),1)
+        self.assertEqual(len(actual['unknowns']),3)
+
     def test_subprocess_pipeline_requires_web_events_and_rejects_non_web_tools(self):
         with tempfile.TemporaryDirectory() as folder:
             script=Path(folder)/'synthetic_provider.py'
