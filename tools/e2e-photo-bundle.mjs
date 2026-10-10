@@ -28,8 +28,14 @@ try{
   const entries=zip.unzipSync(new Uint8Array(await packed.blob.arrayBuffer()));delete entries['manifest.json'];
   const legacy=await s.readBundle(new File([zip.zipSync(entries)],'legacy.tiksi'));
   s.replaceWorkspace(s.emptyWorkspace());await s.importProject(file);
-  return{expected,paths:read.manifest.files.map(f=>f.path),files:read.files.map(f=>({id:f.id,mime:f.meta.mime,kind:f.meta.kind,bytes:Array.from(new Uint8Array(f.buffer))})),legacy:legacy.files.map(f=>({id:f.id,mime:f.meta.mime,kind:f.meta.kind})),restored:await Promise.all(expected.map(async f=>{const rec=await s.getFile(f.id);return{id:f.id,mime:rec.mime,bytes:Array.from(new Uint8Array(rec.buffer))};}))};
+  const f=await import('/js/files.js');let jsonWrites=0,zipWrites=0,savedBlob;
+  const jsonHandle={name:'camera-project.json',getFile:async()=>new File([JSON.stringify(s.ws.data)],'camera-project.json',{type:'application/json'}),queryPermission:async()=> 'granted',createWritable:async()=>({write:async()=>jsonWrites++,close:async()=>{}})};
+  window.showOpenFilePicker=async()=>[jsonHandle];
+  window.showSaveFilePicker=async()=>({name:'camera-project.tiksi',createWritable:async()=>({write:async blob=>{zipWrites++;savedBlob=blob;},close:async()=>{}})});
+  await f.openProjectPicker();await f.saveProject(s.activeProperty());const savedProject=await s.readBundle(new File([savedBlob],'camera-project.tiksi'));
+  return{jsonWrites,zipWrites,savedFormat:savedProject.manifest.format,expected,paths:read.manifest.files.map(f=>f.path),files:read.files.map(f=>({id:f.id,mime:f.meta.mime,kind:f.meta.kind,bytes:Array.from(new Uint8Array(f.buffer))})),legacy:legacy.files.map(f=>({id:f.id,mime:f.meta.mime,kind:f.meta.kind})),restored:await Promise.all(expected.map(async f=>{const rec=await s.getFile(f.id);return{id:f.id,mime:rec.mime,bytes:Array.from(new Uint8Array(rec.buffer))};}))};
  });
  for(const fixture of results.expected){assert.ok(results.paths.includes(`files/${fixture.id}.${fixture.ext}`));assert.deepEqual(results.files.find(f=>f.id===fixture.id),{id:fixture.id,mime:fixture.mime,kind:'photo',bytes:fixture.bytes});assert.deepEqual(results.legacy.find(f=>f.id===fixture.id),{id:fixture.id,mime:fixture.mime,kind:'photo'});assert.deepEqual(results.restored.find(f=>f.id===fixture.id),{id:fixture.id,mime:fixture.mime,bytes:fixture.bytes});}
- console.log('Photo archive transport passed: HEIC/HEIF/TIFF/AVIF/BMP extensions, MIME metadata, legacy classification and exact original bytes. Decoders were not exercised.');
+ assert.equal(results.jsonWrites,0,'opening JSON metadata never adopts it as a ZIP save target');assert.equal(results.zipWrites,1);assert.equal(results.savedFormat,'tiksi-project');
+ console.log('Photo archive transport passed: HEIC/HEIF/TIFF/AVIF/BMP extensions, MIME metadata, legacy classification and exact original bytes; JSON open then SAVE keeps metadata intact and writes a separate project archive. Decoders were not exercised.');
 }finally{await browser.close();await new Promise(r=>server.close(r));}

@@ -207,7 +207,9 @@ export async function openProjectPicker() {
       if (got) {
         ids.push(...got);
         // Opening a project file makes it the Save target for that property.
-        if (got.length === 1 && (await ensurePermission(h, false))) {
+        // JSON is metadata, while SAVE produces a portable ZIP project. Never overwrite
+        // an opened JSON file with archive bytes under its original .json name.
+        if (got.length === 1 && !/\.json$/i.test(file.name) && (await ensurePermission(h, false))) {
           state.fileHandles.set(got[0], h);
           try { await putFile(handleKey(got[0]), null, { kind: 'handle', handle: h }); } catch (e) { /* session only */ }
         }
