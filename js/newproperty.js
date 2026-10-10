@@ -205,17 +205,17 @@ async function startLinkImport(link) {
   renderRunning(link, prop);
   setStatus('Working. The property already exists; cancelling keeps it.', '');
   const signal = run.abort.signal;
-  let scan = prop.scans.find(s => s.kind === 'mesh') || null;
+  let scan = prop.scans.find(s => s.source && s.source.captureId === link.captureId) || null;
   try {
-    if (existing && scan && prop.walls.length) {
+    if (existing && scan && (prop.walls.length || scan.kind !== 'mesh')) {
       log('This capture is already a property here', 'ok', existing.name);
       finish(prop, null, null);
       return;
     }
     let bytes = null;
-    // 0. The model straight from the endpoint Polycam's own viewer uses (open CORS, no relay).
+    // 0. Try public viewer compatibility artifacts before reading the share page.
     if (!scan) {
-      const step0 = log('Fetching the model from Polycam', 'run', 'the viewer endpoint, no relay');
+      const step0 = log('Fetching the model from Polycam', 'run', 'public viewer artifacts; availability depends on the capture');
       try {
         bytes = await fetchCaptureDirect(link, {
           signal,
@@ -233,7 +233,7 @@ async function startLinkImport(link) {
       } catch (e) {
         if (signal.aborted) throw e;
         progress(null);
-        step0.warn(e.status === 404 ? 'Polycam has no raw mesh at that link (is link sharing on?)' : String(e && e.message || e));
+        step0.warn(e.status === 404 ? 'No public mesh artifact. Share or download access may be disabled; an exported file also works.' : String(e && e.message || e));
       }
     }
     // 1-3. Otherwise the share page: title, cover, model (direct, then through a relay if allowed).
@@ -249,20 +249,22 @@ async function startLinkImport(link) {
         step1.warn(e.blocked ? 'blocked by the browser (' + e.message + ')' : e.message);
       }
       if (page && page.assets.length) {
-        const asset = page.assets[0];
-        const step2 = log('Downloading the model', 'run', asset.url.replace(/^https?:\/\//, '').slice(0, 80));
-        try {
-          bytes = await downloadAsset(asset, link, {
-            relays: relayList, signal,
-            onRoute: via => step2.detail(via === 'direct' ? 'direct from Polycam storage' : 'through a relay'),
-            onProgress: (got, total) => progress('Downloading ' + fmtBytes(got) + (total ? ' of ' + fmtBytes(total) : ''), total ? got / total : 0.5),
-          });
-          progress(null);
-          step2.ok(fmtBytes(bytes.size) + (bytes.via === 'direct' ? '' : ' via relay'));
-        } catch (e) {
-          if (signal.aborted) throw e;
-          progress(null);
-          step2.warn(e.message);
+        // A page can expose multiple exports. Skip unsupported ones and keep trying when
+        // a signed URL expired or a preferred model fails, rather than taking only slot 0.
+        const supported = page.assets.filter(a => /^(glb|gltf|ply|obj|stl|zip|spz|splat|ksplat|sog|las|pcd|xyz|pts|bin)$/.test(a.ext));
+        for (const asset of supported) {
+          const step2 = log('Downloading the model', 'run', asset.url.replace(/^https?:\/\//, '').slice(0, 80));
+          try {
+            const candidate = await downloadAsset(asset, link, {
+              relays: relayList, signal,
+              onRoute: via => step2.detail(via === 'direct' ? 'direct from Polycam storage' : 'through a relay'),
+              onProgress: (got, total) => progress('Downloading ' + fmtBytes(got) + (total ? ' of ' + fmtBytes(total) : ''), total ? got / total : 0.5),
+            });
+            // Validate and store now so a corrupt candidate does not prevent the next one.
+            scan = await importScanBytes(candidate.buffer, candidate.name, prop, { ...hooks, signal }, { source: { kind: 'polycam', url: link.url, captureId: link.captureId } });
+            if (!scan) throw new Error('Not a supported scan');
+            progress(null); step2.ok(fmtBytes(candidate.size) + (candidate.via === 'direct' ? '' : ' via relay')); break;
+          } catch (e) { if (signal.aborted) throw e; progress(null); step2.warn(e.message); }
         }
       }
       if (page && page.image && !prop.photos.some(ph => ph.source === 'polycam-cover')) {
@@ -283,7 +285,7 @@ async function startLinkImport(link) {
     // 4. Keep the model, square it up, propose the plan.
     if (bytes) {
       const step4 = log('Storing the scan in this browser', 'run');
-      scan = await importScanBytes(bytes.buffer, bytes.name, prop, hooks, { source: { kind: 'polycam', url: link.url, captureId: link.captureId } });
+      scan = await importScanBytes(bytes.buffer, bytes.name, prop, { ...hooks, signal }, { source: { kind: 'polycam', url: link.url, captureId: link.captureId } });
       if (!scan) throw new Error('the file is not a scan tiksi can read');
       step4.ok(scan.name + ', ' + fmtBytes(bytes.size));
     }
@@ -306,7 +308,7 @@ async function proposePlan(prop, scan, signal) {
   if (!rec || !rec.buffer) throw new Error('scan bytes are missing from storage');
   if (scan.kind !== 'mesh') { step.warn('only meshes can be planned; ' + scan.kind + ' scans are kept as reference'); finish(prop, null, null); return; }
   const { result, applied } = await planFromScanBytes(prop, scan, rec.buffer, hooks);
-  if (signal && signal.aborted) return;
+  if (signal && signal.aborted) throw signal.reason || new Error('Cancelled');
   if (applied) step.ok(proposalSummary(result, applied));
   else step.warn(proposalSummary(result, applied));
   let project = null;
@@ -347,7 +349,7 @@ function finish(prop, result, applied) {
 function showCloseOnly() {
   const c = dlg.querySelector('[data-np-cancel]');
   c.textContent = 'CLOSE';
-  c.onclick = () => { closeDialog(); app.remount(); };
+  c.onclick = () => { if (run) { run.abort.abort(new Error('cancelled')); return; } closeDialog(); app.remount(); };
 }
 
 // Blocked: the property exists, the embed shows the capture; the model comes in by hand.
@@ -361,7 +363,7 @@ function showFallback(link, prop) {
     <div class="np-drop" data-np-drop tabindex="0">
       <span class="empty-ic">${icon('upload')}</span>
       <b>Drop the model file here</b>
-      <span>In Polycam: open the capture, <b>Download</b>, choose <b>GLB</b> (or GLTF, OBJ, PLY), then drop the file on this box. The scan, the underlay and the proposed plan follow automatically.</span>
+      <span>In Polycam: open the capture, <b>Download</b>, choose <b>GLB</b> or the complete <b>GLTF/OBJ ZIP</b> (PLY and STL also work), then drop the file on this box. The scan, the underlay and the proposed plan follow automatically.</span>
       <div class="np-drop-row">
         <a class="btn" href="${escapeHtml(link.url)}" target="_blank" rel="noopener">${icon('link')}OPEN ON POLYCAM</a>
         <button class="btn primary" data-np-choose>${icon('upload')}CHOOSE FILE</button>
@@ -384,20 +386,23 @@ async function attachFile(prop, file) {
   if (run) return;
   run = { abort: new AbortController(), prop };
   dlg.dataset.state = 'running';
+  dlg.querySelector('[data-np-cancel]').textContent = 'CANCEL';
   dlg.querySelector('[data-np-fallback]').hidden = true;
+  const signal = run.abort.signal;
   const step = log('Reading ' + file.name, 'run', fmtBytes(file.size));
   try {
     const buffer = await file.arrayBuffer();
-    const scan = await importScanBytes(buffer, file.name, prop, hooks, prop.source ? { source: { kind: prop.source.kind, url: prop.source.url, captureId: prop.source.captureId } } : null);
+    const scan = await importScanBytes(buffer, file.name, prop, { ...hooks, signal }, prop.source ? { source: { kind: prop.source.kind, url: prop.source.url, captureId: prop.source.captureId } } : null);
     if (!scan) throw new Error('not a scan tiksi can read');
     step.ok(scan.kind + ' stored in this browser');
     if (prop.source) { prop.source.status = 'resolved'; touch(); }
-    await proposePlan(prop, scan, run.abort.signal);
+    await proposePlan(prop, scan, signal);
   } catch (e) {
     console.error(e);
     step.fail(String(e && e.message || e));
     run = null;
     dlg.dataset.state = 'blocked';
+    showCloseOnly();
     dlg.querySelector('[data-np-fallback]').hidden = false;
     setStatus('Could not use that file: ' + String(e && e.message || e), 'fail');
   }

@@ -22,14 +22,19 @@ export function isLAS(buffer) {
 }
 
 export function lasHeader(buffer) {
+  if (!isLAS(buffer)) throw new Error('Not a LAS file (missing LASF signature)');
   const dv = new DataView(buffer);
   const versionMajor = dv.getUint8(24), versionMinor = dv.getUint8(25);
   const headerSize = dv.getUint16(94, true);
   const offset = dv.getUint32(96, true);
+  if (versionMajor !== 1 || versionMinor > 4 || headerSize < 227 || headerSize > buffer.byteLength || offset < headerSize || offset > buffer.byteLength) throw new Error('Invalid LAS header or point-data offset');
+  if (versionMinor >= 4 && headerSize < 375) throw new Error('Truncated LAS 1.4 header');
   const formatRaw = dv.getUint8(104);
   const format = formatRaw & 0x3f;
-  const compressed = (formatRaw & 0x80) !== 0;
+  const compressed = (formatRaw & 0xc0) !== 0;
   const recordLength = dv.getUint16(105, true);
+  const minimum = [20, 28, 26, 34, 57, 63, 30, 36, 38, 59, 67][format];
+  if (!minimum || recordLength < minimum) throw new Error('Invalid LAS point format or record length');
   let count = dv.getUint32(107, true);
   if (versionMinor >= 4 && headerSize >= 375) {
     const big = dv.getBigUint64(247, true);
@@ -39,6 +44,7 @@ export function lasHeader(buffer) {
   const off = [dv.getFloat64(155, true), dv.getFloat64(163, true), dv.getFloat64(171, true)];
   const max = [dv.getFloat64(179, true), dv.getFloat64(195, true), dv.getFloat64(211, true)];
   const min = [dv.getFloat64(187, true), dv.getFloat64(203, true), dv.getFloat64(219, true)];
+  if (scale.some(n => !Number.isFinite(n) || n <= 0) || off.some(n => !Number.isFinite(n))) throw new Error('Invalid LAS coordinate scale or offset');
   return { versionMajor, versionMinor, headerSize, offset, format, compressed, recordLength, count, scale, off, min, max };
 }
 
@@ -136,13 +142,18 @@ export function parsePLYHeader(buffer) {
   for (const raw of lines) {
     const t = raw.trim().split(/\s+/);
     if (t[0] === 'format') out.format = t[1];
-    else if (t[0] === 'element') { cur = { name: t[1], count: parseInt(t[2], 10) || 0, props: [] }; out.elements.push(cur); }
+    else if (t[0] === 'element') { const count = Number(t[2]); if (!Number.isSafeInteger(count) || count < 0) throw new Error('Invalid PLY element count'); cur = { name: t[1], count, props: [] }; out.elements.push(cur); }
     else if (t[0] === 'property' && cur) {
       if (t[1] === 'list') cur.props.push({ name: t[4], isList: true, countType: normType(t[2]), itemType: normType(t[3]) });
       else cur.props.push({ name: t[2], type: normType(t[1]) });
     }
   }
+  if (!['ascii', 'binary_little_endian', 'binary_big_endian'].includes(out.format)) throw new Error('Unsupported PLY encoding: ' + out.format);
+  for (const element of out.elements) for (const p of element.props) {
+    if (p.isList ? (!PLY_TYPES[p.countType] || !PLY_TYPES[p.itemType]) : !PLY_TYPES[p.type]) throw new Error('Unsupported PLY property type');
+  }
   const v = out.elements.find(e => e.name === 'vertex');
+  if (!v || !v.count || !['x', 'y', 'z'].every(n => v.props.some(p => p.name === n))) throw new Error('PLY has no x/y/z vertices');
   const names = new Set(v ? v.props.map(p => p.name) : []);
   // A 3DGS export always carries scale, rotation and colour/opacity together; a plain cloud
   // that happens to have an 'opacity' scalar must not be sent to the splat renderer.
