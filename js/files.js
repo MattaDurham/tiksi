@@ -14,12 +14,13 @@
 
 import {
   ws, activeProperty, projectSlice, projectFileName, exportProjectBlob, importProject, readBundle, importBundle,
-  putFile, getFile, deleteFile, handleKey, setSaveStatus,
+  putFile, getFile, deleteFile, handleKey, setSaveStatus, mergeWorkspace, replaceWorkspace,
 } from './store.js';
 
 export const FSA = typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function';
 export const FSA_DIR = typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
 const PICKER_TYPES = [{ description: 'tiksi project', accept: { 'application/zip': ['.tiksi', '.zip'] } }];
+const OPEN_PICKER_TYPES = [{ description: 'tiksi project or workspace', accept: { 'application/zip': ['.tiksi', '.zip'], 'application/json': ['.json'] } }];
 const FOLDER_MAP_KEY = 'tiksi.folder.v1';
 const SYNC_DELAY_MS = 4000;
 
@@ -83,7 +84,8 @@ async function ensurePermission(handle, interactive) {
 
 async function writeHandle(handle, blob) {
   const w = await handle.createWritable();
-  try { await w.write(blob); } finally { await w.close(); }
+  try { await w.write(blob); await w.close(); }
+  catch (e) { if (typeof w.abort === 'function') { try { await w.abort(); } catch (ignored) {} } throw e; }
 }
 
 function download(blob, name) {
@@ -102,7 +104,9 @@ export async function saveProject(prop, opts) {
   opts = opts || {};
   prop = prop || activeProperty();
   if (!prop) return null;
+  let savedSig;
   const pack = async () => {
+    savedSig = signatureOf(prop.id);
     setSaveStatus('PACKING', true);
     try { return await exportProjectBlob(prop.id); }
     catch (e) { setSaveStatus('SAVE FAILED', true); throw e; }
@@ -110,7 +114,7 @@ export async function saveProject(prop, opts) {
   if (!FSA) {
     const out = await pack();
     download(out.blob, out.name);
-    state.savedSig.set(prop.id, signatureOf(prop.id));
+    state.savedSig.set(prop.id, savedSig);
     setSaveStatus('DOWNLOADED ' + out.name.toUpperCase(), false);
     notify();
     return { via: 'download', name: out.name, bytes: out.bytes };
@@ -132,7 +136,7 @@ export async function saveProject(prop, opts) {
   if (!handle) {
     console.warn('save picker unavailable, downloading instead', pickerFailed);
     download(out.blob, out.name);
-    state.savedSig.set(prop.id, signatureOf(prop.id));
+    state.savedSig.set(prop.id, savedSig);
     setSaveStatus('DOWNLOADED ' + out.name.toUpperCase(), false);
     notify();
     return { via: 'download', name: out.name, bytes: out.bytes };
@@ -148,7 +152,7 @@ export async function saveProject(prop, opts) {
     setSaveStatus('SAVE FAILED', true);
     throw new Error('Could not write ' + handle.name + ': ' + (e && e.message || e));
   }
-  state.savedSig.set(prop.id, signatureOf(prop.id));
+  state.savedSig.set(prop.id, savedSig);
   const t = new Date();
   setSaveStatus('SAVED ' + handle.name.toUpperCase() + ' ' + String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0'), false);
   notify();
@@ -165,15 +169,25 @@ async function rememberedHandle(propId) {
 
 // ---------- open ----------
 export async function openFromFile(file) {
-  const { data, manifest } = await readBundle(file);
+  let parsed;
+  if (/\.json$/i.test(file.name)) {
+    const data = JSON.parse(await file.text());
+    if (!data || !Array.isArray(data.properties)) throw new Error('not a tiksi workspace file');
+    parsed = { data, manifest: null };
+  } else parsed = await readBundle(file);
+  const { data, manifest } = parsed;
   const isProject = manifest && manifest.format === 'tiksi-project';
   if (!isProject && data.properties.length > 1) {
     // A whole-workspace bundle: the existing IMPORT semantics (replace, after asking) apply.
-    const ok = await importBundle(file);
+    let ok;
+    if (/\.json$/i.test(file.name)) {
+      ok = confirm('Replace the current workspace with "' + file.name + '"? Save or export first if you want a backup.');
+      if (ok) replaceWorkspace(data);
+    } else ok = await importBundle(file);
     if (ok) app.afterReplace();
     return ok ? data.properties.map(p => p.id) : null;
   }
-  const ids = await importProject(file);
+  const ids = /\.json$/i.test(file.name) ? mergeWorkspace(data) : await importProject(file);
   for (const id of ids) state.savedSig.set(id, signatureOf(id));
   app.refresh(); app.remount();
   setSaveStatus('OPENED ' + file.name.toUpperCase(), false);
@@ -184,7 +198,7 @@ export async function openFromFile(file) {
 export async function openProjectPicker() {
   if (FSA) {
     let handles;
-    try { handles = await window.showOpenFilePicker({ multiple: true, types: PICKER_TYPES, id: 'tiksi-projects' }); }
+    try { handles = await window.showOpenFilePicker({ multiple: true, types: OPEN_PICKER_TYPES, id: 'tiksi-projects' }); }
     catch (e) { if (e && e.name === 'AbortError') return null; throw e; }
     const ids = [];
     for (const h of handles) {
@@ -193,7 +207,9 @@ export async function openProjectPicker() {
       if (got) {
         ids.push(...got);
         // Opening a project file makes it the Save target for that property.
-        if (got.length === 1 && (await ensurePermission(h, false))) {
+        // JSON is metadata, while SAVE produces a portable ZIP project. Never overwrite
+        // an opened JSON file with archive bytes under its original .json name.
+        if (got.length === 1 && !/\.json$/i.test(file.name) && (await ensurePermission(h, false))) {
           state.fileHandles.set(got[0], h);
           try { await putFile(handleKey(got[0]), null, { kind: 'handle', handle: h }); } catch (e) { /* session only */ }
         }
@@ -212,6 +228,7 @@ export async function openProjectPicker() {
       input.remove();
       resolve(ids);
     };
+    input.oncancel = () => { input.remove(); resolve(null); };
     input.click();
   });
 }
@@ -303,28 +320,30 @@ export async function openFromFolder(entry) {
 export function scheduleFolderSync(delay) {
   if (!state.folder) return;
   clearTimeout(state.syncTimer);
-  state.syncTimer = setTimeout(() => { syncFolder().catch(e => console.error('folder sync failed', e)); }, delay == null ? SYNC_DELAY_MS : delay);
+  state.syncTimer = setTimeout(() => { syncFolder().catch(e => { setSaveStatus('FOLDER SAVE FAILED', true); console.error('folder sync failed', e); }); }, delay == null ? SYNC_DELAY_MS : delay);
 }
 
 export async function syncFolder() {
   if (!state.folder || state.syncing) return;
   state.syncing = true;
+  const folder = state.folder;
   let wrote = 0;
   try {
     if (!(await ensurePermission(state.folder, false))) { state.folder = null; state.folderNeedsPermission = true; notify(); return; }
     for (const prop of ws.data.properties) {
+      if (state.folder !== folder) break;
       const sig = signatureOf(prop.id);
       const entry = state.folderMap[prop.id];
       const wanted = (await uniqueName(prop, entry && entry.file));
       if (entry && entry.sig === sig && entry.file === wanted) continue;
       // Someone else (another machine, through the synced folder) wrote a newer file: keep
       // theirs, flag it, and let OPEN FROM FOLDER pull it in on purpose.
-      if (entry && entry.file === wanted) {
+      if (entry) {
         try {
           const h = await state.folder.getFileHandle(entry.file);
           const f = await h.getFile();
-          if (entry.mtime && f.lastModified > entry.mtime + 2000) { state.conflicts.add(prop.id); continue; }
-        } catch (e) { /* file gone: write it again */ }
+          if (entry.mtime && f.lastModified !== entry.mtime) { state.conflicts.add(prop.id); continue; }
+        } catch (e) { if (e.name !== 'NotFoundError') throw e; /* file gone: write it again */ }
       }
       const out = await exportProjectBlob(prop.id);
       const h = await state.folder.getFileHandle(wanted, { create: true });
@@ -344,17 +363,26 @@ export async function syncFolder() {
   } finally {
     state.syncing = false;
     notify();
+    if (wrote && state.folder === folder && ws.data.properties.some(p => !state.folderMap[p.id] || state.folderMap[p.id].sig !== signatureOf(p.id))) scheduleFolderSync();
   }
 }
 
 // <name>.tiksi, or <name> (2).tiksi when another property already owns that file name.
 async function uniqueName(prop, current) {
-  const base = (await import('./store.js')).projectFileName(prop);
+  const base = projectFileName(prop);
   const taken = new Set(Object.keys(state.folderMap).filter(id => id !== prop.id).map(id => state.folderMap[id].file));
-  if (!taken.has(base)) return base;
-  if (current && current.startsWith(base.replace(/\.tiksi$/, ''))) return current;
-  for (let n = 2; n < 100; n++) { const alt = base.replace(/\.tiksi$/, ' (' + n + ').tiksi'); if (!taken.has(alt)) return alt; }
-  return base;
+  const available = async name => {
+    if (taken.has(name)) return false;
+    if (name === current) return true;
+    try { await state.folder.getFileHandle(name); return false; }
+    catch (e) { if (e.name === 'NotFoundError') return true; throw e; }
+  };
+  if (await available(base)) return base;
+  if (current && current.startsWith(base.replace(/\.tiksi$/, '')) && !taken.has(current)) return current;
+  for (let n = 2; ; n++) {
+    const alt = base.replace(/\.tiksi$/, ' (' + n + ').tiksi');
+    if (await available(alt)) return alt;
+  }
 }
 
 // ---------- window-level intake ----------

@@ -12,6 +12,7 @@ import {
 } from './materials.js';
 import { materialFor, whenMaterialReady, swatchUrl, pendingTextureJobs } from './textures.js';
 import { addPhotoFromFile, photoById } from './photos-store.js';
+import { openResearch } from './research.js';
 
 const FILTERS = ['all', 'wall', 'floor', 'ceiling', 'trim', 'any'];
 const CARD_SWATCH = 160;
@@ -266,6 +267,7 @@ function renderEditor() {
       </div>
     </div>
     <div class="mv-actions">
+      <button type="button" class="btn" data-research>SOURCE THIS MATERIAL</button>
       <button type="button" class="btn" data-dup>DUPLICATE</button>
       ${m.custom
         ? '<button type="button" class="btn danger" data-del>DELETE</button>'
@@ -325,6 +327,7 @@ function tileHint(m) {
 
 function bindEditor(m) {
   const q = s => edEl.querySelector(s);
+  q('[data-research]').onclick = () => openResearch({ kind: 'material', id: m.id, materialId: m.id, name: m.name, category: m.kind, material: m.name, finish: [m.color, m.pattern].filter(Boolean).join(' / ') });
   // Text updates land at once; the texture set, swatch and preview are minted on the debounced
   // timer, because a slider fires per pixel and each distinct value is a fresh synthesis job.
   const changed = (rebuild) => {

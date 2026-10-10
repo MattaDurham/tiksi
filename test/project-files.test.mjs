@@ -22,13 +22,14 @@ ws.data.projects.push(
 );
 ws.data.products.push(
   { id: 'prod-a', name: 'Range', brand: '', model: '', category: 'appliance', url: '', price: 1, unit: 'ea', imageUrl: '', specs: '', notes: '', itemIds: ['it-a1'] },
+  { id: 'prod-material', name: 'Sourced plaster', price: 42, itemIds: [], materialIds: ['mat-custom-1'], research: { source: 'synthetic', url: 'https://example.com/plaster' } },
   { id: 'prod-b', name: 'Tile', brand: '', model: '', category: 'tile', url: '', price: 1, unit: 'sf', imageUrl: '', specs: '', notes: '', itemIds: ['it-b1'] },
 );
 
 const slice = projectSlice(A.id);
 check(slice.properties.length === 1 && slice.properties[0].id === A.id, 'slice holds only House A');
 check(slice.projects.length === 1 && slice.projects[0].id === 'proj-a', 'slice holds only the projects of House A');
-check(slice.products.length === 1 && slice.products[0].id === 'prod-a', 'slice holds only the products specified for House A');
+check(slice.products.length === 2 && slice.products.some(p => p.id === 'prod-a') && slice.products.some(p => p.id === 'prod-material'), 'slice holds products specified by scope and by property materials');
 check(slice.materials.length === 1 && slice.materials[0].id === 'mat-custom-1', 'slice holds only the custom materials House A uses');
 check(slice.settings.activePropertyId === A.id && slice.settings.units === ws.data.settings.units, 'slice settings point at the property and keep units');
 check(slice.properties[0].levels[0].plan.img.startsWith('data:image/webp'), 'slice carries the underlay inline');
@@ -53,6 +54,17 @@ check(ws.data.materials.some(m => m.id === 'mat-custom-1'), 'merge added the cus
 check(ws.data.settings.units === 'metric', 'merge left the workspace settings alone');
 check(ws.data.settings.activePropertyId === A.id, 'merge made the opened property active');
 check(ws.data.properties.some(p => p.id === C.id), 'merge kept the other property');
+
+// A project file is a full snapshot: deleted scope projects must not reappear on reopen.
+ws.data.projects.push({ id: 'stale-project', name: 'Removed scope', propertyId: A.id, items: [] });
+mergeWorkspace(fileJson);
+check(!ws.data.projects.some(p => p.id === 'stale-project'), 'merge removes projects deleted from the opened property snapshot');
+check(store.itemTotals({ qty: 0, low: 50, likely: 100, high: 200 }).likely === 0, 'zero quantity has zero cost');
+check(store.itemTotals({ likely: 100 }).likely === 100, 'missing quantity still defaults to one');
+const unchanged = JSON.stringify(ws.data);
+let malformed = false;
+try { mergeWorkspace({ properties: [{ id: 'bad', walls: 'not a list' }] }); } catch (e) { malformed = true; }
+check(malformed && JSON.stringify(ws.data) === unchanged, 'malformed project rejected before workspace mutation');
 
 console.log(failed ? failed + ' check(s) failed' : 'all checks passed');
 process.exit(failed ? 1 : 0);

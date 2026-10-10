@@ -118,8 +118,40 @@ async function freshApp() {
   await page.waitForSelector('#property-select option', { state: 'attached' });
 }
 async function workspace() {
-  await sleep(900);   // autosave debounce
-  return page.evaluate(() => JSON.parse(localStorage.getItem('tiksi.workspace.v1')));
+  // Wait predicates must be synchronous: a Promise is itself truthy. Obtain
+  // the hydrated live store handle first, then compare the persisted result.
+  // Do not call save(): a broken autosave path must fail this check.
+  const store = await page.evaluateHandle(async () => {
+    const module = await import('./js/store.js');
+    if (module.whenHydrated) await module.whenHydrated();
+    return module.ws;
+  });
+  try {
+    await page.waitForFunction(({ store, captureId }) => {
+      const current = store.data;
+      const saved = JSON.parse(localStorage.getItem('tiksi.workspace.v1') || 'null');
+      const liveProperty = current.properties.find(p => p.source?.captureId === captureId);
+      const savedProperty = saved?.properties.find(p => p.source?.captureId === captureId);
+      const normalized = property => JSON.stringify({
+        ...property,
+        photos: (property.photos || []).map(photo => ({ ...photo, thumb: '' })),
+        levels: (property.levels || []).map(level => ({ ...level,
+          plan: level.plan ? { ...level.plan, img: '' } : level.plan })),
+      });
+      return !!liveProperty && !!savedProperty
+        && saved.settings.activePropertyId === current.settings.activePropertyId
+        && normalized(savedProperty) === normalized(liveProperty);
+    }, { store, captureId: CAPTURE_ID }, { timeout: 60000 });
+  } finally { await store.dispose(); }
+  return page.evaluate(async () => {
+    const data = JSON.parse(localStorage.getItem('tiksi.workspace.v1'));
+    const { getFile, planKey } = await import('./js/store.js');
+    // Images intentionally live in IndexedDB rather than the small workspace manifest.
+    for (const p of data.properties) for (const l of p.levels || []) {
+      if (l.plan && !l.plan.img) { const rec = await getFile(planKey(l.id, p.id)); if (rec && rec.img) l.plan.img = rec.img; }
+    }
+    return data;
+  });
 }
 function findProp(ws) { return ws.properties.find(p => p.source && p.source.captureId === CAPTURE_ID); }
 function assertPlan(prop, tag) {

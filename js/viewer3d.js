@@ -23,14 +23,15 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 import {
   ws, activeProperty, uid, touch, fmtLen, parseLen, fmtArea, polyArea,
-  escapeHtml, deleteFile, getFile, itemById, isoToday,
+  escapeHtml, deleteFile, getFile, itemById, materialById, isoToday,
   ensureLevels, wallsOn, roomsOn, wallHeightOf, levelOfWall, levelOfRoom, levelHeight, topOfLevels,
 } from './store.js';
 import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import { materialSelectHtml } from './materials.js';
-import { pendingTextureJobs } from './textures.js';
+import { pendingTextureJobs, setTextureQuality } from './textures.js';
+import { qualityProfile, stillDimensions } from './render-quality.js';
 import { icon } from './icons.js';
-import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapRects, disposeBuilt } from './geometry.js';
+import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapRects, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
 import { addPhotoFromFile, photoUrl, photoById, revokePhotoUrls } from './photos-store.js';
 import {
   SCAN_ACCEPT, importScanFile, loadScanObject, applyScanTransform, disposeScanObject,
@@ -39,8 +40,6 @@ import {
 
 // ---------- persistent GPU state (one context for the life of the page) ----------
 let renderer = null, pmrem = null;
-const MAX_DPR = { high: 2, medium: 1.5, low: 1 };
-const SHADOW_SIZE = { high: 4096, medium: 2048, low: 1024 };
 
 const ENV_DEFAULTS = {
   time: 14.5, azimuth: 200, north: 0, exposure: 1.0, quality: 'high',
@@ -79,6 +78,7 @@ let toastTimer = 0;
 // Bumped on every mount; async loaders compare their captured token so work started by a
 // previous mount never lands in (or doubles up inside) the next one.
 let mountId = 0;
+let exportingStill = false, exportRequest = false, exportDialog = null;
 const raycaster = new THREE.Raycaster();
 raycaster.params.Points = { threshold: 0.05 };
 // three's default Line threshold is 1 m: far too fat a corridor for helper lines to pick through.
@@ -86,7 +86,7 @@ raycaster.params.Line = { threshold: 0.02 };
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion();
 const walkEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 
-function dpr() { return Math.min(window.devicePixelRatio || 1, MAX_DPR[prop.env.quality] || 2); }
+function dpr() { const q = qualityProfile(prop.env.quality); return Math.min((window.devicePixelRatio || 1) * q.scale, q.maxDpr); }
 // World Y of the highest ceiling: the height the whole model spans (framing, shadows, the section range).
 function modelTop() { return topOfLevels(prop); }
 function lowestElevation() { return prop.levels.reduce((m, l) => Math.min(m, l.elevation), Infinity); }
@@ -308,14 +308,28 @@ function passClipMaterials() {
 
 function applyQuality() {
   const q = prop.env.quality || 'high';
-  passes.gtao.enabled = q === 'high';
-  passes.bloom.enabled = q !== 'low';
-  const size = SHADOW_SIZE[q] || 2048;
+  configureRenderQuality(q);
+  resize();
+}
+
+function configureRenderQuality(name, forExport = false) {
+  const q = qualityProfile(name);
+  passes.gtao.enabled = q.ao;
+  passes.gtao.updateGtaoMaterial({ samples: q.aoSamples });
+  passes.bloom.enabled = q.bloom;
+  // MSAA belongs on the composer's HDR buffers, not the unused default framebuffer.
+  // Query this format: MAX_SAMPLES alone may overstate half-float support.
+  const gl = renderer.getContext();
+  const supported = gl.getInternalformatParameter(gl.RENDERBUFFER, gl.RGBA16F, gl.SAMPLES);
+  const samples = Math.max(0, ...Array.from(supported || []).filter(n => n <= (forExport ? 0 : q.samples)));
+  for (const target of [composer.renderTarget1, composer.renderTarget2]) {
+    if (target.samples !== samples) { target.dispose(); target.samples = samples; }
+  }
+  const size = Math.min(q.shadow, renderer.capabilities.maxTextureSize);
   if (sun.shadow.mapSize.x !== size) {
     sun.shadow.mapSize.set(size, size);
     if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
   }
-  resize();
 }
 
 // ---------- model ----------
@@ -741,6 +755,7 @@ function stepWalk(dt) {
 // ---------- render loop ----------
 function tick(time) {
   if (!scene) return;
+  if (exportingStill) return;
   const dt = Math.min(0.05, (time - (lastT || time)) / 1000);
   lastT = time;
   let active = false;
@@ -811,7 +826,7 @@ function renderFrame() {
 }
 
 function resize() {
-  if (!wrapEl || !renderer || !composer) return;
+  if (!wrapEl || !renderer || !composer || exportingStill) return;
   const w = wrapEl.clientWidth, h = wrapEl.clientHeight;
   if (!w || !h) return;
   const pr = dpr();
@@ -826,29 +841,106 @@ function resize() {
 }
 
 // ---------- still render ----------
-function renderStill(scale) {
-  const w = wrapEl.clientWidth, h = wrapEl.clientHeight;
-  const pr = renderer.getPixelRatio();
-  toast('Rendering ' + (w * scale) + ' x ' + (h * scale) + ' ...', 'info', 1500);
+function openStillDialog() {
+  if (exportDialog || exportRequest) return;
+  const dialog = document.createElement('dialog');
+  exportDialog = dialog;
+  dialog.className = 'v-export-dialog';
+  dialog.innerHTML = `<form method="dialog">
+    <h2>Export image</h2>
+    <p>Save the current camera view as a PNG. Image size is independent of your window.</p>
+    <label>Long edge <select data-export-size><option value="1920">1920 px</option><option value="3840" selected>3840 px (4K)</option><option value="5760">5760 px (6K)</option><option value="7680">7680 px (wide views)</option></select></label>
+    <label>Render quality <select data-export-quality><option value="high">High</option><option value="ultra">Ultra (32 AO samples)</option></select></label>
+    <label class="v-export-check"><input type="checkbox" data-export-annotations> Include measurements and photo pins</label>
+    <p class="v-export-size" data-export-dimensions></p>
+    <p class="v-export-note">Surface detail follows ENVIRONMENT quality. Ultra uses sharper material textures. Up to 24 megapixels, subject to GPU limits.</p>
+    <p role="status" data-export-status></p>
+    <div class="v-export-actions"><button value="cancel" class="btn">CLOSE</button><button type="button" class="btn" data-export-save>SAVE PNG</button></div>
+  </form>`;
+  document.body.appendChild(dialog);
+  dialog.addEventListener('close', () => { dialog.remove(); if (exportDialog === dialog) exportDialog = null; });
+  const size = dialog.querySelector('[data-export-size]');
+  const status = dialog.querySelector('[data-export-status]');
+  const save = dialog.querySelector('[data-export-save]');
+  const dimensions = () => stillDimensions(wrapEl.clientWidth, wrapEl.clientHeight, Number(size.value), renderer.capabilities.maxTextureSize);
+  const refresh = () => {
+    try { const d = dimensions(); dialog.querySelector('[data-export-dimensions]').textContent = d.width + ' × ' + d.height + ' pixels'; status.textContent = ''; save.disabled = exportRequest; }
+    catch (e) { status.textContent = e.message; save.disabled = true; }
+  };
+  size.onchange = refresh;
+  save.onclick = async () => {
+    save.disabled = true;
+    status.textContent = 'Preparing textures and scans…';
+    try {
+      await renderStill({ ...dimensions(), quality: dialog.querySelector('[data-export-quality]').value, annotations: dialog.querySelector('[data-export-annotations]').checked, dialog, status });
+      if (dialog.isConnected) { status.textContent = 'PNG saved.'; save.disabled = false; }
+    } catch (e) { if (dialog.isConnected) { status.textContent = e.message; save.disabled = false; } }
+  };
+  refresh();
+  dialog.showModal();
+}
+
+async function renderStill(options) {
+  if (exportRequest) throw new Error('An image is already being rendered.');
+  exportRequest = true;
+  try { await renderStillPrepared(options); }
+  finally { exportRequest = false; }
+}
+
+async function renderStillPrepared(options) {
+  const token = mountId;
+  const deadline = performance.now() + 60000;
+  // Do not save a transient flat-tinted first frame. Photo decoding is counted too.
+  while (pendingTextureJobs() || Object.values(scanState).some(s => s === 'loading') || splatBusy()) {
+    if (token !== mountId || !options.dialog.open) throw new Error('Export cancelled.');
+    if (performance.now() > deadline) throw new Error('Assets are still loading. Wait for the model to finish, then export again.');
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  if (token !== mountId || !options.dialog.open) throw new Error('Export cancelled.');
+  const { width, height } = options;
+  const c = composer, r = renderer;
+  const savedPasses = [passes.outline, passes.hover].map(p => [p, p.enabled]);
+  const roots = [pinRoot, measureRoot, gizmo.getHelper()].map(o => [o, o.visible]);
+  const oldAspect = camera.aspect;
+  exportingStill = true;
+  options.status.textContent = 'Rendering ' + width + ' × ' + height + '…';
+  // Let the status paint before GPU work.
+  await new Promise(resolve => requestAnimationFrame(resolve));
   try {
-    renderer.setPixelRatio(1); composer.setPixelRatio(1);
-    renderer.setSize(w * scale, h * scale, false);
-    composer.setSize(w * scale, h * scale);
-    for (const m of measures) m.line.material.resolution.set(w * scale, h * scale);
-    composer.render();
-    const url = renderer.domElement.toDataURL('image/png');
+    if (token !== mountId || !options.dialog.open) throw new Error('Export cancelled.');
+    // High-resolution stills use SMAA at output size; avoid multiplying their HDR memory by MSAA.
+    configureRenderQuality(options.quality, true);
+    for (const [p] of savedPasses) p.enabled = false;
+    for (const [o] of roots) o.visible = options.annotations && o !== gizmo.getHelper();
+    r.setPixelRatio(1); c.setPixelRatio(1);
+    r.setSize(width, height, false); c.setSize(width, height);
+    camera.aspect = width / height; camera.updateProjectionMatrix();
+    for (const m of measures) m.line.material.resolution.set(width, height);
+    renderFrame();
+    // Snapshot synchronously before WebGL's non-preserved default framebuffer is cleared.
+    const snapshot = document.createElement('canvas');
+    snapshot.width = width; snapshot.height = height;
+    snapshot.getContext('2d').drawImage(r.domElement, 0, 0);
+    const blob = await new Promise(resolve => snapshot.toBlob(resolve, 'image/png'));
+    if (!blob) throw new Error('PNG encoding failed. Choose a smaller size.');
+    if (token !== mountId || !options.dialog.open) throw new Error('Export cancelled.');
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     const slug = String(prop.name || 'property').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'property';
-    a.href = url; a.download = 'tiksi-' + slug + '-' + isoToday() + '.png';
+    a.href = url; a.download = 'tiksi-' + slug + '-' + width + 'x' + height + '-' + isoToday() + '.png';
     a.click();
-  } catch (e) {
-    toast('Render failed: ' + e.message, 'error');
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
   } finally {
-    renderer.setPixelRatio(pr); composer.setPixelRatio(pr);
-    renderer.setSize(w, h);
-    composer.setSize(w, h);
-    for (const m of measures) m.line.material.resolution.set(w * pr, h * pr);
-    requestRender(2);
+    exportingStill = false;
+    // Navigation can dispose this mount while PNG encoding is running.
+    if (token === mountId && composer === c) {
+      for (const [p, enabled] of savedPasses) p.enabled = enabled;
+      for (const [o, visible] of roots) o.visible = visible;
+      camera.aspect = oldAspect; camera.updateProjectionMatrix();
+      configureRenderQuality(prop.env.quality);
+      resize();
+      requestRender(2);
+    }
   }
 }
 
@@ -1420,7 +1512,7 @@ function renderEnvPanel() {
         ${env.sky === 'pano' ? `<select data-env="panoPhotoId"><option value="">(choose pano)</option>${panos.map(ph => `<option value="${escapeHtml(ph.id)}" ${ph.id === env.panoPhotoId ? 'selected' : ''}>${escapeHtml(ph.name)}</option>`).join('')}</select>` : ''}
       </div>
       <div class="v-row v-row-sel"><span>QUALITY</span>
-        <select data-env="quality"><option value="high" ${env.quality === 'high' ? 'selected' : ''}>High (AO + bloom)</option><option value="medium" ${env.quality === 'medium' ? 'selected' : ''}>Medium</option><option value="low" ${env.quality === 'low' ? 'selected' : ''}>Low</option></select>
+        <select data-env="quality"><option value="ultra" ${env.quality === 'ultra' ? 'selected' : ''}>Ultra (detail + 32-sample AO)</option><option value="high" ${env.quality === 'high' ? 'selected' : ''}>High (AO + bloom)</option><option value="medium" ${env.quality === 'medium' ? 'selected' : ''}>Medium</option><option value="low" ${env.quality === 'low' ? 'selected' : ''}>Low</option></select>
       </div>
       <div class="v-checks">
         <label><input type="checkbox" data-env="showCeilings" ${env.showCeilings !== false ? 'checked' : ''}> CEILINGS</label>
@@ -1449,7 +1541,7 @@ function renderEnvPanel() {
   p.querySelectorAll('select').forEach(s => {
     s.onchange = () => {
       env[s.dataset.env] = s.value || null;
-      if (s.dataset.env === 'quality') applyQuality();
+      if (s.dataset.env === 'quality') { setTextureQuality(env.quality); rebuildModel(); applyQuality(); }
       if (s.dataset.env === 'sky') rebuildGround();
       if (s.dataset.env === 'panoPhotoId') panoMissing = null;   // a fresh choice gets a fresh try
       applyEnvironment();
@@ -1490,7 +1582,40 @@ function linkedProductsHtml(elementId) {
   }
   if (!linked.length) return '';
   return `<div class="field"><label>Products via scope</label>` +
-    linked.map(p => `<div class="stat-line"><span>${escapeHtml(p.name)}</span><b>${p.price ? '$' + Math.round(p.price).toLocaleString() : ''}</b></div>`).join('') + `</div>`;
+    linked.map(p => `<div class="stat-line"><span>${escapeHtml(p.name)}</span><b>${p.price ? '$' + Math.round(p.price).toLocaleString() : ''}</b></div><button class="btn small" data-research-product="${escapeHtml(p.id)}" data-research-element="${escapeHtml(elementId)}">RESEARCH PRODUCT</button>`).join('') + `</div>`;
+}
+
+function researchButtonHtml(elementId, role, label) {
+  return `<button class="btn" data-research-role="${role}" data-research-element="${escapeHtml(elementId)}">${label}</button>`;
+}
+function bindResearchActions(root) {
+  root.querySelectorAll('[data-research-role], [data-research-product]').forEach(button => {
+    button.onclick = async () => {
+      const elementId = button.dataset.researchElement;
+      const role = button.dataset.researchRole;
+      const wall = prop.walls.find(w => w.id === elementId);
+      const room = prop.rooms.find(r => r.id === elementId);
+      const opening = prop.openings.find(o => o.id === elementId);
+      const elementKind = wall ? 'wall' : room ? 'room' : 'opening';
+      let context;
+      if (button.dataset.researchProduct) {
+        const product = ws.data.products.find(p => p.id === button.dataset.researchProduct);
+        if (!product) return;
+        context = { kind: 'product', id: product.id, name: product.name, itemIds: product.itemIds || [], category: product.category || '', propertyId: prop.id, elementId, elementKind };
+      } else if (role === 'fixture' && opening) {
+        const name = opening.type === 'window' ? 'Window' : opening.width > 1.25 ? 'Cased opening' : 'Door';
+        context = { kind: 'fixture', id: opening.id, name, category: opening.type, dimensions: opening.width + ' m wide × ' + opening.height + ' m high', propertyId: prop.id, elementId, elementKind };
+      } else {
+        const materialId = role === 'interior' ? wallInteriorMaterialId(wall, roomsOn(prop, levelOfWall(prop, wall).id)) : role === 'ceiling' ? room?.ceilingMaterial || 'mat-ceiling' : wall?.material || room?.material;
+        const material = materialById(materialId);
+        if (!material) { toast('Choose a material first.', 'warn'); return; }
+        context = { kind: 'material', id: material.id, materialId: material.id, name: material.name, category: material.kind, finish: material.pattern, propertyId: prop.id, elementId, elementKind };
+      }
+      // Only the clicked element's description and local linking IDs enter the research view.
+      try { const { openResearch } = await import('./research.js'); openResearch(context); }
+      catch (e) { toast('Could not open research: ' + e.message, 'error'); }
+    };
+  });
 }
 function bindAssign(root) {
   root.querySelectorAll('[data-assign]').forEach(sel => {
@@ -1603,6 +1728,8 @@ function renderInspector() {
       <div class="field"><label>Height (blank = level default)</label><input type="text" data-h value="${w.height ? escapeHtml(fmtLen(w.height)) : ''}" placeholder="${escapeHtml(fmtLen(levelHeight(prop, lvl.id)))}"></div>
       <div class="field"><label>Material</label>${materialSelectHtml('wall', w.material, 'data-mat')}</div>
       <div class="field"><label>Interior face material</label>${materialSelectHtml('wall', w.materialIn, 'data-matin').replace('(none)', 'Automatic')}</div>
+      ${researchButtonHtml(w.id, 'material', 'RESEARCH WALL MATERIAL')}
+      ${researchButtonHtml(w.id, 'interior', 'RESEARCH INTERIOR FINISH')}
       ${scopeAssignHtml(w.id)}
       ${linkedProductsHtml(w.id)}
       ${photoLinksHtml(w.id)}
@@ -1629,7 +1756,7 @@ function renderInspector() {
       setSelection(null);
       touch(); rebuildModel();
     };
-    bindAssign(inspEl); bindPhotoLinks(inspEl);
+    bindAssign(inspEl); bindPhotoLinks(inspEl); bindResearchActions(inspEl);
     return;
   }
   if (selection.kind === 'opening') {
@@ -1644,6 +1771,8 @@ function renderInspector() {
       ${o.type === 'window' ? `<div class="field"><label>Sill height</label><input type="text" data-s value="${escapeHtml(fmtLen(o.sill || 0))}"></div>` : ''}
       <div class="field"><label>Position along wall</label><input type="range" min="0.02" max="0.98" step="0.005" value="${finiteNum(o.t, 0.5)}" data-t></div>
       <div class="empty">Doors wider than 4 ft become cased openings. Interior doors stand ajar so you can see through rooms.</div>
+      ${researchButtonHtml(o.id, 'fixture', o.type === 'window' ? 'RESEARCH WINDOW' : 'RESEARCH DOOR / OPENING')}
+      ${linkedProductsHtml(o.id)}
       <button class="btn" data-wall>SELECT WALL</button>
       <button class="btn danger" data-del>DELETE OPENING</button>`;
     const num = (sel, fn, min) => { inspEl.querySelector(sel).onchange = e => { const v = parseLen(e.target.value); if (!isNaN(v) && v > (min || 0.05)) { fn(v); touch(); rebuildModel(); } renderInspector(); }; };
@@ -1659,6 +1788,7 @@ function renderInspector() {
     inspEl.querySelector('[data-t]').onchange = () => touch();
     inspEl.querySelector('[data-wall]').onclick = () => setSelection({ kind: 'wall', id: o.wallId });
     inspEl.querySelector('[data-del]').onclick = () => { prop.openings = prop.openings.filter(x => x.id !== o.id); setSelection(null); touch(); rebuildModel(); };
+    bindResearchActions(inspEl);
     return;
   }
   if (selection.kind === 'room') {
@@ -1670,6 +1800,8 @@ function renderInspector() {
       <div class="stat-line"><span>Area</span><b>${fmtArea(polyArea(r.pts))}</b></div>
       <div class="field"><label>Floor material</label>${materialSelectHtml('floor', r.material, 'data-mat')}</div>
       <div class="field"><label>Ceiling material</label>${materialSelectHtml('ceiling', r.ceilingMaterial, 'data-cmat')}</div>
+      ${researchButtonHtml(r.id, 'material', 'RESEARCH FLOOR MATERIAL')}
+      ${researchButtonHtml(r.id, 'ceiling', 'RESEARCH CEILING MATERIAL')}
       ${scopeAssignHtml(r.id)}
       ${linkedProductsHtml(r.id)}
       ${photoLinksHtml(r.id)}
@@ -1678,7 +1810,7 @@ function renderInspector() {
     inspEl.querySelector('[data-mat]').onchange = e => { r.material = e.target.value || null; touch(); rebuildModel(); };
     inspEl.querySelector('[data-cmat]').onchange = e => { r.ceilingMaterial = e.target.value || null; touch(); rebuildModel(); };
     inspEl.querySelector('[data-walk]').onclick = () => setMode('walk');
-    bindAssign(inspEl); bindPhotoLinks(inspEl);
+    bindAssign(inspEl); bindPhotoLinks(inspEl); bindResearchActions(inspEl);
     return;
   }
   if (selection.kind === 'pin') {
@@ -1810,8 +1942,7 @@ function renderToolCol() {
     ${levelRows}
     <div class="tool-sep"></div>
     <div class="tool-head">RENDER</div>
-    ${tb('render2', 'camera', 'STILL 2x')}
-    ${tb('render3', 'camera', 'STILL 3x')}
+    ${tb('render', 'camera', 'EXPORT IMAGE')}
     <div class="tool-sep"></div>
     <div class="tool-head">SCANS</div>
     ${tb('scan', 'scan', 'IMPORT SCAN')}
@@ -1834,8 +1965,7 @@ function renderToolCol() {
   on('pin', () => { if (tool === 'pin') setTool('select'); else startPinMode(null); });
   on('section', toggleSection);
   on('xray', toggleXray);
-  on('render2', () => renderStill(2));
-  on('render3', () => renderStill(3));
+  on('render', openStillDialog);
   const file = tc.querySelector('input[type=file]');
   on('scan', () => file.click());
   file.onchange = () => { onImportScan(file.files[0]); file.value = ''; };
@@ -1901,6 +2031,7 @@ export function mount(root) {
     return;
   }
   ensureDefaults(prop);
+  setTextureQuality(prop.env.quality);
   root.innerHTML = `
     <div class="editor-layout v-layout">
       <div class="tool-col"></div>
@@ -1992,6 +2123,7 @@ function warmPrograms() {
 }
 
 export function unmount() {
+  if (exportDialog) exportDialog.close();
   if (renderer) renderer.setAnimationLoop(null);
   mountId++;
   revokePhotoUrls();   // object URLs handed to the lightbox, pin picker and pano loader

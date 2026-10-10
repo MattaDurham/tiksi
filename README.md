@@ -2,7 +2,8 @@
 
 An open, local-first design console for renovation and construction programs.
 Floorplans to 3D models to materials, products, budgets, schedules and cut sheets,
-in one instrument, in the browser, with no build step and no backend.
+in one instrument, in the browser, with no frontend build step. An optional local
+server adds photo reconstruction and live material research.
 
 The name is Quechua. In the old chronicles the Andean creator god carries the
 honorific Apu Qun Tiksi Wiraqucha, and *tiksi* is the word in the middle:
@@ -37,10 +38,19 @@ Design side:
   floors and scope items; pin any photo on a surface in the 3D model; use an
   equirectangular panorama as the sky so light and reflections come from the
   actual site
-- Import scans as reference geometry: point clouds (PLY, PCD, XYZ, LAS),
-  meshes (OBJ, GLB/GLTF from phone lidar apps like Polycam or Scaniverse) and
+- Import scans as reference geometry: point clouds (PLY, PCD, XYZ, PTS, LAS),
+  meshes (OBJ, STL, GLB/GLTF from phone lidar apps like Polycam or Scaniverse) and
   Gaussian splats (3DGS PLY, .splat, .spz, .ksplat), with colour-by-height,
   point budgets and x-ray mode for alignment
+- Import complete OBJ/MTL/texture or glTF/buffer/texture ZIP bundles as portable
+  GLBs, preserving normal, roughness, ambient occlusion and emissive maps.
+  External dependencies must be bundled; compressed glTF extensions requiring
+  Draco, meshopt or Basis, and LAZ, E57, USDZ, FBX and DAE are unsupported.
+- Reconstruct a textured 3D object or outdoor scene from overlapping photographs
+  on a supported Mac using Apple Object Capture. Originals retain their exact
+  bytes. See [photo reconstruction setup and limits](RECONSTRUCTION.md).
+- Use Ultra rendering with sharper procedural materials and export independent
+  high-resolution PNGs up to the graphics hardware and memory limits.
 - Start a property from a Polycam share link, in one step: paste a
   `poly.cam/capture/...` link into NEW PROPERTY (or anywhere in the console, or
   into the address bar as `#/import/<capture id>`) and tiksi fetches the mesh
@@ -61,8 +71,9 @@ Program side:
 - Link scope items to model elements (the digital-twin thread: a wall knows which
   scope item rebuilds it, which products are specified for it, and which site
   photos document it)
-- Research products anywhere, then capture them in a registry with vendor link,
-  model number, price and specs
+- Select a material, model element or product to open live sourcing. Run a focused
+  web research agent or a specialist team, compare products, fit, suppliers,
+  pricing and evidence, and save selections with their original source history.
 - Generate printable cut sheets: per scope item (elements, takeoffs, materials,
   site photos, specified products, budget line) and per product
 - Run the current-budget report: select and deselect projects against a budget
@@ -72,18 +83,65 @@ Program side:
 
 ## Running it
 
-It is a static page. Any web server works:
+The design console works on a static server. Use the included local server for
+reconstruction and live research:
 
 ```
 git clone https://github.com/MattaDurham/tiksi
 cd tiksi
-python3 -m http.server 8642
+python3 tools/serve.py --port 8642
 # open http://localhost:8642
 ```
 
 Or use the hosted copy at the GitHub Pages link above. First run loads a demo
 workspace (a generic colonial with a realistic renovation program) so every view
 has something to show; replace it with your own property whenever you like.
+
+### Local Mac app and Tailscale
+
+For the local app, run `python3 tools/serve.py --host 0.0.0.0 --port 8642` and
+open `http://localhost:8642/` in Chrome. Install Tiksi using the install button
+in the address bar to give it its own app window and Dock launcher. This server
+serves only the app assets; repository files, saved data, and directory listings
+are excluded. Binding to `0.0.0.0` makes the app reachable on the local network
+and through the Mac's Tailscale address.
+
+For automatic startup, use your operating system's service manager. Keep the
+installation's paths, service label and restart instructions in the private
+`AGENTS.local.md` file, rather than in public source code.
+
+With Tailscale connected on both devices and the Mac awake, open
+`http://<Mac-Tailscale-IP>:8642/` on your phone. Tailscale Serve can optionally
+provide an HTTPS URL once Serve/HTTPS is enabled for the tailnet. The shell and
+forms adapt to narrow screens; detailed model editing still benefits from a
+desktop. Browser storage and selected project
+folders belong to each device: serving the app from the Mac does not sync its
+workspace or expose its saved projects. Shared project storage would require a
+server API. The hosted GitHub Pages copy and the local copy also have separate
+browser storage; use project files or workspace bundles to transfer data.
+
+### Live material and fixture sourcing
+
+Live research needs the included local server and a current Codex CLI signed in
+on the server's host. Use `codex login`, then confirm `codex login status`
+succeeds. The research screen reports whether the local provider is ready.
+The static GitHub Pages app can display saved products but cannot launch agents.
+
+Select a material and click **SOURCE THIS MATERIAL**, select an element in the
+model, or use **RESEARCH ALTERNATIVES** on a product. Add a budget, price unit,
+region, finish, dimensions and required specifications to the brief. Choose a
+focused agent or **Deep specialist team**: three concurrent agents investigate
+specifications, suppliers and prices, and alternatives including sustainability
+and reviews. You can keep browsing while research runs, return for results, or
+cancel it. Up to two research jobs can run at once.
+
+Compare candidates and inspect their cited evidence, vendor offers, fit notes,
+conflicts and unknowns before saving them to Products and linking scope items.
+Evidence records when a source was retrieved and whether it was opened or only
+returned by search. Displayed prices require an opened vendor source with a
+matching currency and unit. Claims are extracted by agents, so confirm final
+fit and purchasing details with the source. Saving retains the research history
+in project files; it does not purchase anything.
 
 ## From a Polycam link
 
@@ -94,9 +152,8 @@ Share a capture from Polycam (link sharing on), then hand the link to tiksi:
 - or open `https://mattadurham.github.io/tiksi/#/import/<capture id>` directly
   (`#/import?url=<the link>` works too)
 
-What happens next, in the dialog's step log: the raw mesh is fetched from the
-endpoint Polycam's own viewer uses (`/api/capture/<id>/artifacts/raw.gltf`, which
-Polycam's storage serves with open CORS, so no third party is involved), packed
+What happens next, in the dialog's step log: Tiksi tries the public edited,
+original and raw model artifacts, validates the downloaded model, packs it
 into one textured GLB and stored in this browser, along with the capture's cover
 image as a site photo. Then scan to plan runs in a Web Worker:
 
@@ -134,9 +191,12 @@ refuse to read another site's page unless that site allows it (CORS), so tiksi c
 then ask a public relay for the public link (the relay sees the link and returns
 the bytes; nothing from your workspace is sent). That fallback is on by default and
 can be turned off or pointed at a relay of your own in the dialog. When nothing
-gets through, the property still exists with its link and the embedded viewer, and
-the dialog (and the plan inspector) take the file you download from Polycam
-yourself: Download, GLB, drop it on the box. The same pipeline runs from there.
+gets through, no successful model import is claimed. The dialog explains access,
+missing-asset and format failures and accepts a model downloaded from Polycam:
+use a GLB or a complete GLTF/OBJ ZIP bundle. The same pipeline runs from there.
+A share link does not guarantee public artifact access. Polycam's authenticated
+API requires its own account entitlements; Tiksi does not silently reuse browser
+credentials.
 
 ## Saving, opening and sharing
 
@@ -166,11 +226,14 @@ back, from the same FILE menu.
 
 ## Where your data lives
 
-Entirely in your browser, plus the files you save. The workspace autosaves to
+The workspace lives in your browser, plus the files you save. It autosaves to
 localStorage; scan files, full-resolution photos, photo thumbnails and plan
 underlays go to IndexedDB, so the localStorage copy stays small. Nothing is
-uploaded anywhere. That is the entire privacy model: the code is public, your
-house is not.
+uploaded by ordinary editing. Photo reconstruction explicitly sends selected
+original photos to this Mac's local server and keeps private job files in ignored
+runtime storage. Live sourcing sends only the submitted brief and visible
+constraints to web research agents; saved evidence travels in project files.
+The code is public; projects, photos, scans and job state stay out of Git.
 
 ## How it is built
 
@@ -192,20 +255,96 @@ products, photos and schedules can reference them, the way a Revit element
 carries its type, materials and quantities. IFC-class interoperability is on the
 roadmap, not faked in v1.
 
+## Development workflow
+
+Tiksi follows the same branch-first review workflow as Vira: one feature branch,
+one isolated worktree, one independently served preview, and one draft pull
+request. The primary checkout and its port 8642 app stay available during work.
+Use the portable shell entry point from any worktree (Python 3.10+ and Node 22+):
+
+```sh
+python3 scripts/agents-local.py seed   # private operating rules, preserved on repeat
+sh scripts/install-hooks.sh           # staged private-file and credential guard
+scripts/branch.sh start better-imports
+cd .worktrees/better-imports           # use the absolute path printed by start
+npm ci
+scripts/branch.sh serve better-imports --fresh --local
+scripts/branch.sh list
+```
+
+Branches use `codex/<slug>`. New worktrees live under the ignored `.worktrees/`
+directory; `adopt [slug]` provisions a worktree created elsewhere. Every command
+finds the actual worktree through Git. `serve` prints a `localhost` URL on an
+available port from 8643 through 8699. Preview pages show their branch and commit.
+Existing previews are reused; `--fresh` stops only that verified branch preview
+and archives its previous server runtime before starting a new instance. Active
+reconstruction jobs block stop/fresh/discard. The live process is never stopped.
+
+Previews bind loopback by default; `--local` makes that intent explicit. An
+explicit `--host 0.0.0.0` exposes a preview on LAN/Tailscale interfaces for phone
+review. Each port has its own browser workspace: the live app's browser data is
+not copied. Import an owner-approved `.tiksi` project or workspace bundle through
+the preview's FILE menu for review with real projects. Preview runtime and logs,
+project files and personal operating rules remain ignored by Git. Discard archives
+private runtime under Git's private workflow directory before deleting the tree.
+
+After committing and verifying a branch:
+
+```sh
+scripts/preflight.sh
+scripts/branch.sh pr better-imports --title "Improve imports" --body-file /tmp/pr-body.txt
+# Draft by default. Watch all checks, fix failures and push updated commits.
+gh pr checks --watch
+```
+
+For dependent feature branches, `pr <slug> --base codex/<baseline>` reviews only
+that feature's commits; retarget to main and rerun CI before landing.
+
+The owner chooses whether to merge, keep testing or discard. Only the owner's
+explicit merge instruction authorizes `pr <slug> --ready` followed by
+`merge <slug> --owner-approved`. Landing requires both trees clean, current local
+main included, an open ready PR at the exact local commit, successful Linux and
+macOS CI, and a local preflight. It merges and pushes main, then removes the spent
+worktree only when GitHub confirms Merged. It never restarts the live service.
+A failed push leaves the actual local merge visible for recovery. A PR whose head
+is in main is never closed. `discard <slug> --owner-approved` rejects dirty trees
+and preserves their files rather than offering a force-delete shortcut.
+
+Public instructions live in `AGENTS.md` and `AGENTS.local.example.md`; the
+owner's `AGENTS.local.md` is seeded once and never overwritten by template
+updates. `python3 scripts/agents-local.py diff` supports deliberate review.
+
 ## Testing
 
-There is no build, and the app has no test framework of its own. The scan-to-plan
-core has a dependency-free regression test on a synthetic two-storey house, and
-the share-link flow has an end-to-end check that runs the real page in headless
-Chromium against a mock Polycam share page (direct, relayed, blocked-then-dropped,
-and deep-linked), with a synthetic two-room lidar-style capture as the fixture:
+Install the pinned test dependencies and browser once. The app itself still has
+no build step or runtime npm dependencies:
 
+```sh
+npm ci
+npx playwright install chromium
+npm run check       # syntax and tracked private-state guard
+npm test            # Node regressions and isolated Python lifecycle/server tests
+npm run test:e2e    # every tools/e2e-*.mjs against temporary test ports
+npm run preflight  # all of the above
 ```
-node test/scan2plan.test.mjs            # the core: levels, walls, rooms, openings
-node test/project-files.test.mjs        # project files: slice one property, merge it back
-node tools/fixture-room.mjs             # writes tools/fixtures/room.glb
-node tools/e2e-polycam.mjs              # needs Playwright with Chromium
-node tools/debug-scan2plan.mjs my.glb   # prints the proposal for any mesh file, in plain Node
+
+Browser checks use synthetic scans and projects. The runner assigns temporary
+ports; tests never bind or stop the live app on 8642. CI runs preflight on macOS
+and Linux, installs headless Chromium, and retains screenshots on failure. The
+branch lifecycle tests build disposable repositories and verify dirty-tree,
+stale-PID, PR-head, CI, merged-PR and preview-service protections without touching
+the real main branch, live service or owner projects. `scripts/preflight.sh --list`
+names the enforced local checks. Local owner-specific identifiers can be listed
+in ignored `.tiksi-private-patterns`; the private guard reports only filenames,
+never the matching values.
+
+Additional focused tools remain available:
+
+```sh
+node test/scan2plan.test.mjs
+node test/project-files.test.mjs
+node tools/fixture-room.mjs
+node tools/debug-scan2plan.mjs my.glb
 ```
 
 ## Roadmap
@@ -216,13 +355,12 @@ node tools/debug-scan2plan.mjs my.glb   # prints the proposal for any mesh file,
 - E57 lidar; scan-to-plan for point clouds and splats (meshes are done), walls off
   the Manhattan grid, stairs
 - Roofs, stairs, sections and elevations
-- Assisted product research (agentic lookup into the registry)
 - Cost database with per-assembly unit pricing
 
 ## Built in public
 
-This tool is being built live, in the open, with Claude as the pair. The commit
-history is the build log. Issues and ideas are welcome.
+This tool is built in the open with reviewed branches and pull requests. The
+commit history is the build log. Issues and ideas are welcome.
 
 MIT licensed. Vendored three.js retains its own MIT license (THREE-LICENSE.txt),
 as does Spark (SPARK-LICENSE.txt).
