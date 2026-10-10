@@ -114,11 +114,18 @@ function captureDraft() {
 async function start() {
   captureDraft();
   if (!draft.query.trim()) { error = 'Describe the material, fixture or product you want to find.'; render(); return; }
+  const labels = { budget: 'Budget', region: 'Region / delivery area', finish: 'Finish', dimensions: 'Dimensions', specifications: 'Required specifications' };
+  for (const key of Object.keys(labels)) {
+    if (draft[key].length > 1000) { error = `${labels[key]} is longer than 1,000 characters. Shorten that field before starting research.`; render(); return; }
+  }
+  for (const key of ['name', 'category', 'material', 'finish', 'dimensions']) {
+    if ((context[key] || '').length > 1000) { error = `The selected ${key} is longer than 1,000 characters. Shorten it in the material or product editor, or start a new brief from Products.`; render(); return; }
+  }
   error = ''; notice = ''; selected.clear(); saved.clear();
   const submittedContext = cleanContext(context), submittedItems = [...draft.itemIds];
   const body = { query: draft.query.trim(), mode: draft.mode, context: {}, constraints: {} };
   for (const key of ['name', 'category', 'material', 'finish', 'dimensions']) body.context[key] = text(context[key]);
-  for (const key of ['budget', 'region', 'finish', 'dimensions', 'specifications']) body.constraints[key] = text(draft[key]);
+  for (const key of ['budget', 'region', 'finish', 'dimensions', 'specifications']) body.constraints[key] = draft[key];
   root.querySelector('[data-start]').disabled = true;
   try {
     const result = await request('', { method: 'POST', body: JSON.stringify(body) });
@@ -160,7 +167,7 @@ async function cancel() {
   } catch (e) { error = e.message; renderResults(); }
 }
 
-const field = (label, key, placeholder = '') => `<div class="field"><label for="research-${key}">${label}</label><input type="text" id="research-${key}" data-brief="${key}" value="${esc(draft[key])}" placeholder="${esc(placeholder)}" maxlength="2000"></div>`;
+const field = (label, key, placeholder = '') => `<div class="field"><label for="research-${key}">${label}</label><input type="text" id="research-${key}" data-brief="${key}" value="${esc(draft[key])}" placeholder="${esc(placeholder)}" maxlength="1000"></div>`;
 
 function render() {
   if (!root) return;
@@ -175,7 +182,7 @@ function render() {
       ${field('Region / delivery area', 'region', 'Where should it be available?')}
       ${field('Finish / color / texture', 'finish')}
       ${field('Dimensions / fit', 'dimensions')}
-      <div class="field"><label for="research-specifications">Required specifications</label><textarea id="research-specifications" data-brief="specifications" maxlength="2000" placeholder="Performance, installation, certifications or compatibility">${esc(draft.specifications)}</textarea></div>
+      <div class="field"><label for="research-specifications">Required specifications</label><textarea id="research-specifications" data-brief="specifications" maxlength="1000" placeholder="Performance, installation, certifications or compatibility">${esc(draft.specifications)}</textarea></div>
       <div class="field"><label for="research-mode">Research depth</label><select id="research-mode" data-brief="mode"><option value="focused" ${draft.mode === 'focused' ? 'selected' : ''}>Focused agent</option><option value="team" ${draft.mode === 'team' ? 'selected' : ''}>Deep specialist team</option></select></div>
       <p class="research-hint">Focused research finds candidates and sources. A team investigates fit, suppliers and pricing, sustainability and reviews, then reconciles findings.</p>
       <div class="field"><label for="research-scope">Link saved selections to scope items</label><select id="research-scope" data-scope multiple size="${Math.min(6, Math.max(2, items.length))}">${items.map(({ project, item }) => `<option value="${esc(item.id)}" ${draft.itemIds.includes(item.id) ? 'selected' : ''}>${esc(project.name)} / ${esc(item.name)}</option>`).join('')}</select></div>

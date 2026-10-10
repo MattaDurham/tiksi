@@ -70,6 +70,13 @@ try {
   await page.waitForSelector('#research-query');
   assert.equal(await page.inputValue('#research-query'), 'Synthetic ceramic tile');
   assert.deepEqual(await page.locator('#research-scope').evaluate(el => [...el.selectedOptions].map(o => o.value)), ['item-fixture']);
+  await page.waitForFunction(() => !document.querySelector('[data-start]').disabled);
+  await page.evaluate(() => research.openResearch({ kind: 'material', id: 'material-fixture', materialId: 'material-fixture', name: 'Synthetic ceramic tile', elementId: 'room-fixture', propertyId: 'property-fixture', specifications: 'S'.repeat(1100) }));
+  assert.equal((await page.inputValue('#research-specifications')).length, 1100);
+  await page.click('[data-start]');
+  assert.match(await page.locator('[role=alert]').innerText(), /longer than 1,000 characters/);
+  assert.equal(posted, undefined, 'oversized prefilled constraints never dispatch a truncated request');
+  await page.fill('#research-specifications', 'Synthetic specifications');
   await page.fill('#research-budget', 'up to $10 per sq ft');
   await page.fill('#research-region', 'Synthetic test region');
   await page.fill('#research-dimensions', '12 x 24 inches');
