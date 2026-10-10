@@ -47,6 +47,7 @@ const server = http.createServer(async (req, res) => {
     assert.equal(req.headers['x-tiksi-token'], 'synthetic-test-token'); cancelCalls++; fixture.status = 'cancelled'; return json(200, { job: fixture });
   }
   if (path === '/api/material-research/job-fixture') {
+    assert.equal(req.headers['x-tiksi-token'], 'synthetic-test-token');
     calls++;
     if (finish) { fixture.status = 'completed'; fixture.agents[0].status = 'completed'; fixture.products = [result, { ...result, id: 'candidate-2', name: 'Synthetic alternative', price: 7, currency: 'EUR', url: 'javascript:alert(1)', sourceEvidence: [{ url: 'javascript:alert(1)', title: '<script>Unsafe source</script>' }] }]; }
     return json(200, { job: fixture });

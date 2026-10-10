@@ -61,7 +61,6 @@ function restore() {
 export function mount(el) {
   root = el; generation++; restore(); render();
   checkCapabilities();
-  if (job && !TERMINAL.has(job.status)) schedulePoll(0);
 }
 
 export function unmount() {
@@ -73,7 +72,7 @@ async function request(path, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
-    const response = await fetch(API + path, { ...options, signal: controller.signal, headers: { 'Content-Type': 'application/json', ...(options.method && capabilities?.token ? { 'X-Tiksi-Token': capabilities.token } : {}), ...options.headers } });
+    const response = await fetch(API + path, { ...options, signal: controller.signal, headers: { 'Content-Type': 'application/json', ...(path !== '/capabilities' && capabilities?.token ? { 'X-Tiksi-Token': capabilities.token } : {}), ...options.headers } });
     if (!response.headers.get('content-type')?.includes('application/json')) throw new Error('Live research needs the Tiksi local server. Open your local or Tailscale Tiksi address.');
     const data = await response.json();
     if (!response.ok) throw new Error(data.error?.message || data.error || data.detail || `Research request failed (${response.status}).`);
@@ -91,6 +90,8 @@ async function checkCapabilities() {
   if (!root) return;
   // Do not replace the form while the user is typing.
   renderAvailability();
+  // Restored private jobs require the token from this server before status reads.
+  if (capabilities?.token && job && !TERMINAL.has(job.status)) schedulePoll(0);
 }
 
 function renderAvailability() {
