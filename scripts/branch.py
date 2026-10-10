@@ -153,7 +153,7 @@ class Workflow:
             with opener.open(f'http://localhost:{metadata["port"]}/api/instance', timeout=1) as response:
                 result = json.load(response)
             if result.get('activeJobs', 0):
-                raise WorkflowError('Preview has active reconstruction jobs; let them finish or cancel them in the app.')
+                raise WorkflowError('Preview has active reconstruction or research jobs; let them finish or cancel them in the app.')
         except urllib.error.URLError as exc:
             raise WorkflowError(f'Cannot verify preview shutdown safety: {exc}')
 
@@ -267,29 +267,33 @@ class Workflow:
     def pr_info(self, slug, strict=False):
         try:
             return json.loads(self.gh('pr', 'view', self.validate(slug), '--json',
-                                     'number,state,isDraft,headRefOid,url,statusCheckRollup'))
+                                     'number,state,isDraft,headRefOid,url,statusCheckRollup,baseRefName'))
         except WorkflowError as exc:
             if strict and "no pull requests found" not in str(exc).lower(): raise
             return None
 
-    def pr(self, slug, *, title=None, body_file=None, ready=False):
+    def pr(self, slug, *, title=None, body_file=None, ready=False, base='main'):
         target = self.target(slug)
         if self.git('status', '--porcelain', cwd=target):
             raise WorkflowError('Commit all branch work before pushing or opening a PR.')
         branch = self.validate(slug)
-        if self.git('rev-list', '--count', 'main..' + branch) == '0':
-            raise WorkflowError('Branch has no commits beyond main; nothing to publish as a PR.')
+        self.git('show-ref', '--verify', 'refs/heads/' + base)
+        if body_file and not Path(body_file).is_file():
+            raise WorkflowError('PR body file does not exist; no push attempted.')
+        if self.git('rev-list', '--count', base + '..' + branch) == '0':
+            raise WorkflowError('Branch has no commits beyond its base; nothing to publish as a PR.')
         self.gh('auth', 'status')
         self.git('push', '-u', 'origin', branch, cwd=target)
         info = self.pr_info(slug)
         if info and info['state'] == 'OPEN':
+            if info.get('baseRefName') != base: self.gh('pr', 'edit', branch, '--base', base)
             if title: self.gh('pr', 'edit', branch, '--title', title)
             if body_file: self.gh('pr', 'edit', branch, '--body-file', str(Path(body_file).resolve()))
             if ready and info['isDraft']: self.gh('pr', 'ready', branch)
             print(info['url'])
             return
-        title = title or self.git('log', '--reverse', '--format=%s', 'main..' + branch).split('\n')[0]
-        args = ['pr', 'create', '--head', branch, '--base', 'main', '--title', title or branch]
+        title = title or self.git('log', '--reverse', '--format=%s', base + '..' + branch).split('\n')[0]
+        args = ['pr', 'create', '--head', branch, '--base', base, '--title', title or branch]
         if body_file: args += ['--body-file', str(Path(body_file).resolve())]
         else: args += ['--body', f'Changes on `{branch}`. Review and validation details will be added before landing.']
         if not ready: args += ['--draft']
@@ -312,6 +316,8 @@ class Workflow:
         info = info or self.pr_info(slug)
         if not info or info['state'] != 'OPEN' or info['isDraft']:
             raise WorkflowError('An open, ready PR is required before merging.')
+        if info.get('baseRefName', 'main') != 'main':
+            raise WorkflowError('Retarget the PR to main and wait for fresh CI before landing.')
         if info['headRefOid'] != self.git('rev-parse', branch):
             raise WorkflowError('PR head differs from local head; push the branch and wait for its CI.')
         checks = info.get('statusCheckRollup') or []
@@ -394,7 +400,7 @@ def main():
             binding.add_argument('--local', action='store_true', help='loopback only (default)')
             binding.add_argument('--host', default='127.0.0.1', help='explicit preview interface')
         if command == 'pr':
-            child.add_argument('--title'); child.add_argument('--body-file')
+            child.add_argument('--title'); child.add_argument('--body-file'); child.add_argument('--base', default='main')
             child.add_argument('--ready', action='store_true')
         if command in ['merge', 'discard']:
             child.add_argument('--owner-approved', action='store_true')

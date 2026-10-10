@@ -5,10 +5,14 @@
   "type": "module",
   "scripts": {
     "check": "python3 scripts/check.py",
-    "test": "node --test test/*.test.mjs && python3 -m unittest discover -s test -p 'test_*.py'",
+    "test": "node --test test/*.test.mjs && python3 scripts/unit.py",
     "test:e2e": "node scripts/e2e.mjs",
     "preflight": "sh scripts/preflight.sh"
   },
-  "devDependencies": { "playwright": "1.64.0" },
-  "engines": { "node": ">=22" }
+  "devDependencies": {
+    "playwright": "1.64.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
 }

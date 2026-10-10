@@ -135,7 +135,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.workflow.gate('feature', info), target)
         with self.assertRaisesRegex(branch.WorkflowError, 'owner'):
             self.workflow.merge('feature')
-        for changes in [{'isDraft': True}, {'headRefOid': '0' * 40}, {'statusCheckRollup': []},
+        for changes in [{'baseRefName': 'codex/baseline'}, {'isDraft': True}, {'headRefOid': '0' * 40}, {'statusCheckRollup': []},
                         {'statusCheckRollup': [{'status': 'IN_PROGRESS', 'conclusion': None}]},
                         {'statusCheckRollup': [{'status': 'COMPLETED', 'conclusion': 'FAILURE'}]}]:
             with self.subTest(changes=changes), self.assertRaises(branch.WorkflowError):
@@ -177,6 +177,49 @@ class WorkflowTests(unittest.TestCase):
             self.assertNotIn(('pr', 'close', 'codex/feature'), [tuple(call.args) for call in gh.call_args_list])
         self.assertTrue(target.exists())
 
+    def test_service_dispatch_aggregates_busy_guard_and_closes_both_services(self):
+        target = self.start()
+        (target / 'server').mkdir()
+        template = """from pathlib import Path
+class SERVICE:
+    def __init__(self, state_dir):
+        self.state = Path(state_dir)
+        self.state.mkdir(parents=True, exist_ok=True)
+    def active_jobs(self):
+        marker = self.state / 'busy'
+        return int(marker.read_text(encoding='utf-8')) if marker.exists() else 0
+    def dispatch(self, handler):
+        if handler.path != '/api/NAME/mock': return False
+        payload = b'NAME'
+        handler.send_response(200)
+        handler.send_header('Content-Length', str(len(payload)))
+        handler.end_headers()
+        handler.wfile.write(payload)
+        return True
+    def close(self):
+        (self.state / 'closed').write_text('closed', encoding='utf-8')
+"""
+        for name, cls in [('reconstruction', 'ReconstructionService'), ('material_research', 'MaterialResearchService')]:
+            (target / 'server' / (name + '.py')).write_text(template.replace('SERVICE', cls).replace('NAME', name), encoding='utf-8')
+        metadata = self.workflow.serve('feature')
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        for name in ['reconstruction', 'material_research']:
+            with opener.open(f'http://localhost:{metadata["port"]}/api/{name}/mock', timeout=2) as response:
+                self.assertEqual(response.read().decode('utf-8'), name)
+        reconstruction = target / '.tiksi-state/reconstruction'
+        research = target / '.tiksi-state/material-research'
+        (reconstruction / 'busy').write_text('2', encoding='utf-8')
+        (research / 'busy').write_text('3', encoding='utf-8')
+        self.assertEqual(self.workflow.probe(metadata)['activeJobs'], 5)
+        with self.assertRaisesRegex(branch.WorkflowError, 'active reconstruction'):
+            self.workflow.stop('feature')
+        self.assertIsNotNone(self.workflow.probe(metadata))
+        (reconstruction / 'busy').unlink()
+        (research / 'busy').unlink()
+        self.workflow.stop('feature')
+        self.assertTrue((reconstruction / 'closed').exists())
+        self.assertTrue((research / 'closed').exists())
+
     def add_origin(self):
         remote = Path(self.temp.name) / 'remote.git'
         self.git('init', '--bare', str(remote))
@@ -194,6 +237,8 @@ class WorkflowTests(unittest.TestCase):
         target = self.start()
         self.commit_feature(target)
         with patch.object(self.workflow, 'gh', return_value='https://example.com/pr/1') as gh, patch.object(self.workflow, 'pr_info', return_value=None):
+            with self.assertRaisesRegex(branch.WorkflowError, 'body file'):
+                self.workflow.pr('feature', body_file='/does/not/exist')
             self.workflow.pr('feature', title='Synthetic upgrade')
             create = next(call.args for call in gh.call_args_list if call.args[:2] == ('pr', 'create'))
             self.assertIn('--draft', create)
