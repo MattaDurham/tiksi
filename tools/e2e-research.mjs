@@ -53,6 +53,7 @@ const server = http.createServer(async (req, res) => {
     return json(200, { job: fixture });
   }
   if (path === '/') { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(html); }
+  if (path === '/app') { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(readFileSync(resolve(repo, 'index.html'))); }
   const file = resolve(repo, '.' + path);
   if (!file.startsWith(repo + sep) || !existsSync(file)) { res.writeHead(404); return res.end('missing'); }
   res.writeHead(200, { 'Content-Type': MIME[extname(file)] || 'application/octet-stream' }); res.end(readFileSync(file));
@@ -132,6 +133,27 @@ try {
   // Static/unconfigured hosting reports the actual availability and disables start.
   available = false; await page.reload(); await page.waitForFunction(() => document.querySelector('[data-availability]').textContent.includes('unavailable'));
   assert.equal(await page.locator('[data-start]').isDisabled(), true);
+  // Verify the real app shell routes contextual actions into the research view.
+  const app = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+  app.on('pageerror', error => errors.push(error.message));
+  await app.goto(address + 'app#/products');
+  await app.waitForSelector('#research-prod');
+  await app.click('#research-prod');
+  await app.waitForSelector('#research-query');
+  assert.equal(new URL(app.url()).hash, '#/research');
+  await app.click('#rail [data-view="materials"]');
+  await app.locator('.mv-card').first().click();
+  const materialName = await app.inputValue('[data-f="name"]');
+  await app.click('[data-research]');
+  await app.waitForSelector('#research-query');
+  assert.equal(await app.inputValue('#research-query'), materialName);
+  await app.click('#rail [data-view="products"]');
+  await app.click('#new-prod');
+  await app.locator('#prod-form [data-f="name"]').fill('Synthetic fixture for routing');
+  await app.locator('#prod-form [data-f="name"]').blur();
+  await app.click('#prod-research');
+  await app.waitForSelector('#research-query');
+  assert.equal(await app.inputValue('#research-query'), 'Synthetic fixture for routing');
   assert.deepEqual(errors, []);
   console.log('research UI contract passed: context, live jobs, browse/resume, evidence, comparison, scope/material links, pricing, cancellation, safety and 402px layout');
 } finally { await browser.close(); await new Promise(r => server.close(r)); }
