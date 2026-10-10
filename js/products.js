@@ -3,6 +3,7 @@
 
 import { ws, uid, touch, fmtMoney, parseMoney, escapeHtml, allScopeItems } from './store.js';
 import { icon } from './icons.js';
+import { openResearch, safeResearchUrl } from './research.js';
 
 const CATEGORIES = ['appliance', 'plumbing', 'lighting', 'flooring', 'tile', 'cabinetry', 'hardware', 'hvac', 'electrical', 'lumber', 'windows-doors', 'paint', 'other'];
 
@@ -34,15 +35,16 @@ function render() {
       </div>
       <div class="toolbar">
         <button class="btn primary" id="new-prod">${icon('plus')}NEW PRODUCT</button>
+        <button class="btn" id="research-prod">RESEARCH PRODUCTS</button>
         <input type="text" class="search-input" id="prod-q" placeholder="search products..." value="${escapeHtml(query)}">
         <select id="prod-cat" class="tb-select">
           <option value="">all categories</option>
           ${CATEGORIES.map(c => `<option ${c === catFilter ? 'selected' : ''}>${c}</option>`).join('')}
         </select>
         <span class="sp"></span>
-        <span class="mono faint" style="font-size:10px">Research a product on the web, then capture it here with its link.</span>
+        <span class="mono faint" style="font-size:10px">Find products and alternatives with live source evidence.</span>
       </div>
-      <div style="display:grid; grid-template-columns: 1fr ${editingId != null ? '340px' : ''}; gap:16px; align-items:start">
+      <div class="products-layout prod-layout ${editingId != null ? 'has-editor' : ''}">
         ${products.length ? `<div class="prod-grid">${products.map(prodCard).join('')}</div>` :
           `<div class="empty-state"><span class="empty-ic">${icon('products')}</span>
             <b>${d.products.length ? 'No products match' : 'No products yet'}</b>
@@ -57,14 +59,19 @@ function render() {
     editingId = p.id;
     touch(); render();
   };
+  el.querySelector('#research-prod').onclick = () => openResearch({});
   const q = el.querySelector('#prod-q');
   q.oninput = () => { query = q.value; render(); el.querySelector('#prod-q').focus(); const i = el.querySelector('#prod-q'); i.setSelectionRange(i.value.length, i.value.length); };
   el.querySelector('#prod-cat').onchange = e => { catFilter = e.target.value; render(); };
 
   el.querySelectorAll('[data-edit]').forEach(c => c.onclick = e => {
-    if (e.target.closest('a')) return;
+    if (e.target.closest('a, button')) return;
     editingId = c.dataset.edit;
     render();
+  });
+  el.querySelectorAll('[data-research-product]').forEach(b => b.onclick = () => {
+    const p = d.products.find(p => p.id === b.dataset.researchProduct);
+    if (p) researchProduct(p);
   });
 
   if (editingId != null) renderForm(items);
@@ -80,19 +87,27 @@ function usedIn(p) {
 
 function prodCard(p) {
   const links = usedIn(p);
+  const url = safeResearchUrl(p.url);
   return `<div class="card prod-card clickable ${p.id === editingId ? 'active' : ''}" data-edit="${escapeHtml(p.id)}">
     <div class="p-img">${p.imageUrl ? `<img src="${escapeHtml(p.imageUrl)}" loading="lazy" alt="" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'ph',textContent:'NO IMAGE'}))">` : `<span class="ph">${icon('image')}NO IMAGE</span>`}</div>
     <div class="p-name">${escapeHtml(p.name)}</div>
     <div class="p-meta">${escapeHtml([p.brand, p.model].filter(Boolean).join(' '))}</div>
     <div class="p-chips">
       <span class="chip">${escapeHtml(p.category)}</span>
+      ${(p.materialIds || []).map(id => ws.data.materials.find(m => m.id === id)).filter(Boolean).map(m => `<span class="chip cyan">${escapeHtml(m.name)}</span>`).join('')}
+      ${p.research ? '<span class="chip">SOURCE EVIDENCE</span>' : ''}
       ${links.map(l => `<span class="chip cyan" title="${escapeHtml(l.project.name)}">${icon('link')}${escapeHtml(l.item.name)}</span>`).join('')}
     </div>
     <div class="p-foot">
       <span class="p-price">${p.price ? fmtMoney(p.price) + (p.unit && p.unit !== 'ea' ? ' / ' + escapeHtml(p.unit) : '') : ''}</span>
-      ${p.url ? `<a href="${escapeHtml(p.url)}" target="_blank" rel="noopener" class="p-link">VENDOR ${icon('arrow-right', { size: 11 })}</a>` : ''}
+      ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="p-link">VENDOR ${icon('arrow-right', { size: 11 })}</a>` : ''}
     </div>
+    <button class="btn" data-research-product="${escapeHtml(p.id)}">RESEARCH ALTERNATIVES</button>
   </div>`;
+}
+
+function researchProduct(p) {
+  openResearch({ kind: 'product', id: p.id, name: [p.name, p.brand, p.model].filter(Boolean).join(' '), category: p.category, specifications: p.specs, itemIds: [...(p.itemIds || [])] });
 }
 
 function renderForm(items) {
@@ -101,6 +116,8 @@ function renderForm(items) {
   const form = el.querySelector('#prod-form');
   form.innerHTML = `
     <h3 class="kicker">EDIT PRODUCT</h3>
+    <button class="btn" id="prod-research">RESEARCH ALTERNATIVES</button>
+    ${p.research ? provenance(p.research) : ''}
     <div class="field"><label>Name</label><input data-f="name" type="text" value="${escapeHtml(p.name)}"></div>
     <div class="field-row">
       <div class="field"><label>Brand</label><input data-f="brand" type="text" value="${escapeHtml(p.brand || '')}"></div>
@@ -128,6 +145,7 @@ function renderForm(items) {
     </div>`;
 
   form.querySelectorAll('[data-f]').forEach(inp => inp.onchange = () => { p[inp.dataset.f] = inp.value; touch(); render(); });
+  form.querySelector('#prod-research').onclick = () => researchProduct(p);
   form.querySelector('[data-money=price]').onchange = e => { p.price = parseMoney(e.target.value); touch(); render(); };
   form.querySelector('[data-items]').onchange = e => {
     p.itemIds = Array.from(e.target.selectedOptions).map(o => o.value);
@@ -140,4 +158,14 @@ function renderForm(items) {
     editingId = null;
     touch(); render();
   };
+}
+
+function provenance(research) {
+  const evidence = research.candidate?.sourceEvidence || [];
+  return `<details class="prod-provenance"><summary>Research evidence and original pricing</summary>
+    <p>Saved ${escapeHtml(research.savedAt || '')}</p>
+    <p>${escapeHtml(research.request?.query || '')}</p>
+    <p>Original source price: ${escapeHtml(String(research.candidate?.price ?? 'unverified'))} ${escapeHtml(research.candidate?.currency || '')} / ${escapeHtml(research.candidate?.unit || 'unit unverified')}. ${escapeHtml(research.candidate?.priceStatus || 'unverified')}</p>
+    ${evidence.map(source => { const url = safeResearchUrl(source.url); return `<p>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.title || url)}</a>` : escapeHtml(source.title || 'Source URL unavailable')}<br>${escapeHtml(source.relevance || '')}<br>${escapeHtml(source.checkedAt || '')}</p>`; }).join('')}
+  </details>`;
 }
