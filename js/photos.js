@@ -11,7 +11,7 @@ import {
 import { addPhotoFromFile, photoUrl, photoBytes, photoById, deletePhoto, isPanoramaAspect, revokePhotoUrls } from './photos-store.js';
 import { addCustomMaterial } from './materials.js';
 
-const PLAN_MAX_PX = 2000;   // same cap as plan2d's own underlay upload
+const PLAN_MAX_PX = 4096;   // detailed tracing without unbounded canvas memory
 const MATERIAL_KINDS = ['wall', 'floor', 'ceiling', 'trim', 'any'];
 
 // Module-persistent view state (survives view switches, like the plan editor).
@@ -58,7 +58,9 @@ function roomLabel(r) {
 
 function kindLabel(p) { return p.kind === 'pano' ? '360 PANO' : 'PHOTO'; }
 
-function fileExt(mime) { return { 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' }[mime] || 'jpg'; }
+function fileExt(mime) { return { 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
+  'image/avif': 'avif', 'image/bmp': 'bmp', 'image/heic': 'heic', 'image/heif': 'heif',
+  'image/tiff': 'tiff', 'image/svg+xml': 'svg' }[mime] || 'jpg'; }
 
 function loadImage(src) {
   return new Promise((resolve, reject) => {
@@ -161,7 +163,7 @@ async function useAsUnderlay(p) {
   c.getContext('2d').drawImage(img, 0, 0, cw, ch);
   const isPng = p.mime === 'image/png';
   lvl.plan = {
-    img: isPng ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.85),
+    img: isPng ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.92),
     imgW: cw, imgH: ch,
     mPerPx: 18 / cw,            // assume ~18 m wide until calibrated (plan2d convention)
     opacity: 0.55, offsetX: 0, offsetY: 0, calibrated: false,

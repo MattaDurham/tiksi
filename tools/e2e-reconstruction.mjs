@@ -62,9 +62,33 @@ try {
     return { width:record.w,height:record.h,original:record.original,bytes:saved.length,exact:saved.length===original.length&&saved.every((v,i)=>v===original[i]),alpha:alpha.getContext('2d').getImageData(0,0,1,1).data[3],cards:document.querySelectorAll('.ph-card').length };
   });
   assert.equal(result.width,4096);assert.equal(result.height,3072);assert.equal(result.original,true);assert.equal(result.exact,true);assert.equal(result.alpha,0);assert.equal(result.cards,1);
+  // Photo library edits and downstream uses must preserve the source and references.
+  await page.locator('.ph-card').click();
+  await page.locator('[data-f=name]').fill('Renamed camera image');await page.locator('[data-f=name]').dispatchEvent('change');
+  await page.locator('[data-f=notes]').fill('Synthetic room reference');await page.locator('[data-f=notes]').dispatchEvent('change');
+  await page.getByRole('button',{name:'MATERIAL',exact:true}).click();
+  await page.waitForFunction(()=>window.test.store.ws.data.materials.some(m=>m.pattern==='photo'));
+  await page.getByRole('button',{name:'PLAN UNDERLAY',exact:true}).click();
+  await page.waitForFunction(()=>window.test.property.levels[0].plan?.imgW===4096);
+  const photoUses=await page.evaluate(()=>{
+    const p=window.test.property.photos[0],m=window.test.store.ws.data.materials.find(m=>m.pattern==='photo');
+    return { name:p.name,notes:p.notes,materialLinked:m.photoId===p.id,underlay:window.test.property.levels[0].plan.imgW };
+  });
+  assert.equal(photoUses.name,'Renamed camera image');assert.equal(photoUses.notes,'Synthetic room reference');assert.equal(photoUses.materialLinked,true);assert.equal(photoUses.underlay,4096);
+  await page.evaluate(async()=>{
+    const c=document.createElement('canvas');c.width=4000;c.height=2000;c.getContext('2d').fillRect(0,0,4000,2000);
+    const b=await new Promise(resolve=>c.toBlob(resolve,'image/png'));
+    window.pano=await window.test.photoStore.addPhotoFromFile(window.test.property,new File([b],'panorama.png',{type:'image/png'}));
+    window.test.photos.unmount();window.test.photos.mount(document.querySelector('#view'));
+  });
+  await page.locator('.ph-card').first().click();
+  await page.getByRole('button',{name:'USE AS SKY',exact:true}).click();
+  await page.waitForFunction(()=>window.test.property.env.sky==='pano');
+  assert.equal(await page.evaluate(()=>window.test.property.env.panoPhotoId===window.pano.id),true);
   await page.getByRole('button',{name:'PHOTO TO 3D',exact:true}).click();assert.match(page.url(),/#\/reconstruct$/);
   await page.evaluate(()=>{window.test.photos.unmount();window.test.reconstruction.mount(document.querySelector('#view'));});
   await page.waitForFunction(()=>document.querySelector('.rc-engine').textContent.includes('ready'));
+  assert.equal(await page.locator('.rc-photo').count(),1); // Renamed JPEG/PNG stays selectable by MIME; panoramas excluded.
   await page.evaluate(()=>{
     const input=document.querySelector('.rc-upload'), dt=new DataTransfer();
     for(let i=0;i<20;i++)dt.items.add(new File([window.original],'frame-'+i+'.png',{type:'image/png',lastModified:i}));
@@ -78,5 +102,5 @@ try {
   await page.setViewportSize({width:402,height:874});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
   assert.deepEqual(errors,[]);
-  console.log(JSON.stringify({ ...result, uploads:uploads.length,mobileWidth:402,errors },null,2));
+  console.log(JSON.stringify({ ...result, uploads:uploads.length,mobileWidth:402,photoUses,panoramaSky:true,errors },null,2));
 } finally { if(browser)await browser.close();await new Promise(resolve=>server.close(resolve)); }

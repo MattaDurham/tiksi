@@ -9,6 +9,7 @@ import { importScanBytes, disposeScanObject } from './scans.js';
 
 const BASE = '/api/reconstruction';
 const TYPES = /\.(jpe?g|png|heic|heif|tiff?)$/i;
+const PHOTO_EXT = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/heic': '.heic', 'image/heif': '.heif', 'image/tiff': '.tiff' };
 let root = null, property = null, capabilities = null, job = null, jobs = [];
 let serverToken = '';
 let files = [], galleryIds = new Set(), busy = false, message = '', poll = null, mountEpoch = 0;
@@ -49,7 +50,7 @@ function renderSelection() {
 }
 function renderGallery() {
   if (!root) return;
-  const gallery = (property.photos || []).filter(p => p.kind !== 'pano' && TYPES.test(p.name || ''));
+  const gallery = (property.photos || []).filter(p => p.kind !== 'pano' && (PHOTO_EXT[p.mime] || TYPES.test(p.name || '')));
   root.querySelector('.rc-gallery').innerHTML = gallery.length ? gallery.map(p => `<label class="rc-photo">
     <input type="checkbox" value="${escapeHtml(p.id)}" ${galleryIds.has(p.id) ? 'checked' : ''} ${busy ? 'disabled' : ''}>
     <img src="${escapeHtml(p.thumb || '')}" alt="" loading="lazy"><span>${escapeHtml(p.name)}<small>${p.w} × ${p.h}${p.original ? ' · original' : ' · older saved copy'}</small></span></label>`).join('') : '<p>Add overlapping photographs here or in PHOTOS. Panoramas are reference images and are excluded from reconstruction.</p>';
@@ -157,7 +158,7 @@ async function reconstruct() {
       if (photo) {
         const bytes = await photoBytes(photo.id);
         if (!bytes) throw new Error('Original bytes are missing for ' + photo.name + '. Re-upload the photo first.');
-        source = { name: photo.name, blob: new Blob([bytes], { type: photo.mime }) };
+        source = { name: PHOTO_EXT[photo.mime] ? 'library-photo' + PHOTO_EXT[photo.mime] : photo.name, blob: new Blob([bytes], { type: photo.mime }) };
       }
       setMessage('Sending original photo ' + (i + 1) + ' / ' + (selectedFiles.length + selectedPhotos.length) + ' to your Mac…');
       uploadingJob = await json('/jobs/' + uploadingId + '/images', { method: 'PUT', headers: { 'X-Image-Name': encodeURIComponent(source.name), 'Content-Type': source.blob.type || 'application/octet-stream' }, body: source.blob });
