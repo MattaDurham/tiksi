@@ -10,7 +10,7 @@ import sys
 import unittest
 
 from server.material_research import (CodexResearchRunner, MaterialResearchManager, MaterialResearchService,
-    ResearchError, aggregate_results, public_url, validate_request, validate_result)
+    ResearchError, aggregate_results, exclude_unobserved_claims, public_url, validate_request, validate_result)
 
 
 def product(price=None, value='1.8 GPM'):
@@ -103,6 +103,22 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(actual['price'],120)
         self.assertEqual(actual['priceSourceUrl'],vendor_url)
         self.assertNotEqual(actual['priceSourceUrl'],actual['url'])
+
+    def test_unopened_policy_does_not_destroy_verified_vendor_research(self):
+        p=product(120)
+        policy='https://vendor.example.com/shipping-policy'
+        p['sourceEvidence'].append({'url':policy,'title':'Shipping policy','relevance':'Shipping','checkedAt':''})
+        p['specifications'].append({'name':'Shipping','value':'Free everywhere','sourceUrl':policy})
+        p['reviews'].append({'summary':'Good','sourceUrl':policy})
+        observed={p['url']:{'status':'opened','checkedAt':'live-check'}}
+        result=exclude_unobserved_claims({'products':[p],'unknowns':[]},observed)
+        actual=validate_result(result,'checked',observed)['products'][0]
+        self.assertEqual(actual['price'],120)
+        self.assertEqual(len(actual['sourceEvidence']),1)
+        self.assertEqual(len(actual['specifications']),1)
+        self.assertEqual(actual['reviews'],[])
+        self.assertEqual(len(actual['unknowns']),3)
+        self.assertIn('Unconfirmed source excluded',actual['unknowns'][0])
 
     def test_subprocess_pipeline_requires_web_events_and_rejects_non_web_tools(self):
         with tempfile.TemporaryDirectory() as folder:

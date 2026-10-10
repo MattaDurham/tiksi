@@ -202,6 +202,53 @@ def validate_result(result, checked_at, observed_sources=None):
     return result
 
 
+def exclude_unobserved_claims(result, observed_sources):
+    """Retain valid research when one speculative citation fails provenance.
+
+    Every exclusion is reported, and dependent claims cannot remain verified.
+    Strict schema/source/price validation still runs on the resulting record.
+    """
+    validate_schema(result, RESULT_SCHEMA)
+    retained = []
+    for product in result["products"]:
+        public_url(product["url"])
+        if product["url"].split("#")[0] not in observed_sources:
+            result["unknowns"].append(product["name"] + ": excluded because its product URL was not confirmed by live web tools")
+            continue
+        sources = []
+        for source in product["sourceEvidence"]:
+            public_url(source["url"])
+            if source["url"].split("#")[0] in observed_sources:
+                sources.append(source)
+            else:
+                product["unknowns"].append("Unconfirmed source excluded: " + source["url"])
+        product["sourceEvidence"] = sources
+        evidence_urls = {s["url"] for s in sources}
+        if not sources:
+            result["unknowns"].append(product["name"] + ": excluded because no cited source had live web provenance")
+            continue
+        for field in ("specifications", "sustainability", "reviews"):
+            facts = []
+            for fact in product[field]:
+                public_url(fact["sourceUrl"])
+                if fact["sourceUrl"] in evidence_urls:
+                    facts.append(fact)
+                else:
+                    product["unknowns"].append("Unverified " + field + " claim excluded: " + fact.get("name", "review") + "; its cited source was not confirmed")
+            product[field] = facts
+        offers = []
+        for offer in product["offers"]:
+            public_url(offer["url"])
+            if offer["url"] in evidence_urls and offer["url"].split("#")[0] in observed_sources:
+                offers.append(offer)
+            else:
+                product["unknowns"].append("Unverified offer excluded: " + offer["vendor"] + "; its vendor source was not confirmed")
+        product["offers"] = offers
+        retained.append(product)
+    result["products"] = retained
+    return result
+
+
 ROLES = {
     "focused": "Research the product, manufacturer specifications, current vendor offers and practical compatibility.",
     "specifications": "Investigate manufacturer specifications, installation requirements, finish options, technical documents and documented sustainability certifications. Prefer manufacturer primary sources.",
@@ -364,7 +411,8 @@ class CodexResearchRunner:
                         raise ResearchError("Provider returned no verified live web search activity", 503)
                     if not final:
                         raise ResearchError("Research returned no structured result", 503)
-                    return validate_result(json.loads(final), checked_at, observed_sources)
+                    result = exclude_unobserved_claims(json.loads(final), observed_sources)
+                    return validate_result(result, checked_at, observed_sources)
                 finally:
                     reader_stopped.set()
                     if process.poll() is None:
