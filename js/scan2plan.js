@@ -12,8 +12,8 @@ import * as THREE from 'three';
 import { uid, touch } from './store.js';
 import { loadMesh } from './scans.js';
 import { scanToPlan } from './scan2plan-core.js';
+import { underlayResolution } from './underlay-resolution.js';
 
-const MAX_PX_PER_M = 64;    // underlay resolution cap: every level's image rides in localStorage
 const UNDERLAY_CUT = 1.3;   // each level is rendered cut this far above its floor
 const CANVAS_BG = 0x0a0e12;
 
@@ -118,8 +118,6 @@ export async function analyseMesh(object, hooks) {
 export function underlaysFor(object, result) {
   const { W, H, ox, oz, cell } = result.grid;
   const x0 = ox, z0 = oz, wM = W * cell, hM = H * cell;
-  const pxPerM = Math.min(MAX_PX_PER_M, 1600 / Math.max(wM, hM));
-  const w = Math.max(64, Math.round(wM * pxPerM)), h = Math.max(64, Math.round(hM * pxPerM));
   const group = new THREE.Group();
   group.position.fromArray(result.transform.pos);
   group.rotation.set(0, result.transform.rot[1] * Math.PI / 180, 0);
@@ -131,6 +129,10 @@ export function underlaysFor(object, result) {
   const out = [];
   try {
     renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: false });
+    const gpu = renderer.getContext();
+    const resolution = underlayResolution(wM, hM, { gpuLimit: Math.min(
+      renderer.capabilities.maxTextureSize, gpu.getParameter(gpu.MAX_RENDERBUFFER_SIZE)) });
+    const { width: w, height: h, metersPerPixel, cameraWidth, cameraHeight } = resolution;
     renderer.setPixelRatio(1);
     renderer.setSize(w, h, false);
     renderer.setClearColor(CANVAS_BG, 1);
@@ -148,16 +150,19 @@ export function underlaysFor(object, result) {
       const repl = mats.map(m => {
         const map = m && m.map ? m.map : null;
         // Scan textures carry their own baked lighting and read right unlit; bare geometry gets a soft shade.
+        const appearance = { color: m && m.color ? m.color : 0xb8c0c8,
+          opacity: m?.opacity ?? 1, transparent: !!m?.transparent,
+          alphaTest: m?.alphaTest ?? 0, side: THREE.DoubleSide };
         return map || hasColor
-          ? new THREE.MeshBasicMaterial({ map, vertexColors: hasColor && !map, side: THREE.DoubleSide })
-          : new THREE.MeshLambertMaterial({ color: 0xb8c0c8, side: THREE.DoubleSide });
+          ? new THREE.MeshBasicMaterial({ ...appearance, map, vertexColors: hasColor })
+          : new THREE.MeshLambertMaterial(appearance);
       });
       swapped.push([o, orig]);
       o.material = Array.isArray(orig) ? repl : repl[0];
     });
     scene.add(group);
     // Camera looks down -y with up = -z: screen x = world x, screen y (down) = world z.
-    const cam = new THREE.OrthographicCamera(x0, x0 + wM, -z0, -(z0 + hM), 0.1, 200);
+    const cam = new THREE.OrthographicCamera(x0, x0 + cameraWidth, -z0, -(z0 + cameraHeight), 0.1, 200);
     cam.up.set(0, 0, -1);
     for (const L of result.levels) {
       try {
@@ -171,9 +176,9 @@ export function underlaysFor(object, result) {
         cam.updateProjectionMatrix();
         renderer.render(scene, cam);
         const canvas = renderer.domElement;
-        let img = canvas.toDataURL('image/webp', 0.82);
-        if (!img.startsWith('data:image/webp')) img = canvas.toDataURL('image/jpeg', 0.82);
-        out.push({ img, imgW: w, imgH: h, mPerPx: 1 / pxPerM, offsetX: x0, offsetY: z0 });
+        let img = canvas.toDataURL('image/webp', 0.96);
+        if (!img.startsWith('data:image/webp')) img = canvas.toDataURL('image/png');
+        out.push({ img, imgW: w, imgH: h, mPerPx: metersPerPixel, offsetX: x0, offsetY: z0 });
       } catch (e) { console.error('underlay render failed for ' + L.name, e); out.push(null); }
     }
     scene.remove(group);
