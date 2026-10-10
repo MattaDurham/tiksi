@@ -124,7 +124,7 @@ async function workspace() {
     const { getFile, planKey } = await import('./js/store.js');
     // Images intentionally live in IndexedDB rather than the small workspace manifest.
     for (const p of data.properties) for (const l of p.levels || []) {
-      if (l.plan && !l.plan.img) { const rec = await getFile(planKey(l.id)); if (rec && rec.img) l.plan.img = rec.img; }
+      if (l.plan && !l.plan.img) { const rec = await getFile(planKey(l.id, p.id)); if (rec && rec.img) l.plan.img = rec.img; }
     }
     return data;
   });
