@@ -244,6 +244,13 @@ function wallSides(wall, rooms) {
   return { pos, neg };
 }
 
+// Share the renderer's automatic finish choice with inspection and sourcing actions.
+export function wallInteriorMaterialId(wall, rooms) {
+  const sides = wallSides(wall, rooms);
+  const exterior = !!sides.pos !== !!sides.neg;
+  return wall.materialIn || (exterior ? 'mat-drywall' : wall.material);
+}
+
 // ---------- wall joints ----------
 function wallFrame(wall) {
   const L = Math.hypot(wall.bx - wall.ax, wall.by - wall.ay);
@@ -600,8 +607,7 @@ export function buildWallGroup(wall, openings, property, ctx) {
   const outMat = matFor(materialById(wall.material), FALLBACK_WALL, 0.9, ctx.matOpts);
   // Faces that look into a room take the interior finish: an explicit one, else drywall on
   // an exterior wall (a room on one side only) and the wall's own finish on a partition.
-  const exterior = !!sides.pos !== !!sides.neg;
-  const inId = wall.materialIn || (exterior ? 'mat-drywall' : wall.material);
+  const inId = wallInteriorMaterialId(wall, rooms);
   const inMat = (sides.pos || sides.neg) && inId !== wall.material
     ? matFor(materialById(inId), FALLBACK_WALL, 0.9, ctx.matOpts) : outMat;
   // One mesh per distinct material, each taking the faces that wear it.

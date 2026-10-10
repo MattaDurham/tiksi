@@ -177,3 +177,15 @@
 .tool-col .v-scan-row { font-size: 10px; }
 .inspector .field input[type=range] { width: 100%; accent-color: var(--accent); }
 .inspector .field textarea { min-height: 44px; }
+
+.v-export-dialog { width: min(440px, calc(100vw - 32px)); border: 1px solid var(--line-2); border-radius: 10px; padding: 24px; color: var(--ink); background: var(--panel); }
+.v-export-dialog::backdrop { background: rgba(6, 8, 10, 0.75); }
+.v-export-dialog h2 { margin: 0 0 12px; font-size: 18px; }
+.v-export-dialog p { line-height: 1.5; font-size: 12px; color: var(--dim); }
+.v-export-dialog label { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 14px 0; font-size: 12px; }
+.v-export-dialog select { width: 210px; padding: 6px; }
+.v-export-dialog .v-export-check { justify-content: start; }
+.v-export-dialog .v-export-size { color: var(--accent); font-family: var(--mono); }
+.v-export-dialog .v-export-note { font-size: 11px; }
+.v-export-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.v-export-actions .btn { width: auto; }

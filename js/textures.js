@@ -21,6 +21,8 @@ const FALLBACK = { id: '', name: 'Fallback', color: '#d8d4cc', pattern: 'flat', 
 const SWATCH_RES = 256;          // texture resolution behind a swatch; the chip is tiny
 const HI_RES = new Set(['wood', 'stone', 'marble']);
 const SLICE_MS = 12;             // per-tick CPU budget of the synthesis scheduler
+const MAX_TEX_BYTES = 256 * 1024 * 1024; // GPU mip chains + retained albedo; higher resolution sets need a byte cap.
+let textureQuality = 'high';
 const MAX_TEX_ENTRIES = 56;      // LRU cap on full texture sets (a 1024 set is ~16 MB of maps)
 const MAX_TRANSIENT_ENTRIES = 8; // of which editor-preview variants: the current one and a few recent
 const MAX_SWATCHES = 200;        // cached swatch PNGs (~50 KB each); a long editing session mints many
@@ -780,7 +782,7 @@ function makeTexture(data, N, wrap, srgb, tile) {
   const t = new THREE.DataTexture(data, N, N, THREE.RGBAFormat, THREE.UnsignedByteType);
   t.wrapS = t.wrapT = wrap;
   t.repeat.set(1 / tile[0], 1 / tile[1]);
-  t.anisotropy = 8;
+  t.anisotropy = textureQuality === 'ultra' ? 16 : textureQuality === 'low' ? 2 : textureQuality === 'medium' ? 4 : 8;
   t.generateMipmaps = true;
   t.minFilter = THREE.LinearMipmapLinearFilter;
   t.magFilter = THREE.LinearFilter;
@@ -891,7 +893,9 @@ function tick(deadline) {
 }
 
 // Number of texture sets still being synthesised (views can throttle their render loops meanwhile).
-export function pendingTextureJobs() { return jobs.length; }
+export function pendingTextureJobs() { return [...texCache.values()].filter(e => !e.cancelled && e.status !== 'ready').length; }
+
+export function setTextureQuality(quality) { textureQuality = quality; }
 
 // Debug aid: synthesis cost per cached texture set.
 export function textureStats() {
@@ -916,7 +920,11 @@ function texKey(mat, res) {
     mat.pattern === 'photo' ? (mat.photoId || '') : '', res, hintKey(mat)].join('|');
 }
 function hintKey(mat) { const h = hints(mat); return Object.keys(h).filter(k => h[k]).join(','); }
-function resFor(mat) { return HI_RES.has(mat.pattern) ? 1024 : 512; }
+function resFor(mat) {
+  if (textureQuality === 'ultra') return HI_RES.has(mat.pattern) || mat.pattern === 'photo' ? 2048 : 1024;
+  if (textureQuality === 'low') return HI_RES.has(mat.pattern) ? 512 : 256;
+  return HI_RES.has(mat.pattern) || mat.pattern === 'photo' ? 1024 : 512;
+}
 function hasMaps(mat) { const p = PATTERNS[mat.pattern]; return !!(p && p.maps !== false) || mat.pattern === 'photo'; }
 
 // Jobs run later, in slices; they must see the record as it was when queued, not as the editor
@@ -965,6 +973,13 @@ function evictTextures(keep) {
   if (over > 0) {
     const rest = transient.slice(drop.length).concat(ready.filter(e => !e.transient).sort(byAge));
     drop = drop.concat(rest.slice(0, over));
+  }
+  // Three maps with full mip chains (~16 bytes/texel) plus retained RGBA albedo.
+  const bytes = e => e.maps ? e.res * e.res * 20 : 0;
+  let resident = [...texCache.values()].reduce((sum, e) => sum + bytes(e), 0) - drop.reduce((sum, e) => sum + bytes(e), 0);
+  for (const e of ready.sort(byAge)) {
+    if (resident <= MAX_TEX_BYTES) break;
+    if (!drop.includes(e)) { drop.push(e); resident -= bytes(e); }
   }
   for (const e of drop) {
     disposeEntry(e);
