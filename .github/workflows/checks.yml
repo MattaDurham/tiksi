@@ -34,6 +34,6 @@ jobs:
         with:
           name: browser-artifacts-${{ matrix.os }}
           path: |
-            tools/fixtures/*.png
+            tools/fixtures/**/*.png
             test-results/
           if-no-files-found: ignore
