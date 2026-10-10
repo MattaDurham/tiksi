@@ -119,7 +119,15 @@ async function freshApp() {
 }
 async function workspace() {
   await sleep(900);   // autosave debounce
-  return page.evaluate(() => JSON.parse(localStorage.getItem('tiksi.workspace.v1')));
+  return page.evaluate(async () => {
+    const data = JSON.parse(localStorage.getItem('tiksi.workspace.v1'));
+    const { getFile, planKey } = await import('./js/store.js');
+    // Images intentionally live in IndexedDB rather than the small workspace manifest.
+    for (const p of data.properties) for (const l of p.levels || []) {
+      if (l.plan && !l.plan.img) { const rec = await getFile(planKey(l.id, p.id)); if (rec && rec.img) l.plan.img = rec.img; }
+    }
+    return data;
+  });
 }
 function findProp(ws) { return ws.properties.find(p => p.source && p.source.captureId === CAPTURE_ID); }
 function assertPlan(prop, tag) {
