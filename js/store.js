@@ -887,8 +887,8 @@ export function exportWorkspace() {
   if (n) alert('Note: ' + n + ' scan/photo file(s) live in browser storage and are not embedded in a JSON export. Use EXPORT > BUNDLE (.zip) to carry them to another machine.');
 }
 
-const IMAGE_EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/bmp': 'bmp' };
-const MIME_BY_EXT = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif', bmp: 'image/bmp' };
+const IMAGE_EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/bmp': 'bmp', 'image/heic': 'heic', 'image/heif': 'heif', 'image/tiff': 'tiff' };
+const MIME_BY_EXT = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif', bmp: 'image/bmp', heic: 'image/heic', heif: 'image/heif', tif: 'image/tiff', tiff: 'image/tiff' };
 // Formats that are already compressed: store them in the zip instead of deflating.
 const STORED_EXT = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'glb', 'spz', 'laz', 'ksplat']);
 
