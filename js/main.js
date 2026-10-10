@@ -13,6 +13,7 @@ import * as plan2d from './plan2d.js';
 import * as viewer3d from './viewer3d.js';
 import * as materialsview from './materialsview.js';
 import * as photos from './photos.js';
+import * as reconstruction from './reconstruction.js';
 import * as projects from './projects.js';
 import * as products from './products.js';
 import * as budget from './budget.js';
@@ -30,6 +31,7 @@ const VIEWS = {
   model: viewer3d,
   materials: materialsview,
   photos,
+  reconstruct: reconstruction,
   projects,
   products,
   budget,
