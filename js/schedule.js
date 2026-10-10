@@ -13,16 +13,17 @@ export function unmount() { el = null; }
 // ---------- CPM ----------
 export function cpm(items) {
   // items: [{id, durationDays, deps[]}] -> map id -> {es, ef, ls, lf, slack, critical}
-  const sched = {}, byId = {};
-  const list = items.filter(i => (i.durationDays || 0) > 0);
+  const sched = Object.create(null), byId = Object.create(null);
+  const list = items.filter(i => Number.isFinite(Number(i.durationDays)) && Number(i.durationDays) > 0);
   for (const it of list) byId[it.id] = it;
 
-  // Kahn topological order (ignore deps outside this project or on zero-duration items).
-  const indeg = {}, succs = {};
+  // Deduplicate edges, and ignore dependencies outside this project and budget-only items.
+  const indeg = Object.create(null), succs = Object.create(null), predecessors = Object.create(null);
   for (const it of list) {
-    const deps = (it.deps || []).filter(d => byId[d]);
+    const deps = [...new Set(it.deps || [])].filter(d => Object.hasOwn(byId, d));
+    predecessors[it.id] = deps;
     indeg[it.id] = deps.length;
-    for (const d of deps) (succs[d] = succs[d] || []).push(it.id);
+    for (const d of deps) (succs[d] ||= []).push(it.id);
   }
   const queue = list.filter(i => !indeg[i.id]).map(i => i.id);
   const order = [];
@@ -32,23 +33,23 @@ export function cpm(items) {
     for (const s of succs[id] || []) if (--indeg[s] === 0) queue.push(s);
   }
   const cyclic = order.length < list.length;
-  if (cyclic) for (const it of list) if (!order.includes(it.id)) order.push(it.id); // degrade gracefully
+  if (cyclic) for (const it of list) if (!order.includes(it.id)) order.push(it.id);
 
-  // Forward pass.
+  // In a cycle, use only predecessors already scheduled. Rebuild the successor graph from
+  // those accepted edges so the backward pass never reads an unfinished successor's LS.
+  const acceptedSuccs = Object.create(null);
   for (const id of order) {
-    const it = byId[id];
-    const deps = (it.deps || []).filter(d => sched[d]);
+    const deps = predecessors[id].filter(d => Object.hasOwn(sched, d));
+    for (const dep of deps) (acceptedSuccs[dep] ||= []).push(id);
     const es = deps.length ? Math.max(...deps.map(d => sched[d].ef)) : 0;
-    sched[id] = { es, ef: es + it.durationDays };
+    sched[id] = { es, ef: es + Number(byId[id].durationDays) };
   }
   const end = Math.max(0, ...Object.values(sched).map(s => s.ef));
-
-  // Backward pass.
   for (const id of [...order].reverse()) {
-    const ss = (succs[id] || []).filter(s => sched[s]);
+    const ss = acceptedSuccs[id] || [];
     const lf = ss.length ? Math.min(...ss.map(s => sched[s].ls)) : end;
     sched[id].lf = lf;
-    sched[id].ls = lf - byId[id].durationDays;
+    sched[id].ls = lf - Number(byId[id].durationDays);
     sched[id].slack = sched[id].ls - sched[id].es;
     sched[id].critical = sched[id].slack < 0.001;
   }

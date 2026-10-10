@@ -163,7 +163,7 @@ function itemRow(p, it) {
   if (prods) linkBits.push(prods + ' prod');
   return `<tr data-item="${escapeHtml(it.id)}">
     <td><input type="text" data-if="name" value="${escapeHtml(it.name)}"></td>
-    <td class="num" style="width:64px"><input type="number" class="num" data-if="qty" value="${escapeHtml(it.qty || 1)}" min="0" step="0.5"></td>
+    <td class="num" style="width:64px"><input type="number" class="num" data-if="qty" value="${escapeHtml(it.qty ?? 1)}" min="0" step="0.5"></td>
     <td style="width:56px"><input type="text" data-if="unit" value="${escapeHtml(it.unit || 'ls')}"></td>
     <td class="num" style="width:92px"><input type="text" class="num" data-money="low" value="${it.low ? fmtMoney(it.low) : ''}"></td>
     <td class="num" style="width:92px"><input type="text" class="num" data-money="likely" value="${it.likely ? fmtMoney(it.likely) : ''}"></td>

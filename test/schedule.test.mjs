@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import { cpm } from '../js/schedule.js';
+const item = (id, durationDays, deps = []) => ({ id, durationDays, deps });
+const res = cpm([item('a', 3), item('b', 4, ['a']), item('c', 1)]);
+assert.equal(res.end, 7);
+assert.equal(res.sched.b.es, 3);
+assert.equal(res.sched.c.slack, 6);
+assert.equal(res.sched.a.critical, true);
+assert.equal(res.cyclic, false);
+const cycle = cpm([item('a', 3, ['b']), item('b', 4, ['a']), item('c', 2, ['b'])]);
+assert.equal(cycle.cyclic, true);
+for (const entry of Object.values(cycle.sched)) for (const field of ['es', 'ef', 'ls', 'lf', 'slack']) assert.ok(Number.isFinite(entry[field]), `${field} remains finite when a cycle is detected`);
+const weird = cpm([item('__proto__', '3'), item('constructor', '4', ['__proto__', '__proto__', 'missing']), item('budget', 0)]);
+assert.equal(weird.end, 7);
+assert.equal(weird.sched.constructor.es, 3);
+assert.equal(weird.cyclic, false);
+assert.equal(weird.sched.budget, undefined);
+console.log('schedule regression checks passed');

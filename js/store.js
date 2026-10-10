@@ -30,7 +30,7 @@ export function setSaveStatus(text, busy) {
 
 let saveFailed = false;
 let savePending = false;
-export function save() {
+export function save(skipPlanQueue = false) {
   // Never write a copy with inline thumbnails while hydrateThumbs() is still moving them into
   // IndexedDB: a freshly imported gallery would not fit and would raise the quota alert for nothing.
   if (hydration) {
@@ -38,7 +38,12 @@ export function save() {
     return;
   }
   if (typeof localStorage === 'undefined') return;
-  queueUnstoredPlans();
+  if (skipPlanQueue !== true) {
+    queueUnstoredPlans();
+    // A high-resolution underlay can exceed localStorage until its IndexedDB write
+    // completes. That write invokes save again; do not report a false quota failure.
+    if (planStoring) return;
+  }
   try {
     localStorage.setItem(LS_KEY, JSON.stringify(persistable(ws.data)));
     saveFailed = false;
@@ -62,14 +67,14 @@ export function save() {
 // every export stays portable. Only the objects on the path to photo records are copied.
 function persistable(d) {
   const strip = ph => !!ph.thumb && thumbsStored.has(ph.id);
-  const stripPlan = l => !!(l.plan && l.plan.img) && plansStored.has(l.id);
+  const stripPlan = (p, l) => !!(l.plan && l.plan.img) && plansStored.get(planKey(l.id, p.id)) === l.plan.img;
   return Object.assign({}, d, {
     properties: (d.properties || []).map(p => {
       const photos = p.photos || [], levels = p.levels || [];
-      if (!photos.some(strip) && !levels.some(stripPlan)) return p;
+      if (!photos.some(strip) && !levels.some(l => stripPlan(p, l))) return p;
       return Object.assign({}, p, {
         photos: photos.map(ph => strip(ph) ? Object.assign({}, ph, { thumb: '' }) : ph),
-        levels: levels.map(l => stripPlan(l) ? Object.assign({}, l, { plan: Object.assign({}, l.plan, { img: '' }) }) : l),
+        levels: levels.map(l => stripPlan(p, l) ? Object.assign({}, l, { plan: Object.assign({}, l.plan, { img: '' }) }) : l),
       });
     }),
   });
@@ -102,6 +107,9 @@ export function mergeWorkspace(data) {
   const d = ws.data;
   const upsert = (list, rec) => { const i = list.findIndex(x => x.id === rec.id); if (i >= 0) list[i] = rec; else list.push(rec); };
   for (const p of incoming.properties) upsert(d.properties, p);
+  const propIds = new Set(incoming.properties.map(p => p.id));
+  const incomingProjectIds = new Set(incoming.projects.map(pr => pr.id));
+  d.projects = d.projects.filter(pr => !propIds.has(pr.propertyId) || incomingProjectIds.has(pr.id));
   for (const pr of incoming.projects || []) upsert(d.projects, pr);
   for (const pr of incoming.products || []) upsert(d.products, pr);
   for (const m of incoming.materials || []) if (m && m.custom) upsert(d.materials, m);
@@ -122,16 +130,24 @@ export function projectSlice(propId, data) {
   const projects = (d.projects || []).filter(pr => pr.propertyId === propId);
   const itemIds = new Set();
   for (const pr of projects) for (const it of pr.items || []) itemIds.add(it.id);
-  const products = (d.products || []).filter(pr => (pr.itemIds || []).some(id => itemIds.has(id)));
   const matIds = new Set();
   for (const w of p.walls || []) matIds.add(w.material);
   for (const r of p.rooms || []) { matIds.add(r.material); matIds.add(r.ceilingMaterial); }
+  const products = (d.products || []).filter(pr => (pr.itemIds || []).some(id => itemIds.has(id)) || (pr.materialIds || []).some(id => matIds.has(id)));
   const photoIds = new Set((p.photos || []).map(ph => ph.id));
   const materials = (d.materials || []).filter(m => m && m.custom && (matIds.has(m.id) || (m.photoId && photoIds.has(m.photoId))));
+  // A material may have been sampled from another property's photograph. Carry only the
+  // source photo records it needs, so the bundle collector includes their original pixels.
+  const neededPhotos = new Set(materials.map(m => m.photoId).filter(Boolean));
+  const photos = [...(p.photos || [])];
+  for (const source of d.properties) for (const ph of source.photos || []) {
+    if (neededPhotos.has(ph.id) && !photoIds.has(ph.id)) { photos.push(ph); photoIds.add(ph.id); }
+  }
+  const property = photos.length === (p.photos || []).length ? p : Object.assign({}, p, { photos });
   return {
     version: d.version,
     settings: { units: d.settings.units, budgetCap: d.settings.budgetCap, programStart: d.settings.programStart, activePropertyId: propId },
-    properties: [p], materials, products, projects,
+    properties: [property], materials, products, projects,
   };
 }
 
@@ -141,12 +157,12 @@ const THUMB_PREFIX = 'thumb-';
 const PLAN_PREFIX = 'plan-';
 const HANDLE_PREFIX = 'fh-';      // File System Access handles (see files.js); never orphans
 const thumbsStored = new Set();   // photo ids whose thumbnail is confirmed in IndexedDB
-const plansStored = new Set();    // level ids whose underlay image is confirmed in IndexedDB
+const plansStored = new Map();    // scoped plan key -> exact image confirmed in IndexedDB
 let hydration = null;             // pending hydrateThumbs() run, if any
 let planStoring = null;           // pending queueUnstoredPlans() run, if any
 
 export function thumbKey(id) { return THUMB_PREFIX + id; }
-export function planKey(levelId) { return PLAN_PREFIX + levelId; }
+export function planKey(levelId, propertyId) { return PLAN_PREFIX + (propertyId ? propertyId + '|' : '') + levelId; }
 export function handleKey(name) { return HANDLE_PREFIX + name; }
 
 // Level underlays are rendered from scans (60-150 KB each, several per property) and would
@@ -155,19 +171,24 @@ export function handleKey(name) { return HANDLE_PREFIX + name; }
 function queueUnstoredPlans() {
   if (planStoring || hydration) return;
   const todo = [];
-  for (const p of ws.data.properties || []) for (const l of p.levels || []) if (l.plan && l.plan.img && !plansStored.has(l.id)) todo.push(l);
+  for (const p of ws.data.properties || []) for (const l of p.levels || []) {
+    const key = planKey(l.id, p.id);
+    if (l.plan && l.plan.img && plansStored.get(key) !== l.plan.img) todo.push({ key, img: l.plan.img });
+  }
   if (!todo.length) return;
   const d = ws.data;
+  let failed = false;
   planStoring = (async () => {
-    for (const l of todo) {
-      try { await putFile(planKey(l.id), null, { kind: 'plan', img: l.plan.img }); if (ws.data === d) plansStored.add(l.id); }
-      catch (e) { /* stays inline in localStorage for this level */ }
+    for (const { key, img } of todo) {
+      try { await putFile(key, null, { kind: 'plan', img }); if (ws.data === d) plansStored.set(key, img); }
+      catch (e) { failed = true; /* stays inline in localStorage for this level */ }
     }
-  })().catch(() => {}).then(() => { planStoring = null; if (ws.data === d) save(); });
+  })().catch(() => {}).then(() => { planStoring = null; if (ws.data === d) save(failed); });
 }
-export function forgetPlanImage(levelId) {
-  plansStored.delete(levelId);
-  deleteFile(planKey(levelId)).catch(() => {});
+export function forgetPlanImage(levelId, propertyId) {
+  const key = planKey(levelId, propertyId);
+  plansStored.delete(key);
+  deleteFile(key).catch(() => {});
 }
 
 // Resolves once the current workspace's thumbnails are back in memory (boot waits for it
@@ -195,7 +216,7 @@ function hydrateThumbs() {
     const photos = [], levels = [];
     for (const p of d.properties || []) {
       for (const ph of p.photos || []) photos.push(ph);
-      for (const l of p.levels || []) levels.push(l);
+      for (const l of p.levels || []) levels.push({ p, l });
     }
     if (!photos.length && !levels.length) return;
     let stored, plans;
@@ -214,18 +235,21 @@ function hydrateThumbs() {
         thumbsStored.add(ph.id);
       }
     }
-    for (const l of levels) {
+    for (const { p, l } of levels) {
       if (ws.data !== d) return;
-      const have = plans.get(l.id);
+      const key = planKey(l.id, p.id);
+      // Read the legacy unscoped entry once, then move it to a property-specific key.
+      const have = plans.get(key) || plans.get(planKey(l.id));
       if (l.plan && l.plan.img) {
-        if (have === l.plan.img) { plansStored.add(l.id); continue; }
+        if (plans.get(key) === l.plan.img) { plansStored.set(key, l.plan.img); continue; }
         try {
-          await putFile(planKey(l.id), null, { kind: 'plan', img: l.plan.img });
-          if (ws.data === d) plansStored.add(l.id);
+          const img = l.plan.img;
+          await putFile(key, null, { kind: 'plan', img });
+          if (ws.data === d) plansStored.set(key, img);
         } catch (e) { /* stays inline */ }
       } else if (l.plan && have) {
         l.plan.img = have;
-        plansStored.add(l.id);
+        try { await putFile(key, null, { kind: 'plan', img: have }); if (ws.data === d) plansStored.set(key, have); } catch (e) { /* keep inline */ }
       }
     }
   })();
@@ -395,7 +419,7 @@ export function deleteLevel(prop, id) {
   if (wallsOn(prop, id).length || roomsOn(prop, id).length) return false;
   prop.levels = prop.levels.filter(x => x !== l);
   if (prop.activeLevelId === id) prop.activeLevelId = lowestLevel(prop).id;
-  forgetPlanImage(id);
+  forgetPlanImage(id, prop.id);
   return true;
 }
 
@@ -446,7 +470,27 @@ function remapIds(node, renamed) {
   }
 }
 
+function validateWorkspace(d) {
+  if (!d || typeof d !== 'object' || Array.isArray(d)) throw new Error('not a tiksi workspace');
+  for (const key of ['properties', 'materials', 'products', 'projects']) {
+    if (d[key] != null && !Array.isArray(d[key])) throw new Error(key + ' must be a list');
+    for (const rec of d[key] || []) if (!rec || typeof rec !== 'object' || Array.isArray(rec)) throw new Error(key + ' contains an invalid record');
+  }
+  for (const p of d.properties || []) for (const key of ['levels','walls','openings','rooms','scans','photos']) {
+    if (p[key] != null && !Array.isArray(p[key])) throw new Error('property ' + key + ' must be a list');
+    for (const rec of p[key] || []) if (!rec || typeof rec !== 'object' || Array.isArray(rec)) throw new Error('property ' + key + ' contains an invalid record');
+  }
+  for (const p of d.projects || []) {
+    if (p.items != null && !Array.isArray(p.items)) throw new Error('project items must be a list');
+    for (const it of p.items || []) {
+      if (!it || typeof it !== 'object' || Array.isArray(it)) throw new Error('project contains an invalid item');
+      for (const key of ['deps', 'elementIds']) if (it[key] != null && !Array.isArray(it[key])) throw new Error('item ' + key + ' must be a list');
+    }
+  }
+}
+
 function migrate(d) {
+  validateWorkspace(d);
   if (!d.version) d.version = 1;
   d.settings = Object.assign({ units: 'imperial', budgetCap: 150000, programStart: isoToday(), activePropertyId: null }, d.settings || {});
   d.properties = d.properties || [];
@@ -656,7 +700,7 @@ export function dayDiff(isoA, isoB) {
 // ---------- project money rollups ----------
 
 export function itemTotals(it) {
-  const q = it.qty || 1;
+  const q = it.qty ?? 1;
   return { low: (it.low || 0) * q, likely: (it.likely || 0) * q, high: (it.high || 0) * q };
 }
 
@@ -777,7 +821,7 @@ async function getAllPlans() {
     const req = d.transaction('files').objectStore('files').getAll(IDBKeyRange.bound(PLAN_PREFIX, PLAN_PREFIX + '\uffff'));
     req.onsuccess = () => {
       const out = new Map();
-      for (const r of req.result || []) if (r && typeof r.img === 'string') out.set(String(r.id).slice(PLAN_PREFIX.length), r.img);
+      for (const r of req.result || []) if (r && typeof r.img === 'string') out.set(String(r.id), r.img);
       resolve(out);
     };
     req.onerror = () => reject(req.error || new Error('IndexedDB read failed'));
@@ -803,7 +847,7 @@ export function listAllFileIds(data) {
 export async function orphanFiles(opts) {
   const keep = new Set();
   for (const id of listAllFileIds()) { keep.add(id); keep.add(thumbKey(id)); }
-  for (const p of ws.data.properties || []) for (const l of p.levels || []) keep.add(planKey(l.id));
+  for (const p of ws.data.properties || []) for (const l of p.levels || []) keep.add(planKey(l.id, p.id));
   const ids = (await storedFileIds()).filter(id => !keep.has(id) && !id.startsWith(HANDLE_PREFIX));
   let bytes = 0;
   if (opts && opts.sizes) {
@@ -911,7 +955,8 @@ export function projectFileName(prop) {
 // One property as a project file (.tiksi, a ZIP): its slice of the workspace plus every scan
 // and photo it references. Resolves { blob, name, fileCount, bytes }.
 export async function exportProjectBlob(propId) {
-  const slice = projectSlice(propId);
+  const current = projectSlice(propId);
+  const slice = current && JSON.parse(JSON.stringify(current));
   if (!slice) throw new Error('no such property');
   const prop = slice.properties[0];
   const { bytes, fileCount } = await buildZip(slice, 'tiksi-project', { project: { id: prop.id, name: prop.name } });
@@ -941,6 +986,7 @@ export async function readBundle(file) {
   let data;
   try { data = JSON.parse(strFromU8(zipped['workspace.json'])); } catch (e) { throw new Error('workspace.json is not valid JSON'); }
   if (!data || !Array.isArray(data.properties)) throw new Error('workspace.json is not a tiksi workspace');
+  validateWorkspace(data);
 
   let manifest = null;
   if (zipped['manifest.json']) {

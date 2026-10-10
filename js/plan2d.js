@@ -345,35 +345,45 @@ function deleteSelection() {
 }
 
 // ---------- underlay upload ----------
+let underlayLoadToken = 0;
 function uploadUnderlay(file) {
   if (!file) return;
   if (file.type === 'application/pdf') {
     alert('PDF import is on the roadmap. For now, export the plan page as a PNG or JPG image and upload that.');
     return;
   }
-  const img = new Image();
+  const token = ++underlayLoadToken, target = prop, level = lvl(), root = el;
+  const current = () => token === underlayLoadToken && el === root && prop === target && lvl() === level && ws.data.properties.includes(target);
+  const img = new Image(), url = URL.createObjectURL(file);
   img.onload = () => {
-    const MAX = 2000;
-    const scale = Math.min(1, MAX / Math.max(img.width, img.height));
-    const cw = Math.round(img.width * scale), ch = Math.round(img.height * scale);
-    const c = document.createElement('canvas');
-    c.width = cw; c.height = ch;
-    c.getContext('2d').drawImage(img, 0, 0, cw, ch);
-    const isPng = file.type === 'image/png';
-    const dataUrl = isPng ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.85);
-    lvl().plan = {
-      img: dataUrl, imgW: cw, imgH: ch,
-      mPerPx: 18 / cw,           // assume ~18 m wide until calibrated
-      opacity: 0.55, offsetX: 0, offsetY: 0, calibrated: false,
-    };
-    vs.planSrc = planKey(prop);
-    selection = { kind: 'underlay' };
-    tool = 'calibrate'; calib = null;
-    fitView();
-    touch(); renderToolCol(); renderInspector(); updateHint();
+    try {
+      if (!current()) return;
+      // IndexedDB carries underlay pixels; retain line detail while bounding canvas memory
+      // (8 MP is 32 MB of RGBA pixels before encoding, and fits mobile GPU texture limits).
+      const scale = Math.min(1, 4096 / Math.max(img.width, img.height), Math.sqrt(8000000 / (img.width * img.height)));
+      const cw = Math.max(1, Math.round(img.width * scale)), ch = Math.max(1, Math.round(img.height * scale));
+      const c = document.createElement('canvas');
+      c.width = cw; c.height = ch;
+      const ctx = c.getContext('2d');
+      if (!ctx) throw new Error('This browser could not create an image canvas.');
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, cw, ch);
+      const dataUrl = file.type === 'image/png' ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.95);
+      if (dataUrl === 'data:,') throw new Error('This browser could not encode the plan image.');
+      level.plan = {
+        img: dataUrl, imgW: cw, imgH: ch,
+        mPerPx: 18 / cw, opacity: 0.55, offsetX: 0, offsetY: 0, calibrated: false,
+      };
+      vs.planSrc = planKey(prop);
+      selection = { kind: 'underlay' };
+      tool = 'calibrate'; calib = null;
+      fitView();
+      touch(); renderToolCol(); renderInspector(); updateHint();
+    } catch (e) { if (current()) alert('Could not read that image file: ' + e.message); }
+    finally { URL.revokeObjectURL(url); }
   };
-  img.onerror = () => alert('Could not read that image file.');
-  img.src = URL.createObjectURL(file);
+  img.onerror = () => { URL.revokeObjectURL(url); if (current()) alert('Could not read that image file.'); };
+  img.src = url;
 }
 
 // ---------- rendering: grid, hatch, text helpers ----------

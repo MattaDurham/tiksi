@@ -19,7 +19,7 @@ function render() {
   const remaining = cap - sel.likely;
   const pct = cap > 0 ? Math.min(sel.likely / cap, 1.4) : 0;
 
-  const byCat = {};
+  const byCat = Object.create(null);
   for (const p of d.projects) {
     if (!p.selected) continue;
     const t = projectTotals(p);
@@ -127,14 +127,14 @@ export function budgetReportHtml() {
   const sel = selectedTotals();
   const selectedProjects = d.projects.filter(p => p.selected);
   const parked = d.projects.filter(p => !p.selected);
-  const byCat = {};
+  const byCat = Object.create(null);
   for (const p of selectedProjects) {
     const t = projectTotals(p);
     byCat[p.category] = byCat[p.category] || { likely: 0, n: 0 };
     byCat[p.category].likely += t.likely; byCat[p.category].n++;
   }
   const itemRows = p => p.items.map(it => {
-    const q = it.qty || 1;
+    const q = it.qty ?? 1;
     return `<tr><td style="padding-left:22px">${escapeHtml(it.name)}</td>
       <td class="num">${q} ${escapeHtml(it.unit || '')}</td>
       <td class="num">${fmtMoney((it.low || 0) * q)}</td>
