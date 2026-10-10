@@ -29,7 +29,7 @@ const result = {
   id: 'candidate-fixture', name: 'Synthetic tile <img src=x onerror=alert(1)>', brand: 'Example manufacturer', model: 'SYN-1',
   category: 'tile', url: 'https://example.com/tile', price: 8, unit: 'sf', currency: 'USD', priceStatus: 'verified', availability: 'Synthetic availability',
   specifications: [{ name: 'Thickness', value: '8 mm', sourceUrl: 'https://example.com/specification' }],
-  sourceEvidence: [{ url: 'https://example.com/specification', title: 'Synthetic manufacturer sheet', relevance: 'Fixture evidence for thickness', checkedAt: '2026-01-01T00:00:00Z' }],
+  sourceEvidence: [{ url: 'https://example.com/specification', title: 'Synthetic manufacturer sheet', relevance: 'Fixture evidence for thickness', checkedAt: '2026-01-01T00:00:00Z', sourceStatus: 'opened' }],
   fitNotes: ['Synthetic fit note'], unknowns: ['Delivery date needs confirmation'], offers: [], sustainability: [], reviews: [],
 };
 let posted, calls = 0, cancelCalls = 0, available = true, finish = false;
@@ -49,7 +49,7 @@ const server = http.createServer(async (req, res) => {
   if (path === '/api/material-research/job-fixture') {
     assert.equal(req.headers['x-tiksi-token'], 'synthetic-test-token');
     calls++;
-    if (finish) { fixture.status = 'completed'; fixture.agents[0].status = 'completed'; fixture.products = [result, { ...result, id: 'candidate-2', name: 'Synthetic alternative', price: 7, currency: 'EUR', url: 'javascript:alert(1)', sourceEvidence: [{ url: 'javascript:alert(1)', title: '<script>Unsafe source</script>' }] }]; }
+    if (finish) { fixture.status = 'completed'; fixture.agents[0].status = 'completed'; fixture.products = [result, { ...result, id: 'candidate-2', name: 'Synthetic alternative', price: 7, currency: 'EUR', url: 'javascript:alert(1)', sourceEvidence: [{ url: 'javascript:alert(1)', title: '<script>Unsafe source</script>', sourceStatus: 'search-result' }] }]; }
     return json(200, { job: fixture });
   }
   if (path === '/') { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(html); }
@@ -87,6 +87,10 @@ try {
   assert.equal(await page.inputValue('#research-region'), 'Edited while researching');
   assert.equal(await page.locator('.research-candidate img').count(), 0);
   assert.equal(await page.locator('a[href^="javascript:"]').count(), 0);
+  await page.locator('.research-candidate').nth(0).locator('details summary').click();
+  await page.locator('.research-candidate').nth(1).locator('details summary').click();
+  assert.match(await page.locator('.research-candidate').nth(0).innerText(), /Opened source/i);
+  assert.match(await page.locator('.research-candidate').nth(1).innerText(), /Search result only/i);
   await page.check('[data-pick="0"]'); await page.check('[data-pick="1"]'); await page.click('[data-compare]');
   assert.match(await page.locator('[data-comparison]').innerText(), /Thickness/);
   await page.click('[data-save-candidate="0"]');
@@ -105,6 +109,7 @@ try {
   await page.waitForSelector('[data-edit]'); await page.locator('[data-edit]').last().click();
   await page.locator('.prod-provenance summary').click();
   assert.match(await page.locator('.prod-provenance').innerText(), /Synthetic manufacturer sheet/);
+  assert.match(await page.locator('.prod-provenance').innerText(), /Opened source/i);
   await page.click('#prod-research'); await page.waitForSelector('#research-query');
   assert.match(await page.inputValue('#research-query'), /Example manufacturer/);
   // A fresh job can be cancelled, including the token required by the server.

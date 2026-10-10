@@ -166,6 +166,6 @@ function provenance(research) {
     <p>Saved ${escapeHtml(research.savedAt || '')}</p>
     <p>${escapeHtml(research.request?.query || '')}</p>
     <p>Original source price: ${escapeHtml(String(research.candidate?.price ?? 'unverified'))} ${escapeHtml(research.candidate?.currency || '')} / ${escapeHtml(research.candidate?.unit || 'unit unverified')}. ${escapeHtml(research.candidate?.priceStatus || 'unverified')}</p>
-    ${evidence.map(source => { const url = safeResearchUrl(source.url); return `<p>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.title || url)}</a>` : escapeHtml(source.title || 'Source URL unavailable')}<br>${escapeHtml(source.relevance || '')}<br>${escapeHtml(source.checkedAt || '')}</p>`; }).join('')}
+    ${evidence.map(source => { const url = safeResearchUrl(source.url); return `<p>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.title || url)}</a>` : escapeHtml(source.title || 'Source URL unavailable')} <span class="chip">${source.sourceStatus === 'opened' ? 'Opened source' : source.sourceStatus === 'search-result' ? 'Search result only' : 'Source opening unverified'}</span><br>${escapeHtml(source.relevance || '')}<br>${escapeHtml(source.checkedAt || '')}</p>`; }).join('')}
   </details>`;
 }
