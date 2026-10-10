@@ -27,7 +27,7 @@ const fixture = {
 };
 const result = {
   id: 'candidate-fixture', name: 'Synthetic tile <img src=x onerror=alert(1)>', brand: 'Example manufacturer', model: 'SYN-1',
-  category: 'tile', url: 'https://example.com/tile', price: 8, unit: 'sf', currency: 'USD', priceStatus: 'verified', availability: 'Synthetic availability',
+  category: 'tile', url: 'https://example.com/tile', priceSourceUrl: 'https://example.com/vendor-price', price: 8, unit: 'sf', currency: 'USD', priceStatus: 'verified', availability: 'Synthetic availability',
   specifications: [{ name: 'Thickness', value: '8 mm', sourceUrl: 'https://example.com/specification' }],
   sourceEvidence: [{ url: 'https://example.com/specification', title: 'Synthetic manufacturer sheet', relevance: 'Fixture evidence for thickness', checkedAt: '2026-01-01T00:00:00Z', sourceStatus: 'opened' }],
   fitNotes: ['Synthetic fit note'], unknowns: ['Delivery date needs confirmation'], offers: [], sustainability: [], reviews: [],
@@ -95,6 +95,7 @@ try {
   assert.equal(await page.inputValue('#research-region'), 'Edited while researching');
   assert.equal(await page.locator('.research-candidate img').count(), 0);
   assert.equal(await page.locator('a[href^="javascript:"]').count(), 0);
+  assert.equal(await page.locator('.research-candidate').first().getByRole('link', { name: 'PRICE SOURCE' }).getAttribute('href'), 'https://example.com/vendor-price');
   await page.locator('.research-candidate').nth(0).locator('details summary').click();
   await page.locator('.research-candidate').nth(1).locator('details summary').click();
   assert.match(await page.locator('.research-candidate').nth(0).innerText(), /Opened source/i);
@@ -105,6 +106,7 @@ try {
   const saved = await page.evaluate(() => workspace.data.products[0]);
   assert.equal(saved.price, 8); assert.equal(saved.unit, 'sf'); assert.deepEqual(saved.itemIds, ['item-fixture']);
   assert.deepEqual(saved.materialIds, ['material-fixture']); assert.equal(saved.research.candidate.sourceEvidence[0].title, 'Synthetic manufacturer sheet');
+  assert.equal(saved.priceSourceUrl, 'https://example.com/vendor-price');
   assert.equal(saved.research.request.constraints.region, 'Synthetic test region');
   assert.ok(!saved.notes.includes('Confirm coverage'), 'compatible price and scope units have no mismatch warning');
   await page.selectOption('#research-scope', ['item-other']);
@@ -118,6 +120,7 @@ try {
   await page.locator('.prod-provenance summary').click();
   assert.match(await page.locator('.prod-provenance').innerText(), /Synthetic manufacturer sheet/);
   assert.match(await page.locator('.prod-provenance').innerText(), /Opened source/i);
+  assert.equal(await page.locator('.prod-provenance').getByRole('link', { name: 'PRICE SOURCE' }).getAttribute('href'), 'https://example.com/vendor-price');
   await page.click('#prod-research'); await page.waitForSelector('#research-query');
   assert.match(await page.inputValue('#research-query'), /Example manufacturer/);
   // A fresh job can be cancelled, including the token required by the server.
