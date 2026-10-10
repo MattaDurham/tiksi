@@ -7,6 +7,12 @@ import { openResearch, safeResearchUrl } from './research.js';
 
 const CATEGORIES = ['appliance', 'plumbing', 'lighting', 'flooring', 'tile', 'cabinetry', 'hardware', 'hvac', 'electrical', 'lumber', 'windows-doors', 'paint', 'other'];
 
+function availableCategories() {
+  // Research and imports can bring a more specific source category. Keep it
+  // selectable instead of letting the browser display the first unrelated one.
+  return [...new Set([...CATEGORIES, ...ws.data.products.map(p => p.category).filter(c => typeof c === 'string' && c.trim())])];
+}
+
 let el = null;
 let editingId = null;
 let query = '', catFilter = '';
@@ -39,7 +45,7 @@ function render() {
         <input type="text" class="search-input" id="prod-q" placeholder="search products..." value="${escapeHtml(query)}">
         <select id="prod-cat" class="tb-select">
           <option value="">all categories</option>
-          ${CATEGORIES.map(c => `<option ${c === catFilter ? 'selected' : ''}>${c}</option>`).join('')}
+          ${availableCategories().map(c => `<option value="${escapeHtml(c)}" ${c === catFilter ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
         </select>
         <span class="sp"></span>
         <span class="mono faint" style="font-size:10px">Find products and alternatives with live source evidence.</span>
@@ -125,7 +131,7 @@ function renderForm(items) {
     </div>
     <div class="field-row">
       <div class="field"><label>Category</label>
-        <select data-f="category">${CATEGORIES.map(c => `<option ${c === p.category ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+        <select data-f="category">${availableCategories().map(c => `<option value="${escapeHtml(c)}" ${c === p.category ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}</select></div>
       <div class="field"><label>Price</label><input data-money="price" type="text" value="${p.price ? fmtMoney(p.price) : ''}"></div>
       <div class="field"><label>Unit</label><input data-f="unit" type="text" value="${escapeHtml(p.unit || 'ea')}" placeholder="ea / sf / lf"></div>
     </div>

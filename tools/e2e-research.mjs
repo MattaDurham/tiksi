@@ -27,7 +27,7 @@ const fixture = {
 };
 const result = {
   id: 'candidate-fixture', name: 'Synthetic tile <img src=x onerror=alert(1)>', brand: 'Example manufacturer', model: 'SYN-1',
-  category: 'tile', url: 'https://example.com/tile', priceSourceUrl: 'https://example.com/vendor-price', price: 8, unit: 'sf', currency: 'USD', priceStatus: 'verified', availability: 'Synthetic availability',
+  category: 'Kitchen faucet', url: 'https://example.com/tile', priceSourceUrl: 'https://example.com/vendor-price', price: 8, unit: 'sf', currency: 'USD', priceStatus: 'verified', availability: 'Synthetic availability',
   specifications: [{ name: 'Thickness', value: '8 mm', sourceUrl: 'https://example.com/specification' }],
   sourceEvidence: [{ url: 'https://example.com/specification', title: 'Synthetic manufacturer sheet', relevance: 'Fixture evidence for thickness', checkedAt: '2026-01-01T00:00:00Z', sourceStatus: 'opened' }],
   fitNotes: ['Synthetic fit note'], unknowns: ['Delivery date needs confirmation'], offers: [], sustainability: [], reviews: [],
@@ -106,6 +106,7 @@ try {
   const saved = await page.evaluate(() => workspace.data.products[0]);
   assert.equal(saved.price, 8); assert.equal(saved.unit, 'sf'); assert.deepEqual(saved.itemIds, ['item-fixture']);
   assert.deepEqual(saved.materialIds, ['material-fixture']); assert.equal(saved.research.candidate.sourceEvidence[0].title, 'Synthetic manufacturer sheet');
+  assert.equal(saved.category, 'Kitchen faucet'); assert.equal(saved.research.candidate.category, 'Kitchen faucet');
   assert.equal(saved.priceSourceUrl, 'https://example.com/vendor-price');
   assert.equal(saved.research.request.constraints.region, 'Synthetic test region');
   assert.ok(!saved.notes.includes('Confirm coverage'), 'compatible price and scope units have no mismatch warning');
@@ -117,12 +118,19 @@ try {
   assert.match(unverified.notes, /Confirm coverage and conversion/);
   await page.evaluate(() => { location.hash = '#/products'; });
   await page.waitForSelector('[data-edit]'); await page.locator('[data-edit]').last().click();
+  assert.equal(await page.inputValue('#prod-form [data-f="category"]'), 'Kitchen faucet');
+  await page.locator('#prod-form [data-f="brand"]').fill('Edited example manufacturer');
+  await page.locator('#prod-form [data-f="brand"]').blur();
+  assert.equal(await page.inputValue('#prod-form [data-f="category"]'), 'Kitchen faucet', 'editing another field retains the imported category');
+  await page.selectOption('#prod-cat', 'Kitchen faucet');
+  assert.equal(await page.locator('[data-edit]').count(), 2, 'specific imported categories are usable filters');
+  await page.selectOption('#prod-cat', '');
   await page.locator('.prod-provenance summary').click();
   assert.match(await page.locator('.prod-provenance').innerText(), /Synthetic manufacturer sheet/);
   assert.match(await page.locator('.prod-provenance').innerText(), /Opened source/i);
   assert.equal(await page.locator('.prod-provenance').getByRole('link', { name: 'PRICE SOURCE' }).getAttribute('href'), 'https://example.com/vendor-price');
   await page.click('#prod-research'); await page.waitForSelector('#research-query');
-  assert.match(await page.inputValue('#research-query'), /Example manufacturer/);
+  assert.match(await page.inputValue('#research-query'), /Edited example manufacturer/);
   // A fresh job can be cancelled, including the token required by the server.
   await page.click('[data-start]'); await page.waitForSelector('[data-cancel]');
   await page.click('[data-cancel]'); await page.waitForFunction(() => document.querySelector('[data-results]').textContent.includes('CANCELLED'));
