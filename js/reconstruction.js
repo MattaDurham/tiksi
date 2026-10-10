@@ -14,6 +14,7 @@ let root = null, property = null, capabilities = null, job = null, jobs = [];
 let serverToken = '';
 let files = [], galleryIds = new Set(), busy = false, message = '', poll = null, mountEpoch = 0;
 let preview = null, modelBytes = null, modelId = null;
+const importingModels = new Set();
 const terminal = new Set(['complete', 'failed', 'cancelled', 'interrupted']);
 const humanBytes = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1024).toFixed(0) + ' KB';
 const err = error => String(error && error.message || error);
@@ -80,7 +81,7 @@ function renderJob() {
     ${job.warnings?.length ? `<details><summary>${job.warnings.length} engine notices</summary><ul>${job.warnings.map(w => '<li>' + escapeHtml(w) + '</li>').join('')}</ul></details>` : ''}
     <div class="rc-actions">
       ${active ? '<button class="btn" data-job=cancel>Cancel reconstruction</button>' : ''}
-      ${complete ? '<button class="btn" data-job=preview>Review in 3D</button><button class="btn" data-job=download>Save GLB</button><button class="btn" data-job=native>Save native OBJ and maps</button><button class="btn primary" data-job=import>Add to this property</button>' : ''}
+      ${complete ? `<button class="btn" data-job=preview>Review in 3D</button><button class="btn" data-job=download>Save GLB</button><button class="btn" data-job=native>Save native OBJ and maps</button><button class="btn primary" data-job=import ${importingModels.has(property.id + ':' + job.id) ? 'disabled' : ''}>Add to this property</button>` : ''}
       ${terminal.has(job.state) || job.state === 'draft' ? '<button class="btn" data-job=delete>Remove job and its photo copies</button>' : ''}
     </div>
     ${complete ? '<p class="rc-note">Review the result before importing. Check scale using a known measurement in MODEL; ordinary photographs may have no metric scale. Gaps and blurred regions need better source photos.</p>' : ''}`;
@@ -114,6 +115,9 @@ function renderJob() {
   });
   area.querySelector('[data-job=import]')?.addEventListener('click', async event => {
     const targetProperty = property, selectedJob = job;
+    const key = targetProperty.id + ':' + selectedJob.id;
+    if (importingModels.has(key)) return;
+    importingModels.add(key);
     event.target.disabled = true;
     try {
       const bytes = await getModel(selectedJob);
@@ -123,7 +127,10 @@ function renderJob() {
       setMessage('Textured model added to ' + (targetProperty.name || 'the property') + '. Open MODEL to position and calibrate it.');
       if (root && property === targetProperty) root.querySelector('.rc-open-model').hidden = false;
     } catch (error) { setMessage(err(error)); }
-    finally { if (event.target.isConnected) event.target.disabled = false; }
+    finally {
+      importingModels.delete(key);
+      if (root && property === targetProperty && job?.id === selectedJob.id) renderJob();
+    }
   });
 }
 async function getModel(selected = job) {
