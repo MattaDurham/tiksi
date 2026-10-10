@@ -2,6 +2,7 @@
 // Run: node tools/e2e-functionality.mjs (Playwright + Chromium installed).
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { setTimeout as delay } from 'node:timers/promises';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +22,16 @@ const viewMarkers = {
   photos: '.ph-grid', projects: '#new-project', products: '#new-prod',
   budget: '#cap-input', schedule: '#prog-start', sheets: '#sheet-view',
 };
+async function waitUntil(predicate, message, timeoutMs = 30_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (true) {
+    // Await the resolved boolean: an unresolved Promise is always truthy.
+    if (await predicate()) return;
+    const remaining = deadline - performance.now();
+    assert.ok(remaining > 0, `Timed out: ${message}`);
+    await delay(Math.min(100, remaining));
+  }
+}
 async function navigateToView(page, view) {
   // These links change the hash and mount a view in the current document. Waiting
   // for a full navigation after the click stalled the Linux CI browser check.
@@ -87,10 +98,19 @@ try {
   });
   const images = await page.evaluate(async () => { const s = await import('/js/store.js'); return s.ws.data.properties.map(p=>p.levels[0].plan.img); });
   assert.notEqual(images[0], images[1]);
+  await waitUntil(() => page.evaluate(async () => {
+    const s = await import('/js/store.js');
+    const matches = await Promise.all(s.ws.data.properties.map(async p =>
+      (await s.getFile(s.planKey(p.levels[0].id, p.id)))?.img === p.levels[0].plan.img));
+    return matches.every(Boolean);
+  }), 'both property-scoped underlays persist before reload');
   await page.goto(url + '/#/plan'); await page.reload(); await page.locator('[data-prop-name]').waitFor();
   assert.deepEqual(await page.evaluate(async () => { const s=await import('/js/store.js');return s.ws.data.properties.map(p=>p.levels[0].plan.img); }),images,'two properties retain their own underlays after storage reload');
   await page.evaluate(async image=>{const s=await import('/js/store.js');s.ws.data.properties[0].levels[0].plan.img=image;s.save();},images[1]);
-  await page.waitForFunction(async () => { const s=await import('/js/store.js'); const p=s.ws.data.properties[0];return (await s.getFile(s.planKey(p.levels[0].id,p.id)))?.img===p.levels[0].plan.img; });
+  await waitUntil(() => page.evaluate(async () => {
+    const s = await import('/js/store.js'); const p = s.ws.data.properties[0];
+    return (await s.getFile(s.planKey(p.levels[0].id, p.id)))?.img === p.levels[0].plan.img;
+  }), 'replacement underlay persists before reload');
   await page.goto(url + '/#/plan'); await page.reload(); await page.locator('[data-prop-name]').waitFor();
   assert.equal(await page.evaluate(async()=>{const s=await import('/js/store.js');return s.ws.data.properties[0].levels[0].plan.img;}),images[1],'replacement underlay survives reload');
 
@@ -143,7 +163,13 @@ try {
   const upload=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=5000;c.height=1000;const ctx=c.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,5000,1000);ctx.fillStyle='#000';ctx.fillRect(100,100,4800,3);return c.toDataURL('image/png').split(',')[1];});
   await page.evaluate(()=>{window.auditRevocations=0;const orig=URL.revokeObjectURL.bind(URL);URL.revokeObjectURL=url=>{window.auditRevocations++;orig(url);};});
   await page.locator('.tool-col input[type=file]').setInputFiles({name:'high-resolution-plan.png',mimeType:'image/png',buffer:Buffer.from(upload,'base64')});
-  await page.waitForFunction(async()=>{const s=await import('/js/store.js');return s.activeProperty().levels[0].plan.imgW===4096;});
+  await waitUntil(() => page.evaluate(async () => {
+    const s = await import('/js/store.js');
+    return s.activeProperty().levels[0].plan.imgW === 4096;
+  }), 'uploaded plan reaches its full 4096px width');
+  assert.equal(await page.evaluate(async () => {
+    const s = await import('/js/store.js'); return s.activeProperty().levels[0].plan.imgW;
+  }), 4096, 'uploaded plan retains its expected resolution');
   assert.equal(await page.evaluate(()=>window.auditRevocations),1,'uploaded plan releases its object URL');
   const calibrationCanvas=await page.locator('.plan-canvas canvas').boundingBox();
   await page.mouse.click(calibrationCanvas.x+calibrationCanvas.width*0.25,calibrationCanvas.y+calibrationCanvas.height*0.50);
