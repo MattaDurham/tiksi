@@ -42,7 +42,7 @@ function render() {
         <span class="sp"></span>
         <span class="mono faint" style="font-size:10px">Research a product on the web, then capture it here with its link.</span>
       </div>
-      <div style="display:grid; grid-template-columns: 1fr ${editingId != null ? '340px' : ''}; gap:16px; align-items:start">
+      <div class="products-layout" style="display:grid; grid-template-columns: 1fr ${editingId != null ? '340px' : ''}; gap:16px; align-items:start">
         ${products.length ? `<div class="prod-grid">${products.map(prodCard).join('')}</div>` :
           `<div class="empty-state"><span class="empty-ic">${icon('products')}</span>
             <b>${d.products.length ? 'No products match' : 'No products yet'}</b>

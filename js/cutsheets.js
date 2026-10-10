@@ -16,12 +16,13 @@ function render() {
   if (!el) return;
   const items = allScopeItems();
   const products = ws.data.products;
+  if (current && !(current.kind === 'item' ? items.some(x => x.item.id === current.id) : products.some(p => p.id === current.id))) current = null;
   if (!current) {
     if (items.length) current = { kind: 'item', id: items[0].item.id };
     else if (products.length) current = { kind: 'product', id: products[0].id };
   }
 
-  const groups = {};
+  const groups = Object.create(null);
   for (const { project, item } of items) (groups[project.name] = groups[project.name] || []).push(item);
 
   el.innerHTML = `
@@ -141,7 +142,7 @@ function itemSheetHtml(project, item) {
     <h2>Budget line</h2>
     <table><thead><tr><th class="num">Qty</th><th>Unit</th><th class="num">Low</th><th class="num">Likely</th><th class="num">High</th><th class="num">Duration</th></tr></thead>
       <tbody><tr>
-        <td class="num">${escapeHtml(item.qty || 1)}</td><td>${escapeHtml(item.unit || 'ls')}</td>
+        <td class="num">${escapeHtml(item.qty ?? 1)}</td><td>${escapeHtml(item.unit || 'ls')}</td>
         <td class="num">${fmtMoney(t.low)}</td><td class="num"><b>${fmtMoney(t.likely)}</b></td><td class="num">${fmtMoney(t.high)}</td>
         <td class="num">${escapeHtml(item.durationDays || 0)} days</td>
       </tr></tbody></table>
