@@ -1,4 +1,4 @@
-.reconstruction-view { overflow: auto; padding: 22px; min-width: 0; }
+#view.reconstruction-view, .reconstruction-view { overflow: auto; padding: 22px; min-width: 0; }
 .rc-head { display: flex; justify-content: space-between; align-items: center; gap: 18px; margin-bottom: 22px; }
 .rc-head p { margin: 8px 0 0; color: var(--text-muted, #9aa3ad); }
 .rc-layout { display: grid; grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr); gap: 24px; max-width: 1500px; margin: auto; }
