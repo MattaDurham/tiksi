@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "check": "python3 scripts/check.py",
-    "test": "node --test test/*.test.mjs && python3 scripts/unit.py",
+    "test": "node --test --test-concurrency=1 test/*.test.mjs && python3 scripts/unit.py",
     "test:e2e": "node scripts/e2e.mjs",
     "preflight": "sh scripts/preflight.sh"
   },
