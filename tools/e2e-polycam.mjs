@@ -281,10 +281,22 @@ try {
 
   // ---- re-propose from the model view ----
   console.log('\n[viewer] PROPOSE PLAN FROM SCAN on the existing scan');
+  // This fixture checks import, mesh selection and plan proposals. Keep its
+  // software-rendered viewer at Low so High-quality shader warmup cannot delay
+  // the scan controls beyond the interaction budget on a shared CI runner.
+  // e2e-fidelity independently checks High/Ultra pixels and real 4K output.
+  await page.evaluate(async captureId => {
+    const { ws, touch } = await import('./js/store.js');
+    const property = ws.data.properties.find(p => p.source?.captureId === captureId);
+    if (!property?.scans.length) throw new Error('The imported scan fixture is missing.');
+    property.env = { ...property.env, quality: 'low' };
+    touch();
+  }, CAPTURE_ID);
   await page.click('#np-dialog [data-np-cancel]');
   page.once('dialog', d => d.accept());
   await page.goto(APP + '#/model');
   await page.waitForSelector('.v-scan-row', { timeout: 60000 });
+  check(await page.inputValue('[data-env="quality"]') === 'low', 'viewer: functional fixture uses Low render quality');
   await page.waitForFunction(() => { const k = document.querySelector('.v-scan-row .key'); return k && k.textContent.trim() === 'MESH'; }, null, { timeout: 60000 });
   await page.click('.v-scan-row');
   await page.click('.inspector [data-plan]');
