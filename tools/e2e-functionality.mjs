@@ -2,6 +2,7 @@
 // Run: node tools/e2e-functionality.mjs (Playwright + Chromium installed).
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { setTimeout as delay } from 'node:timers/promises';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,20 +17,47 @@ const server = createServer(async (req, res) => {
 await new Promise(r => server.listen(0, 'localhost', r));
 const url = `http://localhost:${server.address().port}`;
 const browser = await chromium.launch({ headless: true });
+const viewMarkers = {
+  plan: '.plan-canvas canvas', model: 'canvas.v-canvas', materials: '.mv-grid',
+  photos: '.ph-grid', projects: '#new-project', products: '#new-prod',
+  budget: '#cap-input', schedule: '#prog-start', sheets: '#sheet-view',
+};
+async function waitUntil(predicate, message, timeoutMs = 30_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (true) {
+    // Await the resolved boolean: an unresolved Promise is always truthy.
+    if (await predicate()) return;
+    const remaining = deadline - performance.now();
+    assert.ok(remaining > 0, `Timed out: ${message}`);
+    await delay(Math.min(100, remaining));
+  }
+}
+async function navigateToView(page, view) {
+  // These links change the hash and mount a view in the current document. Waiting
+  // for a full navigation after the click stalled the Linux CI browser check.
+  await page.locator(`#rail a[data-view="${view}"]`).click({ noWaitAfter: true });
+  await page.waitForFunction(({ view, marker }) => {
+    const root = document.querySelector('#view');
+    const link = document.querySelector(`#rail a[data-view="${view}"]`);
+    return location.hash === '#/' + view && link?.classList.contains('active') &&
+      !!root?.firstElementChild && !!root.querySelector(marker);
+  }, { view, marker: viewMarkers[view] });
+  // Allow layout to settle for the actual viewport measurements below.
+  await page.evaluate(() => new Promise(resolve =>
+    requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.ok(await page.locator('#view').innerText(), `${view} mounts`);
+}
 try {
   const page = await browser.newPage({ viewport: { width:1280, height:900 } });
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   page.on('dialog', d => d.accept(d.type() === 'prompt' ? 'Synthetic audit project' : undefined));
   await page.goto(url); await page.locator('[data-prop-name]').waitFor();
   for (const view of ['plan','model','materials','photos','projects','products','budget','schedule','sheets']) {
-    await page.locator(`#rail a[data-view="${view}"]`).click();
-    await page.waitForFunction(v => location.hash === '#/' + v && !!document.querySelector('#view').firstElementChild, view);
-    await page.waitForTimeout(150);
-    assert.ok(await page.locator('#view').innerText(), `${view} mounts`);
+    await navigateToView(page, view);
     console.log('route checked:', view);
   }
   assert.deepEqual(errors, [], 'all nine desktop routes mount without exceptions');
-  await page.locator('#rail [data-view=plan]').click(); await page.locator('.plan-canvas canvas').waitFor();
+  await navigateToView(page, 'plan'); await page.locator('.plan-canvas canvas').waitFor();
   const beforeWalls=await page.evaluate(async()=>{const s=await import('/js/store.js');return s.activeProperty().walls.length;});
   const canvas=await page.locator('.plan-canvas canvas').boundingBox();
   await page.locator('[data-tool=wall]').click();
@@ -39,21 +67,21 @@ try {
   assert.equal(await page.evaluate(async()=>{const s=await import('/js/store.js');return s.activeProperty().walls.length;}),beforeWalls+1,'canvas tracing creates a wall');
   await page.locator('[data-act=undo]').click();
   assert.equal(await page.evaluate(async()=>{const s=await import('/js/store.js');return s.activeProperty().walls.length;}),beforeWalls,'undo restores traced geometry');
-  await page.locator('#rail [data-view=projects]').click(); await page.locator('#new-project').waitFor();
+  await navigateToView(page, 'projects'); await page.locator('#new-project').waitFor();
   await page.locator('#new-project').click(); await page.locator('#add-item').click();
   await page.locator('[data-if=qty]').fill('0'); await page.locator('[data-if=qty]').press('Tab');
   await page.locator('[data-money=likely]').fill('100'); await page.locator('[data-money=likely]').press('Tab');
   assert.equal(await page.locator('[data-if=qty]').inputValue(), '0');
   assert.equal(await page.evaluate(async () => { const s = await import('/js/store.js'); return s.projectTotals(s.ws.data.projects.at(-1)).likely; }), 0, 'zero quantity contributes zero to budget');
-  await page.locator('#rail [data-view=products]').click(); await page.locator('#new-prod').waitFor(); await page.locator('#new-prod').click();
+  await navigateToView(page, 'products'); await page.locator('#new-prod').waitFor(); await page.locator('#new-prod').click();
   await page.locator('#prod-form [data-f=name]').fill('Synthetic audit product'); await page.locator('#prod-form [data-f=name]').press('Tab');
   await page.locator('[data-items]').selectOption({ label: 'Synthetic audit project / New item' }); await page.locator('#prod-done').click();
   assert.ok((await page.locator('#view').innerText()).includes('Synthetic audit product'));
-  await page.locator('#rail [data-view=budget]').click(); await page.locator('#cap-input').waitFor(); await page.locator('#cap-input').fill('50000'); await page.locator('#cap-input').press('Tab');
+  await navigateToView(page, 'budget'); await page.locator('#cap-input').waitFor(); await page.locator('#cap-input').fill('50000'); await page.locator('#cap-input').press('Tab');
   await page.locator('#print-report').click(); assert.ok((await page.locator('#print-root').innerText()).includes('$50,000'));
-  await page.locator('#rail [data-view=schedule]').click(); await page.locator('#prog-start').waitFor(); await page.locator('#prog-start').fill('2026-10-15'); await page.locator('#prog-start').press('Tab');
+  await navigateToView(page, 'schedule'); await page.locator('#prog-start').waitFor(); await page.locator('#prog-start').fill('2026-10-15'); await page.locator('#prog-start').press('Tab');
   assert.ok(await page.locator('.gantt-svg').count());
-  await page.locator('#rail [data-view=sheets]').click(); await page.locator('.sl-item').first().waitFor(); await page.getByRole('button', {name:'Synthetic audit product',exact:true}).click();
+  await navigateToView(page, 'sheets'); await page.locator('.sl-item').first().waitFor(); await page.getByRole('button', {name:'Synthetic audit product',exact:true}).click();
   assert.equal(await page.locator('#sheet-view h1').innerText(), 'Synthetic audit product'); await page.locator('#print-sheet').click();
   assert.ok((await page.locator('#print-root').innerText()).includes('Synthetic audit product'));
 
@@ -70,10 +98,19 @@ try {
   });
   const images = await page.evaluate(async () => { const s = await import('/js/store.js'); return s.ws.data.properties.map(p=>p.levels[0].plan.img); });
   assert.notEqual(images[0], images[1]);
+  await waitUntil(() => page.evaluate(async () => {
+    const s = await import('/js/store.js');
+    const matches = await Promise.all(s.ws.data.properties.map(async p =>
+      (await s.getFile(s.planKey(p.levels[0].id, p.id)))?.img === p.levels[0].plan.img));
+    return matches.every(Boolean);
+  }), 'both property-scoped underlays persist before reload');
   await page.goto(url + '/#/plan'); await page.reload(); await page.locator('[data-prop-name]').waitFor();
   assert.deepEqual(await page.evaluate(async () => { const s=await import('/js/store.js');return s.ws.data.properties.map(p=>p.levels[0].plan.img); }),images,'two properties retain their own underlays after storage reload');
   await page.evaluate(async image=>{const s=await import('/js/store.js');s.ws.data.properties[0].levels[0].plan.img=image;s.save();},images[1]);
-  await page.waitForFunction(async () => { const s=await import('/js/store.js'); const p=s.ws.data.properties[0];return (await s.getFile(s.planKey(p.levels[0].id,p.id)))?.img===p.levels[0].plan.img; });
+  await waitUntil(() => page.evaluate(async () => {
+    const s = await import('/js/store.js'); const p = s.ws.data.properties[0];
+    return (await s.getFile(s.planKey(p.levels[0].id, p.id)))?.img === p.levels[0].plan.img;
+  }), 'replacement underlay persists before reload');
   await page.goto(url + '/#/plan'); await page.reload(); await page.locator('[data-prop-name]').waitFor();
   assert.equal(await page.evaluate(async()=>{const s=await import('/js/store.js');return s.ws.data.properties[0].levels[0].plan.img;}),images[1],'replacement underlay survives reload');
 
@@ -122,11 +159,17 @@ try {
   });
   assert.match(workspaceJson.message,/workspace-fixture.json/);assert.equal(workspaceJson.properties,2,'whole-workspace JSON open prompts then replaces');
   console.log('project and file regression checks passed');
-  await page.locator('#rail [data-view=plan]').click(); await page.locator('.tool-col input[type=file]').waitFor({state:'attached'});
+  await navigateToView(page, 'plan'); await page.locator('.tool-col input[type=file]').waitFor({state:'attached'});
   const upload=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=5000;c.height=1000;const ctx=c.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,5000,1000);ctx.fillStyle='#000';ctx.fillRect(100,100,4800,3);return c.toDataURL('image/png').split(',')[1];});
   await page.evaluate(()=>{window.auditRevocations=0;const orig=URL.revokeObjectURL.bind(URL);URL.revokeObjectURL=url=>{window.auditRevocations++;orig(url);};});
   await page.locator('.tool-col input[type=file]').setInputFiles({name:'high-resolution-plan.png',mimeType:'image/png',buffer:Buffer.from(upload,'base64')});
-  await page.waitForFunction(async()=>{const s=await import('/js/store.js');return s.activeProperty().levels[0].plan.imgW===4096;});
+  await waitUntil(() => page.evaluate(async () => {
+    const s = await import('/js/store.js');
+    return s.activeProperty().levels[0].plan.imgW === 4096;
+  }), 'uploaded plan reaches its full 4096px width');
+  assert.equal(await page.evaluate(async () => {
+    const s = await import('/js/store.js'); return s.activeProperty().levels[0].plan.imgW;
+  }), 4096, 'uploaded plan retains its expected resolution');
   assert.equal(await page.evaluate(()=>window.auditRevocations),1,'uploaded plan releases its object URL');
   const calibrationCanvas=await page.locator('.plan-canvas canvas').boundingBox();
   await page.mouse.click(calibrationCanvas.x+calibrationCanvas.width*0.25,calibrationCanvas.y+calibrationCanvas.height*0.50);
@@ -144,13 +187,15 @@ try {
 
   // Real mobile layout at load; this is not a desktop page resized after startup.
   const mobile = await browser.newPage({viewport:{width:402,height:874},isMobile:true,hasTouch:true,deviceScaleFactor:2});
+  mobile.on('pageerror', e => errors.push(e.message));
   await mobile.goto(url); await mobile.locator('[data-prop-name]').waitFor();
   for(const view of ['plan','model','materials','photos','projects','products','budget','schedule','sheets']) {
-    await mobile.locator(`#rail a[data-view="${view}"]`).click();await mobile.waitForTimeout(200);
+    await navigateToView(mobile, view);
     console.log('mobile route checked:', view);
     assert.equal(await mobile.evaluate(()=>document.body.scrollWidth),402,`${view} does not widen mobile viewport`);
     if(view==='plan'||view==='model') assert.ok(await mobile.locator(view==='plan'?'.plan-canvas canvas':'canvas.v-canvas').isVisible(),`${view} has a visible mobile canvas`);
   }
+  assert.deepEqual(errors, [], 'all nine mobile routes mount without exceptions');
   await mobile.close();
   console.log('Browser audit passed: nine desktop/mobile routes; projects, products, budget/report, schedule, cut sheets; underlay isolation/replacement; portable scan/photo project roundtrip; JSON open; atomic file failure and edit-during-save; folder backup/conflict safety.');
 } finally { await browser.close(); await new Promise(r=>server.close(r)); }
