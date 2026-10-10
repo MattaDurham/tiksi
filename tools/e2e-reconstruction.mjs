@@ -108,6 +108,7 @@ try {
   await page.waitForFunction(()=>document.querySelector('.rc-engine')?.textContent.includes('ready'));
   assert.match(page.url(), /#\/reconstruct$/);
   assert.equal(await page.locator('#rail [data-view=reconstruct].active').count(),1);
+  assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector('#view')).overflowY),'auto');
   await page.locator('#rail [data-view=photos]').click();
   await page.waitForSelector('.ph-head');
   await page.locator('#rail [data-view=reconstruct]').click();
