@@ -116,6 +116,17 @@ test('replace rebuilds only the floor it lands on and drops the scan it supersed
   assert.equal(single.wallHeight, 2.6);
 });
 
+test('a rescan targets the floor it matches, not the floor with the most walls', () => {
+  const prop = property();
+  const upperSegs = OUTLINE.concat([[6, 0, 6, 8], [0, 4, 6, 4], [6, 4, 10, 4]]);
+  prop.levels.push({ id: 'lvl-up', name: 'Upper', elevation: 2.75, height: 2.4, plan: null });
+  for (const w of wallsOf(upperSegs, true)) prop.walls.push(Object.assign(w, { id: 'up-' + w.id, level: 'lvl-up' }));
+  const fit = fitScan(existing(prop), proposal(OUTLINE, INSIDE, { rot: 90, dx: 5 }));
+  assert.equal(fit.ref.id, 'lvl-main');
+  assert.equal(fit.suggestion, 'replace', fit.reason);
+  assert.equal(fit.placements.replace.dElev, 0);
+});
+
 test('nothing to fit against yields no suggestion', () => {
   assert.equal(fitScan({ levels: [] }, proposal(OUTLINE, INSIDE)), null);
 });

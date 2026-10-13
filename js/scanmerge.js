@@ -67,24 +67,26 @@ export function fitScan(existing, result) {
   const levels = (existing.levels || []).filter(l => l.walls && l.walls.length);
   const main = result.levels[result.mainLevelIndex] || result.levels[0];
   if (!levels.length || !main || !main.walls.length) return null;
-  const ref = levels.reduce((a, b) => (b.walls.length > a.walls.length ? b : a));
   const top = (existing.levels || []).reduce((m, l) => Math.max(m, l.elevation + (l.height || 2.44)), 0);
-  const B0 = bounds(ref.walls);
-  // The outline says whether it is this building; the interior walls say whether it is this floor.
+  // The outline says whether it is this building; the interior walls say whether it is this
+  // floor. Every floor with walls is tried at every right angle; the best match is the reference.
   const ext = main.walls.filter(w => w.exterior);
   const hasInner = main.walls.length > ext.length;
   let best = null;
-  for (const rot of [0, 90, 180, 270]) {
-    const turned = moveWalls(main.walls, rot, 0, 0);
-    const B = bounds(turned);
-    const dx = B0.cx - B.cx, dy = B0.cy - B.cy;
-    const placed = moveWalls(main.walls, rot, dx, dy);
-    const outline = overlap(ext.length ? placed.filter(w => w.exterior) : placed, ref.walls);
-    const inner = overlap(hasInner ? placed.filter(w => !w.exterior) : placed, ref.walls);
-    const size = Math.min(B.w * B.h, B0.w * B0.h) / Math.max(B.w * B.h, B0.w * B0.h, 1e-6);
-    const score = outline + 0.5 * inner + 0.25 * size;
-    if (!best || score > best.score) best = { rot, dx, dy, outline, inner, size, score, B };
+  for (const level of levels) {
+    const B0 = bounds(level.walls);
+    for (const rot of [0, 90, 180, 270]) {
+      const B = bounds(moveWalls(main.walls, rot, 0, 0));
+      const dx = B0.cx - B.cx, dy = B0.cy - B.cy;
+      const placed = moveWalls(main.walls, rot, dx, dy);
+      const outline = overlap(ext.length ? placed.filter(w => w.exterior) : placed, level.walls);
+      const inner = overlap(hasInner ? placed.filter(w => !w.exterior) : placed, level.walls);
+      const size = Math.min(B.w * B.h, B0.w * B0.h) / Math.max(B.w * B.h, B0.w * B0.h, 1e-6);
+      const score = outline + 0.5 * inner + 0.25 * size;
+      if (!best || score > best.score) best = { level, B0, rot, dx, dy, outline, inner, size, score };
+    }
   }
+  const ref = best.level, B0 = best.B0;
   const baseElev = main.elevation || 0;
   const lowest = result.levels.reduce((m, l) => Math.min(m, l.elevation), Infinity);
   const placements = {

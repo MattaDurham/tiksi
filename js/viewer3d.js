@@ -1450,18 +1450,22 @@ async function onImportScan(file) {
 }
 
 // Scan to plan on a mesh scan that is already here. Without a plan the proposal becomes the
-// plan; with one, the scan is fitted against it and the person says what it is (the next
-// floor, a rescan of a floor, a separate building, or reference only). Then the scan moves
-// onto its place and the model rebuilds.
+// plan. A scan the plan already came from is proposed again over the floor it matches (after
+// asking). Any other scan is fitted against the plan and the person says what it is: the
+// next floor, a rescan of a floor, a separate building, or reference only. Then the scan
+// moves onto its place and the model rebuilds.
 let planning = false;
 async function proposePlanFromScan(s) {
   if (planning) return;
+  const again = !!s.planned && prop.walls.length > 0;
+  if (again && !confirm('Propose the plan from "' + s.name + '" again? The floor it matches is rebuilt from the scan; other floors, the scan and photos stay, and scope links to the rebuilt walls are dropped.')) return;
   const token = mountId;
   planning = true;
   try {
     const rec = await getFile(s.id);
     if (!rec || !rec.buffer) throw new Error('the scan bytes are not in this browser');
-    const { result, applied, mode } = await placeScanBytes(prop, s, rec.buffer, hooks, fit => chooseScanPlacement(fit, s.name));
+    const choose = again ? () => 'replace' : fit => chooseScanPlacement(fit, s.name);
+    const { result, applied, mode } = await placeScanBytes(prop, s, rec.buffer, hooks, choose);
     if (token !== mountId) return;
     if (mode === 'reference') { toast('Kept ' + s.name + ' as reference; the plan is unchanged.', 'info'); return; }
     for (const id of (applied && applied.superseded) || []) {
