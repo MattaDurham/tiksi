@@ -305,6 +305,33 @@ try {
   console.log('       ' + toast);
   check(/5 walls|6 walls|7 walls/.test(toast) && /2 rooms/.test(toast), 'viewer: re-proposal matches');
 
+  // ---- a second scan joins the plan: the fit reads it, the person says what it is ----
+  console.log('\n[additive] a second scan of the same layout, added as the next floor');
+  const before2 = await page.evaluate(async captureId => {
+    const { ws } = await import('./js/store.js');
+    const p = ws.data.properties.find(p => p.source?.captureId === captureId);
+    return { levels: p.levels.length, walls: p.walls.length, scans: p.scans.length, name: p.name };
+  }, CAPTURE_ID);
+  await page.setInputFiles('.tool-col input[type=file]', glbPath);
+  await page.waitForSelector('.sp [data-mode]', { timeout: 120000 });
+  const suggested = await page.evaluate(() => document.querySelector('.sp-choice.suggested').dataset.mode);
+  check(suggested === 'replace', 'additive: the same layout is suggested as a rescan (' + suggested + ')');
+  await page.click('.sp [data-mode=level]');
+  await page.waitForFunction(() => /Proposed:/.test((document.querySelector('.v-toast') || {}).textContent || ''), null, { timeout: 120000 });
+  const after2 = await page.evaluate(async captureId => {
+    const { ws } = await import('./js/store.js');
+    const p = ws.data.properties.find(p => p.source?.captureId === captureId);
+    const lv = p.levels.slice().sort((a, b) => a.elevation - b.elevation);
+    const top = lv[lv.length - 1];
+    return { levels: p.levels.length, walls: p.walls.length, scans: p.scans.length, top: top.elevation, topWalls: p.walls.filter(w => w.level === top.id).length,
+      lifted: p.scans[p.scans.length - 1].pos[1], name: p.name };
+  }, CAPTURE_ID);
+  check(after2.levels === before2.levels + 1, 'additive: one level added (' + after2.levels + ')');
+  check(after2.top > 2.4 && after2.top < 3.2, 'additive: stacked on the floor below (' + after2.top.toFixed(2) + ' m)');
+  check(after2.topWalls >= 5 && after2.walls === before2.walls + after2.topWalls, 'additive: the lower floor kept its ' + before2.walls + ' walls');
+  check(after2.scans === before2.scans + 1 && after2.lifted > 2.2, 'additive: the new scan is kept and lifted with its floor');
+  check(after2.name === before2.name, 'additive: the property keeps its name');
+
   // ---- every view still mounts on the new property ----
   console.log('\n[views] every view mounts on the property');
   const before = errors.filter(e => e.startsWith('pageerror')).length;

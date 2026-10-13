@@ -17,7 +17,14 @@ export function touch() {
   for (const fn of listeners) { try { fn(); } catch (e) { console.error(e); } }
   setSaveStatus('SAVING', true);
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(save, 450);
+  saveTimer = setTimeout(() => { saveTimer = null; save(); }, 450);
+}
+
+// A pending autosave must not be lost when the tab closes or reloads inside the debounce.
+if (typeof window !== 'undefined') {
+  const flush = () => { if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; save(); } };
+  window.addEventListener('pagehide', flush);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
 }
 
 export function setSaveStatus(text, busy) {
