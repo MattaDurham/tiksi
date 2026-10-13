@@ -9,8 +9,9 @@
 // underlays and the proposed walls land on top of each other in PLAN and MODEL.
 
 import * as THREE from 'three';
-import { uid, touch } from './store.js';
+import { uid, touch, levelOfWall } from './store.js';
 import { loadMesh } from './scans.js';
+import { fitScan, placeResult, mergeProposal, existingPlan } from './scanmerge.js';
 import { scanToPlan } from './scan2plan-core.js';
 import { underlayResolution } from './underlay-resolution.js';
 
@@ -275,9 +276,49 @@ export async function planFromScanBytes(prop, scan, buffer, hooks, opts) {
   }
 }
 
+// A scan joining a property that already has a plan. The proposal is fitted against that
+// plan, `choose(fit)` decides what it is (scanplace.js asks, with the fit's suggestion
+// first): 'replace', 'level', 'beside', or 'reference' / null to leave the plan alone and
+// keep the scan as reference geometry. Without a plan this is planFromScanBytes.
+// Resolves { result, applied, mode, fit }.
+export async function placeScanBytes(prop, scan, buffer, hooks, choose) {
+  const hasPlan = (prop.walls || []).length > 0;
+  if (!hasPlan || !choose) return Object.assign(await planFromScanBytes(prop, scan, buffer, hooks), { mode: 'replace', fit: null });
+  const say = (m, f) => { if (hooks && hooks.progress) hooks.progress(m, f); };
+  say('Parsing ' + scan.name, 0.02);
+  const obj = await loadMesh(buffer, scan.format || String(scan.name || '').split('.').pop().toLowerCase());
+  try {
+    const result = await analyseMesh(obj, hooks);
+    if (!result) throw new Error('no floor could be found in ' + scan.name);
+    const fit = result.roomLike ? fitScan(existingPlan(prop, x => levelOfWall(prop, x).id), result) : null;
+    say(null);
+    const mode = fit ? await choose(fit) : null;
+    if (!mode || mode === 'reference') return { result, applied: null, mode: 'reference', fit };
+    const placed = placeResult(result, fit.placements[mode]);
+    say('Rendering the underlays', 0.9);
+    await new Promise(r => setTimeout(r, 0));
+    let underlays = null;
+    try { underlays = underlaysFor(obj, placed); } catch (e) { console.error('underlay render failed', e); }
+    const applied = mergeProposal(prop, scan, placed, underlays, mode, uid);
+    touch();
+    say(null);
+    return { result: placed, applied, mode, fit };
+  } finally {
+    obj.traverse(o => {
+      if (o.geometry) o.geometry.dispose();
+      const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+      for (const m of mats) { for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap']) if (m[k] && m[k].dispose) m[k].dispose(); m.dispose(); }
+    });
+  }
+}
+
 // One-line summary for toasts and logs.
 export function proposalSummary(result, applied) {
   if (!applied) return 'the scan is placed on the floor; it does not read as a room, so no walls were proposed';
+  if (applied.mode === 'level' || applied.mode === 'beside') {
+    const where = applied.mode === 'level' ? 'as ' + applied.levels.map(l => l.name).join(', ') : 'beside the building';
+    return 'added ' + applied.walls.length + ' walls and ' + applied.rooms.length + ' room' + (applied.rooms.length === 1 ? '' : 's') + ' ' + where;
+  }
   const doors = applied.openings.filter(o => o.type === 'door').length, wins = applied.openings.length - doors;
   const n = applied.levels ? applied.levels.length : 1;
   const plural = (k, w) => k + ' ' + w + (k === 1 ? '' : 's');

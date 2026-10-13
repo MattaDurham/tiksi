@@ -876,6 +876,22 @@ kbd {
 .src-card a:hover { color: var(--accent); }
 .src-card .btn { margin-top: 2px; }
 
+/* "what is this scan?" chooser */
+.modal.sp { width: min(520px, calc(100vw - 32px)); }
+.sp-backdrop { z-index: 950; }
+.sp-why { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; margin-bottom: 12px; border-left: 2px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); font-size: 12.5px; color: var(--ink); line-height: 1.45; }
+.sp-list { display: flex; flex-direction: column; gap: 6px; padding-bottom: 14px; }
+.sp-choice {
+  display: grid; grid-template-columns: 18px 1fr; gap: 10px; align-items: start; text-align: left; cursor: pointer;
+  padding: 10px 12px; border: 1px solid var(--line-2); border-radius: var(--radius); background: var(--panel-2); color: var(--dim);
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.sp-choice:hover, .sp-choice:focus-visible { border-color: var(--accent); background: var(--panel-3); outline: none; }
+.sp-choice.suggested { border-color: rgba(232, 151, 58, 0.55); }
+.sp-choice svg { margin-top: 2px; color: var(--accent); }
+.sp-choice b { display: block; font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; color: var(--ink); }
+.sp-choice small { display: block; margin-top: 3px; font-size: 12px; line-height: 1.4; }
+
 /* ---------- save state on the topbar ---------- */
 .tb-btn.dirty { position: relative; }
 .tb-btn.dirty::after {

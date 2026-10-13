@@ -26,12 +26,15 @@ import {
   escapeHtml, deleteFile, getFile, itemById, materialById, isoToday,
   ensureLevels, wallsOn, roomsOn, wallHeightOf, levelOfWall, levelOfRoom, levelHeight, topOfLevels,
 } from './store.js';
-import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
+import { placeScanBytes, seedProject, proposalSummary } from './scan2plan.js';
+import { chooseScanPlacement } from './scanplace.js';
+import { openNewPropertyDialog } from './newproperty.js';
 import { materialSelectHtml } from './materials.js';
 import { pendingTextureJobs, setTextureQuality } from './textures.js';
 import { qualityProfile, stillDimensions } from './render-quality.js';
 import { icon } from './icons.js';
 import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapRects, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
+import { planWallMove, applyWallMove, normalOffset } from './wallmove.js';
 import { addPhotoFromFile, photoUrl, photoById, revokePhotoUrls } from './photos-store.js';
 import {
   SCAN_ACCEPT, importScanFile, loadScanObject, applyScanTransform, disposeScanObject,
@@ -62,6 +65,7 @@ let section = { on: false, height: 1.2 };
 const clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 1.2);
 let framesLeft = 0, lastT = 0, tween = null, resizeObs = null;
 let pinPhotoId = null;         // photo being placed by the PIN PHOTO tool
+let pinBatch = false;          // placing unpinned photos one after another
 let measureDraft = null;       // first measure point
 const measures = [];           // {a, b, line, label}
 const scanObjs = {};           // scanId -> Object3D
@@ -1066,11 +1070,27 @@ function setSelection(sel) {
 }
 
 // ---------- move walls gizmo ----------
+// The wall group's local z is the wall normal. A wall joined to others slides along it only,
+// and the walls, rooms and openings attached to it follow (wallmove.js, as in PLAN).
+function wallMovePlan(w) {
+  const levelId = levelOfWall(prop, w).id;
+  const walls = wallsOn(prop, levelId);
+  const ids = new Set(walls.map(x => x.id));
+  return planWallMove(w, walls, roomsOn(prop, levelId), (prop.openings || []).filter(o => ids.has(o.wallId)));
+}
 function reattachGizmo() {
   gizmo.detach();
   if (tool === 'move' && selection && selection.kind === 'wall') {
     const g = findGroupFor('wall', selection.id);
-    if (g) { gizmo.attach(g); g.userData.origin = g.position.clone(); }
+    const w = prop.walls.find(w => w.id === selection.id);
+    if (g && w) {
+      const mv = wallMovePlan(w);
+      gizmo.space = 'local';
+      gizmo.showX = !(mv && mv.connected);
+      gizmo.showZ = true;
+      gizmo.attach(g);
+      g.userData.origin = g.position.clone();
+    }
   }
   requestRender(2);
 }
@@ -1083,8 +1103,9 @@ function commitGizmoMove() {
   const w = prop.walls.find(w => w.id === selection.id);
   if (!w) return;
   const r = v => Math.round(v * 200) / 200;
-  w.ax = r(w.ax + dx); w.ay = r(w.ay + dz);
-  w.bx = r(w.bx + dx); w.by = r(w.by + dz);
+  const mv = wallMovePlan(w);
+  if (mv && mv.connected) applyWallMove(mv, r(normalOffset(mv, dx, dz)));
+  else { w.ax = r(w.ax + dx); w.ay = r(w.ay + dz); w.bx = r(w.bx + dx); w.by = r(w.by + dz); }
   touch();
   rebuildModel();
   renderInspector();
@@ -1242,12 +1263,65 @@ function buildAllPins() {
   for (const id of Object.keys(pinObjs)) removePin(id);
   for (const ph of prop.photos) if (ph.pin) buildPin(ph);
 }
+// Unpinned photos in gallery order, after `afterId` and wrapping round.
+function nextUnpinned(afterId) {
+  const list = prop.photos;
+  const i = list.findIndex(ph => ph.id === afterId);
+  for (let k = 1; k <= list.length; k++) {
+    const ph = list[(i + k + list.length) % list.length];
+    if (ph && !ph.pin && ph.id !== afterId) return ph;
+  }
+  return null;
+}
+function pinHint() {
+  const ph = pinPhotoId && photoById(prop, pinPhotoId);
+  if (!ph) return 'PIN PHOTO: add or choose a photo in the inspector, then click a surface.';
+  const left = prop.photos.filter(p => !p.pin).length;
+  return 'PIN PHOTO: click where "' + ph.name + '" was taken' + (pinBatch && left > 1 ? ' (' + left + ' to place; the next one follows)' : '') + '. Esc stops.';
+}
 function startPinMode(photoId) {
   tool = 'pin';
-  pinPhotoId = photoId || pinPhotoId || (prop.photos[0] && prop.photos[0].id) || null;
+  const first = nextUnpinned(null);
+  pinPhotoId = photoId || (first && first.id) || pinPhotoId || (prop.photos[0] && prop.photos[0].id) || null;
+  const ph = pinPhotoId && photoById(prop, pinPhotoId);
+  // Placing a new photo chains on to the next unpinned one; MOVE PIN re-places just the one.
+  pinBatch = !!(ph && !ph.pin);
   gizmo.detach();
   renderToolCol(); renderInspector();
-  setHint(pinPhotoId ? 'PIN PHOTO: click any surface to place the photo there. Esc cancels.' : 'PIN PHOTO: add or choose a photo in the inspector, then click a surface.');
+  setHint(pinHint());
+}
+// What a pin lands on says where the photo belongs: the room in front of the surface (on the
+// level at that height) and, on a vertical surface, the wall it sits on. This holds for a
+// click on the scan as much as on the model, so photos placed on a Polycam mesh link too.
+function levelAtHeight(y) {
+  const sorted = prop.levels.slice().sort((a, b) => a.elevation - b.elevation);
+  let found = sorted[0];
+  for (const l of sorted) if (y >= l.elevation - 0.1) found = l;
+  return found;
+}
+function linkPinToPlan(ph, hit) {
+  ph.elementIds = ph.elementIds || [];
+  const add = id => { if (id && !ph.elementIds.includes(id)) ph.elementIds.push(id); };
+  if (hit.kind === 'wall') add(hit.id);
+  else if (hit.kind === 'opening') add(hit.wallId);
+  else if (hit.kind === 'room') add(hit.id);
+  const p = hit.point, n = hit.normal;
+  const qx = p.x + n.x * 0.15, qz = p.z + n.z * 0.15;
+  const lvl = levelAtHeight(p.y);
+  if (!lvl) return;
+  const room = hit.kind === 'room' ? prop.rooms.find(r => r.id === hit.id)
+    : roomsOn(prop, lvl.id).find(r => r.pts && r.pts.length > 2 && pointInPolygon(qx, qz, r.pts));
+  if (room) ph.roomId = room.id;
+  if (hit.kind === 'wall' || hit.kind === 'opening' || Math.abs(n.y) > 0.5) return;
+  let best = null, bestD = Infinity;
+  for (const w of wallsOn(prop, lvl.id)) {
+    const dx = w.bx - w.ax, dy = w.by - w.ay, L2 = dx * dx + dy * dy;
+    if (L2 < 1e-6) continue;
+    const t = Math.max(0, Math.min(1, ((p.x - w.ax) * dx + (p.z - w.ay) * dy) / L2));
+    const d = Math.hypot(p.x - (w.ax + t * dx), p.z - (w.ay + t * dy));
+    if (d < (w.thickness || 0.114) / 2 + 0.2 && d < bestD) { bestD = d; best = w; }
+  }
+  if (best) add(best.id);
 }
 function placePin(e) {
   if (!pinPhotoId) { toast('Choose a photo first (or ADD PHOTO).', 'warn'); return; }
@@ -1257,17 +1331,23 @@ function placePin(e) {
   if (!ph) { pinPhotoId = null; renderInspector(); return; }
   const size = (ph.pin && ph.pin.size) || 0.6;
   ph.pin = { x: hit.point.x, y: hit.point.y, z: hit.point.z, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z, size };
-  if (hit.kind === 'room' || hit.kind === 'wall' || hit.kind === 'opening') {
-    ph.elementIds = ph.elementIds || [];
-    const elId = hit.kind === 'opening' ? hit.wallId : hit.id;
-    if (elId && !ph.elementIds.includes(elId)) ph.elementIds.push(elId);
-    if (hit.kind === 'room') ph.roomId = hit.id;
-  }
+  linkPinToPlan(ph, hit);
   touch();
   buildPin(ph);
+  const where = ph.roomId ? ' in ' + ((prop.rooms.find(r => r.id === ph.roomId) || {}).name || 'the room') : '';
+  const next = pinBatch ? nextUnpinned(ph.id) : null;
+  if (next) {
+    pinPhotoId = next.id;
+    renderInspector();
+    setHint(pinHint());
+    toast('Pinned "' + ph.name + '"' + where + '. Next: "' + next.name + '".', 'ok');
+    requestRender(2);
+    return;
+  }
+  pinBatch = false;
   tool = 'select';
   setSelection({ kind: 'pin', id: ph.id });
-  toast('Photo pinned. Click it to open, MOVE PIN to re-place.', 'ok');
+  toast('Photo pinned' + where + '. Click it to open, MOVE PIN to re-place.', 'ok');
   setHint('');
 }
 function flyToPin(id) {
@@ -1353,6 +1433,7 @@ async function onImportScan(file) {
     if (obj) { centerScanOnModel(scan, obj, modelBounds(prop)); applyScanTransform(scan, obj); touch(); }
     setSelection({ kind: 'scan', id: scan.id });
     toast('Imported ' + scan.name + ' (' + scanStats(obj).label + ').', 'ok');
+    if (scan.kind === 'mesh' && prop.walls.length) { showProgress(null); await proposePlanFromScan(scan); }
   } catch (e) {
     console.error(e);
     if (token !== mountId) return;
@@ -1368,23 +1449,31 @@ async function onImportScan(file) {
   renderToolCol();
 }
 
-// Scan to plan on a mesh scan that is already here: replaces the traced plan with the
-// proposal (after asking, when there is one), moves the scan onto it and rebuilds the model.
+// Scan to plan on a mesh scan that is already here. Without a plan the proposal becomes the
+// plan; with one, the scan is fitted against it and the person says what it is (the next
+// floor, a rescan of a floor, a separate building, or reference only). Then the scan moves
+// onto its place and the model rebuilds.
 let planning = false;
 async function proposePlanFromScan(s) {
   if (planning) return;
-  const traced = prop.walls.length + prop.rooms.length;
-  if (traced && !confirm('Replace the ' + prop.walls.length + ' traced wall(s) and ' + prop.rooms.length + ' room(s) with a plan proposed from "' + s.name + '"? The scan and photos stay; scope links to old elements are dropped.')) return;
   const token = mountId;
   planning = true;
   try {
     const rec = await getFile(s.id);
     if (!rec || !rec.buffer) throw new Error('the scan bytes are not in this browser');
-    const { result, applied } = await planFromScanBytes(prop, s, rec.buffer, hooks);
+    const { result, applied, mode } = await placeScanBytes(prop, s, rec.buffer, hooks, fit => chooseScanPlacement(fit, s.name));
     if (token !== mountId) return;
+    if (mode === 'reference') { toast('Kept ' + s.name + ' as reference; the plan is unchanged.', 'info'); return; }
+    for (const id of (applied && applied.superseded) || []) {
+      const old = scanObjs[id];
+      if (old) { scanRoot.remove(old); disposeScanObject(old); delete scanObjs[id]; }
+      delete scanState[id];
+    }
     if (applied) {
-      const project = seedProject(prop, applied, prop.name + ': scope from scan');
-      if (project && !ws.data.projects.some(p => p.propertyId === prop.id && /scope from scan/i.test(p.name))) { ws.data.projects.push(project); touch(); }
+      const added = mode === 'level' || mode === 'beside';
+      const label = prop.name + ': scope from ' + (added ? s.name : 'scan');
+      const project = seedProject(prop, applied, label);
+      if (project && (added || !ws.data.projects.some(p => p.propertyId === prop.id && /scope from scan/i.test(p.name)))) { ws.data.projects.push(project); touch(); }
     }
     const obj = scanObjs[s.id];
     if (obj) applyScanTransform(s, obj);
@@ -1418,7 +1507,7 @@ function defaultHint() {
   if (mode === 'walk') return walkLocked ? 'WALK: WASD / arrows move, Shift runs, mouse looks. Esc releases the mouse.' : 'WALK: WASD / arrows move, Shift runs. Drag to look or click to capture the mouse. Esc exits.';
   if (tool === 'measure') return 'MEASURE: click two points on any surface.';
   if (tool === 'pin') return 'PIN PHOTO: choose a photo, then click a surface.';
-  if (tool === 'move') return 'MOVE WALLS: select a wall, drag the gizmo arrows to slide it; release to commit.';
+  if (tool === 'move') return 'MOVE WALLS: select a wall, drag the gizmo arrow to slide it; connected walls follow on release.';
   if (section.on) return 'SECTION: slide the cut height in the mode bar to look inside.';
   return 'Drag to orbit, right-drag to pan, scroll to zoom. Click elements to inspect; hover shows outlines.';
 }
@@ -1666,27 +1755,40 @@ function unpin(id) {
 }
 
 function renderPinPanel() {
+  const total = prop.photos.length, placed = prop.photos.filter(ph => ph.pin).length;
+  const cur = pinPhotoId && photoById(prop, pinPhotoId);
   inspEl.innerHTML = `<h3>PIN PHOTO</h3>
-    <div class="empty">Pick a photo, then click any wall, floor, ground, point cloud or mesh surface to pin it there. Gaussian splats have no pickable surface; a click on one lands on whatever is behind it.</div>
+    ${cur ? `<div class="v-thumb big active"><img src="${escapeHtml(cur.thumb)}" alt=""></div>
+      <div class="stat-line"><span>Placing</span><b>${escapeHtml(cur.name)}</b></div>` : ''}
+    ${total ? `<div class="stat-line"><span>Pinned</span><b>${placed} of ${total}</b></div>` : ''}
+    <div class="empty">Click the wall, floor or scan surface where the photo was taken. It links to the room and wall there${pinBatch ? ', then the next unpinned photo comes up' : ''}. Pick another photo below to place it instead.</div>
     <div class="v-thumbs">${prop.photos.map(ph => `<button class="v-thumb ${ph.id === pinPhotoId ? 'active' : ''}" data-pick="${escapeHtml(ph.id)}" title="${escapeHtml(ph.name)}"><img src="${escapeHtml(ph.thumb)}" alt="">${ph.pin ? '<i class="v-pinned">PINNED</i>' : ''}</button>`).join('')}</div>
-    ${prop.photos.length ? '' : '<div class="empty" style="margin-top:8px">No photos on this property yet.</div>'}
-    <button class="btn primary" data-add>ADD PHOTO</button>
+    ${total ? '' : '<div class="empty" style="margin-top:8px">No photos on this property yet.</div>'}
+    <button class="btn primary" data-add>ADD PHOTOS</button>
     <input type="file" class="hidden-file" accept="image/*" multiple>
-    <button class="btn" data-cancel>CANCEL</button>`;
-  inspEl.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => { pinPhotoId = b.dataset.pick; renderPinPanel(); setHint('PIN PHOTO: click any surface to place the photo there.'); });
+    <button class="btn" data-cancel>${placed ? 'DONE' : 'CANCEL'}</button>`;
+  inspEl.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => {
+    pinPhotoId = b.dataset.pick;
+    const ph = photoById(prop, pinPhotoId);
+    pinBatch = !!(ph && !ph.pin);
+    renderPinPanel(); setHint(pinHint());
+  });
   const file = inspEl.querySelector('input[type=file]');
   inspEl.querySelector('[data-add]').onclick = () => file.click();
   file.onchange = async () => {
     const files = Array.from(file.files || []);
     file.value = '';
+    let first = null;
     for (const f of files) {
-      try { const rec = await addPhotoFromFile(prop, f); pinPhotoId = rec.id; }
+      try { const rec = await addPhotoFromFile(prop, f); first = first || rec; }
       catch (e) { toast('Could not add ' + f.name + ': ' + e.message, 'error'); }
     }
-    if (tool === 'pin') renderPinPanel();
+    // New photos are placed in the order they were chosen, starting with the first.
+    if (first) { pinPhotoId = first.id; pinBatch = true; }
+    if (tool === 'pin') { renderPinPanel(); setHint(pinHint()); }
     renderEnvPanel();
   };
-  inspEl.querySelector('[data-cancel]').onclick = () => { tool = 'select'; renderToolCol(); renderInspector(); setHint(''); };
+  inspEl.querySelector('[data-cancel]').onclick = () => { tool = 'select'; pinBatch = false; renderToolCol(); renderInspector(); setHint(''); };
 }
 
 function renderInspector() {
@@ -1733,7 +1835,7 @@ function renderInspector() {
       ${scopeAssignHtml(w.id)}
       ${linkedProductsHtml(w.id)}
       ${photoLinksHtml(w.id)}
-      <div class="empty" style="margin:8px 0">MOVE WALLS: drag the gizmo arrows to slide this wall in plan; release to commit.</div>
+      <div class="empty" style="margin:8px 0">MOVE WALLS: drag the gizmo arrow to slide this wall; the walls, rooms and openings joined to it follow when you release.</div>
       <button class="btn" data-walk>WALK HERE</button>
       <button class="btn danger" data-del>DELETE WALL</button>`;
     inspEl.querySelector('[data-th]').onchange = e => {
@@ -1946,6 +2048,7 @@ function renderToolCol() {
     <div class="tool-sep"></div>
     <div class="tool-head">SCANS</div>
     ${tb('scan', 'scan', 'IMPORT SCAN')}
+    ${tb('polycam', 'link', 'POLYCAM LINK')}
     <input type="file" class="hidden-file" accept="${SCAN_ACCEPT}">
     ${scanRows}
     <div class="empty" style="padding:6px 8px; font-size:9.5px; color:var(--faint); font-family:var(--mono); line-height:1.5">
@@ -1968,6 +2071,7 @@ function renderToolCol() {
   on('render', openStillDialog);
   const file = tc.querySelector('input[type=file]');
   on('scan', () => file.click());
+  on('polycam', () => openNewPropertyDialog({ into: prop.id }));
   file.onchange = () => { onImportScan(file.files[0]); file.value = ''; };
   tc.querySelectorAll('[data-scan]').forEach(b => b.onclick = () => setSelection({ kind: 'scan', id: b.dataset.scan }));
   tc.querySelectorAll('[data-level]').forEach(b => b.onclick = () => toggleLevel(b.dataset.level));
@@ -1976,6 +2080,7 @@ function renderToolCol() {
 function setTool(next) {
   if (tool === 'measure' && next !== 'measure') { measureDraft = null; measureRoot.children.filter(c => c.userData.draft).forEach(c => { measureRoot.remove(c); c.geometry.dispose(); c.material.dispose(); }); }
   tool = next;
+  if (next !== 'pin') pinBatch = false;
   reattachGizmo();
   renderToolCol();
   renderInspector();

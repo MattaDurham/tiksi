@@ -12,8 +12,9 @@ import {
 import { materialSelectHtml } from './materials.js';
 import { icon } from './icons.js';
 import { SCAN_ACCEPT } from './scans.js';
-import { attachScanFileToProperty } from './newproperty.js';
+import { attachScanFileToProperty, openNewPropertyDialog } from './newproperty.js';
 import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
+import { planWallMove, applyWallMove, normalOffset, planCornerMove, applyCornerMove } from './wallmove.js';
 
 const PRESETS = {
   interior: { thickness: 0.114, material: 'mat-drywall' },   // 4.5 in stud wall
@@ -210,12 +211,13 @@ function snapPoint(wx, wy, opts) {
   opts = opts || {};
   const tolW = 11 / vs.zoom;
   snapInfo = null;
+  const skip = opts.excludeWall instanceof Set ? opts.excludeWall : new Set(opts.excludeWall ? [opts.excludeWall] : []);
   // Endpoint snap (the SNAP switch gates every kind of snapping, as its label promises).
   if (snapOn) {
     let best = null, bestD = tolW;
     for (const w of curWalls()) {
       for (const p of [[w.ax, w.ay], [w.bx, w.by]]) {
-        if (opts.excludeWall && opts.excludeWall === w.id) continue;
+        if (skip.has(w.id)) continue;
         const d = Math.hypot(p[0] - wx, p[1] - wy);
         if (d < bestD) { bestD = d; best = p; }
       }
@@ -1272,15 +1274,21 @@ function onPointerDown(e) {
   }
   // Drags take their undo snapshot on the first real move (onPointerMove), so a plain
   // click-select never touches the history or clears the redo stack.
+  // Walls are sticky: a corner drag moves every wall end and room corner at that joint, a
+  // wall drag slides its straight run along its normal and stretches what is attached.
+  // Alt (Option) detaches, moving only the one wall freely as before.
   if (hit.kind === 'handle') {
-    drag = { kind: 'handle', id: hit.id, end: hit.end, moved: false };
+    const w = prop.walls.find(w => w.id === hit.id);
+    const joint = w && !e.altKey ? planCornerMove(w, hit.end, curWalls(), curRooms(), curOpenings()) : null;
+    drag = { kind: 'handle', id: hit.id, end: hit.end, joint, moved: false };
     return;
   }
   selection = { kind: hit.kind, id: hit.id };
   renderInspector();
   if (hit.kind === 'wall') {
     const w = prop.walls.find(w => w.id === hit.id);
-    drag = { kind: 'wall', id: hit.id, wx, wy, orig: { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by }, moved: false };
+    const mv = e.altKey ? null : planWallMove(w, curWalls(), curRooms(), curOpenings());
+    drag = { kind: 'wall', id: hit.id, wx, wy, orig: { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by }, mv: mv && mv.connected ? mv : null, moved: false };
   } else if (hit.kind === 'opening') {
     drag = { kind: 'opening', id: hit.id, moved: false };
   } else if (hit.kind === 'room') {
@@ -1315,11 +1323,13 @@ function onPointerMove(e) {
   if (drag.kind === 'handle') {
     const w = prop.walls.find(w => w.id === drag.id);
     if (!w) return;
-    const pt = snapPoint(wx, wy, { excludeWall: w.id, from: drag.end === 'a' ? [w.bx, w.by] : [w.ax, w.ay] });
-    if (drag.end === 'a') { w.ax = pt[0]; w.ay = pt[1]; } else { w.bx = pt[0]; w.by = pt[1]; }
+    const pt = snapPoint(wx, wy, { excludeWall: drag.joint ? new Set(drag.joint.wallIds) : w.id, from: drag.end === 'a' ? [w.bx, w.by] : [w.ax, w.ay] });
+    if (drag.joint) applyCornerMove(drag.joint, pt[0], pt[1]);
+    else if (drag.end === 'a') { w.ax = pt[0]; w.ay = pt[1]; } else { w.bx = pt[0]; w.by = pt[1]; }
   } else if (drag.kind === 'wall') {
     const w = prop.walls.find(w => w.id === drag.id);
     if (!w) return;
+    if (drag.mv) { applyWallMove(drag.mv, rnd(normalOffset(drag.mv, wx - drag.wx, wy - drag.wy))); return; }
     const dx = rnd(wx - drag.wx), dy = rnd(wy - drag.wy);
     w.ax = drag.orig.ax + dx; w.ay = drag.orig.ay + dy;
     w.bx = drag.orig.bx + dx; w.by = drag.orig.by + dy;
@@ -1432,7 +1442,7 @@ function setTool(t) {
 function setHint(text) { if (hintEl) hintEl.textContent = text; }
 function updateHint() {
   const hints = {
-    select: 'Click to select. Drag walls, endpoints, openings, rooms or the underlay. Scroll pans, pinch or cmd+scroll zooms. F fits view.',
+    select: 'Click to select. Drag walls, corners, openings, rooms or the underlay; connected walls follow (hold Alt to detach). Scroll pans, pinch or cmd+scroll zooms. F fits view.',
     wall: drawing ? 'Click to place the next corner. Double-click or Esc to end the chain.' : 'Click to start a wall chain. Walls snap to endpoints, axes and 15 degree angles.',
     door: 'Click on a wall to place a door.',
     window: 'Click on a wall to place a window.',
@@ -1565,20 +1575,22 @@ function lenField(label, value, key, placeholder) {
 
 function head(ic, text) { return `<h3>${icon(ic)}${text}</h3>`; }
 
-// Where the property came from and what the scan can still do for the plan: a mesh scan
-// can (re)propose the whole plan; a property made from a link that the browser could not
-// fetch takes the downloaded file here.
+// Where the property came from and what scans can still do for the plan: a mesh scan can
+// (re)propose the plan, and another scan (a link or a file) joins it as the next floor, a
+// rescan or a separate building. Every property gets the card, so a property made by name
+// (photos first) can take its scan later.
 function meshScan() { return (prop.scans || []).find(s => s.kind === 'mesh') || null; }
 function sourceCardHtml() {
   const src = prop.source;
   const scan = meshScan();
-  if (!src && !scan) return '';
   const label = src && src.kind === 'polycam' ? 'FROM POLYCAM' : 'SCAN';
+  const fileTitle = scan ? 'Add a GLB/OBJ/PLY scan; you choose whether it is the next floor, a rescan or a separate building' : 'Attach the GLB/OBJ/PLY you downloaded from Polycam; the plan is proposed from it';
   return `<div class="src-card">
     <span class="np-kicker">${label}</span>
     ${src && src.url ? `<a href="${escapeHtml(src.url)}" target="_blank" rel="noopener" title="${escapeHtml(src.url)}">${escapeHtml(src.title || src.url.replace(/^https?:\/\//, ''))}</a>` : ''}
-    ${scan ? `<button class="btn" data-src-plan title="Square the scan up and propose walls, rooms, doors, windows and the underlay again">${icon('scan')}PROPOSE PLAN FROM SCAN</button>`
-           : `<button class="btn primary" data-src-attach title="Attach the GLB/OBJ/PLY you downloaded from Polycam; the plan is proposed from it">${icon('upload')}ATTACH SCAN FILE</button><input type="file" class="hidden-file" data-src-file accept="${SCAN_ACCEPT}">`}
+    ${scan ? `<button class="btn" data-src-plan title="Square the scan up and propose walls, rooms, doors, windows and the underlay again">${icon('scan')}PROPOSE PLAN FROM SCAN</button>` : ''}
+    <button class="btn ${scan ? '' : 'primary'}" data-src-link title="Paste a poly.cam/capture link; it is added to this property">${icon('link')}${scan ? 'ADD ANOTHER POLYCAM SCAN' : 'ADD POLYCAM SCAN'}</button>
+    <button class="btn" data-src-attach title="${escapeHtml(fileTitle)}">${icon('upload')}${scan ? 'ADD SCAN FILE' : 'ATTACH SCAN FILE'}</button><input type="file" class="hidden-file" data-src-file accept="${SCAN_ACCEPT}">
     <div class="empty" data-src-status></div>
   </div>`;
 }
@@ -1620,6 +1632,8 @@ function bindSourceCard(insp) {
     } catch (e) { console.error(e); say('Could not propose a plan: ' + String(e && e.message || e), false); }
     finally { sourceBusy = false; }
   };
+  const linkBtn = insp.querySelector('[data-src-link]');
+  if (linkBtn) linkBtn.onclick = () => openNewPropertyDialog({ into: prop.id });
   const attach = insp.querySelector('[data-src-attach]');
   const file = insp.querySelector('[data-src-file]');
   if (attach && file) {
@@ -1632,6 +1646,7 @@ function bindSourceCard(insp) {
         pushUndo();
         const out = await attachScanFileToProperty(prop, f, viewHooks);
         if (!out) throw new Error('not a scan tiksi can read');
+        if (out.mode === 'reference') { say('Kept ' + out.scan.name + ' as reference; the plan is unchanged.', false); return; }
         afterPlan(out.result, out.applied);
       } catch (e) { console.error(e); say('Could not use that file: ' + String(e && e.message || e), false); }
       finally { sourceBusy = false; }

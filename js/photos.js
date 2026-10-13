@@ -325,6 +325,9 @@ function renderHead() {
   const all = photos();
   const panos = all.filter(p => p.kind === 'pano').length;
   const pinned = all.filter(p => p.pin).length;
+  // Unpinned photos are placed one after another in the model: click where each was taken.
+  const unpinned = all.filter(p => !p.pin);
+  const canPlace = unpinned.length && !importing && (prop.walls.length || (prop.scans || []).length);
   const sub = importing
     ? `IMPORTING ${importing.done} / ${importing.total}`
     : `${all.length} photo${all.length === 1 ? '' : 's'} - ${panos} panorama${panos === 1 ? '' : 's'} - ${pinned} pinned in 3D`;
@@ -335,13 +338,19 @@ function renderHead() {
     </div>
     <div class="ph-head-actions">
       <span class="ph-hint">drop images anywhere - or paste</span>
+      ${canPlace ? `<button class="btn primary" data-act="place" title="Open the model and click where each unpinned photo was taken; each one links to the room and wall there">PLACE ${unpinned.length} IN 3D</button>` : ''}
       <button class="btn" data-act="reconstruct">PHOTO TO 3D</button>
       <button class="btn" data-act="camera" title="Take a photo with the phone camera">CAMERA</button>
-      <button class="btn primary" data-act="upload">UPLOAD</button>
+      <button class="btn ${canPlace ? '' : 'primary'}" data-act="upload">UPLOAD</button>
       <input type="file" class="hidden-file" data-file="upload" accept="image/*" multiple>
       <input type="file" class="hidden-file" data-file="camera" accept="image/*" capture="environment">
     </div>`;
   bindUploadButtons(head);
+  const place = head.querySelector('[data-act=place]');
+  if (place) place.onclick = () => {
+    const first = photos().find(p => !p.pin);
+    if (first) pinIn3d(first);
+  };
 }
 
 function bindUploadButtons(root) {
@@ -457,10 +466,15 @@ function renderGrid() {
   });
 }
 
+// Scope items of this property's projects (and unassigned ones); an item already linked from
+// elsewhere stays listed so it can be unlinked.
 function scopeOptionsHtml(p) {
   const have = new Set(p.itemIds || []);
   const groups = {};
-  for (const { project, item } of allScopeItems()) (groups[project.name] = groups[project.name] || []).push(item);
+  for (const { project, item } of allScopeItems()) {
+    if (project.propertyId && project.propertyId !== prop.id && !have.has(item.id)) continue;
+    (groups[project.name] = groups[project.name] || []).push(item);
+  }
   return Object.entries(groups).map(([name, items]) =>
     `<optgroup label="${escapeHtml(name)}">${items.map(it =>
       `<option value="${escapeHtml(it.id)}" ${have.has(it.id) ? 'selected' : ''}>${escapeHtml(it.name)}</option>`).join('')}</optgroup>`).join('');

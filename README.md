@@ -21,21 +21,26 @@ Design side:
 - Upload a floorplan image (photo, scan or PDF export) as a tracing underlay,
   or send any site photo to the plan from the photo gallery
 - Calibrate real-world scale from any known dimension
-- Trace walls with endpoint/axis/angle snapping; place doors and windows; outline rooms
+- Trace walls with endpoint/axis/angle snapping; place doors and windows; outline rooms.
+  Walls are sticky: dragging a wall slides its straight run along its normal and the
+  walls, room corners and openings joined to it follow; dragging a corner moves every
+  wall end at that joint. Hold Alt (Option) to move one wall on its own
 - Generate a 3D model from the plan: solid walls with real openings (headers over
   doors, sills under windows), glazed windows, per-room floor slabs and ceilings
 - Render it photoreal: a physical sun and sky driven by time of day and heading,
   image-based lighting, ambient occlusion, real glass with reflections and
   refraction, night mode with interior lights, quality presets down to laptop level
 - Edit the model manually: select any wall, floor or ceiling in 3D, change
-  thickness, height or material, slide walls with a drag gizmo, delete elements
+  thickness, height or material, slide walls with a drag gizmo (joined walls follow),
+  delete elements
 - Assign building materials from a library of procedural PBR materials (drywall,
   plaster, brick, block, stone, wood, tile, concrete, carpet, siding, marble,
   metal, glass), tune colour, roughness, tile size and grout, or build a
   photo-based material from a close-up of the real surface
 - Keep photos with the model: site conditions, reference images and 360
   panoramas in a gallery per property, filtered by room and tagged to walls,
-  floors and scope items; pin any photo on a surface in the 3D model; use an
+  floors and scope items; pin photos on surfaces in the 3D model one after another
+  (PHOTOS > PLACE IN 3D), each linking to the room and wall it lands on; use an
   equirectangular panorama as the sky so light and reflections come from the
   actual site
 - Import scans as reference geometry: point clouds (PLY, PCD, XYZ, PTS, LAS),
@@ -63,6 +68,9 @@ Design side:
   the 3D view stacks them with per-level visibility and the section cut
 - Scan to plan for any mesh scan already in a property: PROPOSE PLAN FROM SCAN in
   the plan inspector or the 3D scan inspector runs the same pipeline
+- Scans are additive: a Polycam link or scan file added to a property that already
+  has a plan is fitted against it and offered as the next floor, a rescan that
+  replaces the floor it matches, a separate building beside it, or reference only
 
 Program side:
 
@@ -184,6 +192,18 @@ runs. Everything proposed is ordinary plan data afterwards: drag, retype, delete
 undo. Expect to fix a few things by hand: walls behind tall furniture, glass
 walls and diagonal walls (only the two main axes are traced) are the usual gaps,
 and the underlay makes those edits a matter of dragging a line over a photo.
+
+A link can also join a property that already exists: ADD POLYCAM SCAN in the plan
+inspector, POLYCAM LINK in the model's scan list, or the choice the dialog offers
+when a link is pasted while a property is open (it starts on the open property when
+that property has no plan yet, say one made by name to hold photos first). When the
+property already has a plan, the new scan's proposal is turned through the four
+right angles and slid onto the existing walls, and scored on how much of its outline
+and of its inside walls land on them. The dialog then asks what the scan is, with
+the best reading first: the next floor (stacked on top, lined up), a rescan
+(rebuilds only the floor it matches), a separate building (placed 3 m beside, on the
+same floor), or reference geometry only. This is geometry, not recognition; the
+person adding the scan has the last word.
 
 If the direct endpoint has nothing (a capture that is not shared, or one without a
 mesh), the dialog falls back to reading the share page for a model file; browsers
