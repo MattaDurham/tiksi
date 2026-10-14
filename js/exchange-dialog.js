@@ -76,7 +76,7 @@ export function openExchangeDialog(prop, { selected, imported, changed, hooks, h
       status.textContent='Saving the before design…';
       const before=await exportModel(prop,{format:'glb',source:'design'});
       const snapshot=await importScanBytes(await before.blob.arrayBuffer(),'Before — '+before.name,prop,hooks,{visible:false,designSnapshot:true});
-      snapshot.parametricSnapshot=JSON.parse(JSON.stringify({levels:prop.levels,walls:prop.walls,rooms:prop.rooms,openings:prop.openings}));
+      snapshot.parametricSnapshot=JSON.parse(JSON.stringify({levels:prop.levels.map(level=>({...level,plan:level.plan?{...level.plan,img:''}:null})),walls:prop.walls,rooms:prop.rooms,openings:prop.openings}));
       beforeId=snapshot.id;
     }
     if(revision && scan.kind==='mesh') prop.designComparison={beforeId,afterId:scan.id,view:'after'};
