@@ -99,7 +99,7 @@ try {
   await page.locator('[data-return-file]').setInputFiles({name:'returned-edit.glb',mimeType:'model/gltf-binary',buffer:await readFile(await download.path())});
   try {await page.locator('[data-file-dialog]').waitFor({state:'detached',timeout:30000});}catch(e){throw new Error('Bring-back UI: '+await page.locator('[data-status]').innerText());}
   await page.locator('[data-act=before]').waitFor();await page.locator('[data-act=before]').click();
-  assert.equal(await page.evaluate(async()=>{const s=await import('/js/store.js');return s.activeProperty().modelSourceId||null;}),null);
+  assert.ok(await page.evaluate(async()=>{const s=await import('/js/store.js');const p=s.activeProperty(),before=p.scans.find(scan=>scan.id===p.designComparison.beforeId);return p.modelSourceId===before.id && before.designSnapshot && before.parametricSnapshot.walls.length>0;}),'before is an immutable saved mesh and parametric snapshot');
   await page.locator('[data-act=after]').click();assert.ok(await page.evaluate(async()=>{const s=await import('/js/store.js');return s.activeProperty().modelSourceId;}));
   assert.equal(await page.locator('#btn-save').count(),0,'only one File entry point');
   await page.setViewportSize({width:390,height:844});await page.locator('#btn-file').click();

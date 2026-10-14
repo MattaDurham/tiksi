@@ -1,6 +1,6 @@
 import { converterCapabilities, conversionJobs, conversionPacket, cancelConversion } from './native-conversion.js';
 import { EXCHANGE_FORMATS, exportModel } from './model-exchange.js';
-import { SCAN_ACCEPT, importScanFile } from './scans.js';
+import { SCAN_ACCEPT, importScanFile, importScanBytes } from './scans.js';
 import { escapeHtml, getFile, touch } from './store.js';
 
 export function downloadModel(blob, name) {
@@ -70,8 +70,16 @@ export function openExchangeDialog(prop, { selected, imported, changed, hooks, h
     // A returned file contains world-space coordinates exported by Tiksi. Applying the
     // prior placement again would double its translation, rotation and scale.
     if(prior && scan.kind==='mesh') {scan.revisionOf=prior.id;prior.visible=false;}
-    if(revision==='design') scan.revisionOf='design';
-    if(revision && scan.kind==='mesh') prop.designComparison={beforeId:revision,afterId:scan.id,view:'after'};
+    let beforeId=revision;
+    if(revision==='design' && scan.kind==='mesh') {
+      scan.revisionOf='design';
+      status.textContent='Saving the before design…';
+      const before=await exportModel(prop,{format:'glb',source:'design'});
+      const snapshot=await importScanBytes(await before.blob.arrayBuffer(),'Before — '+before.name,prop,hooks,{visible:false,designSnapshot:true});
+      snapshot.parametricSnapshot=JSON.parse(JSON.stringify({levels:prop.levels,walls:prop.walls,rooms:prop.rooms,openings:prop.openings}));
+      beforeId=snapshot.id;
+    }
+    if(revision && scan.kind==='mesh') prop.designComparison={beforeId,afterId:scan.id,view:'after'};
     if(scan.kind==='mesh' && dialog.querySelector('[data-show-return]').checked) prop.modelSourceId=scan.id;
     touch();await imported?.(scan);dialog.close();
   });
