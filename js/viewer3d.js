@@ -83,6 +83,8 @@ let toastTimer = 0;
 // Bumped on every mount; async loaders compare their captured token so work started by a
 // previous mount never lands in (or doubles up inside) the next one.
 let mountId = 0;
+let pendingScanFocus = null;
+export function focusScanOnMount(id) { pendingScanFocus=id; }
 let exportingStill = false, exportRequest = false, exportDialog = null;
 const raycaster = new THREE.Raycaster();
 raycaster.params.Points = { threshold: 0.05 };
@@ -2068,7 +2070,7 @@ function renderToolCol() {
       const scan=prop.scans.find(s=>s.id===id);if(scan){scan.visible=id===chosen;applyScanTransform(scan,scanObjs[id]);}
     }
     if(chosen==='design')delete prop.modelSourceId;else prop.modelSourceId=chosen;
-    rebuildModel();renderToolCol();touch();
+    rebuildModel();renderToolCol();if(scanObjs[chosen])frameObject(scanObjs[chosen]);touch();
   };
   on('before',()=>compare('before'));on('after',()=>compare('after'));
   tc.querySelectorAll('[data-scan]').forEach(b => b.onclick = () => setSelection({ kind: 'scan', id: b.dataset.scan }));
@@ -2192,7 +2194,8 @@ export function mount(root) {
   renderer.setAnimationLoop(tick);
   requestRender(4);
 
-  loadAllScans();
+  const focus=pendingScanFocus || prop.modelSourceId,token=mountId;pendingScanFocus=null;
+  loadAllScans().then(()=>{if(token===mountId && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
   // Deep link from the PHOTOS view: #/model?pin=<photoId> enters PIN PHOTO for that photo.
   const m = /[?&]pin=([^&]+)/.exec(location.hash);
   if (m) {

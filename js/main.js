@@ -221,6 +221,7 @@ async function importAnyFile(file) {
   }
   const scan = await importScanFile(file, prop);
   if (!scan) throw new Error('Choose a supported model or a native source for conversion.');
+  viewer3d.focusScanOnMount(scan.id);
   return 'model';
 }
 
@@ -252,7 +253,7 @@ function openFileMenu(initialTab = 'project', selected) {
   let busy=false;
   const run=async fn=>{if(busy)return;busy=true;const disabled=Array.from(dialog.querySelectorAll('button')).filter(b=>!b.disabled);disabled.forEach(b=>b.disabled=true);dialog.oncancel=e=>e.preventDefault();try {status.textContent='Working…';await fn();status.textContent='Done.';refresh();}catch(e){status.textContent=e.message;}finally{busy=false;dialog.oncancel=null;disabled.forEach(b=>b.disabled=false);refresh();}};
   let exchangeMounted=false;
-  const mountExchange=()=>{if(exchangeMounted)return;exchangeMounted=true;if(currentName==='model'){const image=document.createElement('button');image.className='btn';image.textContent='SAVE VIEW IMAGE';image.dataset.saveView='';image.onclick=()=>{dialog.close();viewer3d.openStillDialog();};dialog.querySelector('[data-file-exchange]').append(image);}if(prop) openExchangeDialog(prop,{selected,host:dialog.querySelector('[data-file-exchange]'),close:()=>dialog.close(),imported:async()=>{refreshTopbar();if(currentName==='model')remountView();else location.hash='#/model';},changed:remountView});};
+  const mountExchange=()=>{if(exchangeMounted)return;exchangeMounted=true;if(currentName==='model'){const image=document.createElement('button');image.className='btn';image.textContent='SAVE VIEW IMAGE';image.dataset.saveView='';image.onclick=()=>{dialog.close();viewer3d.openStillDialog();};dialog.querySelector('[data-file-exchange]').append(image);}if(prop) openExchangeDialog(prop,{selected,host:dialog.querySelector('[data-file-exchange]'),close:()=>dialog.close(),imported:async scan=>{viewer3d.focusScanOnMount(scan.id);refreshTopbar();if(currentName==='model')remountView();else location.hash='#/model';},changed:remountView});};
   const tab=id=>{if(id==='exchange')mountExchange();dialog.querySelectorAll('[data-file-panel]').forEach(p=>p.hidden=p.dataset.filePanel!==id);dialog.querySelectorAll('[data-file-tab]').forEach(b=>{b.classList.toggle('active',b.dataset.fileTab===id);b.setAttribute('aria-current',b.dataset.fileTab===id?'true':'false');});};
   dialog.querySelectorAll('[data-file-tab]').forEach(b=>b.onclick=()=>tab(b.dataset.fileTab));tab(initialTab);refresh();
   on('[data-close-file]',()=>dialog.close());

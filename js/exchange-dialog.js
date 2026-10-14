@@ -19,7 +19,7 @@ export function openExchangeDialog(prop, { selected, imported, changed, hooks, h
   const meshes = (prop.scans || []).filter(s => s.kind === 'mesh');
   dialog.innerHTML = `<form method="dialog"><h3>Edit in your modeling app</h3>
     <p>Build here, edit in Blender or SketchUp, then bring the exported model back. Keep a .tiksi project for your editable plan, scope and photos.</p>
-    <label>Export source <select data-source><option value="design">Tiksi floorplan — all levels</option>${captures.map(s => `<option value="${escapeHtml(s.id)}" ${s.id === selected || s.id === prop.modelSourceId ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}</select></label>
+    <label>Export source <select data-source><option value="design">Tiksi floorplan — all levels</option>${captures.map(s => `<option value="${escapeHtml(s.id)}" ${s.id === (selected || prop.modelSourceId) ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}</select></label>
     <label>Format <select data-format>${EXCHANGE_FORMATS.map(([id,name])=>`<option value="${id}">${name}</option>`).join('')}</select></label>
     <p data-format-note></p><p data-engines role="status">Checking native engines…</p>
     <label class="v-export-check"><input type="checkbox" data-include> Include visible imported meshes with floorplan</label>
