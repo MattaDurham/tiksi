@@ -102,7 +102,11 @@ export async function prepareModelPackage(buffer, name) {
       const converted = await convertLegacy(buffer, name.split('.').pop().toLowerCase());
       return { ...converted, name: name.replace(/\.(dae|fbx|3ds)$/i, '.glb'), originalName: name };
     }
-    if (!/\.gltf$/i.test(name)) return { buffer, name };
+    if (!/\.gltf$/i.test(name)) {
+      if(/\.(ply|splat|spz|ksplat|sog|obj|glb|stl|pcd|xyz|pts|txt|las)$/i.test(name))return {buffer,name};
+      const converted=await nativeConvert(buffer,'.'+name.split('.').pop().toLowerCase());
+      return {...converted,name:name.replace(/\.[^.]+$/,converted.format),originalName:name};
+    }
     let gltf; try { gltf = JSON.parse(new TextDecoder().decode(buffer)); } catch (e) { throw new Error('glTF is not valid JSON'); }
     const packed = await bundleGltf(gltf, uri => { throw new Error('Missing glTF resource: ' + uri + '. Select the complete exported ZIP or a GLB.'); });
     return { buffer: packed, name: name.replace(/\.gltf$/i, '.glb') };

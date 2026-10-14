@@ -103,10 +103,7 @@ export function inspectGltf(buffer, format) {
 export async function importScanFile(file, prop, hooks, extra) {
   if (!file) return null;
   const name = file.name;
-  const e = ext(name);
-  const say = (m, k) => hooks && hooks.toast && hooks.toast(m, k);
   const progress = (l, f) => hooks && hooks.progress && hooks.progress(l, f);
-  if (!SCAN_ACCEPT.split(',').includes('.' + e)) { say('Unsupported file type .' + e + '. Supported: ' + SCAN_ACCEPT.replace(/\./g, '').replace(/,/g, ' '), 'warn'); return null; }
   progress('Reading ' + name, 0.1);
   const buffer = await file.arrayBuffer();
   return importScanBytes(buffer, name, prop, hooks, extra);

@@ -78,6 +78,7 @@ try {
       check(sizeOf(mesh).every((v,i)=>Math.abs(v-sizeOf(loaded)[i])<.002),'real .blend round trip preserves geometry and placement');
       check(modelMaterialSlots(mesh).some(s=>s.name.includes('Synthetic confirmed paint')),'real Blender material name returns');
     } else results.push('SKIP native Blender: not installed');
+    let other;try{await importScanBytes(new TextEncoder().encode('synthetic proprietary model').buffer,'other.c4d',p);}catch(e){other=e;}check(other?.jobId,'other native formats retain a generic interpretation handoff');
     let failed;
     try{await nativeConvert(new TextEncoder().encode('synthetic unsupported native input'),'.rvt');}catch(e){failed=e;}
     check(failed?.jobId,'unsupported native source retained with actionable handoff');
