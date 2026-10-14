@@ -89,7 +89,7 @@ try {
   checks.forEach(check=>console.log('PASS '+check));
   await page.locator('#rail a[data-view=model]').click();await page.locator('canvas.v-canvas').waitFor();
   await page.locator('#btn-file').click();await page.locator('[data-file-tab=exchange]').click();await page.locator('dialog').waitFor();
-  await page.locator('[data-engines]').filter({hasText:'ready'}).waitFor();
+  await page.locator('[data-engines]').filter({hasText:'Local engines'}).waitFor();
   await page.locator('[data-format]').selectOption('glb');
   const downloadPromise=page.waitForEvent('download');await page.locator('[data-save-model]').click();const download=await downloadPromise;
   assert.match(download.suggestedFilename(),/\.glb$/);assert.ok((await readFile(await download.path())).length>100);
