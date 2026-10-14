@@ -944,3 +944,28 @@ kbd {
 }
 
 @media (max-width: 760px) { .products-layout { grid-template-columns: minmax(0, 1fr) !important; } .products-layout #prod-form { grid-row: 1; } }
+
+/* A single file/settings surface, using the console's existing colour/type roles. */
+.file-dialog { width:min(680px,calc(100vw - 24px)); max-height:calc(100dvh - 32px); overflow:auto; padding:24px; border:1px solid var(--line-2); border-radius:8px; background:var(--panel); color:var(--ink); }
+.file-dialog::backdrop { background:rgba(0,0,0,.7); }
+.file-heading { display:flex; align-items:start; justify-content:space-between; gap:16px; }
+.file-heading h2 { font-size:20px; margin:0; }
+.file-dialog p { font-size:13px; line-height:1.6; color:var(--dim); margin:10px 0 18px; }
+.file-tabs { display:flex; gap:4px; flex-wrap:wrap; padding:12px 0; margin-bottom:20px; border-block:1px solid var(--line); }
+.file-tabs .active { color:var(--accent); border-color:var(--accent); }
+.file-dialog h3 { font-size:15px; margin:20px 0 12px; }
+.file-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.file-dialog .btn { min-height:44px; margin:4px 4px 4px 0; }
+.file-dialog label { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin:16px 0; }
+.file-dialog select { min-width:0; max-width:100%; padding:8px; }
+.file-dialog details { border-top:1px solid var(--line); margin-top:20px; padding-top:12px; }
+.file-dialog summary { cursor:pointer; min-height:44px; display:flex; align-items:center; color:var(--dim); font-size:13px; }
+.file-dialog [hidden] { display:none; }
+.file-dialog .v-export-check { justify-content:start; }
+.file-dialog hr { border:0; border-top:1px solid var(--line); margin:24px 0; }
+.file-dialog [role=status] { overflow-wrap:anywhere; }
+@media (max-width:600px) { .file-dialog { padding:16px; } .file-tabs .btn { flex:1 0 40%; } .file-dialog label:not(.v-export-check) { align-items:start; flex-direction:column; } .file-dialog select { width:100%; } }
+.file-dialog .file-env { position:static; width:auto; background:transparent; border:0; box-shadow:none; margin:0; }
+.file-dialog .file-env .v-env-head { display:none; }
+.file-dialog .file-env .v-env-body { display:block; padding:0; }
+.file-dialog { margin:auto; }

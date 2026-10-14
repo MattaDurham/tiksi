@@ -1,10 +1,13 @@
 // App shell: routing, topbar, property management, persistence wiring.
 
 import {
-  ws, load, save, touch, onChange, activeProperty, replaceWorkspace,
-  exportWorkspace, exportBundle, importBundle, listAllFileIds, orphanFiles, deleteFiles, whenHydrated,
+  ws, load, save, touch, onChange, activeProperty, replaceWorkspace, mergeWorkspace,
+  exportBundle, importBundle, listAllFileIds, orphanFiles, deleteFiles, whenHydrated,
   setSaveStatus, fmtBytes, escapeHtml,
 } from './store.js';
+import { openExchangeDialog } from './exchange-dialog.js';
+import { SCAN_ACCEPT, importScanFile } from './scans.js';
+import { addPhotoFromFile } from './photos-store.js';
 import { ensureBuiltinMaterials } from './materials.js';
 import { disposeMaterials } from './textures.js';
 import { revokePhotoUrls } from './photos-store.js';
@@ -23,7 +26,7 @@ import * as cutsheets from './cutsheets.js';
 import { initNewProperty, openNewPropertyDialog, dialogOpen } from './newproperty.js';
 import { parseCaptureUrl } from './polycam.js';
 import {
-  initFiles, bindFileIntake, saveProject, openProjectPicker, openFromUrl, linkFolder, unlinkFolder, reconnectFolder,
+  initFiles, bindFileIntake, saveProject, openProjectPicker, openFromFile, openFromUrl, linkFolder, unlinkFolder, reconnectFolder,
   listFolder, openFromFolder, scheduleFolderSync, filesState, onFilesChange, isDirty, saveTarget, FSA, FSA_DIR,
 } from './files.js';
 
@@ -59,7 +62,7 @@ async function boot() {
   onChange(refreshTopbar);
   // Projects are files: SAVE, the FILE menu, drops, Cmd+S/Cmd+O, and the linked folder.
   initFiles({ remount: remountView, refresh: refreshTopbar, afterReplace: afterWorkspaceReplaced });
-  bindFileIntake();
+  bindFileIntake(importAnyFile);
   onChange(() => { scheduleFolderSync(); refreshSaveButton(); });
   onFilesChange(refreshSaveButton);
   reconnectFolder(false).then(refreshSaveButton).catch(() => refreshSaveButton());
@@ -160,7 +163,7 @@ function afterWorkspaceReplaced() {
   revokePhotoUrls();
   ensureBuiltinMaterials();
   remountView();
-  offerStorageCleanup(true);
+
 }
 
 // IMPORT and DEMO leave the previous workspace's scans and photos in IndexedDB on purpose
@@ -196,75 +199,87 @@ function bindTopbar() {
     remountView();
   };
 
-  document.getElementById('property-new').onclick = () => openNewPropertyDialog();
+  document.addEventListener('tiksi:files',e=>openFileMenu(e.detail?.tab || 'project',e.detail?.selected));
 
-  document.querySelectorAll('#units-seg .seg-btn').forEach(b => b.onclick = () => {
-    ws.data.settings.units = b.dataset.units;
-    touch();
-    remountView();
-  });
-
-  document.getElementById('btn-save').onclick = () => saveProject(activeProperty()).catch(e => alert(e.message));
   const fileBtn = document.getElementById('btn-file');
-  fileBtn.onclick = () => openFileMenu(fileBtn);
-
-  const importFile = document.getElementById('import-file');
-  importFile.accept = '.json,.zip,application/json,application/zip';
-  importFile.onchange = async () => {
-    const file = importFile.files[0];
-    importFile.value = '';
-    if (!file) return;
-    try {
-      if (await isZipFile(file)) {
-        if (!(await importBundle(file))) return;
-      } else {
-        const data = JSON.parse(await file.text());
-        if (!data || !Array.isArray(data.properties)) throw new Error('not a tiksi workspace file');
-        if (!confirm('Replace the current workspace with "' + file.name + '"? Save or export first if you want a backup.')) return;
-        replaceWorkspace(data);
-      }
-      afterWorkspaceReplaced();
-    } catch (e) {
-      alert('Import failed: ' + e.message);
-    }
-  };
+  fileBtn.onclick = () => openFileMenu();
 }
 
-// The FILE menu: this property as a file, the project folder, and the whole workspace.
-async function openFileMenu(anchor) {
-  const st = filesState();
+// One home for project files, capture, exchange and settings. Import merges by default.
+async function importAnyFile(file) {
+  if (/\.(tiksi|json)$/i.test(file.name)) return openFromFile(file);
+  if (/\.zip$/i.test(file.name)) {
+    // Inspect the archive before routing it; a model ZIP is not a workspace replacement.
+    const { unpackModelZip } = await import('./scanbundle.js');
+    const archive = unpackModelZip(await file.arrayBuffer());
+    if (archive.has('workspace.json')) return openFromFile(file);
+  }
   const prop = activeProperty();
-  const n = listAllFileIds().length;
-  let stray = 0;
-  try { stray = (await orphanFiles()).ids.length; } catch (e) { /* storage unavailable: nothing to clean */ }
-  const items = [];
-  items.push({ label: 'OPEN PROJECT', hint: (FSA ? 'a .tiksi file' : '.tiksi, .zip or .json') + '  (Cmd+O)', run: () => openProjectPicker().catch(e => alert(e.message)) });
-  if (prop) {
-    const target = saveTarget(prop.id);
-    items.push({ label: 'SAVE PROJECT', hint: target ? 'to ' + target.name + '  (Cmd+S)' : (FSA ? 'choose a file, then Cmd+S saves silently' : 'downloads ' + prop.name + '.tiksi'), primary: true, run: () => saveProject(prop).catch(e => alert(e.message)) });
-    if (FSA) items.push({ label: 'SAVE PROJECT AS', hint: 'choose a new file  (Cmd+Shift+S)', run: () => saveProject(prop, { as: true }).catch(e => alert(e.message)) });
+  if (!prop) throw new Error('Create a property before importing a capture.');
+  if (/\.(jpe?g|png|webp|heic|heif|tiff?|avif)$/i.test(file.name)) {
+    await addPhotoFromFile(prop, file); touch(); return 'photo';
   }
-  if (FSA_DIR) {
-    if (st.folder) {
-      items.push({ label: 'OPEN FROM FOLDER', hint: st.folderName + ': every property is kept there', sep: true, run: () => openFolderList(anchor) });
-      items.push({ label: 'UNLINK FOLDER', hint: 'stop keeping projects in ' + st.folderName + ' (files stay)', run: () => unlinkFolder() });
-    } else if (st.folderNeedsPermission) {
-      items.push({ label: 'RECONNECT FOLDER', hint: st.folderName + ' needs permission again', sep: true, primary: true, run: () => reconnectFolder(true).catch(e => alert(e.message)) });
-      items.push({ label: 'UNLINK FOLDER', hint: 'forget ' + st.folderName, run: () => unlinkFolder() });
-    } else {
-      items.push({ label: 'LINK A PROJECT FOLDER', hint: 'every property auto-saved there as <name>.tiksi; put it in iCloud Drive or Dropbox to sync', sep: true, run: () => linkFolder().catch(e => alert(e.message)) });
-    }
-  }
-  items.push({ label: 'EXPORT WORKSPACE', hint: n ? 'bundle (.zip) with all ' + n + ' scan/photo file' + (n === 1 ? '' : 's') : 'workspace.json', sep: true, run: n ? runExportBundle : exportWorkspace });
-  if (n) items.push({ label: 'EXPORT WORKSPACE JSON', hint: 'no binary files', run: exportWorkspace });
-  items.push({ label: 'IMPORT WORKSPACE', hint: 'replaces everything here', run: () => document.getElementById('import-file').click() });
-  if (stray) items.push({ label: 'CLEAN STORAGE', hint: stray + ' stored file' + (stray === 1 ? '' : 's') + ' nothing here uses', run: () => offerStorageCleanup(false) });
-  items.push({ label: 'LOAD DEMO', hint: 'replaces everything here', run: () => {
-    if (!confirm('Load the demo workspace? This replaces everything currently here (save or export first for a backup).')) return;
-    replaceWorkspace(demoWorkspace());
-    afterWorkspaceReplaced();
-  } });
-  openMenu(anchor, items);
+  const scan = await importScanFile(file, prop);
+  if (!scan) throw new Error('Choose a supported model or a native source for conversion.');
+  return 'model';
+}
+
+function openFileMenu(initialTab = 'project', selected) {
+  document.querySelector('[data-file-dialog]')?.close();
+  const prop=activeProperty(), dialog=document.createElement('dialog');
+  dialog.className='file-dialog';dialog.dataset.fileDialog='';dialog.setAttribute('aria-label','Files and settings');
+  dialog.innerHTML=`<header class="file-heading"><div><h2>Files & settings</h2><p>${escapeHtml(prop?.name || 'Workspace')}</p></div><button class="btn" data-close-file aria-label="Close files and settings">CLOSE</button></header>
+    <nav class="file-tabs" aria-label="File actions">${[['project','Project'],['capture','Import'],['exchange','3D exchange'],['settings','Settings']].map(([id,label])=>`<button class="btn" data-file-tab="${id}">${label}</button>`).join('')}</nav>
+    <section data-file-panel="project"><h3>Save your project</h3><p>A .tiksi file keeps your plan, models, original captures, pinned photos, materials and project work together.</p>
+      <div class="file-actions"><button class="btn primary" data-project-save>SAVE PROJECT</button><button class="btn" data-project-as>SAVE AS…</button><button class="btn" data-project-open>OPEN / IMPORT…</button></div><p data-file-target></p>
+      <button class="btn" data-new-property>NEW PROPERTY</button></section>
+    <section data-file-panel="capture" hidden><h3>Bring your room into Tiksi</h3><p>Choose photos, a scan, a 3D model or a saved project. Imported projects add or update properties here.</p><button class="btn primary" data-capture-open>CHOOSE FILES…</button><button class="btn" data-polycam>POLYCAM LINK</button><button class="btn" data-photo3d>PHOTOS → 3D</button></section>
+    <section data-file-panel="exchange" hidden data-file-exchange></section>
+    <section data-file-panel="settings" hidden><h3>Display</h3><label>Units <select data-file-units><option value="imperial">Feet / square feet</option><option value="metric">Metres / square metres</option></select></label><details><summary>Model environment</summary><div data-file-env></div></details><h3>Project folder</h3><p data-folder-label></p><div class="file-actions"><button class="btn" data-folder-link>LINK FOLDER</button><button class="btn" data-folder-open>OPEN FROM FOLDER</button><button class="btn" data-folder-unlink>UNLINK</button></div>
+      <details><summary>Workspace backup & maintenance</summary><p>Project saves are usually enough. A workspace backup carries every property.</p><button class="btn" data-workspace-save>SAVE WORKSPACE BACKUP</button><button class="btn" data-demo>ADD DEMO PROJECTS</button><button class="btn" data-storage>CLEAN UNUSED STORAGE</button><p>Replace workspace is available only when you intentionally want to restore a full backup.</p><button class="btn" data-workspace-replace>REPLACE FROM BACKUP…</button></details></section>
+    <p role="status" data-file-status></p><input type="file" data-any-file hidden multiple accept=".tiksi,.json,${SCAN_ACCEPT},.mtl,.bin,.tga,.jpg,.jpeg,.png,.webp,.heic,.heif,.tif,.tiff,.avif"><input type="file" data-replace-file hidden accept=".json,.zip,.tiksi">`;
+  document.body.append(dialog);dialog.showModal();dialog.addEventListener('close',()=>dialog.remove());
+  const envHost=dialog.querySelector('[data-file-env]');
+  if(currentName==='model')viewer3d.mountEnvironmentSettings(envHost);
+  else {envHost.innerHTML='<button class="btn" data-open-model-settings>OPEN MODEL SETTINGS</button>';envHost.querySelector('button').onclick=()=>{dialog.close();history.replaceState(null,'','#/model');route();openFileMenu('settings');};}
+  const status=dialog.querySelector('[data-file-status]'), on=(selector,fn)=>dialog.querySelector(selector).onclick=fn;
+  const refresh=()=>{
+    const st=filesState(),target=prop && saveTarget(prop.id);
+    dialog.querySelector('[data-file-target]').textContent=target?'Saving to '+target.name:'Choose a file on first save. Cmd+S saves again; Cmd+O opens a project.';
+    dialog.querySelector('[data-folder-label]').textContent=st.folderName || 'Optionally keep project files in a synced folder.';
+    dialog.querySelector('[data-folder-link]').disabled=!FSA_DIR;dialog.querySelector('[data-folder-open]').disabled=!st.folder;dialog.querySelector('[data-folder-unlink]').disabled=!st.folder && !st.folderNeedsPermission;
+  };
+  let busy=false;
+  const run=async fn=>{if(busy)return;busy=true;const disabled=Array.from(dialog.querySelectorAll('button')).filter(b=>!b.disabled);disabled.forEach(b=>b.disabled=true);dialog.oncancel=e=>e.preventDefault();try {status.textContent='Working…';await fn();status.textContent='Done.';refresh();}catch(e){status.textContent=e.message;}finally{busy=false;dialog.oncancel=null;disabled.forEach(b=>b.disabled=false);refresh();}};
+  let exchangeMounted=false;
+  const mountExchange=()=>{if(exchangeMounted)return;exchangeMounted=true;if(currentName==='model'){const image=document.createElement('button');image.className='btn';image.textContent='SAVE VIEW IMAGE';image.dataset.saveView='';image.onclick=()=>{dialog.close();viewer3d.openStillDialog();};dialog.querySelector('[data-file-exchange]').append(image);}if(prop) openExchangeDialog(prop,{selected,host:dialog.querySelector('[data-file-exchange]'),close:()=>dialog.close(),imported:async()=>{refreshTopbar();if(currentName==='model')remountView();else location.hash='#/model';},changed:remountView});};
+  const tab=id=>{if(id==='exchange')mountExchange();dialog.querySelectorAll('[data-file-panel]').forEach(p=>p.hidden=p.dataset.filePanel!==id);dialog.querySelectorAll('[data-file-tab]').forEach(b=>{b.classList.toggle('active',b.dataset.fileTab===id);b.setAttribute('aria-current',b.dataset.fileTab===id?'true':'false');});};
+  dialog.querySelectorAll('[data-file-tab]').forEach(b=>b.onclick=()=>tab(b.dataset.fileTab));tab(initialTab);refresh();
+  on('[data-close-file]',()=>dialog.close());
+  on('[data-project-save]',()=>run(()=>saveProject(prop)));on('[data-project-as]',()=>run(()=>saveProject(prop,{as:true})));
+  const input=dialog.querySelector('[data-any-file]');
+  on('[data-project-open]',()=>input.click());on('[data-capture-open]',()=>input.click());
+  input.onchange=()=>run(async()=>{const files=Array.from(input.files);input.value='';let type;
+    const models=files.filter(f=>/\.(gltf|obj|dae|fbx|3ds|usd|usda|usdc|blend)$/i.test(f.name));
+    if(files.length>1 && models.length===1){
+      const {zipSync}=await import('three/addons/libs/fflate.module.js'),entries={};
+      for(const f of files){if(entries[f.name])throw new Error('Two resources have the same name; import a ZIP retaining the folder structure.');entries[f.name]=new Uint8Array(await f.arrayBuffer());}
+      type=await importAnyFile(new File([zipSync(entries)],models[0].name+'.zip'));
+    } else for(const file of files)type=await importAnyFile(file);ensureBuiltinMaterials();refreshTopbar();if(type==='model'&&currentName!=='model')location.hash='#/model';else if(type==='photo'&&currentName!=='photos')location.hash='#/photos';else remountView();dialog.close();});
+  on('[data-new-property]',()=>{dialog.close();openNewPropertyDialog();});
+  on('[data-polycam]',()=>{dialog.close();openNewPropertyDialog({into:prop?.id});});
+  on('[data-photo3d]',()=>{dialog.close();location.hash='#/reconstruct';});
+  dialog.querySelector('[data-file-units]').value=ws.data.settings.units;
+  dialog.querySelector('[data-file-units]').onchange=e=>{ws.data.settings.units=e.target.value;touch();remountView();};
+  on('[data-folder-link]',()=>run(()=>filesState().folderNeedsPermission?reconnectFolder(true):linkFolder()));
+  on('[data-folder-open]',()=>openFolderList(dialog.querySelector('[data-folder-open]')));on('[data-folder-unlink]',()=>{unlinkFolder();refresh();});
+  on('[data-workspace-save]',()=>run(runExportBundle));on('[data-storage]',()=>run(()=>offerStorageCleanup(false)));
+  on('[data-demo]',()=>{mergeWorkspace(demoWorkspace());ensureBuiltinMaterials();refreshTopbar();remountView();dialog.close();});
+  const replace=dialog.querySelector('[data-replace-file]');on('[data-workspace-replace]',()=>replace.click());
+  replace.onchange=()=>run(async()=>{const file=replace.files[0];replace.value='';if(!file)return;
+    if(!confirm('Replace the workspace with '+file.name+'? This is the explicit backup-restore action.'))return;
+    if(/\.json$/i.test(file.name))replaceWorkspace(JSON.parse(await file.text()));else if(!await importBundle(file,{confirm:false}))return;
+    afterWorkspaceReplaced();refreshTopbar();dialog.close();});
 }
 
 async function openFolderList(anchor) {
@@ -280,7 +295,7 @@ async function openFolderList(anchor) {
 
 // SAVE shows a dot when the browser copy is ahead of the file, red when the folder holds a newer file.
 function refreshSaveButton() {
-  const btn = document.getElementById('btn-save');
+  const btn = document.getElementById('btn-file');
   if (!btn) return;
   const prop = activeProperty();
   const st = filesState();
@@ -308,13 +323,6 @@ async function runExportBundle() {
   } finally {
     btn.disabled = false;
   }
-}
-
-async function isZipFile(file) {
-  if (/\.zip$/i.test(file.name)) return true;
-  if (/\.json$/i.test(file.name)) return false;
-  const head = new Uint8Array(await file.slice(0, 4).arrayBuffer());
-  return head[0] === 0x50 && head[1] === 0x4b && head[2] === 3 && head[3] === 4;   // "PK\3\4"
 }
 
 // Small anchored menu under a topbar button. Closes on choice, outside click or Escape.

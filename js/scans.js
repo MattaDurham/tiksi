@@ -6,18 +6,19 @@
 import * as THREE from 'three';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import { modelMaterialSlots, applyModelMaterials } from './model-materials.js';
 import { prepareModelPackage } from './scanbundle.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { PCDLoader } from 'three/addons/loaders/PCDLoader.js';
-import { uid, touch, putFile, getFile } from './store.js';
+import { uid, touch, putFile, getFile, deleteFile, materialById, ws } from './store.js';
 import { isLAS, lasHeader, parsePLYHeader, parseAndRecentre, recentre } from './las.js';
 import { makePointCloud, updatePointCloud, decimate, fromGeometry } from './pointcloud.js';
 import { ensureSpark, loadSplat, disposeSplat, splatBounds, splatDrawables, splatBusy, releaseSplatRenderer } from './splats.js';
 
 export { splatDrawables, splatBusy, releaseSplatRenderer };
 
-export const SCAN_ACCEPT = '.ply,.splat,.spz,.ksplat,.sog,.obj,.glb,.gltf,.stl,.zip,.pcd,.xyz,.pts,.txt,.las';
+export const SCAN_ACCEPT = '.skp,.blend,.ifc,.step,.stp,.iges,.igs,.dxf,.laz,.usd,.usda,.usdc,.usdz,.rvt,.dwg,.3dm,.e57,.ply,.splat,.spz,.ksplat,.sog,.obj,.dae,.fbx,.3ds,.glb,.gltf,.stl,.zip,.pcd,.xyz,.pts,.txt,.las';
 const DEFAULT_BUDGET = 2000000;
 const FLIP_X = new THREE.Quaternion(1, 0, 0, 0);     // 180 degrees about X: y-down captures become y-up
 const FLIP_M = new THREE.Matrix4().makeRotationX(Math.PI);
@@ -105,8 +106,6 @@ export async function importScanFile(file, prop, hooks, extra) {
   const e = ext(name);
   const say = (m, k) => hooks && hooks.toast && hooks.toast(m, k);
   const progress = (l, f) => hooks && hooks.progress && hooks.progress(l, f);
-  if (e === 'laz') { say('LAZ is compressed LAS; export an uncompressed .las (or PLY) from your scanner app and import that.', 'warn'); return null; }
-  if (e === 'e57') { say('E57 import is on the roadmap. Export PLY, LAS or a mesh from your scanner app for now.', 'warn'); return null; }
   if (!SCAN_ACCEPT.split(',').includes('.' + e)) { say('Unsupported file type .' + e + '. Supported: ' + SCAN_ACCEPT.replace(/\./g, '').replace(/,/g, ' '), 'warn'); return null; }
   progress('Reading ' + name, 0.1);
   const buffer = await file.arrayBuffer();
@@ -120,23 +119,43 @@ export async function importScanBytes(buffer, name, prop, hooks, extra) {
   const progress = (l, f) => hooks && hooks.progress && hooks.progress(l, f);
   const signal = hooks && hooks.signal;
   const cancelled = () => { if (signal && signal.aborted) throw signal.reason || new Error('Import cancelled'); };
-  let e, kind, prepared;
+  const originalBuffer = buffer, originalName = name;
+  let e, kind, prepared, info;
   try {
     cancelled();
     if (!(buffer instanceof ArrayBuffer) || !buffer.byteLength) throw new Error('The file is empty');
     if (buffer.byteLength > 600 * 1024 * 1024) throw new Error('Scan files must be smaller than 600 MB');
     prepared = await prepareModelPackage(buffer, name);
     buffer = prepared.buffer; name = prepared.name; e = ext(name);
-    kind = sniffKind(e, buffer);
+    try {kind = sniffKind(e, buffer);}
+    catch(err) {
+      if(e==='glb' && /requires KHR_draco|requires EXT_meshopt|requires KHR_texture_basisu/.test(err.message)) {
+        const {nativeConvert}=await import('./native-conversion.js');
+        const converted=await nativeConvert(buffer,'.glb');buffer=converted.buffer;
+        prepared.warnings=[...(prepared.warnings||[]),'Compressed GLB decoded by local Blender.',...converted.warnings];
+        prepared.conversionJobId=converted.conversionJobId;kind=sniffKind(e,buffer);
+      } else throw err;
+    }
+    if(e==='glb') {
+      const doc=inspectGltf(buffer,e),warnings=prepared.warnings||(prepared.warnings=[]);
+      if(doc.animations?.length||doc.skins?.length)warnings.push('Animations/rigs are retained in the original GLB; Tiksi edits static design geometry.');
+      if(doc.cameras?.length||doc.extensions?.KHR_lights_punctual)warnings.push('Source cameras/lights are retained in the original; Tiksi uses its own environment.');
+    }
     progress('Validating ' + name, 0.2);
-    await validateScan(buffer, e, kind, name, hooks);
+    info = await validateScan(buffer, e, kind, name, hooks);
     cancelled();
-  } catch (err) { progress(null); throw new Error(name + ': ' + errMsg(err)); }
+  } catch (err) { progress(null); const error = new Error(name + ': ' + errMsg(err)); error.jobId=err.jobId; throw error; }
   const id = uid('scan');
   progress('Storing ' + name, 0.3);
   await putFile(id, buffer, { name, format: e, kind });
+  let originalFileId = id;
+  if (buffer !== originalBuffer || name !== originalName) {
+    originalFileId = uid('source');
+    try { await putFile(originalFileId, originalBuffer, { name: originalName, format: ext(originalName), kind: 'source' }); }
+    catch (err) { await deleteFile(id); throw err; }
+  }
   const scan = Object.assign({
-    id, name, originalName: prepared.originalName || null, format: e, kind, pos: [0, 0, 0], rotY: 0, rot: [0, 0, 0], scale: 1, visible: true,
+    id, name, originalName, originalFileId, importWarnings: prepared.warnings || [], conversionJobId: prepared.conversionJobId || null, materialIdentities: info?.materialIdentities || {}, format: e, kind, pos: [0, 0, 0], rotY: 0, rot: [0, 0, 0], scale: 1, visible: true,
     pointSize: 0.02, pointColor: 'rgb', budget: DEFAULT_BUDGET, flip: kind === 'splat',
   }, extra || {});
   prop.scans = prop.scans || [];
@@ -292,6 +311,14 @@ async function validateScan(buffer, format, kind, name, hooks) {
       if (index) for (const i of index.array) if (i < 0 || i >= p.count) throw new Error('Mesh index is outside its vertices');
     });
     if (!vertices) throw new Error('No mesh geometry found');
+    const materialIdentities={};
+    for(const slot of modelMaterialSlots(obj)) {
+      const id=slot.material.userData.tiksiMaterialId || /\[(mat-[^\]]+)\]/.exec(slot.name)?.[1];
+      const exact=ws.data?.materials.filter(m=>m.name===slot.name) || [];
+      const record=id && materialById(id) || (exact.length===1?exact[0]:null);
+      if(record)materialIdentities[slot.key]=record.id;
+    }
+    return {materialIdentities};
   } finally { disposeScanObject(obj); }
 }
 
@@ -312,6 +339,7 @@ async function buildPoints(buffer, e, scan, inner, wrapper, hooks) {
 async function buildMesh(buffer, e, scan, inner, hooks) {
   hooks && hooks.progress && hooks.progress('Loading ' + scan.name, 0.5);
   const obj = await loadMesh(buffer, e);
+  await applyModelMaterials(scan, obj);
   let count = 0;
   obj.traverse(o => { if (o.isMesh) {
     const anisotropy = hooks && hooks.renderer ? Math.min(16, hooks.renderer.capabilities.getMaxAnisotropy()) : 1;
@@ -453,12 +481,14 @@ export function centerScanOnModel(scan, obj, bounds) {
 export function disposeScanObject(obj) {
   if (!obj) return;
   if (obj.userData.splat) disposeSplat(obj.userData.splat);
+  const disposedMaterials=new Set(),disposedTextures=new Set();
   obj.traverse(o => {
     if (o.userData && o.userData.splat) return;
     if (o.geometry) o.geometry.dispose();
-    const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
+    const mats = [...(Array.isArray(o.material) ? o.material : (o.material ? [o.material] : [])),...(o.userData.sourceMaterials || [])];
     for (const m of mats) {
-      for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap', 'bumpMap', 'alphaMap']) if (m[k] && m[k].dispose) m[k].dispose();
+      if(disposedMaterials.has(m))continue;disposedMaterials.add(m);
+      for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap', 'bumpMap', 'alphaMap']) if (m[k]?.dispose && !disposedTextures.has(m[k])) {disposedTextures.add(m[k]);m[k].dispose();}
       m.dispose();
     }
   });

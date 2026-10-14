@@ -154,10 +154,10 @@ try {
   assert.equal(folderSafety.saved,'Folder fixture (2).tiksi');assert.equal(folderSafety.writes,1);assert.equal(folderSafety.conflict,true);assert.equal(folderSafety.backup,'unrelated backup');
   assert.deepEqual(errors,[],'desktop mutations and file roundtrip remain free of page exceptions');
   const workspaceJson=await page.evaluate(async()=>{
-    const s=await import('/js/store.js'),f=await import('/js/files.js');const data=JSON.parse(JSON.stringify(s.ws.data));data.properties.push(s.propertyTemplate('Second fixture'));
+    const s=await import('/js/store.js'),f=await import('/js/files.js');const data=JSON.parse(JSON.stringify(s.ws.data));data.properties.push(s.propertyTemplate('Second fixture'));s.ws.data.properties.push(s.propertyTemplate('Unrelated existing property'));
     let message='';const original=window.confirm;window.confirm=msg=>{message=msg;return true;};await f.openFromFile(new File([JSON.stringify(data)],'workspace-fixture.json'));window.confirm=original;return{message,properties:s.ws.data.properties.length};
   });
-  assert.match(workspaceJson.message,/workspace-fixture.json/);assert.equal(workspaceJson.properties,2,'whole-workspace JSON open prompts then replaces');
+  assert.equal(workspaceJson.message,'');assert.equal(workspaceJson.properties,3,'workspace JSON adds/updates without warning or deleting an unrelated property');
   console.log('project and file regression checks passed');
   await navigateToView(page, 'plan'); await page.locator('.tool-col input[type=file]').waitFor({state:'attached'});
   const upload=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=5000;c.height=1000;const ctx=c.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,5000,1000);ctx.fillStyle='#000';ctx.fillRect(100,100,4800,3);return c.toDataURL('image/png').split(',')[1];});

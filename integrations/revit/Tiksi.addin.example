@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+  <AddIn Type="Command">
+    <Name>Export for Tiksi</Name>
+    <Assembly>REPLACE_WITH_ABSOLUTE_BUILD_PATH_TO_Tiksi.Revit.dll</Assembly>
+    <AddInId>32239FED-A45B-4A96-A1BA-6B6A7190F8AF</AddInId>
+    <FullClassName>Tiksi.Revit.ExportForTiksi</FullClassName>
+    <VendorId>TIKS</VendorId>
+    <VendorDescription>Tiksi local IFC exchange</VendorDescription>
+  </AddIn>
+</RevitAddIns>

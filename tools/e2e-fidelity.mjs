@@ -82,21 +82,23 @@ try {
       location.hash = '#/research';
     }` }));
   await page.route('**/api/material-research/capabilities', route => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ available: false, reason: 'Synthetic browser check.' }) }));
+  await page.route('**/api/model-conversion/capabilities',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({token:'synthetic',blender:false,sketchup:false,cad:false})}));
   await page.goto(base + '/#/model');
   await page.waitForSelector('.v-canvas');
   await page.evaluate(async () => { window.testTextures = await import('/js/textures.js'); });
   await page.waitForFunction(() => window.testTextures.pendingTextureJobs() === 0, null, { timeout: 90000 });
   await captureFrame(page, 'high.png');
   const initial = await page.locator('.v-canvas').evaluate(c => ({ width: c.width, height: c.height }));
-  await page.click('.v-env-head');
-  await page.selectOption('[data-env=quality]', 'ultra');
+  await page.click('#btn-file');await page.click('[data-file-tab=settings]');await page.getByText('Model environment',{exact:true}).click();
+  await page.selectOption('[data-file-env] [data-env=quality]', 'ultra');
+  await page.click('[data-close-file]');
   await page.waitForFunction(() => window.testTextures.pendingTextureJobs() === 0, null, { timeout: 120000 });
   const ultra = await page.locator('.v-canvas').evaluate(c => ({ width: c.width, height: c.height }));
   assert.ok(ultra.width > initial.width, 'Ultra increases drawing-buffer resolution at DPR 1');
   const stats = await page.evaluate(async () => (await import('/js/textures.js')).textureStats());
   assert.ok(stats.some(s => s.res === 2048 && s.status === 'ready'), 'Ultra produces 2K surface maps');
   await captureFrame(page, 'ultra.png');
-  await page.click('[data-act=render]');
+  await page.click('#btn-file');await page.click('[data-file-tab=exchange]');await page.click('[data-save-view]');
   await page.selectOption('[data-export-size]', '3840');
   const displayed = await page.locator('[data-export-dimensions]').innerText();
   // A 4K still can occupy SwiftShader's main thread longer than Playwright's
@@ -118,12 +120,12 @@ try {
   await page.click('.v-export-actions button[value=cancel]');
   const restored = await page.locator('.v-canvas').evaluate(c => ({ width: c.width, height: c.height }));
   assert.deepEqual(restored, ultra, 'Export restores interactive render size');
-  await page.click('[data-act=section]');
-  await page.click('[data-act=xray]');
-  await page.selectOption('[data-env=quality]', 'low');
-  await page.click('[data-act=top]');
+  await page.click('[data-section]');
+  await page.click('[data-xray]');
+  await page.click('#btn-file');await page.click('[data-file-tab=settings]');await page.getByText('Model environment',{exact:true}).click();
+  await page.selectOption('[data-file-env] [data-env=quality]', 'low');await page.click('[data-close-file]');
+  await page.click('[data-mode=top]');
   await captureFrame(page, 'section-xray-low.png');
-  await page.click('.v-env-head');
   // Pick a real floor through the viewer's raycaster; the join must carry the clicked element.
   for (const [x, y] of [[250, 350], [350, 400], [400, 450], [300, 500]]) {
     await page.locator('.v-canvas').click({ position: { x, y } });

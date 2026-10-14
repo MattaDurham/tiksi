@@ -179,7 +179,7 @@ function assertPlan(prop, tag) {
   void thick;
 }
 async function runDialog(link, opts) {
-  await page.click('#property-new');
+  await page.click('#btn-file');await page.click('[data-new-property]');
   await page.waitForSelector('#np-dialog [data-np-input]');
   if (opts && opts.relay === false) await page.uncheck('#np-dialog [data-np-relay]');
   else if (opts && opts.relay) {

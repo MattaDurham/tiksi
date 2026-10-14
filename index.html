@@ -39,16 +39,10 @@
     <div class="topbar-group">
       <label class="tb-label" for="property-select">PROPERTY</label>
       <select id="property-select" class="tb-select"></select>
-      <button id="property-new" class="tb-btn icon-btn" title="New property">+</button>
     </div>
     <div class="topbar-spacer"></div>
     <div class="topbar-group">
-      <div class="seg" id="units-seg" title="Display units">
-        <button data-units="imperial" class="seg-btn">FT</button>
-        <button data-units="metric" class="seg-btn">M</button>
-      </div>
-      <button id="btn-save" class="tb-btn" title="Save this property as a project file (Cmd+S)">SAVE</button>
-      <button id="btn-file" class="tb-btn" title="Open, save as, project folder, workspace export and import">FILE</button>
+      <button id="btn-file" class="tb-btn" title="Open, import, save, 3D exchange and settings">FILE</button>
       <span id="save-status" class="save-status">SAVED</span>
     </div>
   </header>
@@ -71,7 +65,6 @@
   <main id="view"></main>
 </div>
 <div id="print-root"></div>
-<input type="file" id="import-file" accept="application/json" hidden>
 <script type="module" src="./js/icons.js"></script>
 <script type="module" src="./js/main.js"></script>
 </body>

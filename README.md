@@ -384,3 +384,5 @@ commit history is the build log. Issues and ideas are welcome.
 
 MIT licensed. Vendored three.js retains its own MIT license (THREE-LICENSE.txt),
 as does Spark (SPARK-LICENSE.txt).
+
+3D editing, native-file converters, before/after and measured finish estimates are described in [MODEL-EXCHANGE.md](MODEL-EXCHANGE.md). FILE consolidates open/import, project saving, model exchange and settings.
