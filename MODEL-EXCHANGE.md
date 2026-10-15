@@ -60,6 +60,29 @@ Use the existing **Propose plan** review to reconstruct walls/rooms/openings, or
 Codex/Claude reinterpret a handoff into reviewed Tiksi elements. Texture/material names
 are useful evidence; verified manufacturer/product identity comes from sourcing.
 
+## SketchUp mirror
+
+A linked project folder keeps `<name>.skp` beside each `<name>.tiksi` (see README,
+Saving). `server/sketchup_mirror.py` writes and reads it through the same installed
+SketchUp C API, in the same sandboxed one-shot process as other conversions, but its job
+files are deleted after each call: the mirror lives in the owner's folder, not in
+converter history.
+
+| In the .skp | Written from Tiksi | Read back into Tiksi |
+| --- | --- | --- |
+| Wall group (extruded face, openings cut) | Plan line, thickness, height, level tag | Group placement and face bounds: start/end, thickness, height. A copy becomes a new wall |
+| Opening group nested in its wall | Span along the wall, sill and head | Position along the wall, width, height, sill |
+| Room group (floor face) | Outline, name (the group name), level tag | Largest horizontal face outline; the group name |
+| Plan underlay image | Calibrated placement on the level | Not read: Tiksi owns underlays |
+| Anything else drawn in SketchUp | Never written or removed | Kept in the .skp only, counted in the status |
+
+Every Tiksi group carries a `tiksi` attribute dictionary with its id and the values it was
+written from, and the model records the signature of every element it holds. Reading
+compares each element three ways (SketchUp now, Tiksi now, last agreed state), so edits on
+either side apply and simultaneous edits to one element are reported instead of lost.
+Keep Tiksi groups at the top level of the model; an opening moved out of its wall group is
+reported and left unchanged.
+
 ## Local setup
 
 Blender is discovered from PATH or its standard macOS application location. The

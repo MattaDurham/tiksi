@@ -27,7 +27,7 @@ import { initNewProperty, openNewPropertyDialog, dialogOpen } from './newpropert
 import { parseCaptureUrl } from './polycam.js';
 import {
   initFiles, bindFileIntake, saveProject, openProjectPicker, openFromFile, openFromUrl, linkFolder, unlinkFolder, reconnectFolder,
-  listFolder, openFromFolder, scheduleFolderSync, filesState, onFilesChange, isDirty, saveTarget, FSA, FSA_DIR,
+  listFolder, openFromFolder, scheduleFolderSync, filesState, onFilesChange, isDirty, saveTarget, FSA, FSA_DIR, mirrorStatus,
 } from './files.js';
 
 const VIEWS = {
@@ -237,6 +237,7 @@ function openFileMenu(initialTab = 'project', selected) {
     <section data-file-panel="capture" hidden><h3>Bring your room into Tiksi</h3><p>Choose photos, a scan, a 3D model or a saved project. Imported projects add or update properties here.</p><button class="btn primary" data-capture-open>CHOOSE FILES…</button><button class="btn" data-polycam>POLYCAM LINK</button><button class="btn" data-photo3d>PHOTOS → 3D</button></section>
     <section data-file-panel="exchange" hidden data-file-exchange></section>
     <section data-file-panel="settings" hidden><h3>Display</h3><label>Units <select data-file-units><option value="imperial">Feet / square feet</option><option value="metric">Metres / square metres</option></select></label><details><summary>Model environment</summary><div data-file-env></div></details><h3>Project folder</h3><p data-folder-label></p><div class="file-actions"><button class="btn" data-folder-link>LINK FOLDER</button><button class="btn" data-folder-open>OPEN FROM FOLDER</button><button class="btn" data-folder-unlink>UNLINK</button></div>
+      <label><input type="checkbox" data-mirror-on> Keep a SketchUp mirror (.skp) beside each project</label><p data-mirror-label></p>
       <details><summary>Workspace backup & maintenance</summary><p>Project saves are usually enough. A workspace backup carries every property.</p><button class="btn" data-workspace-save>SAVE WORKSPACE BACKUP</button><button class="btn" data-demo>ADD DEMO PROJECTS</button><button class="btn" data-storage>CLEAN UNUSED STORAGE</button><p>Replace workspace is available only when you intentionally want to restore a full backup.</p><button class="btn" data-workspace-replace>REPLACE FROM BACKUP…</button></details></section>
     <p role="status" data-file-status></p><input type="file" data-any-file hidden multiple accept=".tiksi,.json,${SCAN_ACCEPT},.c4d,.max,.ma,.mb,.rfa,.dwf,.mtl,.bin,.tga,.jpg,.jpeg,.png,.webp,.heic,.heif,.tif,.tiff,.avif"><input type="file" data-replace-file hidden accept=".json,.zip,.tiksi">`;
   document.body.append(dialog);dialog.showModal();dialog.addEventListener('close',()=>dialog.remove());
@@ -249,7 +250,9 @@ function openFileMenu(initialTab = 'project', selected) {
     dialog.querySelector('[data-file-target]').textContent=target?'Saving to '+target.name:'Choose a file on first save. Cmd+S saves again; Cmd+O opens a project.';
     dialog.querySelector('[data-folder-label]').textContent=st.folderName || 'Optionally keep project files in a synced folder.';
     dialog.querySelector('[data-folder-link]').disabled=!FSA_DIR;dialog.querySelector('[data-folder-open]').disabled=!st.folder;dialog.querySelector('[data-folder-unlink]').disabled=!st.folder && !st.folderNeedsPermission;
+    dialog.querySelector('[data-mirror-on]').checked=ws.data.settings.sketchupMirror!==false;dialog.querySelector('[data-mirror-label]').textContent=prop?mirrorStatus(prop.id):'';
   };
+  const stopWatching=onFilesChange(refresh);dialog.addEventListener('close',stopWatching);
   let busy=false;
   const run=async fn=>{if(busy)return;busy=true;const disabled=Array.from(dialog.querySelectorAll('button')).filter(b=>!b.disabled);disabled.forEach(b=>b.disabled=true);dialog.oncancel=e=>e.preventDefault();try {status.textContent='Working…';await fn();status.textContent='Done.';refresh();}catch(e){status.textContent=e.message;}finally{busy=false;dialog.oncancel=null;disabled.forEach(b=>b.disabled=false);refresh();}};
   let exchangeMounted=false;
@@ -273,6 +276,7 @@ function openFileMenu(initialTab = 'project', selected) {
   dialog.querySelector('[data-file-units]').value=ws.data.settings.units;
   dialog.querySelector('[data-file-units]').onchange=e=>{ws.data.settings.units=e.target.value;touch();remountView();};
   on('[data-folder-link]',()=>run(()=>filesState().folderNeedsPermission?reconnectFolder(true):linkFolder()));
+  dialog.querySelector('[data-mirror-on]').onchange=e=>{ws.data.settings.sketchupMirror=e.target.checked;touch();scheduleFolderSync(0);refresh();};
   on('[data-folder-open]',()=>openFolderList(dialog.querySelector('[data-folder-open]')));on('[data-folder-unlink]',()=>{unlinkFolder();refresh();});
   on('[data-workspace-save]',()=>run(runExportBundle));on('[data-storage]',()=>run(()=>offerStorageCleanup(false)));
   on('[data-demo]',()=>{mergeWorkspace(demoWorkspace());ensureBuiltinMaterials();refreshTopbar();remountView();dialog.close();});

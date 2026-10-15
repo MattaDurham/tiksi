@@ -2,6 +2,7 @@
 import io
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import shutil
@@ -17,6 +18,7 @@ ROOT=Path(__file__).resolve().parent.parent
 MAX_BYTES=600*1024*1024
 CAD={'.ifc','.step','.stp','.iges','.igs','.dxf','.laz','.3dm','.e57'}
 BLENDER={'.blend','.usd','.usda','.usdc','.usdz'}
+MIRROR_ENTRY=re.compile(r'^(mirror\.json|existing\.skp|underlay/[\w.:-]{1,80}\.(png|jpg|jpeg|webp))$')
 
 class ConversionError(ValueError):
     def __init__(self,message,status=400):super().__init__(message);self.status=status
@@ -32,7 +34,7 @@ class ModelConversionService:
     def capabilities(self):
         return {'token':self.token,'blender':bool(self.blender),'sketchup':self.sketchup,'cad':self.python.is_file(),
                 'imports':sorted((BLENDER if self.blender else set()) | (CAD if self.python.is_file() else set()) | ({'.skp'} if self.sketchup else set())),
-                'exports':(['blend'] if self.blender else [])+(['skp'] if self.sketchup else [])+(['ifc'] if self.python.is_file() else []),'maxBytes':MAX_BYTES}
+                'exports':(['blend'] if self.blender else [])+(['skp'] if self.sketchup else [])+(['ifc'] if self.python.is_file() else []),'mirror':self.sketchup,'maxBytes':MAX_BYTES}
     def active_jobs(self):return int(self.lock.locked())
     def cancel(self):
         if self.process and self.process.poll() is None:self.process.terminate()
@@ -109,6 +111,42 @@ class ModelConversionService:
                 if isinstance(error,ConversionError):error.job_id=folder.name
             raise
         finally:self.lock.release()
+    def mirror(self,op,data):
+        """SketchUp mirror of one property: 'write' takes a ZIP (mirror.json, optional
+        existing.skp and underlay images) and returns SKP bytes; 'read' takes SKP bytes and
+        returns the tagged elements as JSON. Job files are deleted afterwards: the mirror
+        itself lives in the owner's project folder, not in server history."""
+        if op not in {'write','read'}:raise ConversionError('Invalid mirror operation')
+        if not self.sketchup:raise ConversionError('The SketchUp mirror needs SketchUp installed on this Mac',422)
+        if not 0<len(data)<=MAX_BYTES:raise ConversionError('Mirror must be between 1 byte and 600 MB',413)
+        if not self.lock.acquire(blocking=False):raise ConversionError('Another model conversion is running',409)
+        folder=None
+        try:
+            base=self.root/'mirror';base.mkdir(exist_ok=True)
+            folder=base/secrets.token_hex(16);folder.mkdir()
+            worker=[sys.executable,str(ROOT/'server/sketchup_mirror.py'),op,str(folder)]
+            if op=='write':
+                try:archive=zipfile.ZipFile(io.BytesIO(data))
+                except zipfile.BadZipFile:raise ConversionError('Mirror package must be a ZIP')
+                with archive:
+                    items=archive.infolist();names=[i.filename for i in items]
+                    if len(items)>64 or len(set(names))!=len(names) or not all(MIRROR_ENTRY.match(n) for n in names):raise ConversionError('Invalid mirror package entry')
+                    if 'mirror.json' not in names:raise ConversionError('Mirror package has no mirror.json')
+                    if sum(i.file_size for i in items)>MAX_BYTES:raise ConversionError('Mirror package expands beyond 600 MB',413)
+                    for item in items:
+                        target=folder/item.filename;target.parent.mkdir(exist_ok=True);target.write_bytes(archive.read(item))
+                self._run(worker,folder)
+                output=folder/'model.skp'
+                if not output.is_file() or not 0<output.stat().st_size<=MAX_BYTES:raise ConversionError('Mirror writer did not produce a SketchUp file',422)
+                return output.read_bytes()
+            (folder/'source.skp').write_bytes(data)
+            self._run(worker,folder)
+            output=folder/'mirror-read.json'
+            if not output.is_file():raise ConversionError('Mirror reader did not produce a result',422)
+            return output.read_bytes()
+        finally:
+            if folder:shutil.rmtree(folder,ignore_errors=True)
+            self.lock.release()
     def dispatch(self,h):
         base='/api/model-conversion';path=urlsplit(h.path).path
         if path!=base and not path.startswith(base+'/'):return False
@@ -128,6 +166,14 @@ class ModelConversionService:
                 identifier,data,report=self.convert(data,h.headers.get('X-Model-Extension','').lower(),h.headers.get('X-Model-Target','glb'))
                 mime='application/octet-stream' if report['outputFormat']!='.glb' else 'model/gltf-binary'
                 self.reply(h,200,data,mime,{'X-Tiksi-Job':identifier,'X-Tiksi-Format':report['outputFormat'],'X-Tiksi-Warnings':json.dumps(report.get('warnings',[]),ensure_ascii=True)});return True
+            if path==base+'/mirror' and h.command=='POST':
+                try:length=int(h.headers.get('Content-Length','0'))
+                except ValueError:raise ConversionError('Invalid content length')
+                if not 0<length<=MAX_BYTES:raise ConversionError('Mirror must be smaller than 600 MB',413)
+                h.connection.settimeout(60);data=h.rfile.read(length)
+                if len(data)!=length:raise ConversionError('Upload was truncated')
+                op=h.headers.get('X-Mirror-Op','');data=self.mirror(op,data)
+                self.reply(h,200,data,'application/json' if op=='read' else 'application/octet-stream');return True
             if path==base+'/jobs' and h.command=='GET':
                 jobs=[json.loads(p.read_text()) for p in self.root.glob('*/report.json')]
                 self.reply(h,200,json.dumps({'jobs':jobs}).encode(),'application/json');return True
