@@ -191,7 +191,15 @@ class MirrorServiceBoundsTests(unittest.TestCase):
     def tearDown(self):
         self.service.close(); self.temp.cleanup()
 
+    def test_without_sketchup_the_mirror_says_so(self):
+        self.service.sketchup = False
+        with self.assertRaises(ConversionError) as caught:
+            self.service.mirror('read', b'abc')
+        self.assertEqual(caught.exception.status, 422)
+        self.assertFalse(self.service.capabilities()['mirror'])
+
     def test_rejects_unknown_operation_and_bad_packages(self):
+        self.service.sketchup = True
         with self.assertRaises(ConversionError):
             self.service.mirror('delete', b'abc')
         with self.assertRaises(ConversionError):
@@ -202,6 +210,7 @@ class MirrorServiceBoundsTests(unittest.TestCase):
             self.service.mirror('write', io_zip({'existing.skp': b'abc'}))
 
     def test_busy_service_refuses_mirror(self):
+        self.service.sketchup = True   # the lock is checked before any native call, so no SDK is needed
         self.service.lock.acquire()
         try:
             with self.assertRaises(ConversionError) as caught:

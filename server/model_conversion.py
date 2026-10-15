@@ -29,7 +29,7 @@ class ModelConversionService:
         self.token=secrets.token_urlsafe(32);self.lock=threading.Lock();self.process=None
         self.blender=shutil.which('blender') or (str(Path('/Applications/Blender.app/Contents/MacOS/Blender')) if Path('/Applications/Blender.app/Contents/MacOS/Blender').exists() else None)
         from server.sketchup_convert import library_path
-        self.sketchup=bool(library_path())
+        sdk=library_path();self.sketchup=bool(sdk and sdk.is_file())
         self.python=Path(os.environ.get('TIKSI_CAD_PYTHON',str(self.root/'venv/bin/python')))
     def capabilities(self):
         return {'token':self.token,'blender':bool(self.blender),'sketchup':self.sketchup,'cad':self.python.is_file(),
