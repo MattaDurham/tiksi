@@ -23,6 +23,7 @@ import * as products from './products.js';
 import * as budget from './budget.js';
 import * as schedule from './schedule.js';
 import * as cutsheets from './cutsheets.js';
+import * as guide from './guide.js';
 import { initNewProperty, openNewPropertyDialog, dialogOpen } from './newproperty.js';
 import { parseCaptureUrl } from './polycam.js';
 import {
@@ -42,6 +43,7 @@ const VIEWS = {
   budget,
   schedule,
   sheets: cutsheets,
+  guide,
 };
 
 let currentView = null;
@@ -142,6 +144,9 @@ function route() {
   unmountCurrent();
   currentName = VIEWS[name] ? name : 'plan';
   currentView = view;
+  const guideEntry = document.querySelector('.guide-entry');
+  if (currentName === 'guide') guideEntry?.setAttribute('aria-current', 'page');
+  else guideEntry?.removeAttribute('aria-current');
   document.querySelectorAll('#rail a[data-view]').forEach(a =>
     a.classList.toggle('active', a.dataset.view === currentName));
   const root = document.getElementById('view');

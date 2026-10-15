@@ -104,6 +104,35 @@ try {
   assert.ok(await page.evaluate(async()=>{const s=await import('/js/store.js');const p=s.activeProperty(),before=p.scans.find(scan=>scan.id===p.designComparison.beforeId);return p.modelSourceId===before.id && before.designSnapshot && before.parametricSnapshot.walls.length>0;}),'before is an immutable saved mesh and parametric snapshot');
   const beforeId=await page.evaluate(async()=>{const s=await import('/js/store.js');return s.activeProperty().modelSourceId;});assert.equal(await page.locator('.v-scan-row.active').getAttribute('data-scan'),beforeId,'comparison inspector follows visible model');
   await page.locator('[data-act=after]').click();assert.ok(await page.evaluate(async()=>{const s=await import('/js/store.js');return s.activeProperty().modelSourceId;}));
+
+  // A slow scan load used to restore the mount's AFTER selection after the user
+  // had already chosen BEFORE. Hold the actual GLB parser across a new mount so
+  // this ordering is deterministic on machines both with and without native engines.
+  await page.locator('#rail a[data-view=plan]').click();
+  await page.locator('.plan-canvas canvas').waitFor();
+  await page.evaluate(async()=>{
+    const {GLTFLoader}=await import('three/addons/loaders/GLTFLoader.js');
+    const original=GLTFLoader.prototype.parseAsync;
+    let release;const gate=new Promise(resolve=>{release=resolve;});
+    window.exchangeLoadGate={started:false,release(){GLTFLoader.prototype.parseAsync=original;release();}};
+    GLTFLoader.prototype.parseAsync=async function(...args){
+      window.exchangeLoadGate.started=true;
+      await gate;
+      return original.apply(this,args);
+    };
+  });
+  await page.locator('#rail a[data-view=model]').click();
+  await page.waitForFunction(()=>window.exchangeLoadGate.started);
+  await page.locator('[data-act=before]').click();
+  assert.equal(await page.locator('.v-scan-row.active').getAttribute('data-scan'),beforeId,'comparison selects the visible record while its geometry loads');
+  assert.equal(await page.locator('.inspector [data-frame]').isDisabled(),true,'selected comparison is still loading');
+  await page.evaluate(()=>window.exchangeLoadGate.release());
+  await page.waitForFunction(()=>[...document.querySelectorAll('.v-scan-row .key')].every(badge=>badge.textContent!=='...'));
+  await page.evaluate(()=>new Promise(requestAnimationFrame));
+  assert.equal(await page.locator('.v-scan-row.active').getAttribute('data-scan'),beforeId,'late scan completion preserves the chosen comparison inspector');
+  assert.equal(await page.locator('.inspector [data-frame]').isDisabled(),false,'chosen comparison inspector refreshes when geometry loads');
+  assert.equal(await page.evaluate(async()=>(await import('/js/store.js')).activeProperty().modelSourceId),beforeId,'late focus does not change the visible comparison');
+  console.log('PASS comparison selection survives delayed scan loading');
   assert.equal(await page.locator('#btn-save').count(),0,'only one File entry point');
   await page.setViewportSize({width:390,height:844});await page.locator('#btn-file').click();
   assert.ok(await page.evaluate(()=>document.querySelector('[data-file-dialog]').scrollWidth<=document.querySelector('[data-file-dialog]').clientWidth),'file UI fits mobile width');

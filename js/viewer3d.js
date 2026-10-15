@@ -58,6 +58,7 @@ let sky = null, envSky = null, sun = null, hemi = null, envRT = null, skyScene =
 let modelGroup = null, groundGroup = null, scanRoot = null, pinRoot = null, lightRoot = null, measureRoot = null;
 let prop = null;
 let selection = null;          // {kind:'wall'|'room'|'opening'|'scan'|'pin', id}
+let selectionVersion = 0;      // late mount focus must not replace a newer user selection
 let hoverTarget = null;
 let mode = 'orbit';            // orbit | walk | top
 let tool = 'select';           // select | move | measure | pin
@@ -1065,6 +1066,7 @@ function updateOutlineTargets() {
   }
 }
 function setSelection(sel) {
+  selectionVersion++;
   selection = sel;
   updateOutlineTargets();
   reattachGizmo();
@@ -2070,7 +2072,9 @@ function renderToolCol() {
       const scan=prop.scans.find(s=>s.id===id);if(scan){scan.visible=id===chosen;applyScanTransform(scan,scanObjs[id]);}
     }
     if(chosen==='design')delete prop.modelSourceId;else prop.modelSourceId=chosen;
-    rebuildModel();setSelection(scanObjs[chosen]?{kind:'scan',id:chosen}:null);renderToolCol();touch();
+    // Select the record immediately, including while its scene object is loading.
+    // setScanState refreshes this inspector when the chosen object is ready.
+    rebuildModel();setSelection(chosen==='design'?null:{kind:'scan',id:chosen});renderToolCol();touch();
   };
   on('before',()=>compare('before'));on('after',()=>compare('after'));
   tc.querySelectorAll('[data-scan]').forEach(b => b.onclick = () => setSelection({ kind: 'scan', id: b.dataset.scan }));
@@ -2194,8 +2198,8 @@ export function mount(root) {
   renderer.setAnimationLoop(tick);
   requestRender(4);
 
-  const focus=pendingScanFocus || prop.modelSourceId,token=mountId;pendingScanFocus=null;
-  loadAllScans().then(()=>{if(token===mountId && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
+  const focus=pendingScanFocus || prop.modelSourceId,token=mountId,focusVersion=selectionVersion;pendingScanFocus=null;
+  loadAllScans().then(()=>{if(token===mountId && selectionVersion===focusVersion && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
   // Deep link from the PHOTOS view: #/model?pin=<photoId> enters PIN PHOTO for that photo.
   const m = /[?&]pin=([^&]+)/.exec(location.hash);
   if (m) {
