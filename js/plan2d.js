@@ -11,8 +11,6 @@ import {
 } from './store.js';
 import { materialSelectHtml } from './materials.js';
 import { icon } from './icons.js';
-import { SCAN_ACCEPT } from './scans.js';
-import { attachScanFileToProperty, openNewPropertyDialog } from './newproperty.js';
 import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import { planWallMove, applyWallMove, normalOffset, planCornerMove, applyCornerMove } from './wallmove.js';
 
@@ -1584,13 +1582,11 @@ function sourceCardHtml() {
   const src = prop.source;
   const scan = meshScan();
   const label = src && src.kind === 'polycam' ? 'FROM POLYCAM' : 'SCAN';
-  const fileTitle = scan ? 'Add a GLB/OBJ/PLY scan; you choose whether it is the next floor, a rescan or a separate building' : 'Attach the GLB/OBJ/PLY you downloaded from Polycam; the plan is proposed from it';
   return `<div class="src-card">
     <span class="np-kicker">${label}</span>
     ${src && src.url ? `<a href="${escapeHtml(src.url)}" target="_blank" rel="noopener" title="${escapeHtml(src.url)}">${escapeHtml(src.title || src.url.replace(/^https?:\/\//, ''))}</a>` : ''}
     ${scan ? `<button class="btn" data-src-plan title="Square the scan up and propose walls, rooms, doors, windows and the underlay again">${icon('scan')}PROPOSE PLAN FROM SCAN</button>` : ''}
-    <button class="btn ${scan ? '' : 'primary'}" data-src-link title="Paste a poly.cam/capture link; it is added to this property">${icon('link')}${scan ? 'ADD ANOTHER POLYCAM SCAN' : 'ADD POLYCAM SCAN'}</button>
-    <button class="btn" data-src-attach title="${escapeHtml(fileTitle)}">${icon('upload')}${scan ? 'ADD SCAN FILE' : 'ATTACH SCAN FILE'}</button><input type="file" class="hidden-file" data-src-file accept="${SCAN_ACCEPT}">
+    <div class="empty">Add captures in FILE → Import.</div>
     <div class="empty" data-src-status></div>
   </div>`;
 }
@@ -1632,26 +1628,7 @@ function bindSourceCard(insp) {
     } catch (e) { console.error(e); say('Could not propose a plan: ' + String(e && e.message || e), false); }
     finally { sourceBusy = false; }
   };
-  const linkBtn = insp.querySelector('[data-src-link]');
-  if (linkBtn) linkBtn.onclick = () => openNewPropertyDialog({ into: prop.id });
-  const attach = insp.querySelector('[data-src-attach]');
-  const file = insp.querySelector('[data-src-file]');
-  if (attach && file) {
-    attach.onclick = () => file.click();
-    file.onchange = async () => {
-      const f = file.files[0]; file.value = '';
-      if (!f || sourceBusy) return;
-      sourceBusy = true;
-      try {
-        pushUndo();
-        const out = await attachScanFileToProperty(prop, f, viewHooks);
-        if (!out) throw new Error('not a scan tiksi can read');
-        if (out.mode === 'reference') { say('Kept ' + out.scan.name + ' as reference; the plan is unchanged.', false); return; }
-        afterPlan(out.result, out.applied);
-      } catch (e) { console.error(e); say('Could not use that file: ' + String(e && e.message || e), false); }
-      finally { sourceBusy = false; }
-    };
-  }
+
 }
 
 function renderInspector() {

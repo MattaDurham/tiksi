@@ -5,6 +5,7 @@
 // and Gaussian splats as reference scans; a still-image renderer.
 
 import * as THREE from 'three';
+import { modelTakeoff, createModelEstimate } from './model-takeoff.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
@@ -37,7 +38,7 @@ import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapRects
 import { planWallMove, applyWallMove, normalOffset } from './wallmove.js';
 import { addPhotoFromFile, photoUrl, photoById, revokePhotoUrls } from './photos-store.js';
 import {
-  SCAN_ACCEPT, importScanFile, loadScanObject, applyScanTransform, disposeScanObject,
+  loadScanObject, applyScanTransform, disposeScanObject,
   scanStats, dropScanToFloor, centerScanOnModel, releaseSplatRenderer, splatDrawables, splatBusy,
 } from './scans.js';
 
@@ -82,6 +83,8 @@ let toastTimer = 0;
 // Bumped on every mount; async loaders compare their captured token so work started by a
 // previous mount never lands in (or doubles up inside) the next one.
 let mountId = 0;
+let pendingScanFocus = null;
+export function focusScanOnMount(id) { pendingScanFocus=id; }
 let exportingStill = false, exportRequest = false, exportDialog = null;
 const raycaster = new THREE.Raycaster();
 raycaster.params.Points = { threshold: 0.05 };
@@ -340,6 +343,7 @@ function configureRenderQuality(name, forExport = false) {
 function rebuildModel() {
   if (modelGroup) { scene.remove(modelGroup); disposeBuilt(modelGroup); }
   modelGroup = buildPropertyGroup(prop, { xray, hiddenLevels: hiddenLevels() });
+  modelGroup.visible = !prop.modelSourceId;
   scene.add(modelGroup);
   rebuildNightLights();
   applySection();
@@ -573,7 +577,7 @@ function updateSun() {
 let capMesh = null;
 function rebuildCaps() {
   if (capMesh) { scene.remove(capMesh); capMesh.geometry.dispose(); capMesh = null; }
-  if (!section.on || !modelGroup) return;
+  if (!section.on || !modelGroup || !modelGroup.visible) return;
   const rects = wallCapRects(prop, section.height, { hiddenLevels: hiddenLevels() });
   if (!rects.length) return;
   const P = [], I = [];
@@ -845,7 +849,7 @@ function resize() {
 }
 
 // ---------- still render ----------
-function openStillDialog() {
+export function openStillDialog() {
   if (exportDialog || exportRequest) return;
   const dialog = document.createElement('dialog');
   exportDialog = dialog;
@@ -1420,35 +1424,6 @@ async function loadAllScans() {
   }
   renderToolCol();
 }
-async function onImportScan(file) {
-  if (!file) return;
-  const token = mountId;
-  let scan = null;
-  try { scan = await importScanFile(file, prop, hooks); }
-  catch (e) { console.error(e); if (token === mountId) { toast('Import failed: ' + errMsg(e), 'error'); showProgress(null); } return; }
-  if (!scan || token !== mountId || !scene) return;
-  try {
-    const obj = await addScanToScene(scan);
-    if (token !== mountId) return;
-    if (obj) { centerScanOnModel(scan, obj, modelBounds(prop)); applyScanTransform(scan, obj); touch(); }
-    setSelection({ kind: 'scan', id: scan.id });
-    toast('Imported ' + scan.name + ' (' + scanStats(obj).label + ').', 'ok');
-    if (scan.kind === 'mesh' && prop.walls.length) { showProgress(null); await proposePlanFromScan(scan); }
-  } catch (e) {
-    console.error(e);
-    if (token !== mountId) return;
-    // A record whose bytes cannot be displayed would only ever show an error again: drop it.
-    prop.scans = prop.scans.filter(s => s.id !== scan.id);
-    delete scanState[scan.id];
-    try { await deleteFile(scan.id); } catch (e2) { console.error(e2); }
-    touch();
-    if (scanSelected(scan.id)) setSelection(null);
-    toast('Could not display ' + scan.name + ': ' + errMsg(e), 'error', 6000);
-  }
-  showProgress(null);
-  renderToolCol();
-}
-
 // Scan to plan on a mesh scan that is already here. Without a plan the proposal becomes the
 // plan. A scan the plan already came from is proposed again over the floor it matches (after
 // asking). Any other scan is fitted against the plan and the person says what it is: the
@@ -1585,8 +1560,7 @@ function toggleXray() { xray = !xray; rebuildModel(); renderHud(); renderToolCol
 
 // ---------- environment panel ----------
 function sunLabel(el) { return el >= 0 ? 'SUN ' + Math.round(el) + '&deg;' : (el > -6 ? 'TWILIGHT' : 'NIGHT'); }
-function renderEnvPanel() {
-  const p = hud.env;
+function renderEnvPanel(p = hud.env) {
   if (!p) return;
   const env = prop.env;
   const el = sunElevation(env.time);
@@ -1614,7 +1588,7 @@ function renderEnvPanel() {
         <label><input type="checkbox" data-env="nightLights" ${env.nightLights !== false ? 'checked' : ''}> NIGHT LIGHTS</label>
       </div>
     </div>`;
-  p.querySelector('[data-toggle]').onclick = () => { p.classList.toggle('open'); renderEnvPanel(); };
+  p.querySelector('[data-toggle]').onclick = () => { p.classList.toggle('open'); renderEnvPanel(p); };
   let touchTimer = 0;
   const commit = () => { clearTimeout(touchTimer); touchTimer = setTimeout(() => touch(), 400); };
   p.querySelectorAll('input[type=range]').forEach(r => {
@@ -1639,7 +1613,7 @@ function renderEnvPanel() {
       if (s.dataset.env === 'panoPhotoId') panoMissing = null;   // a fresh choice gets a fresh try
       applyEnvironment();
       touch();
-      renderEnvPanel();
+      renderEnvPanel(p);
     };
   });
   p.querySelectorAll('input[type=checkbox]').forEach(c => {
@@ -1651,6 +1625,11 @@ function renderEnvPanel() {
       touch();
     };
   });
+}
+
+export function mountEnvironmentSettings(host) {
+  host.className='v-env open file-env';
+  renderEnvPanel(host);
 }
 
 // ---------- inspector ----------
@@ -1951,7 +1930,8 @@ function renderInspector() {
     const isPts = s.kind === 'points', isSplat = s.kind === 'splat';
     // Nothing to frame, drop or centre until the object exists; deleting mid-parse would race the loader.
     const dis = obj ? '' : 'disabled', disDel = state === 'loading' ? 'disabled' : '';
-    inspEl.innerHTML = `<h3>SCAN</h3>
+    const materialSlots = s.kind === 'mesh' && obj ? modelTakeoff(obj) : [];
+    inspEl.innerHTML = `<h3>${s.kind === 'mesh' ? 'MODEL' : 'SCAN'}</h3>
       <div class="stat-line"><span>File</span><b title="${escapeHtml(s.name)}">${escapeHtml(s.name.length > 22 ? s.name.slice(0, 20) + '...' : s.name)}</b></div>
       <div class="stat-line"><span>Kind</span><b>${escapeHtml(s.kind || '?')} &middot; ${escapeHtml((s.format || '').toUpperCase())}</b></div>
       <div class="stat-line"><span>${isSplat ? 'Splats' : (isPts ? 'Points' : 'Triangles')}</span><b>${escapeHtml(st.label)}</b></div>
@@ -1976,7 +1956,20 @@ function renderInspector() {
       <button class="btn" data-center ${dis}>CENTER ON MODEL</button>
       ${s.kind === 'mesh' ? `<button class="btn" data-plan ${dis} title="Find the floor and ceiling, square the scan up, propose walls, rooms, doors and windows, and render the plan underlay from the scan">${icon('plan')}PROPOSE PLAN FROM SCAN</button>` : ''}
       ${s.source && s.source.url ? `<a class="btn" href="${escapeHtml(s.source.url)}" target="_blank" rel="noopener" style="display:flex; text-decoration:none; justify-content:center">${icon('link')}OPEN ON POLYCAM</a>` : ''}
+      ${s.importWarnings?.length ? `<p class="empty">${s.importWarnings.map(escapeHtml).join('<br>')}</p>` : ''}
+      ${s.kind === 'mesh' ? `<button class="btn" data-exchange ${dis}>EDIT / BRING BACK</button>
+      <h3>MATERIALS</h3><p class="empty">Match exported surface names to known Tiksi materials. Names and colours do not establish a product identity.</p>
+      ${materialSlots.map(slot=>`<div class="field"><label title="${escapeHtml(slot.name)}">${escapeHtml(slot.name)} · ${escapeHtml(fmtArea(slot.areaM2))}</label><select data-model-material="${slot.key}"><option value="">Original surface${s.materialIdentities?.[slot.key] ? ' · '+escapeHtml(materialById(s.materialIdentities[slot.key])?.name || ''):''}</option>${ws.data.materials.map(m=>`<option value="${escapeHtml(m.id)}" ${s.materialBindings?.[slot.key]===m.id?'selected':''}>${escapeHtml(m.name)}</option>`).join('')}</select></div>`).join('')}<button class="btn" data-estimate ${dis}>CREATE FINISH ESTIMATE</button><p class="empty">Measured triangle surface areas. Map only finish surfaces to include; review overlaps and waste in Scope before ordering.</p>` : ''}
       <button class="btn danger" data-del ${disDel} title="${disDel ? 'Wait for the scan to finish loading' : ''}">DELETE SCAN</button>`;
+    const estimate = inspEl.querySelector('[data-estimate]');
+    if(estimate) estimate.onclick = () => {try {const pr=createModelEstimate(prop,s,obj);toast('Created '+pr.name+'. Review quantities and prices in Scope / Budget.','ok');}catch(e){toast(e.message,'warn');}};
+    const exchange = inspEl.querySelector('[data-exchange]');
+    if(exchange) exchange.onclick = () => exchangeDialog(s.id);
+    inspEl.querySelectorAll('[data-model-material]').forEach(input => input.onchange = async () => {
+      s.materialBindings = s.materialBindings || {};
+      if(input.value) s.materialBindings[input.dataset.modelMaterial]=input.value; else delete s.materialBindings[input.dataset.modelMaterial];
+      touch(); try { await addScanToScene(s); } catch(e) {toast(e.message,'error');}
+    });
     const upd = () => { applyScanTransform(s, obj); touch(); requestRender(3); };
     inspEl.querySelectorAll('[data-p]').forEach(i => i.onchange = () => { s.pos[+i.dataset.p] = parseFloat(i.value) || 0; upd(); });
     inspEl.querySelectorAll('[data-r]').forEach(i => i.onchange = () => {
@@ -2002,17 +1995,21 @@ function renderInspector() {
     inspEl.querySelector('[data-del]').onclick = async () => {
       if (scanState[s.id] === 'loading' && !obj) return;
       prop.scans = prop.scans.filter(x => x.id !== s.id);
+      if([prop.designComparison?.beforeId,prop.designComparison?.afterId].includes(s.id))delete prop.designComparison;
+      if(prop.modelSourceId === s.id) { delete prop.modelSourceId; rebuildModel(); }
       if (obj) { scanRoot.remove(obj); disposeScanObject(obj); delete scanObjs[s.id]; }
       delete scanState[s.id];
       setSelection(null);
       touch();
       renderToolCol();
-      try { await deleteFile(s.id); }
+      try { await deleteFile(s.id); if(s.originalFileId && s.originalFileId !== s.id) await deleteFile(s.originalFileId); }
       catch (e) { console.error(e); toast('The scan record is gone but its bytes could not be removed from browser storage: ' + errMsg(e), 'warn'); }
     };
     return;
   }
 }
+
+function exchangeDialog(selected) { document.dispatchEvent(new CustomEvent('tiksi:files',{detail:{tab:'exchange',selected}})); }
 
 // ---------- tool column ----------
 function renderToolCol() {
@@ -2032,8 +2029,6 @@ function renderToolCol() {
     ${tb('frame', 'frame', 'FRAME', 'F')}
     ${tb('front', 'target', 'FRONT')}
     ${tb('iso', 'model', 'ISO')}
-    ${tb('top', 'top', 'TOP', 'T')}
-    ${tb('walk', 'walk', 'WALK', 'W', mode === 'walk')}
     <div class="tool-sep"></div>
     <div class="tool-head">TOOLS</div>
     ${tb('select', 'select', 'SELECT', 'V', tool === 'select')}
@@ -2041,24 +2036,17 @@ function renderToolCol() {
     ${tb('measure', 'measure', 'MEASURE', 'D', tool === 'measure')}
     ${measures.length ? tb('clearm', 'close', 'CLEAR MEASURES') : ''}
     ${tb('pin', 'pin', 'PIN PHOTO', 'P', tool === 'pin')}
-    ${tb('section', 'section', 'SECTION', 'C', section.on)}
-    ${tb('xray', 'xray', 'X-RAY', 'X', xray)}
     <div class="tool-sep"></div>
     <div class="tool-head">LEVELS</div>
     ${levelRows}
     <div class="tool-sep"></div>
-    <div class="tool-head">RENDER</div>
-    ${tb('render', 'camera', 'EXPORT IMAGE')}
-    <div class="tool-sep"></div>
-    <div class="tool-head">SCANS</div>
-    ${tb('scan', 'scan', 'IMPORT SCAN')}
-    ${tb('polycam', 'link', 'POLYCAM LINK')}
-    <input type="file" class="hidden-file" accept="${SCAN_ACCEPT}">
+    <div class="tool-head">MODELS & SCANS</div>
+    ${prop.designComparison ? tb('before', 'scan', 'BEFORE', '', prop.designComparison.view === 'before') + tb('after', 'model', 'AFTER', '', prop.designComparison.view === 'after') : ''}
     ${scanRows}
     <div class="empty" style="padding:6px 8px; font-size:9.5px; color:var(--faint); font-family:var(--mono); line-height:1.5">
       PLY / PCD / XYZ / LAS point clouds, OBJ / GLB meshes, .splat / .spz / .ply Gaussian splats.</div>
     <div class="tool-sep"></div>
-    ${tb('rebuild', 'refresh', 'REGENERATE')}`;
+<div class="empty">Import and exchange models in FILE.</div>`;
   const on = (act, fn) => { const b = tc.querySelector(`[data-act=${act}]`); if (b) b.onclick = fn; };
   on('frame', () => { if (mode !== 'orbit') setMode('orbit'); presetView('frame'); });
   on('front', () => { if (mode !== 'orbit') setMode('orbit'); presetView('front'); });
@@ -2073,10 +2061,18 @@ function renderToolCol() {
   on('section', toggleSection);
   on('xray', toggleXray);
   on('render', openStillDialog);
-  const file = tc.querySelector('input[type=file]');
-  on('scan', () => file.click());
-  on('polycam', () => openNewPropertyDialog({ into: prop.id }));
-  file.onchange = () => { onImportScan(file.files[0]); file.value = ''; };
+  on('exchange', () => exchangeDialog());
+  const compare = view => {
+    const c=prop.designComparison; if(!c)return;
+    c.view=view;
+    const chosen=view==='before'?c.beforeId:c.afterId;
+    for(const id of [c.beforeId,c.afterId]) {
+      const scan=prop.scans.find(s=>s.id===id);if(scan){scan.visible=id===chosen;applyScanTransform(scan,scanObjs[id]);}
+    }
+    if(chosen==='design')delete prop.modelSourceId;else prop.modelSourceId=chosen;
+    rebuildModel();setSelection(scanObjs[chosen]?{kind:'scan',id:chosen}:null);renderToolCol();touch();
+  };
+  on('before',()=>compare('before'));on('after',()=>compare('after'));
   tc.querySelectorAll('[data-scan]').forEach(b => b.onclick = () => setSelection({ kind: 'scan', id: b.dataset.scan }));
   tc.querySelectorAll('[data-level]').forEach(b => b.onclick = () => toggleLevel(b.dataset.level));
   on('rebuild', () => { rebuildModel(); rebuildGround(); buildAllPins(); });
@@ -2177,6 +2173,7 @@ export function mount(root) {
   presetView('frame', true);
   renderHud();
   renderEnvPanel();
+  hud.env.hidden=true;
   renderToolCol();
   renderInspector();
   setHint('');
@@ -2197,7 +2194,8 @@ export function mount(root) {
   renderer.setAnimationLoop(tick);
   requestRender(4);
 
-  loadAllScans();
+  const focus=pendingScanFocus || prop.modelSourceId,token=mountId;pendingScanFocus=null;
+  loadAllScans().then(()=>{if(token===mountId && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
   // Deep link from the PHOTOS view: #/model?pin=<photoId> enters PIN PHOTO for that photo.
   const m = /[?&]pin=([^&]+)/.exec(location.hash);
   if (m) {

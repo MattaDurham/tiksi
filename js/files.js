@@ -176,17 +176,7 @@ export async function openFromFile(file) {
     parsed = { data, manifest: null };
   } else parsed = await readBundle(file);
   const { data, manifest } = parsed;
-  const isProject = manifest && manifest.format === 'tiksi-project';
-  if (!isProject && data.properties.length > 1) {
-    // A whole-workspace bundle: the existing IMPORT semantics (replace, after asking) apply.
-    let ok;
-    if (/\.json$/i.test(file.name)) {
-      ok = confirm('Replace the current workspace with "' + file.name + '"? Save or export first if you want a backup.');
-      if (ok) replaceWorkspace(data);
-    } else ok = await importBundle(file);
-    if (ok) app.afterReplace();
-    return ok ? data.properties.map(p => p.id) : null;
-  }
+  // Opening always adds/updates imported properties. Replacement is a separate explicit action.
   const ids = /\.json$/i.test(file.name) ? mergeWorkspace(data) : await importProject(file);
   for (const id of ids) state.savedSig.set(id, signatureOf(id));
   app.refresh(); app.remount();
@@ -386,7 +376,7 @@ async function uniqueName(prop, current) {
 }
 
 // ---------- window-level intake ----------
-export function bindFileIntake() {
+export function bindFileIntake(intake) {
   const hasFiles = e => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
   const isProjectFile = f => /\.(tiksi|zip|json)$/i.test(f.name);
   window.addEventListener('dragover', e => {
@@ -395,11 +385,11 @@ export function bindFileIntake() {
     if (f && f.kind === 'file') { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }
   });
   window.addEventListener('drop', async e => {
-    if (!hasFiles(e)) return;
-    const files = Array.from(e.dataTransfer.files).filter(isProjectFile);
+    if (!hasFiles(e) || e.defaultPrevented || document.querySelector('dialog[open], .modal-backdrop')) return;
+    const files = Array.from(e.dataTransfer.files).filter(f => intake || isProjectFile(f));
     if (!files.length) return;
     e.preventDefault();
-    try { for (const f of files) await openFromFile(f); }
+    try { for (const f of files) await (intake ? intake(f) : openFromFile(f)); app.refresh(); app.remount(); }
     catch (err) { alert('Open failed: ' + (err && err.message || err)); }
   });
   window.addEventListener('keydown', e => {

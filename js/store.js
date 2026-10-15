@@ -138,6 +138,7 @@ export function projectSlice(propId, data) {
   const itemIds = new Set();
   for (const pr of projects) for (const it of pr.items || []) itemIds.add(it.id);
   const matIds = new Set();
+  for (const s of p.scans || []) for (const id of [...Object.values(s.materialBindings || {}),...Object.values(s.materialIdentities || {})]) matIds.add(id);
   for (const w of p.walls || []) matIds.add(w.material);
   for (const r of p.rooms || []) { matIds.add(r.material); matIds.add(r.ceilingMaterial); }
   const products = (d.products || []).filter(pr => (pr.itemIds || []).some(id => itemIds.has(id)) || (pr.materialIds || []).some(id => matIds.has(id)));
@@ -841,7 +842,7 @@ export function listAllFileIds(data) {
   const d = data || ws.data;
   const ids = [];
   for (const p of d.properties || []) {
-    for (const s of p.scans || []) ids.push(s.id);
+    for (const s of p.scans || []) { ids.push(s.id); if (s.originalFileId && s.originalFileId !== s.id) ids.push(s.originalFileId); }
     for (const ph of p.photos || []) ids.push(ph.id);
   }
   return ids;
@@ -907,6 +908,12 @@ async function collectBundleFiles(properties) {
   const out = [];
   for (const p of properties || ws.data.properties) {
     for (const s of p.scans || []) {
+      if (s.originalFileId && s.originalFileId !== s.id) {
+        const source = await getFile(s.originalFileId);
+        if (!source?.buffer) throw new Error('Original model source is missing: ' + (s.originalName || s.name));
+        const ext = source.format || 'bin';
+        out.push({ id: s.originalFileId, kind: 'source', name: s.originalName || source.name, format: ext, ext, buffer: source.buffer });
+      }
       const rec = await getFile(s.id);
       if (!rec || !rec.buffer) continue;
       const ext = String(s.format || rec.format || 'bin').toLowerCase();

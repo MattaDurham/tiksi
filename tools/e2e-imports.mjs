@@ -40,8 +40,8 @@ try {
     await reject(enc('v NaN 0 0\nf 1 2 3'), 'bad.obj', /invalid|geometry/i);
     await reject(enc('nonsense'), 'bad.pcd', /point|PCD|header|undefined/i);
     await reject(enc(''), 'empty.ply', /empty/i);
-    await reject(enc('1 2 3'), 'bad.laz', /Unsupported/i);
-    await reject(enc('1 2 3'), 'bad.e57', /Unsupported/i);
+    await reject(enc('1 2 3'), 'bad.laz', /Native conversion|Unsupported/i);
+    await reject(enc('1 2 3'), 'bad.e57', /Native conversion|Unsupported/i);
     await reject(enc('abc'), 'bad.splat', /Truncated/i);
     const badSplat = new ArrayBuffer(32); new DataView(badSplat).setFloat32(0, NaN, true);
     await reject(badSplat, 'bad-coordinates.splat', /coordinates/i);

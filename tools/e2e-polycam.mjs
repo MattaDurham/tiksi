@@ -179,7 +179,7 @@ function assertPlan(prop, tag) {
   void thick;
 }
 async function runDialog(link, opts) {
-  await page.click('#property-new');
+  await page.click('#btn-file');await page.click('[data-new-property]');
   await page.waitForSelector('#np-dialog [data-np-input]');
   if (opts && opts.relay === false) await page.uncheck('#np-dialog [data-np-relay]');
   else if (opts && opts.relay) {
@@ -312,7 +312,10 @@ try {
     const p = ws.data.properties.find(p => p.source?.captureId === captureId);
     return { levels: p.levels.length, walls: p.walls.length, scans: p.scans.length, name: p.name };
   }, CAPTURE_ID);
-  await page.setInputFiles('.tool-col input[type=file]', glbPath);
+  await page.click('#btn-file');await page.click('[data-file-tab=capture]');
+  await page.setInputFiles('[data-any-file]',glbPath);
+  await page.waitForSelector('[data-file-dialog]',{state:'detached'});
+  await page.locator('.v-scan-row').last().click();await page.click('.inspector [data-plan]');
   await page.waitForSelector('.sp [data-mode]', { timeout: 120000 });
   const suggested = await page.evaluate(() => document.querySelector('.sp-choice.suggested').dataset.mode);
   check(suggested === 'replace', 'additive: the same layout is suggested as a rescan (' + suggested + ')');
