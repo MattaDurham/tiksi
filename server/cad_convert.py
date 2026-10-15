@@ -14,8 +14,10 @@ def convert(source, output):
         import ifcopenshell.geom
         import ifcopenshell.util.element
         model=ifcopenshell.open(str(source));settings=ifcopenshell.geom.settings();settings.set(settings.USE_WORLD_COORDS,True)
-        failures=[]
+        failures=[];semantic_volumes=[]
         for product in model.by_type('IfcProduct'):
+            if product.is_a('IfcOpeningElement') or product.is_a('IfcSpace'):
+                semantic_volumes.append({'id':product.GlobalId,'class':product.is_a(),'name':product.Name});continue
             if not product.Representation:continue
             try:
                 shape=ifcopenshell.geom.create_shape(settings,product);geo=shape.geometry
@@ -30,6 +32,9 @@ def convert(source, output):
                     meshes.append({'name':product.Name or product.is_a(),'positions':positions,'indices':indices,'material':{'name':mat.name if mat else 'Default','color':color},
                                    'extras':{'ifcGlobalId':product.GlobalId,'ifcClass':product.is_a(),'ifcProperties':ifcopenshell.util.element.get_psets(product)}})
             except Exception as e:failures.append((product.GlobalId,str(e)))
+        if semantic_volumes:
+            (output.parent/'ifc-spaces-openings.json').write_text(json.dumps(semantic_volumes,indent=2))
+            warnings.append(f'{len(semantic_volumes)} IFC space/void volumes kept as semantics in the source/handoff, rather than drawn as opaque solids. Wall opening subtraction remains in the wall geometry.')
         if failures:raise ValueError('IFC geometry could not be converted for '+str(len(failures))+' elements; first: '+str(failures[0]))
         warnings.append('IFC GlobalIds, classes and property sets retained in GLB metadata; tessellated meshes do not preserve parametric BIM relationships.')
     elif suffix in {'.step','.stp','.iges','.igs'}:

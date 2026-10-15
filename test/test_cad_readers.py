@@ -39,6 +39,11 @@ with TemporaryDirectory() as temp:
  mesh.Faces.AddFace(0,1,2);rhino.Objects.AddMesh(mesh);rhino.Write(str(p/'mesh.3dm'),8);convert(p/'mesh.3dm',p/'rhino.glb');assert doc(p/'rhino.glb')['accessors'][0]['max']==[2,0,0]
  part={'name':'wall:synthetic','positions':[0,0,0,2,0,0,0,3,0],'material':{'name':'Synthetic paint','color':[.8,.1,.2,1]},'extras':{'ifcGlobalId':'0gqDwbvY19fP7zxuJDDCKA','ifcClass':'IfcWall','ifcProperties':{'SyntheticPset':{'Finish':'Paint','id':1}}}}
  (p/'mesh.json').write_text(json.dumps({'meshes':[part,part]}));write_ifc(p/'mesh.json',p/'wall.ifc');native=ifcopenshell.open(str(p/'wall.ifc'));assert len(native.by_type('IfcWall'))==1,'material primitives share one IFC element';convert(p/'wall.ifc',p/'ifc.glb');g=doc(p/'ifc.glb');assert g['nodes'][0]['extras']['ifcGlobalId']==part['extras']['ifcGlobalId'];assert g['nodes'][0]['extras']['ifcProperties']['SyntheticPset']['Finish']=='Paint'
+ # Semantic room/void volumes must never fill physical rooms or door openings.
+ import ifcopenshell.api
+ for cls in ['IfcSpace','IfcOpeningElement']:
+  semantic=ifcopenshell.api.run('root.create_entity',native,ifc_class=cls,name='Synthetic '+cls);semantic.Representation=native.by_type('IfcWall')[0].Representation
+ native.write(str(p/'semantic.ifc'));convert(p/'semantic.ifc',p/'semantic.glb');classes=[node['extras']['ifcClass'] for node in doc(p/'semantic.glb')['nodes']];assert classes and set(classes)=={'IfcWall'},classes;assert len(json.loads((p/'ifc-spaces-openings.json').read_text()))==2
 print('Real STEP, DXF, drafting handoff, LAZ, E57, Rhino and IFC metadata converters passed')
 '''
         result=subprocess.run([str(PYTHON),'-c',code],cwd=ROOT,capture_output=True,text=True,timeout=120)
