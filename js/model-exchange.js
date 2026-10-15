@@ -35,6 +35,19 @@ async function meshForScan(scan) {
 }
 
 function cleanExport(root) {
+  const readable=new Map();
+  const textureForExport=texture=>{
+    if(!texture?.image?.data)return texture;
+    if(readable.has(texture))return readable.get(texture);
+    const image=texture.image;
+    if(texture.type!==THREE.UnsignedByteType || texture.format!==THREE.RGBAFormat || image.data.length!==image.width*image.height*4)throw new Error('This data texture needs conversion to RGBA pixels before export.');
+    // GLTFExporter bakes normal-map channel signs with drawImage(), which does not
+    // accept DataTexture image records. Keep every pixel and sampling transform.
+    const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;
+    canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(image.data),image.width,image.height),0,0);
+    const copy=texture.clone();copy.source=new THREE.Source(canvas);copy.userData={...texture.userData,exchangePixels:true};
+    readable.set(texture,copy);return copy;
+  };
   const copyNode = source => {
     const data = source.userData;
     let copy;
@@ -54,6 +67,7 @@ function cleanExport(root) {
       const material = m => {
         const copy = m.clone(), record = materialById(m.userData.materialId || m.userData.tiksiMaterialId);
         copy.name = record ? record.name + ' [' + record.id + ']' : m.name || 'Surface';
+        for(const key of Object.keys(copy))if(copy[key]?.isTexture)copy[key]=textureForExport(copy[key]);
         copy.userData = record ? { tiksiMaterialId: record.id } : {};
         return copy;
       };
@@ -103,7 +117,8 @@ export async function exportModel(prop, { format = 'glb', source = 'design', sca
     if (format === 'glb') return { name: base + '.glb', blob: new Blob([await new GLTFExporter().parseAsync(clone, { binary: true, maxTextureSize: Infinity })], {type:'model/gltf-binary'}) };
     return exportStatic(clone, format, base);
   } finally {
-    clone?.traverse(o => { for (const m of Array.isArray(o.material) ? o.material : o.material ? [o.material] : []) m.dispose(); });
+    const released=new Set();
+    clone?.traverse(o => { for (const m of Array.isArray(o.material) ? o.material : o.material ? [o.material] : []) {for(const value of Object.values(m))if(value?.isTexture && value.userData.exchangePixels && !released.has(value)){value.dispose();released.add(value);}m.dispose();} });
     if (built) disposeBuilt(built);
     disposable.forEach(disposeScanObject);
   }

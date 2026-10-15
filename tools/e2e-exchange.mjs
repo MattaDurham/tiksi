@@ -23,7 +23,7 @@ try {
     const {modelMaterialSlots}=await import('/js/model-materials.js');
     const {modelTakeoff,createModelEstimate}=await import('/js/model-takeoff.js');
     const results=[],check=(condition,label)=>{if(!condition)throw new Error(label);results.push(label);};
-    store.ws.data=store.emptyWorkspace();const p=store.propertyTemplate('Synthetic exchange house');store.ws.data.properties.push(p);store.ws.data.settings.activePropertyId=p.id;
+    store.ws.data=store.emptyWorkspace();const {ensureBuiltinMaterials}=await import('/js/materials.js');ensureBuiltinMaterials();(await import('/js/textures.js')).setTextureQuality('low');const p=store.propertyTemplate('Synthetic exchange house');store.ws.data.properties.push(p);store.ws.data.settings.activePropertyId=p.id;
     p.walls=[{id:'wall-exchange',ax:1,ay:2,bx:5,by:2,thickness:.15,height:3,level:p.levels[0].id,material:'mat-drywall'}];
     p.rooms=[{id:'room-exchange',name:'Test room',pts:[[1,2],[5,2],[5,5],[1,5]],level:p.levels[0].id,material:'mat-oak'}];
     const sizeOf=obj=>{obj.updateMatrixWorld(true);const b=new THREE.Box3().setFromObject(obj);return [b.min.x,b.min.y,b.min.z,b.max.x,b.max.y,b.max.z];};
@@ -32,6 +32,7 @@ try {
       const out=await exportModel(p,{format}),buffer=await out.blob.arrayBuffer();
       const scan=await importScanBytes(buffer,out.name,p),rec=await store.getFile(scan.id),mesh=await loadMesh(rec.buffer,scan.format),size=sizeOf(mesh);
       check(scan.kind==='mesh',format+' export imports as a mesh');
+      if(format==='glb'){const {inspectGltf}=await import('/js/scans.js'),doc=inspectGltf(rec.buffer,'glb');check(doc.images?.length>=3 && doc.materials.some(m=>m.normalTexture && m.pbrMetallicRoughness.metallicRoughnessTexture),'real catalog colour, normal and ORM pixels survive GLB export');}
       if(!originalSize)originalSize=size;else check(size.every((v,i)=>Math.abs(v-originalSize[i])<.002),format+' preserves metre bounds and origin');
       check((await store.getFile(scan.originalFileId)).buffer.byteLength===buffer.byteLength,format+' original upload retained');
       if(format!=='stl')check(modelMaterialSlots(mesh).length>0,format+' returns identifiable material slots');
