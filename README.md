@@ -3,7 +3,7 @@
 An open, local-first design console for renovation and construction programs.
 Floorplans to 3D models to materials, products, budgets, schedules and cut sheets,
 in one instrument, in the browser, with no frontend build step. An optional local
-server adds photo reconstruction and live material research.
+server adds photo reconstruction, native-file converters and live material research.
 
 The name is Quechua. In the old chronicles the Andean creator god carries the
 honorific Apu Qun Tiksi Wiraqucha, and *tiksi* is the word in the middle:
@@ -14,11 +14,19 @@ stone models first, then brought them to life. Model first, then build.
 
 Live app: https://mattadurham.github.io/tiksi/
 
+## User guide
+
+Open **[the illustrated guide](https://mattadurham.github.io/tiksi/#/guide)** in
+Tiksi for feature walkthroughs, screenshots and short demonstrations. The same
+guide is available as [USER-GUIDE.md](USER-GUIDE.md). Start with files and capture,
+then follow the room through plan editing, model comparison, materials, scope,
+budget, schedule and cut sheets. The guide uses synthetic example data.
+
 ## What it does
 
 Design side:
 
-- Upload a floorplan image (photo, scan or PDF export) as a tracing underlay,
+- Upload a floorplan image (photo, scan or image exported from a PDF) as a tracing underlay,
   or send any site photo to the plan from the photo gallery
 - Calibrate real-world scale from any known dimension
 - Trace walls with endpoint/axis/angle snapping; place doors and windows; outline rooms.
@@ -27,7 +35,7 @@ Design side:
   wall end at that joint. Hold Alt (Option) to move one wall on its own
 - Generate a 3D model from the plan: solid walls with real openings (headers over
   doors, sills under windows), glazed windows, per-room floor slabs and ceilings
-- Render it photoreal: a physical sun and sky driven by time of day and heading,
+- Render it with a physical sun and sky driven by time of day and heading,
   image-based lighting, ambient occlusion, real glass with reflections and
   refraction, night mode with interior lights, quality presets down to laptop level
 - Edit the model manually: select any wall, floor or ceiling in 3D, change
@@ -49,8 +57,15 @@ Design side:
   point budgets and x-ray mode for alignment
 - Import complete OBJ/MTL/texture or glTF/buffer/texture ZIP bundles as portable
   GLBs, preserving normal, roughness, ambient occlusion and emissive maps.
-  External dependencies must be bundled; compressed glTF extensions requiring
-  Draco, meshopt or Basis, and LAZ, E57, USDZ, FBX and DAE are unsupported.
+  External dependencies must be bundled. DAE, FBX and 3DS have browser converters;
+  compressed glTF can use local Blender. Native SketchUp/Blender, IFC, STEP/IGES,
+  Rhino render meshes, DXF surfaces, USD, E57 and LAZ use optional local converters.
+  See the [format and preservation matrix](MODEL-EXCHANGE.md).
+- Export native SketchUp/Blender models or GLB, IFC, DAE, OBJ and STL; edit in
+  another application and return the file as a revision. BEFORE / AFTER switches
+  saved models. Original files remain available alongside the converted geometry.
+- Map imported surface slots to materials and create measured finish estimates.
+  Review quantities, coverage, waste, labour and product pricing before ordering.
 - Reconstruct a textured 3D object or outdoor scene from overlapping photographs
   on a supported Mac using Apple Object Capture. Originals retain their exact
   bytes. See [photo reconstruction setup and limits](RECONSTRUCTION.md).
@@ -92,7 +107,7 @@ Program side:
 ## Running it
 
 The design console works on a static server. Use the included local server for
-reconstruction and live research:
+reconstruction, native-file conversion and live research:
 
 ```
 git clone https://github.com/MattaDurham/tiksi
@@ -155,7 +170,7 @@ in project files; it does not purchase anything.
 
 Share a capture from Polycam (link sharing on), then hand the link to tiksi:
 
-- paste it into the NEW PROPERTY dialog (the `+` next to the property selector),
+- paste it into **FILE → Project → NEW PROPERTY**,
   paste it anywhere in the console, or drop it on the window from another tab
 - or open `https://mattadurham.github.io/tiksi/#/import/<capture id>` directly
   (`#/import?url=<the link>` works too)
@@ -193,8 +208,8 @@ undo. Expect to fix a few things by hand: walls behind tall furniture, glass
 walls and diagonal walls (only the two main axes are traced) are the usual gaps,
 and the underlay makes those edits a matter of dragging a line over a photo.
 
-A link can also join a property that already exists: ADD POLYCAM SCAN in the plan
-inspector, POLYCAM LINK in the model's scan list, or the choice the dialog offers
+A link can also join a property that already exists: **FILE → Import → POLYCAM
+LINK**, or the choice the dialog offers
 when a link is pasted while a property is open (it starts on the open property when
 that property has no plan yet, say one made by name to hold photos first). When the
 property already has a plan, the new scan's proposal is turned through the four
@@ -225,31 +240,36 @@ the products they specify, the custom materials it uses, and every scan and
 photo, so it opens anywhere with nothing missing. Three ways to keep it, none of
 which needs a server:
 
-- **SAVE (Cmd+S).** In Chrome and Edge the first save asks where; every later
+- **FILE → Project → SAVE PROJECT (Cmd+S).** In Chrome and Edge the first save asks where; every later
   save writes there silently, and the file is remembered across visits. Other
-  browsers download the file. SAVE AS (Cmd+Shift+S) picks a new file. The SAVE
+  browsers download the file. SAVE AS… (Cmd+Shift+S) picks a new file. The FILE
   button carries a dot while the browser copy is ahead of the file.
-- **A project folder.** FILE > LINK A PROJECT FOLDER picks a folder once; from
+- **A project folder.** FILE → Settings → LINK FOLDER picks a folder once; from
   then on every property is kept there as its own `.tiksi`, rewritten a few
   seconds after each change. Put the folder in iCloud Drive, Dropbox or OneDrive
   and your projects follow you to the next machine, where OPEN FROM FOLDER lists
   them. If the folder holds a newer copy than this browser (you edited elsewhere),
-  SAVE turns red and OPEN FROM FOLDER pulls it in rather than overwriting it.
-- **OPEN.** A `.tiksi` from the picker (Cmd+O), dropped on the window, chosen
+  FILE warns and OPEN FROM FOLDER pulls it in rather than overwriting it.
+- **FILE → Project → OPEN / IMPORT…** A `.tiksi` from the picker (Cmd+O), dropped on the window, chosen
   from the folder, or hosted anywhere that allows cross-origin reads through
   `#/open?url=<file>` (a raw GitHub or gist URL, a Dropbox direct link). Opening
   a file replaces the property of the same id, so re-opening updates rather than
   duplicates, and everything else in the workspace stays.
 
-The whole workspace still exports as a bundle (.zip) or plain JSON and imports
-back, from the same FILE menu.
+FILE → Settings → Workspace backup & maintenance → SAVE WORKSPACE BACKUP saves
+every property as a ZIP bundle. Normal open/import adds or updates matching
+records. REPLACE FROM BACKUP… is the separate, explicit full-workspace restore.
+Older JSON files remain readable; use `.tiksi` or a full bundle when transferring
+original photos and model files.
 
 ## Where your data lives
 
 The workspace lives in your browser, plus the files you save. It autosaves to
 localStorage; scan files, full-resolution photos, photo thumbnails and plan
 underlays go to IndexedDB, so the localStorage copy stays small. Nothing is
-uploaded by ordinary editing. Photo reconstruction explicitly sends selected
+uploaded by ordinary editing. Native conversion sends a selected source copy to
+the local server; source/log/interpretation handoffs can be saved separately.
+Photo reconstruction explicitly sends selected
 original photos to this Mac's local server and keeps private job files in ignored
 runtime storage. Live sourcing sends only the submitted brief and visible
 constraints to web research agents; saved evidence travels in project files.
@@ -272,8 +292,10 @@ The code is public; projects, photos, scans and job state stay out of Git.
 The data model deliberately follows BIM thinking in miniature: geometry elements
 (walls, openings, rooms) are first-class objects with identity, so scope items,
 products, photos and schedules can reference them, the way a Revit element
-carries its type, materials and quantities. IFC-class interoperability is on the
-roadmap, not faked in v1.
+carries its type, materials and quantities. Local IFC import/export carries
+classified static geometry, source IDs, properties and hierarchy. Native BIM
+relationships and parametric history remain in the source application file;
+see [MODEL-EXCHANGE.md](MODEL-EXCHANGE.md).
 
 ## Development workflow
 
@@ -369,10 +391,10 @@ node tools/debug-scan2plan.mjs my.glb
 
 ## Roadmap
 
-- IFC import/export (via web-ifc) so models round-trip with Revit and friends
+- Richer BIM semantics and authoring-application bridges beyond static IFC exchange
 - PDF floorplan import (pdf.js)
 - Automatic wall vectorization from floorplan images
-- E57 lidar; scan-to-plan for point clouds and splats (meshes are done), walls off
+- Scan-to-plan for point clouds and splats (meshes are done), walls off
   the Manhattan grid, stairs
 - Roofs, stairs, sections and elevations
 - Cost database with per-assembly unit pricing
