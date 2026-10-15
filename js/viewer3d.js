@@ -577,7 +577,7 @@ function updateSun() {
 let capMesh = null;
 function rebuildCaps() {
   if (capMesh) { scene.remove(capMesh); capMesh.geometry.dispose(); capMesh = null; }
-  if (!section.on || !modelGroup) return;
+  if (!section.on || !modelGroup || !modelGroup.visible) return;
   const rects = wallCapRects(prop, section.height, { hiddenLevels: hiddenLevels() });
   if (!rects.length) return;
   const P = [], I = [];
@@ -2070,7 +2070,7 @@ function renderToolCol() {
       const scan=prop.scans.find(s=>s.id===id);if(scan){scan.visible=id===chosen;applyScanTransform(scan,scanObjs[id]);}
     }
     if(chosen==='design')delete prop.modelSourceId;else prop.modelSourceId=chosen;
-    rebuildModel();renderToolCol();touch();
+    rebuildModel();setSelection(scanObjs[chosen]?{kind:'scan',id:chosen}:null);renderToolCol();touch();
   };
   on('before',()=>compare('before'));on('after',()=>compare('after'));
   tc.querySelectorAll('[data-scan]').forEach(b => b.onclick = () => setSelection({ kind: 'scan', id: b.dataset.scan }));
