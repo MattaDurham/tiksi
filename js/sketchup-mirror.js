@@ -116,19 +116,27 @@ const readSig = {
   room: p => roomSig(p),
 };
 
-// `read` is the server's reading of the .skp; `synced` maps id -> signature at the last
-// moment Tiksi and the .skp agreed (empty for a mirror written on another machine, where
-// the .skp's own record of what it was written from stands in). Mutates `prop`.
-export function mergeMirror(prop, read, synced) {
+// `read` is the server's reading of the .skp. `synced` maps id -> signature at the last
+// moment Tiksi and the .skp agreed; `seenBefore` maps id -> the value the .skp reported last
+// time it was read. Both are empty for a mirror written on another machine.
+//
+// The .skp may have been open in SketchUp while Tiksi rewrote it, so a save can carry stale
+// values. SketchUp changed an element only when its value differs from what this very file
+// was written from (the group's own record), from the last agreed state, and from what the
+// file reported before. Tiksi changed it when it differs from the last agreed state.
+// Mutates `prop`; the returned report's `seen` is the next `seenBefore`.
+export function mergeMirror(prop, read, synced, seenBefore) {
   synced = synced || {};
+  seenBefore = seenBefore || {};
   const written = (read.model && read.model.elements && typeof read.model.elements === 'object') ? read.model.elements : {};
-  const report = { applied: [], added: [], deleted: [], conflicts: [], warnings: (read.warnings || []).slice(), untagged: read.untagged || null };
+  const report = { applied: [], added: [], deleted: [], conflicts: [], warnings: (read.warnings || []).slice(), untagged: read.untagged || null, seen: {} };
   const before = elementState(prop);
-  const baseOf = (id, kind, base) => synced[id] || (written[id] && written[id].sig) || readSig[kind](base || {});
   const seen = new Set();
   const decide = (id, kind, now, base) => {
-    const nowSig = readSig[kind](now), baseSig = baseOf(id, kind, base), cur = before.get(id);
-    const skpChanged = nowSig !== baseSig;
+    const nowSig = readSig[kind](now), fileBase = readSig[kind](base || {}), cur = before.get(id);
+    report.seen[id] = nowSig;
+    const agreed = synced[id] || (written[id] && written[id].sig) || fileBase;
+    const skpChanged = nowSig !== fileBase && nowSig !== synced[id] && nowSig !== seenBefore[id];
     if (!cur) {
       if (synced[id] || written[id]) {   // Tiksi deleted it after the last sync
         if (skpChanged) report.conflicts.push({ id, kind, reason: 'deleted in Tiksi, changed in SketchUp; kept deleted' });
@@ -137,7 +145,7 @@ export function mergeMirror(prop, read, synced) {
       return 'add';
     }
     if (!skpChanged || cur.sig === nowSig) return 'keep';
-    if (cur.sig !== baseSig) { report.conflicts.push({ id, kind, reason: 'changed in both; kept the Tiksi version' }); return 'keep'; }
+    if (cur.sig !== agreed) { report.conflicts.push({ id, kind, reason: 'changed in both; kept the Tiksi version' }); return 'keep'; }
     return 'apply';
   };
 
@@ -188,11 +196,12 @@ export function mergeMirror(prop, read, synced) {
     }
   }
 
-  // Elements the .skp once held and no longer does: deleted in SketchUp.
+  // Elements this .skp was written with and no longer holds: deleted in SketchUp. (An
+  // element Tiksi added after the file was opened in SketchUp is not in its record.)
   for (const [id, cur] of before) {
-    if (seen.has(id) || !(synced[id] || written[id])) continue;
-    const base = synced[id] || written[id].sig;
-    if (cur.sig !== base) { report.conflicts.push({ id, kind: cur.kind, reason: 'deleted in SketchUp, changed in Tiksi; kept' }); continue; }
+    if (seen.has(id) || !written[id]) continue;
+    const agreed = synced[id] || written[id].sig;
+    if (cur.sig !== agreed) { report.conflicts.push({ id, kind: cur.kind, reason: 'deleted in SketchUp, changed in Tiksi; kept' }); continue; }
     if (cur.kind === 'wall') {
       prop.walls = prop.walls.filter(w => w.id !== id);
       prop.openings = prop.openings.filter(o => o.wallId !== id);
@@ -318,7 +327,8 @@ export async function syncMirror(folder, prop, entry, write) {
   if (got && (got.file.lastModified !== ms.mtime || got.file.size !== ms.size)) {
     const read = await readMirror(await got.file.arrayBuffer());
     if (read.model && read.model.propertyId && read.model.propertyId !== prop.id) throw new Error(name + ' mirrors a different Tiksi property');
-    report = mergeMirror(prop, read, ms.synced);
+    report = mergeMirror(prop, read, ms.synced, ms.seen);
+    ms.seen = report.seen;
     changed = report.applied.length + report.added.length + report.deleted.length > 0;
     for (const level of Object.keys(ms.underlays || {})) {
       if (!(read.underlays || []).some(u => u.level === level && u.sig === ms.underlays[level])) delete ms.underlays[level];

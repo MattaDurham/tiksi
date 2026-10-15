@@ -158,6 +158,50 @@ test('a mirror written on another machine merges against its own record', () => 
   assert.equal(p.walls.find(w => w.id === 'w-e').bx, 4.25);
 });
 
+// The .skp was open in SketchUp while Tiksi rewrote it; SketchUp then saves its older copy.
+test('a stale save from SketchUp does not undo a later Tiksi edit', () => {
+  const p = room();
+  const staleRead = readOf(mirrorSpec(p));             // the copy SketchUp opened
+  p.walls.find(w => w.id === 'w-e').bx = 4.5;          // Tiksi edits and rewrites the mirror
+  const synced = syncedState(p);
+  const r = mergeMirror(p, staleRead, synced);
+  assert.deepEqual([r.applied, r.conflicts], [[], []]);
+  assert.equal(p.walls.find(w => w.id === 'w-e').bx, 4.5);
+});
+
+test('a stale save does not delete what Tiksi added after SketchUp opened the file', () => {
+  const p = room();
+  const staleRead = readOf(mirrorSpec(p));
+  p.rooms.push({ id: 'r-2', level: p.levels[0].id, name: 'Closet', pts: [[0, 3], [1, 3], [1, 4], [0, 4]], material: 'mat-oak', ceilingMaterial: null });
+  const r = mergeMirror(p, staleRead, syncedState(p));
+  assert.deepEqual(r.deleted, []);
+  assert.ok(p.rooms.some(x => x.id === 'r-2'));
+});
+
+test('a value SketchUp already delivered is not applied again over a newer Tiksi edit', () => {
+  const p = room(), opened = readOf(mirrorSpec(p));
+  // Save 1 from SketchUp: the north wall moves to 3.4; Tiksi takes it.
+  opened.walls.find(w => w.id === 'w-n').now.ay = 3.4;
+  const first = mergeMirror(p, opened, syncedState(p));
+  assert.deepEqual(first.applied, ['w-n']);
+  // Tiksi then moves it to 3.6 and rewrites; SketchUp saves again, still holding 3.4.
+  p.walls.find(w => w.id === 'w-n').ay = 3.6;
+  const second = mergeMirror(p, opened, syncedState(p), first.seen);
+  assert.deepEqual([second.applied, second.conflicts], [[], []]);
+  assert.equal(p.walls.find(w => w.id === 'w-n').ay, 3.6);
+});
+
+test('a second SketchUp edit of the same element after a merge applies', () => {
+  const p = room(), opened = readOf(mirrorSpec(p));
+  opened.walls.find(w => w.id === 'w-n').now.ay = 3.4;
+  const first = mergeMirror(p, opened, syncedState(p));
+  const synced = syncedState(p);
+  opened.walls.find(w => w.id === 'w-n').now.ay = 3.5;   // same SketchUp session, edited again
+  const second = mergeMirror(p, opened, synced, first.seen);
+  assert.deepEqual([second.applied, second.conflicts], [['w-n'], []]);
+  assert.equal(p.walls.find(w => w.id === 'w-n').ay, 3.5);
+});
+
 test('the property survives store validation after a merge', () => {
   const p = room(), synced = syncedState(p), read = readOf(mirrorSpec(p));
   read.walls.push(structuredClone(read.walls[0]));
