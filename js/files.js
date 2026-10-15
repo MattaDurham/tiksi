@@ -11,11 +11,14 @@
 //                    project hosted anywhere that allows cross-origin reads.
 //
 // Browser autosave (localStorage + IndexedDB) stays as it was; this is the durable copy.
+// With the local server and SketchUp available, the folder also keeps <name>.skp beside each
+// project and the two stay connected both ways (sketchup-mirror.js).
 
 import {
   ws, activeProperty, projectSlice, projectFileName, exportProjectBlob, importProject, readBundle, importBundle,
-  putFile, getFile, deleteFile, handleKey, setSaveStatus, mergeWorkspace, replaceWorkspace,
+  putFile, getFile, deleteFile, handleKey, setSaveStatus, mergeWorkspace, replaceWorkspace, touch,
 } from './store.js';
+import { syncMirror, mirrorCapabilities, mirrorChangedOnDisk, MirrorBusy } from './sketchup-mirror.js';
 
 export const FSA = typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function';
 export const FSA_DIR = typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
@@ -38,6 +41,7 @@ const state = {
   syncTimer: null,
   syncing: false,
   conflicts: new Set(),     // propIds whose folder file is newer than what we last wrote
+  mirror: { available: null, errors: new Map(), poll: null },   // SketchUp mirror (see below)
   listeners: new Set(),
 };
 export function filesState() { return state; }
@@ -317,44 +321,107 @@ export async function syncFolder() {
   if (!state.folder || state.syncing) return;
   state.syncing = true;
   const folder = state.folder;
-  let wrote = 0;
+  let wrote = 0, mirrored = 0;
+  startMirrorPoll();
   try {
     if (!(await ensurePermission(state.folder, false))) { state.folder = null; state.folderNeedsPermission = true; notify(); return; }
+    const mirrorOn = await mirrorEnabled();
     for (const prop of ws.data.properties) {
       if (state.folder !== folder) break;
       const sig = signatureOf(prop.id);
       const entry = state.folderMap[prop.id];
       const wanted = (await uniqueName(prop, entry && entry.file));
-      if (entry && entry.sig === sig && entry.file === wanted) continue;
-      // Someone else (another machine, through the synced folder) wrote a newer file: keep
-      // theirs, flag it, and let OPEN FROM FOLDER pull it in on purpose.
-      if (entry) {
-        try {
-          const h = await state.folder.getFileHandle(entry.file);
-          const f = await h.getFile();
-          if (entry.mtime && f.lastModified !== entry.mtime) { state.conflicts.add(prop.id); continue; }
-        } catch (e) { if (e.name !== 'NotFoundError') throw e; /* file gone: write it again */ }
+      if (!(entry && entry.sig === sig && entry.file === wanted)) {
+        // Someone else (another machine, through the synced folder) wrote a newer file: keep
+        // theirs, flag it, and let OPEN FROM FOLDER pull it in on purpose.
+        if (entry) {
+          try {
+            const h = await state.folder.getFileHandle(entry.file);
+            const f = await h.getFile();
+            if (entry.mtime && f.lastModified !== entry.mtime) { state.conflicts.add(prop.id); continue; }
+          } catch (e) { if (e.name !== 'NotFoundError') throw e; /* file gone: write it again */ }
+        }
+        const out = await exportProjectBlob(prop.id);
+        const h = await state.folder.getFileHandle(wanted, { create: true });
+        await writeHandle(h, out.blob);
+        const f = await h.getFile();
+        if (entry && entry.file !== wanted) { try { await state.folder.removeEntry(entry.file); } catch (e) { /* renamed copy stays */ } }
+        state.folderMap[prop.id] = Object.assign({}, entry, { file: wanted, sig, mtime: f.lastModified });
+        state.savedSig.set(prop.id, sig);
+        state.conflicts.delete(prop.id);
+        wrote++;
       }
-      const out = await exportProjectBlob(prop.id);
-      const h = await state.folder.getFileHandle(wanted, { create: true });
-      await writeHandle(h, out.blob);
-      const f = await h.getFile();
-      if (entry && entry.file !== wanted) { try { await state.folder.removeEntry(entry.file); } catch (e) { /* renamed copy stays */ } }
-      state.folderMap[prop.id] = { file: wanted, sig, mtime: f.lastModified };
-      state.savedSig.set(prop.id, sig);
-      state.conflicts.delete(prop.id);
-      wrote++;
+      if (mirrorOn && await mirrorProperty(prop, folder)) mirrored++;
     }
     saveFolderMap();
-    if (wrote) {
+    if (wrote || mirrored) {
       const t = new Date();
-      setSaveStatus('FOLDER ' + String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0'), false);
+      setSaveStatus((mirrored ? 'FROM SKETCHUP ' : 'FOLDER ') + String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0'), false);
     }
+    if (mirrored) { app.refresh(); app.remount(); }
   } finally {
     state.syncing = false;
     notify();
     if (wrote && state.folder === folder && ws.data.properties.some(p => !state.folderMap[p.id] || state.folderMap[p.id].sig !== signatureOf(p.id))) scheduleFolderSync();
   }
+}
+
+// ---------- SketchUp mirror ----------
+// On by default wherever it can run: a linked folder, the local server, SketchUp installed.
+async function mirrorEnabled() {
+  if (ws.data.settings.sketchupMirror === false) return false;
+  const cap = await mirrorCapabilities();
+  state.mirror.available = !!cap.mirror;
+  return state.mirror.available;
+}
+
+// Returns true when SketchUp edits were merged into the property.
+async function mirrorProperty(prop, folder) {
+  const entry = state.folderMap[prop.id];
+  if (!entry) return false;
+  try {
+    const { changed } = await syncMirror(folder, prop, entry, writeHandle);
+    state.mirror.errors.delete(prop.id);
+    if (changed) touch();
+    return changed;
+  } catch (e) {
+    if (e instanceof MirrorBusy) { scheduleFolderSync(); return false; }   // a model conversion is running
+    state.mirror.errors.set(prop.id, e && e.message || String(e));
+    console.error('SketchUp mirror failed', e);
+    return false;
+  }
+}
+
+// A .skp saved in SketchUp shows up as a new modification time; look every few seconds.
+function startMirrorPoll() {
+  if (state.mirror.poll) return;
+  state.mirror.poll = setInterval(async () => {
+    if (!state.folder) { clearInterval(state.mirror.poll); state.mirror.poll = null; return; }
+    if (state.syncing || !state.mirror.available || ws.data.settings.sketchupMirror === false) return;
+    for (const prop of ws.data.properties) {
+      try { if (await mirrorChangedOnDisk(state.folder, state.folderMap[prop.id])) { scheduleFolderSync(0); return; } }
+      catch (e) { /* the next tick tries again */ }
+    }
+  }, 4000);
+}
+
+export function mirrorStatus(propId) {
+  if (ws.data.settings.sketchupMirror === false) return 'SketchUp mirror is off.';
+  if (!state.folder) return 'Link a project folder to keep a SketchUp mirror (.skp) beside each project.';
+  if (state.mirror.available === false) return 'SketchUp mirror needs the local Tiksi server on a Mac with SketchUp installed.';
+  if (state.mirror.errors.has(propId)) return 'SketchUp mirror: ' + state.mirror.errors.get(propId);
+  const ms = state.folderMap[propId] && state.folderMap[propId].mirror;
+  if (!ms || !ms.file) return 'SketchUp mirror: written with the next folder save.';
+  const hm = t => { const d = new Date(t); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  let text = 'SketchUp mirror: ' + ms.file + (ms.at ? ', written ' + hm(ms.at) : '') + '.';
+  const r = ms.report;
+  if (r) {
+    text += ' Last SketchUp save (' + hm(r.at) + '): ' + r.applied + ' changed, ' + r.added + ' added, ' + r.deleted + ' deleted';
+    if (r.conflicts && r.conflicts.length) text += ', ' + r.conflicts.length + ' conflict' + (r.conflicts.length === 1 ? '' : 's') + ' kept the Tiksi version';
+    text += '.';
+    if (r.untagged && (r.untagged.faces || r.untagged.groups || r.untagged.instances)) text += ' Geometry drawn outside Tiksi groups stays in SketchUp only.';
+  }
+  return text;
 }
 
 // <name>.tiksi, or <name> (2).tiksi when another property already owns that file name.

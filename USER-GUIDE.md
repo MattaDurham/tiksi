@@ -576,6 +576,8 @@ Settings groups display, model environment, project-folder controls and the sepa
 
 ### Other features here
 
+**Keep a SketchUp mirror.** With a linked folder and SketchUp installed on this Mac, each project also gets a .skp beside its .tiksi. Walls, openings and rooms you move, resize, copy, delete or rename in SketchUp come back into the plan when you save there. The status line under the switch shows the last sync and any conflicts.
+
 **Save workspace backup.** Exports every property together. Keep a .tiksi per property for ordinary project handoffs.
 
 **Add demo projects.** Adds sample projects to the workspace without replacing unrelated properties.

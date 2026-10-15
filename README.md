@@ -250,6 +250,15 @@ which needs a server:
   and your projects follow you to the next machine, where OPEN FROM FOLDER lists
   them. If the folder holds a newer copy than this browser (you edited elsewhere),
   FILE warns and OPEN FROM FOLDER pulls it in rather than overwriting it.
+- **A SketchUp mirror.** With a project folder linked and the local server running on a
+  Mac with SketchUp installed, every `<name>.tiksi` in the folder gets a `<name>.skp` beside
+  it. Walls (with their openings cut), openings, room floors, level tags and plan underlays
+  are SketchUp groups that carry their Tiksi ids. Save the `.skp` in SketchUp and Tiksi reads
+  it back within seconds: moved, stretched, raised or deleted walls, slid openings, reshaped
+  or renamed rooms and copied groups come into the plan. Change the plan in Tiksi and the
+  `.skp` is rewritten without touching anything you drew outside the Tiksi groups. If both
+  sides changed the same element between syncs, Tiksi keeps its version and FILE → Settings
+  lists the conflict. Turn it off there with "Keep a SketchUp mirror".
 - **FILE → Project → OPEN / IMPORT…** A `.tiksi` from the picker (Cmd+O), dropped on the window, chosen
   from the folder, or hosted anywhere that allows cross-origin reads through
   `#/open?url=<file>` (a raw GitHub or gist URL, a Dropbox direct link). Opening

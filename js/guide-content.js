@@ -333,6 +333,7 @@ export const chapters = [
       'Open Workspace backup & maintenance when you want a whole-workspace backup or need to inspect unused browser storage.',
     ],
     features: [
+      ['Keep a SketchUp mirror', 'With a linked folder and SketchUp installed on this Mac, each project also gets a .skp beside its .tiksi. Walls, openings and rooms you move, resize, copy, delete or rename in SketchUp come back into the plan when you save there. The status line under the switch shows the last sync and any conflicts.'],
       ['Save workspace backup', 'Exports every property together. Keep a .tiksi per property for ordinary project handoffs.'],
       ['Add demo projects', 'Adds sample projects to the workspace without replacing unrelated properties.'],
       ['Clean unused storage', 'Removes unreferenced browser assets only after the offered review/confirmation. Keep them if you need them for an older JSON-only project.'],
