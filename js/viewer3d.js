@@ -2070,7 +2070,7 @@ function renderToolCol() {
       const scan=prop.scans.find(s=>s.id===id);if(scan){scan.visible=id===chosen;applyScanTransform(scan,scanObjs[id]);}
     }
     if(chosen==='design')delete prop.modelSourceId;else prop.modelSourceId=chosen;
-    rebuildModel();renderToolCol();if(scanObjs[chosen])frameObject(scanObjs[chosen]);touch();
+    rebuildModel();renderToolCol();touch();
   };
   on('before',()=>compare('before'));on('after',()=>compare('after'));
   tc.querySelectorAll('[data-scan]').forEach(b => b.onclick = () => setSelection({ kind: 'scan', id: b.dataset.scan }));
