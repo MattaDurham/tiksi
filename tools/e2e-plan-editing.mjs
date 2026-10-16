@@ -63,6 +63,8 @@ try {
   await page.locator('#rail a[data-view="plan"]').click({ noWaitAfter: true });
   const canvasLoc = page.locator('.plan-canvas canvas');
   await canvasLoc.waitFor();
+  // The view slides in by 4 px (css view-in); every screen position below assumes it has landed.
+  await page.evaluate(() => Promise.all(document.getAnimations().filter(a => a.animationName === 'view-in').map(a => a.finished)));
   await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
   await page.keyboard.press('f');
   await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
