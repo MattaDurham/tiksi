@@ -40,6 +40,10 @@ try {
       p.walls.push(wall('w-s', 0, 0, 5, 0), wall('w-e', 5, 0, 5, 3.5), wall('w-n', 5, 3.5, 0, 3.5), wall('w-w', 0, 3.5, 0, 0));
       p.openings.push({ id: 'o-d', wallId: 'w-s', type: 'door', t: 0.2, width: 0.914, height: 2.032 });
       p.rooms.push({ id: 'r-1', level: L, name: 'Living', pts: [[0, 0], [5, 0], [5, 3.5], [0, 3.5]], material: 'mat-oak', ceilingMaterial: null });
+      // A scan-rendered underlay is WebP, which the SketchUp SDK cannot read; the mirror must still write it.
+      const c = document.createElement('canvas'); c.width = 64; c.height = 48;
+      const g = c.getContext('2d'); g.fillStyle = '#7a5236'; g.fillRect(0, 0, 64, 48); g.fillStyle = '#e8e2d4'; g.fillRect(8, 8, 48, 32);
+      p.levels[0].plan = { img: c.toDataURL('image/webp'), imgW: 64, imgH: 48, mPerPx: 0.1, offsetX: -0.5, offsetY: -0.5, opacity: 0.6, calibrated: true, source: 'scan' };
       store.ws.data.properties.push(p); store.ws.data.settings.activePropertyId = p.id;
       // In-memory folder with the FileSystemDirectoryHandle calls files.js uses.
       const entries = new Map(); let clock = Date.now();
@@ -79,20 +83,22 @@ try {
       // Edit like SketchUp: move the east wall 0.5 m east with the SDK, then save.
       const work = await mkdtemp(tmpdir() + '/tiksi-mirror-edit-');
       await writeFile(join(work, 'in.skp'), Buffer.from(first.skp, 'base64'));
-      execFileSync('python3', ['-c', `
+      const images = execFileSync('python3', ['-c', `
 import sys, ctypes as C
 sys.path.insert(0, ${JSON.stringify(root)})
 from server.sketchup_convert import API, Ref, Transform
 from server.sketchup_mirror import get_data, to_ref, matrix
 api = API(); m = Ref()
 api.call('SUModelCreateFromFile', C.byref(m), sys.argv[1].encode())
+print(len(api.collection(api.ref('SUModelGetEntities', m), 'Images')))
 for g in api.collection(api.ref('SUModelGetEntities', m), 'Groups'):
       d = get_data(api, to_ref(api, 'SUGroupToEntity', g))
       if d and d.get('id') == 'w-e':
           t = Transform(); api.call('SUGroupGetTransform', g, C.byref(t)); v = matrix(t); v[12] += 0.5 / 0.0254; t.values[:] = v
           api.call('SUGroupSetTransform', g, C.byref(t))
 api.call('SUModelSaveToFile', m, sys.argv[2].encode()); api.call('SUModelRelease', C.byref(m)); api.lib.SUTerminate()
-`, join(work, 'in.skp'), join(work, 'out.skp')]);
+`, join(work, 'in.skp'), join(work, 'out.skp')]).toString().trim();
+      assert.equal(images, '1', 'the WebP underlay reached the .skp as an image');
       const edited = (await readFile(join(work, 'out.skp'))).toString('base64');
       await rm(work, { recursive: true, force: true });
       const second = await page.evaluate(async b64 => {
