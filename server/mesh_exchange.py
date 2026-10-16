@@ -1,5 +1,6 @@
 """Small static-scene GLB writer shared by local native converters (metres, Y-up)."""
 import base64
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -11,6 +12,8 @@ def write_glb(meshes, path):
            'scenes': [{'nodes': []}], 'nodes': [], 'meshes': [], 'accessors': [], 'bufferViews': [],
            'materials': [], 'images': [], 'textures': [], 'buffers': []}
     binary = bytearray()
+    # Many meshes share one texture (every face batch of a SketchUp material); embed each image once.
+    shared_textures = {}
     def view(data, target=None):
         binary.extend(b'\0' * (-len(binary) % 4))
         rec = {'buffer': 0, 'byteOffset': len(binary), 'byteLength': len(data)}
@@ -36,10 +39,13 @@ def write_glb(meshes, path):
         if linear[3] < 1: mat['alphaMode'] = 'BLEND'
         if spec.get('texture'):
             texture = Path(spec['texture']); data = texture.read_bytes()
-            mime = 'image/jpeg' if data.startswith(b'\xff\xd8') else 'image/png'
-            doc['images'].append({'bufferView': view(data), 'mimeType': mime})
-            doc['textures'].append({'source': len(doc['images']) - 1})
-            mat['pbrMetallicRoughness']['baseColorTexture'] = {'index': len(doc['textures']) - 1}
+            key = hashlib.sha256(data).digest()
+            if key not in shared_textures:
+                mime = 'image/jpeg' if data.startswith(b'\xff\xd8') else 'image/png'
+                doc['images'].append({'bufferView': view(data), 'mimeType': mime})
+                doc['textures'].append({'source': len(doc['images']) - 1})
+                shared_textures[key] = len(doc['textures']) - 1
+            mat['pbrMetallicRoughness']['baseColorTexture'] = {'index': shared_textures[key]}
         doc['materials'].append(mat)
         attrs = {'POSITION': accessor(p, 3, 'VEC3')}
         if mesh.get('uv'): attrs['TEXCOORD_0'] = accessor(mesh['uv'], 2, 'VEC2')
