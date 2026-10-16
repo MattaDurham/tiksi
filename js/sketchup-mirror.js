@@ -293,6 +293,24 @@ function dataUrlBytes(url) {
   return { ext: m[1] === 'jpeg' ? 'jpg' : m[1], bytes: out };
 }
 
+// SketchUp reads PNG and JPEG images; underlays rendered from scans are WebP, which its SDK
+// rejects (the whole write would fail). Those are re-encoded as JPEG before they are sent.
+export async function sketchupImageBytes(url, encode = encodeJpeg) {
+  const data = dataUrlBytes(url);
+  if (!data || data.ext !== 'webp') return data;
+  return { ext: 'jpg', bytes: await encode(data.bytes) };
+}
+
+async function encodeJpeg(bytes) {
+  const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/webp' }));
+  try {
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.92 });
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally { bitmap.close(); }
+}
+
 export function mirrorFileName(tiksiName) { return String(tiksiName).replace(/\.tiksi$/i, '') + '.skp'; }
 
 async function fileIn(folder, name) {
@@ -343,7 +361,7 @@ export async function syncMirror(folder, prop, entry, write) {
     const files = {};
     for (const u of spec.underlays) {
       if (got && ms.underlays && ms.underlays[u.level] === u.sig) continue;   // already in the .skp
-      const level = prop.levels.find(l => l.id === u.level), data = level && dataUrlBytes(level.plan.img);
+      const level = prop.levels.find(l => l.id === u.level), data = level && await sketchupImageBytes(level.plan.img);
       if (!data) continue;
       u.file = 'underlay/' + u.level + '.' + data.ext;
       files[u.file] = data.bytes;
