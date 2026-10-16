@@ -21,6 +21,21 @@ class ConversionTests(unittest.TestCase):
         write_glb([{'name':'Synthetic IFC wall','positions':[0,0,0,4,0,0,0,3,0],'indices':[0,1,2], 'material':{'name':'Paint','color':[1,0,0,.5]},'extras':{'ifcGlobalId':'synthetic','ifcClass':'IfcWall'}}],out)
         b=out.read_bytes();magic,version,length=struct.unpack_from('<III',b);self.assertEqual((magic,version,length),(0x46546c67,2,len(b)))
         n=struct.unpack_from('<I',b,12)[0];doc=json.loads(b[20:20+n]);self.assertEqual(doc['nodes'][0]['extras']['ifcClass'],'IfcWall');self.assertEqual(doc['accessors'][0]['max'],[4,3,0]);self.assertEqual(doc['materials'][0]['alphaMode'],'BLEND')
+    def test_glb_writer_embeds_each_texture_once(self):
+        # Two face batches of one material and a copy of its texture under another name share an image;
+        # a different texture gets its own.
+        png=lambda tag:b'\x89PNG\r\n\x1a\n'+tag*64
+        (self.root/'brick.png').write_bytes(png(b'b'));(self.root/'brick-copy.png').write_bytes(png(b'b'));(self.root/'soil.png').write_bytes(png(b's'))
+        tri={'positions':[0,0,0,1,0,0,0,1,0],'uv':[0,0,1,0,0,1],'indices':[0,1,2]}
+        meshes=[dict(tri,name=n,material={'name':m,'texture':str(self.root/f)}) for n,m,f in
+                [('Wall A','Brick','brick.png'),('Wall B','Brick','brick.png'),('Chimney','Brick (copy)','brick-copy.png'),('Bed','Soil','soil.png')]]
+        out=self.root/'textured.glb';write_glb(meshes,out)
+        b=out.read_bytes();n=struct.unpack_from('<I',b,12)[0];doc=json.loads(b[20:20+n])
+        self.assertEqual(len(doc['materials']),4);self.assertEqual(len(doc['images']),2);self.assertEqual(len(doc['textures']),2)
+        used=[m['pbrMetallicRoughness']['baseColorTexture']['index'] for m in doc['materials']]
+        self.assertEqual(used[:3],[used[0]]*3);self.assertNotEqual(used[3],used[0])
+        binary=b[20+n+8:];self.assertEqual(binary.count(png(b'b')),1);self.assertEqual(binary.count(png(b's')),1)
+        self.assertEqual({im['mimeType'] for im in doc['images']},{'image/png'})
     def test_invalid_mesh_does_not_create_output(self):
         for indices in [[0,1,9],[0,1]]:
             with self.assertRaises(ValueError):write_glb([{'positions':[0,0,0,1,0,0,0,1,0],'indices':indices}],self.root/'bad.glb')
