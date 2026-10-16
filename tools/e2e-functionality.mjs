@@ -134,6 +134,20 @@ try {
   assert.equal(portable.name,'Portable fixture','project export takes an immutable snapshot');assert.equal(portable.fileCount,3);assert.equal(portable.propertyCount,1);assert.deepEqual(portable.texturePhotoNames,['fixture.png','Texture source.png']);assert.deepEqual(portable.textureBytes,portable.expectedTextureBytes,'cross-property material source photo bytes travel with the project');assert.deepEqual(portable.missing,[]);assert.equal(portable.photos,2);assert.equal(portable.underlay,images[1]);assert.equal(portable.scan,'0 0 0\n1 1 1');
   const json = await page.evaluate(async () => { const s=await import('/js/store.js');const f=await import('/js/files.js');const data=s.projectSlice(s.ws.data.properties[0].id);data.properties[0].name='JSON opened';await f.openFromFile(new File([JSON.stringify(data)],'fixture.json'));return s.ws.data.properties[0].name; });
   assert.equal(json,'JSON opened','JSON project open follows its advertised picker support');
+  const kept = await page.evaluate(async () => {
+    const s=await import('/js/store.js');const f=await import('/js/files.js');const m=await import('/js/materials.js');
+    const p=s.activeProperty();const made=m.newMaterial('wall');made.name='Made here, unassigned';
+    s.ws.data.materials.push({id:'mat-file-unused',name:'Opened unassigned',custom:true,kind:'any',color:'#333',propertyIds:[p.id]});
+    s.ws.data.settings.programStart='2026-11-01';
+    const packed=await s.exportProjectBlob(p.id);
+    s.replaceWorkspace(s.emptyWorkspace());s.ws.data.settings.programStart='2026-10-30';
+    await f.openFromFile(new File([packed.blob],packed.name));
+    const again=(await s.readBundle(new File([(await s.exportProjectBlob(p.id)).blob],'again.tiksi'))).data;
+    return {made:made.id,ids:again.materials.map(x=>x.id),start:s.ws.data.settings.programStart,savedStart:again.settings.programStart};
+  });
+  assert.ok(kept.ids.includes(kept.made)&&kept.ids.includes('mat-file-unused'),'a project file keeps unassigned custom materials across open and save');
+  assert.equal(kept.start,'2026-11-01','opening a project file brings its schedule start');
+  assert.equal(kept.savedStart,'2026-11-01','saving an opened project file writes its schedule start back');
 
   const fileSafety=await page.evaluate(async()=>{
     const s=await import('/js/store.js'),f=await import('/js/files.js');const p=s.ws.data.properties[0];let aborted=0,closed=0;

@@ -61,6 +61,59 @@ mergeWorkspace(fileJson);
 check(!ws.data.projects.some(p => p.id === 'stale-project'), 'merge removes projects deleted from the opened property snapshot');
 check(store.itemTotals({ qty: 0, low: 50, likely: 100, high: 200 }).likely === 0, 'zero quantity has zero cost');
 check(store.itemTotals({ likely: 100 }).likely === 100, 'missing quantity still defaults to one');
+// A project file keeps every custom material it was opened with, used or not, and its schedule start.
+ws.data = emptyWorkspace();
+const D = store.propertyTemplate('House D'), E = store.propertyTemplate('House E');
+D.walls.push({ id: 'w-d1', level: D.levels[0].id, ax: 0, ay: 0, bx: 4, by: 0, thickness: 0.114, height: null, material: 'mat-d-used' });
+ws.data.properties.push(D, E);
+ws.data.settings.programStart = '2026-11-01';
+ws.data.materials.push(
+  { id: 'mat-d-used', name: 'Used stucco', kind: 'wall', color: '#ddd', custom: true, propertyIds: [D.id] },
+  { id: 'mat-d-roof', name: 'Shingles, unassigned', kind: 'any', color: '#333', custom: true, propertyIds: [D.id, E.id] },
+  { id: 'mat-e-only', name: 'Kept by House E', kind: 'any', color: '#444', custom: true, propertyIds: [E.id] },
+  { id: 'mat-loose', name: 'Kept by nobody', kind: 'any', color: '#555', custom: true },
+);
+ws.data.products.push({ id: 'prod-roof', name: 'Shingle quote', price: 3, itemIds: [], materialIds: ['mat-d-roof'] });
+const dSlice = JSON.parse(JSON.stringify(projectSlice(D.id)));
+check(dSlice.materials.map(m => m.id).sort().join() === 'mat-d-roof,mat-d-used', 'slice keeps the custom materials its property keeps, used or not (' + dSlice.materials.map(m => m.id).join() + ')');
+check(dSlice.materials.every(m => !('propertyIds' in m)), 'slice leaves the browser\'s owner list out of the file');
+check(dSlice.products.some(p => p.id === 'prod-roof'), 'slice keeps products sourced for a kept material');
+check(dSlice.settings.programStart === '2026-11-01', 'slice writes the schedule start');
+// A file written before owner lists existed: one material used, two used by nothing.
+dSlice.materials.push({ id: 'mat-d-cabinet', name: 'Cabinets, unassigned', kind: 'any', color: '#222', custom: true });
+
+// Open it in another browser: a different schedule start, and a House F that keeps the roof material too.
+ws.data = emptyWorkspace();
+const F = store.propertyTemplate('House F');
+ws.data.properties.push(F);
+ws.data.settings.programStart = '2026-10-30';
+ws.data.settings.units = 'metric';
+ws.data.materials.push({ id: 'mat-d-roof', name: 'Shingles, old copy', kind: 'any', color: '#333', custom: true, propertyIds: [F.id] });
+mergeWorkspace(dSlice, { fromFile: true });
+check(ws.data.settings.programStart === '2026-11-01', 'opening a project file brings its schedule start (' + ws.data.settings.programStart + ')');
+check(ws.data.settings.units === 'metric', 'opening a project file leaves the other settings alone');
+const owners = id => (ws.data.materials.find(m => m.id === id) || {}).propertyIds || [];
+check(['mat-d-used', 'mat-d-roof', 'mat-d-cabinet'].every(id => owners(id).includes(D.id)), 'every custom material in the file is kept with its property');
+check(owners('mat-d-roof').includes(F.id) && ws.data.materials.find(m => m.id === 'mat-d-roof').name === 'Shingles, unassigned', 'the file\'s copy replaces the record and other properties keep it too');
+const resaved = projectSlice(D.id);
+check(resaved.materials.map(m => m.id).sort().join() === 'mat-d-cabinet,mat-d-roof,mat-d-used', 'saving the opened file writes back every custom material it carried (' + resaved.materials.map(m => m.id).join() + ')');
+check(resaved.settings.programStart === '2026-11-01', 'saving the opened file writes back its schedule start');
+check(projectSlice(F.id).materials.map(m => m.id).join() === 'mat-d-roof', 'another property\'s file keeps only what it keeps');
+
+// Only an opened project file moves the schedule start: not a demo merge, not a file without a start.
+ws.data.settings.programStart = '2026-10-30';
+mergeWorkspace(Object.assign({}, dSlice, { settings: Object.assign({}, dSlice.settings, { programStart: '2027-01-15' }) }));
+check(ws.data.settings.programStart === '2026-10-30', 'a merge that is not an opened file keeps the schedule start');
+mergeWorkspace(Object.assign({}, dSlice, { settings: { units: 'imperial' } }), { fromFile: true });
+check(ws.data.settings.programStart === '2026-10-30', 'a file without a schedule start keeps the browser\'s');
+mergeWorkspace(Object.assign({}, dSlice, { settings: { programStart: 'Nov 1' } }), { fromFile: true });
+check(ws.data.settings.programStart === '2026-10-30', 'a malformed schedule start is ignored');
+// A workspace bundle names no single owner, so its untagged materials stay untagged.
+ws.data = emptyWorkspace();
+const G = store.propertyTemplate('House G'), H = store.propertyTemplate('House H');
+mergeWorkspace({ settings: { programStart: '2027-02-01' }, properties: [G, H], materials: [{ id: 'mat-shared', name: 'Shared', kind: 'any', color: '#666', custom: true }], products: [], projects: [] }, { fromFile: true });
+check(!owners('mat-shared').length && ws.data.settings.programStart !== '2027-02-01', 'a multi-property workspace file assigns no owners and keeps the schedule start');
+
 const unchanged = JSON.stringify(ws.data);
 let malformed = false;
 try { mergeWorkspace({ properties: [{ id: 'bad', walls: 'not a list' }] }); } catch (e) { malformed = true; }

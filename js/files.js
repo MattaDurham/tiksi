@@ -181,7 +181,7 @@ export async function openFromFile(file) {
   } else parsed = await readBundle(file);
   const { data, manifest } = parsed;
   // Opening always adds/updates imported properties. Replacement is a separate explicit action.
-  const ids = /\.json$/i.test(file.name) ? mergeWorkspace(data) : await importProject(file);
+  const ids = /\.json$/i.test(file.name) ? mergeWorkspace(data, { fromFile: true }) : await importProject(file);
   for (const id of ids) state.savedSig.set(id, signatureOf(id));
   app.refresh(); app.remount();
   setSaveStatus('OPENED ' + file.name.toUpperCase(), false);

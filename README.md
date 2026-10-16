@@ -236,9 +236,11 @@ credentials.
 ## Saving, opening and sharing
 
 A property is a project file: `<name>.tiksi` holds the property, its projects,
-the products they specify, the custom materials it uses, and every scan and
-photo, so it opens anywhere with nothing missing. Three ways to keep it, none of
-which needs a server:
+the products they specify, its custom materials, the schedule's program start,
+and every scan and photo, so it opens anywhere with nothing missing. Its custom
+materials are the ones it uses, the ones the file was opened with and the ones
+made while it was open, assigned or not. Opening a file sets SCHEDULE's program
+start to the file's date. Three ways to keep it, none of which needs a server:
 
 - **FILE → Project → SAVE PROJECT (Cmd+S).** In Chrome and Edge the first save asks where; every later
   save writes there silently, and the file is remembered across visits. Other

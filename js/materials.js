@@ -2,10 +2,12 @@
 // data and user models can reference them. The 13 original builtin ids are sacred.
 //
 // Record: { id, name, kind: 'wall'|'floor'|'ceiling'|'trim'|'any', color, pattern, tile: [w, h] (m),
-//           roughness, metalness, normalScale, accent|null, photoId|null, custom }
+//           roughness, metalness, normalScale, accent|null, photoId|null, custom, propertyIds? }
+// `propertyIds` (custom only) names the properties whose project files keep the material even
+// while nothing uses it: the file it was opened with, or the property open when it was made.
 // `color` is always present: the 2D plan and cut sheets use it; the 3D textures bake it as the tint.
 
-import { ws, uid, touch, escapeHtml, fmtLen } from './store.js';
+import { ws, uid, touch, escapeHtml, fmtLen, activeProperty } from './store.js';
 import { swatchUrl } from './textures.js';
 
 export const KINDS = ['wall', 'floor', 'ceiling', 'trim', 'any'];
@@ -191,8 +193,15 @@ export function materialsFor(kind) {
   return ws.data.materials.filter(m => !kind || m.kind === kind || m.kind === 'any');
 }
 
+// A material made while a property is open goes into that property's project file.
+function keptWithActive(m) {
+  const p = activeProperty();
+  if (p) m.propertyIds = [p.id]; else delete m.propertyIds;
+  return m;
+}
+
 export function addCustomMaterial(name, color, kind) {
-  const m = normalizeMaterial({ id: uid('mat'), name, color, kind: kind || 'any', custom: true });
+  const m = keptWithActive(normalizeMaterial({ id: uid('mat'), name, color, kind: kind || 'any', custom: true }));
   ws.data.materials.push(m);
   touch();
   return m;
@@ -203,7 +212,7 @@ export function newMaterial(kind) {
   kind = KINDS.includes(kind) ? kind : 'any';
   const pattern = kind === 'floor' ? 'wood' : kind === 'trim' ? 'flat' : 'drywall';
   const color = { wall: '#d6d0c4', floor: '#b8945f', ceiling: '#f0eee8', trim: '#f2f0ea', any: '#b9b2a6' }[kind];
-  const m = normalizeMaterial({ id: uid('mat'), name: 'New material', color, kind, pattern, custom: true });
+  const m = keptWithActive(normalizeMaterial({ id: uid('mat'), name: 'New material', color, kind, pattern, custom: true }));
   ws.data.materials.push(m);
   touch();
   return m;
@@ -212,7 +221,7 @@ export function newMaterial(kind) {
 export function duplicateMaterial(id) {
   const src = ws.data.materials.find(m => m.id === id);
   if (!src) return null;
-  const m = Object.assign(clone(src), { id: uid('mat'), name: src.name + ' copy', custom: true });
+  const m = keptWithActive(Object.assign(clone(src), { id: uid('mat'), name: src.name + ' copy', custom: true }));
   const i = ws.data.materials.indexOf(src);
   ws.data.materials.splice(i + 1, 0, m);
   touch();
