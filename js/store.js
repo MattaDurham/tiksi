@@ -630,13 +630,15 @@ export function units() { return ws.data.settings.units; }
 export function fmtLen(m, opts) {
   if (m == null || isNaN(m)) return '-';
   if (units() === 'metric') return (Math.round(m * 100) / 100) + ' m';
-  const totalIn = m / M_PER_FT * 12;
+  // Below the datum (a basement floor) the sign covers feet and inches alike: -7'-7", not -8'-5".
+  const totalIn = Math.abs(m) / M_PER_FT * 12;
   let ft = Math.floor(totalIn / 12);
   let inch = Math.round(totalIn - ft * 12);
   if (inch === 12) { ft += 1; inch = 0; }
-  if (ft === 0) return inch + '"';
-  if (opts && opts.short && inch === 0) return ft + "'";
-  return ft + "'-" + inch + '"';
+  const sign = m < 0 && (ft || inch) ? '-' : '';
+  if (ft === 0) return sign + inch + '"';
+  if (opts && opts.short && inch === 0) return sign + ft + "'";
+  return sign + ft + "'-" + inch + '"';
 }
 
 export function fmtArea(m2) {
@@ -653,7 +655,11 @@ export function parseLen(str) {
   const mMatch = str.match(/^(-?\d+(?:\.\d+)?)\s*m$/);
   if (mMatch) return parseFloat(mMatch[1]);
   const ftIn = str.match(/^(-?\d+(?:\.\d+)?)\s*'\s*(?:-?\s*(\d+(?:\.\d+)?)\s*"?)?$/);
-  if (ftIn) return (parseFloat(ftIn[1]) + (ftIn[2] ? parseFloat(ftIn[2]) / 12 : 0)) * M_PER_FT;
+  if (ftIn) {
+    // -7'-7" is seven feet seven inches below the datum: the inches take the sign of the feet.
+    const ft = parseFloat(ftIn[1]), inch = ftIn[2] ? parseFloat(ftIn[2]) / 12 : 0;
+    return (ftIn[1].startsWith('-') ? ft - inch : ft + inch) * M_PER_FT;
+  }
   const inOnly = str.match(/^(-?\d+(?:\.\d+)?)\s*"$/);
   if (inOnly) return parseFloat(inOnly[1]) / 12 * M_PER_FT;
   const plain = parseFloat(str);
