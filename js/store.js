@@ -109,9 +109,14 @@ export function replaceWorkspace(data) {
 // Merge a project file (or any workspace-shaped JSON) into the current workspace: properties,
 // projects, products and custom materials are replaced by id or added; settings stay. The
 // first incoming property becomes active. Returns the ids of the properties that landed.
-export function mergeWorkspace(data) {
+// A project file opened from disk (opts.fromFile, one property) also brings its schedule start,
+// and every custom material it carries is kept with its property, so the next save writes them
+// all back whether or not anything uses them yet.
+export function mergeWorkspace(data, opts) {
+  const fileStart = data && data.settings && data.settings.programStart;   // read before migrate fills in today
   const incoming = migrate(JSON.parse(JSON.stringify(data)));
   const d = ws.data;
+  const projectFile = !!(opts && opts.fromFile) && incoming.properties.length === 1;
   const upsert = (list, rec) => { const i = list.findIndex(x => x.id === rec.id); if (i >= 0) list[i] = rec; else list.push(rec); };
   for (const p of incoming.properties) upsert(d.properties, p);
   const propIds = new Set(incoming.properties.map(p => p.id));
@@ -119,7 +124,13 @@ export function mergeWorkspace(data) {
   d.projects = d.projects.filter(pr => !propIds.has(pr.propertyId) || incomingProjectIds.has(pr.id));
   for (const pr of incoming.projects || []) upsert(d.projects, pr);
   for (const pr of incoming.products || []) upsert(d.products, pr);
-  for (const m of incoming.materials || []) if (m && m.custom) upsert(d.materials, m);
+  for (const m of incoming.materials || []) if (m && m.custom) {
+    const owners = new Set([...materialOwners(d.materials.find(x => x.id === m.id)), ...materialOwners(m)]);
+    if (projectFile) owners.add(incoming.properties[0].id);
+    if (owners.size) m.propertyIds = [...owners];
+    upsert(d.materials, m);
+  }
+  if (projectFile && typeof fileStart === 'string' && ISO_DATE_RE.test(fileStart)) d.settings.programStart = fileStart;
   if (incoming.properties.length) d.settings.activePropertyId = incoming.properties[0].id;
   ws.data = migrate(d);
   // Incoming records carry thumbnails and underlays inline; move them into IndexedDB.
@@ -128,8 +139,14 @@ export function mergeWorkspace(data) {
   return incoming.properties.map(p => p.id);
 }
 
+// The properties a custom material is kept with: the ones whose project file carried it, or
+// that were open when it was made (materials.js). Their files carry it even while unused.
+export function materialOwners(m) {
+  return m && Array.isArray(m.propertyIds) ? m.propertyIds.filter(id => typeof id === 'string' && id) : [];
+}
+
 // The part of the workspace that is one property: the property, its projects, the products
-// those projects specify, and the custom materials it uses. This is what a project file holds.
+// those projects specify, and the custom materials it uses or keeps. This is what a project file holds.
 export function projectSlice(propId, data) {
   const d = data || ws.data;
   const p = d.properties.find(x => x.id === propId);
@@ -141,9 +158,13 @@ export function projectSlice(propId, data) {
   for (const s of p.scans || []) for (const id of [...Object.values(s.materialBindings || {}),...Object.values(s.materialIdentities || {})]) matIds.add(id);
   for (const w of p.walls || []) matIds.add(w.material);
   for (const r of p.rooms || []) { matIds.add(r.material); matIds.add(r.ceilingMaterial); }
+  for (const m of d.materials || []) if (m && m.custom && materialOwners(m).includes(propId)) matIds.add(m.id);
   const products = (d.products || []).filter(pr => (pr.itemIds || []).some(id => itemIds.has(id)) || (pr.materialIds || []).some(id => matIds.has(id)));
   const photoIds = new Set((p.photos || []).map(ph => ph.id));
-  const materials = (d.materials || []).filter(m => m && m.custom && (matIds.has(m.id) || (m.photoId && photoIds.has(m.photoId))));
+  // The file's list is itself the record of what it keeps (mergeWorkspace), so the browser's
+  // owner list stays out of it: other properties' ids neither leak nor mark this file unsaved.
+  const materials = (d.materials || []).filter(m => m && m.custom && (matIds.has(m.id) || (m.photoId && photoIds.has(m.photoId))))
+    .map(m => { if (!('propertyIds' in m)) return m; const { propertyIds, ...rest } = m; return rest; });
   // A material may have been sampled from another property's photograph. Carry only the
   // source photo records it needs, so the bundle collector includes their original pixels.
   const neededPhotos = new Set(materials.map(m => m.photoId).filter(Boolean));
@@ -436,6 +457,7 @@ export function deleteLevel(prop, id) {
 // reference following it), a thumbnail that is not a plain base64 image is dropped.
 const ID_RE = /^[\w.:-]{1,80}$/;
 const THUMB_RE = /^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function sanitiseIds(d) {
   const renamed = new Map();
@@ -988,7 +1010,7 @@ export async function exportProjectBlob(propId) {
 export async function importProject(file) {
   const { data, files } = await readBundle(file);
   for (const f of files) await putFile(f.id, f.buffer, f.meta);
-  return mergeWorkspace(data);
+  return mergeWorkspace(data, { fromFile: true });
 }
 
 function u8Buffer(u8) {
