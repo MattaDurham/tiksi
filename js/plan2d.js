@@ -16,6 +16,7 @@ import {
   planWallMove, applyWallMove, normalOffset, planCornerMove, applyCornerMove,
   floorCornerAttached, floorCornersOf, snapFloorToWalls,
 } from './wallmove.js';
+import { wallFaces, roomFromWalls, sameFloor } from './roomfill.js';
 
 const PRESETS = {
   interior: { thickness: 0.114, material: 'mat-drywall' },   // 4.5 in stud wall
@@ -69,6 +70,8 @@ let calib = null;            // {a:[x,y], b:[x,y]|null}
 let hoverPt = null;          // last cursor world pos
 let drag = null;             // active drag descriptor
 let spaceDown = false;
+let altDown = false;         // Alt/Option: the ROOM tool outlines instead of filling
+let facesCache = null;       // {key, faces}: the areas the current level's walls enclose
 // Undo history is kept per workspace object and per property: a snapshot taken while editing
 // one property must never replay into another, nor into a re-imported workspace that reuses
 // the same property ids (import/demo swap ws.data, so the WeakMap starts over for them).
@@ -288,6 +291,24 @@ function snapPoint(wx, wy, opts) {
     }
   }
   return [rnd(x), rnd(y)];
+}
+
+// ---------- filling a room from its walls ----------
+// The areas the level's walls enclose, recomputed only when a wall changes.
+function levelFaces() {
+  const walls = curWalls();
+  const key = lvl().id + '|' + walls.map(w => w.ax + ',' + w.ay + ',' + w.bx + ',' + w.by + ',' + w.thickness).join(';');
+  if (!facesCache || facesCache.key !== key) facesCache = { key, faces: wallFaces(walls) };
+  return facesCache.faces;
+}
+// The outline a ROOM click at (wx, wy) fills, or null when the click starts a corner-by-corner
+// outline instead: during an outline, with Alt held, on a wall, wall end or floor corner (where
+// outlines start), or outside every closed wall loop.
+function fillTarget(wx, wy) {
+  if (roomDraft || altDown) return null;
+  snapPoint(wx, wy, { walls: true, floors: true });
+  if (snapInfo && (snapInfo.kind === 'endpoint' || snapInfo.kind === 'wall')) return null;
+  return roomFromWalls(curWalls(), wx, wy, levelFaces());
 }
 
 // ---------- hit testing ----------
@@ -1032,9 +1053,13 @@ function drawDrafts(w, h) {
       }
     }
   } else if (tool === 'room' && hoverPt && !drag) {
-    const pt = snapPoint(hoverPt[0], hoverPt[1], { walls: true, floors: true });
-    crossGuides(pt, w, h, 'rgba(95,179,201,0.12)');
-    snapMarker(pt);
+    const fill = fillTarget(hoverPt[0], hoverPt[1]);
+    if (fill) drawFillPreview(fill);
+    else {
+      const pt = snapPoint(hoverPt[0], hoverPt[1], { walls: true, floors: true });
+      crossGuides(pt, w, h, 'rgba(95,179,201,0.12)');
+      snapMarker(pt);
+    }
   }
   if (calib && calib.a) {
     const a = w2s(calib.a);
@@ -1057,6 +1082,24 @@ function drawDrafts(w, h) {
   } else if (tool === 'calibrate' && hoverPt && curPlan() && !drag) {
     crossGuides(hoverPt, w, h, 'rgba(232,151,58,0.14)');
   }
+}
+
+// What a ROOM click here would fill: the enclosed area with its corners on the wall centre
+// lines, labelled with its area, or with the name of the floor that already covers it.
+function drawFillPreview(pts) {
+  const same = sameFloor(curRooms(), pts);
+  tracePoly(pts.map(w2s));
+  if (!same) { ctx.fillStyle = 'rgba(95,179,201,0.16)'; ctx.fill(); }
+  ctx.strokeStyle = C.cyan; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  for (const p of pts) {
+    const s = w2s(p);
+    ctx.fillStyle = C.cyan; ctx.beginPath(); ctx.arc(s[0], s[1], 3, 0, Math.PI * 2); ctx.fill();
+  }
+  const c = w2s(roomInteriorPoint(pts));
+  if (same) pill(String(same.name || 'Floor').toUpperCase() + ' HAS A FLOOR', c[0], c[1] + 30, C.cyan);
+  else pill('CLICK TO FLOOR ' + fmtArea(polyArea(pts)), c[0], c[1], C.cyan);
 }
 
 // Floor corners: solid where the corner is attached to a wall (it follows the wall), a hollow
@@ -1340,6 +1383,10 @@ function onPointerDown(e) {
     return;
   }
   if (tool === 'room') {
+    // One click inside a closed wall loop floors it; anywhere else it starts an outline.
+    altDown = e.altKey;
+    const fill = fillTarget(wx, wy);
+    if (fill) { fillRoom(fill); return; }
     const pt = snapPoint(wx, wy, roomDraft && roomDraft.pts.length ? { from: roomDraft.pts[roomDraft.pts.length - 1], walls: true, floors: true } : { walls: true, floors: true });
     if (!roomDraft) roomDraft = { pts: [] };
     if (roomDraft.pts.length >= 3) {
@@ -1408,6 +1455,7 @@ function onPointerMove(e) {
   const [sx, sy] = canvasPos(e);
   const [wx, wy] = s2w(sx, sy);
   hoverPt = [wx, wy];
+  altDown = e.altKey;
   updateBadge(wx, wy);
 
   if (!drag) {
@@ -1493,11 +1541,25 @@ function closeRoom() {
   if (pts.length > 3 && Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]) <= 0.01) pts.pop();
   roomDraft = null;
   if (pts.length < 3) { updateHint(); return; }
+  addRoom(pts);
+}
+
+function addRoom(pts) {
   pushUndo();
   const r = { id: uid('r'), level: lvl().id, name: 'Room ' + (prop.rooms.length + 1), pts, material: 'mat-oak' };
   prop.rooms.push(r);
   selection = { kind: 'room', id: r.id };
   touch(); renderInspector(); updateHint();
+}
+
+// A floor for an area the walls enclose. An area that already has exactly this floor gets no
+// second one: the click selects the existing floor instead.
+function fillRoom(pts) {
+  const same = sameFloor(curRooms(), pts);
+  if (!same) { addRoom(pts); return; }
+  selection = { kind: 'room', id: same.id };
+  renderInspector();
+  setHint((same.name || 'A floor') + ' already covers this area. Alt-click to outline a floor inside it.');
 }
 
 function onWheel(e) {
@@ -1520,6 +1582,7 @@ function onKeyDown(e) {
   if (e.target.matches('input, textarea, select')) return;
   invalidate();
   if (e.key === ' ') { spaceDown = true; e.preventDefault(); updateCursor(); return; }
+  if (e.key === 'Alt') { altDown = true; return; }
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
     e.preventDefault();
     e.shiftKey ? redo() : undo();
@@ -1544,7 +1607,10 @@ function onKeyDown(e) {
     deleteSelection();
   }
 }
-function onKeyUp(e) { if (e.key === ' ') { spaceDown = false; updateCursor(); invalidate(); } }
+function onKeyUp(e) {
+  if (e.key === ' ') { spaceDown = false; updateCursor(); invalidate(); }
+  if (e.key === 'Alt') { altDown = false; invalidate(); }
+}
 
 // ---------- tool column / hint ----------
 function setTool(t) {
@@ -1565,7 +1631,7 @@ function updateHint() {
     wall: drawing ? 'Click to place the next corner. Double-click or Esc to end the chain.' : 'Click to start a wall chain. Walls snap to wall ends, along walls (diamond), axes and 15 degree angles.',
     door: 'Click on a wall to place a door.',
     window: 'Click on a wall to place a window.',
-    room: roomDraft ? 'Click corners; click the first point or double-click to close the room.' : 'Click to outline a floor. Corners snap to wall ends and along walls, so the floor follows them when they move.',
+    room: roomDraft ? 'Click corners; click the first point or double-click to close the room.' : 'Click inside a room the walls close to floor it. To outline a floor corner by corner, start on a wall or in an open area, or Alt-click; corners snap to walls, so the floor follows them.',
     calibrate: (!prop || !curPlan()) ? 'Upload a plan image first (UNDERLAY, left panel).' : 'Click two points a known distance apart on the plan image, then enter the real distance.',
   };
   setHint(hints[tool] || '');
@@ -1755,7 +1821,8 @@ function bindSourceCard(insp) {
 function renderInspector() {
   if (!inspEl) return;
   const insp = inspEl;
-  if (tool === 'select') updateHint();   // the select hint describes what the selection allows
+  // The select hint describes what the selection allows; ROOM drops a note about the last one.
+  if (tool === 'select' || tool === 'room') updateHint();
 
   if (calib && calib.a && calib.b) {
     const measured = Math.hypot(calib.b[0] - calib.a[0], calib.b[1] - calib.a[1]);
@@ -2057,6 +2124,6 @@ export function unmount() {
   window.removeEventListener('resize', invalidate);
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
   if (offChange) { offChange(); offChange = null; }
-  drawing = null; roomDraft = null; drag = null; hover = null; hoverPt = null; hist = null;
+  drawing = null; roomDraft = null; drag = null; hover = null; hoverPt = null; hist = null; facesCache = null;
   el = null; canvas = null; ctx = null; wrapEl = null; inspEl = null; hintEl = null; badgeEl = null; levelEl = null;
 }

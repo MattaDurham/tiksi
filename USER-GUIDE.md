@@ -157,7 +157,7 @@ Plan tools are on the left of the canvas. Select an element to edit dimensions, 
 1. Use UPLOAD IMAGE for a tracing underlay, or select a photo in PHOTOS and choose PLAN UNDERLAY.
 2. Choose CALIBRATE, mark two points with a known separation, enter the real distance in the inspector and apply the scale.
 3. Choose WALL, then click successive wall endpoints. Use the interior/exterior preset for the starting thickness. Escape ends the current drawing action.
-4. Place doors and windows on walls. Outline each room with the ROOM tool so it can have its own floor finish and area; its corners snap to wall ends and along walls.
+4. Place doors and windows on walls. Give each room a floor with the ROOM tool so it can have its own finish and area: click once inside a room the walls close, or click corner by corner where the walls leave it open.
 5. Choose SELECT and click an element to select it; a click never moves anything. Type precise dimensions in the inspector, or drag a wall or a selected wall's corner. Joined walls and the floors on them follow the edit.
 6. Use + LEVEL for another storey and set its elevation and wall height. Each level has its own underlay and plan geometry.
 
@@ -175,6 +175,8 @@ In PLAN, use SELECT and click a wall. Edit the wall height in the inspector to e
 
 **Sticky walls.** Dragging a wall slides its straight run and connected geometry. Dragging a corner turns the walls there, and walls and floors attached along them stay on them. Hold Alt/Option to move that wall on its own.
 
+**Floor a room in one click.** With ROOM, a click inside an area the walls close floors it, with its corners on the wall centre lines; the canvas outlines that area before you click. Where the walls leave a room open, click its corners one by one instead. Start on a wall or Alt-click to outline a floor inside a closed room.
+
 **Floors follow walls.** A floor never moves on its own; dragging one pans the view. Its corners that sit on a wall as drawn are attached and move with the wall. Select a floor to see them: solid corners are attached, hollow ones are loose. Drag a corner to reshape the floor, or use SNAP CORNERS TO WALLS.
 
 **Snapping and dimensions.** SNAP helps with wall ends, wall centre lines, floor corners, axes and angles. DIMS displays wall dimension strings.
@@ -183,7 +185,7 @@ In PLAN, use SELECT and click a wall. Edit the wall height in the inspector to e
 
 **Navigation and undo.** Drag empty canvas or a floor to pan. Scroll also pans. Pinch or Cmd/Ctrl+scroll zooms. Space-drag or middle-drag pans anywhere; F fits the view. Cmd/Ctrl+Z undoes plan edits.
 
-> **Good to know:** Calibrate the underlay before tracing: calibration changes the image scale, not walls you already drew. Rooms need their own ROOM polygons to create floor surfaces and floor-area takeoffs. Recheck scan-generated geometry against measurements on site.
+> **Good to know:** Calibrate the underlay before tracing: calibration changes the image scale, not walls you already drew. Rooms need their own ROOM floors to create floor surfaces and floor-area takeoffs. Recheck scan-generated geometry against measurements on site.
 
 <a id="model"></a>
 
@@ -602,7 +604,7 @@ Use the visible tooltips and inspector labels when you forget a control. These a
 
 **Plan navigation.** F: fit view. Scroll or drag empty canvas: pan. Pinch or Cmd/Ctrl+scroll: zoom. Space-drag or middle-drag: pan. [ and ]: step between levels.
 
-**Plan drawing.** V: select. W: wall. D: door. N: window. R: room. C: calibrate. Click the first point or double-click to close a room polygon.
+**Plan drawing.** V: select. W: wall. D: door. N: window. R: room. C: calibrate. With ROOM, a click inside closed walls floors that room and Alt-click starts an outline; click the first point or double-click to close an outline.
 
 **Model navigation.** F: frame. O: orbit. W: walk. T: top. C: section. X: X-ray. M: move walls. D: measure. P: pin photo.
 
