@@ -157,8 +157,8 @@ Plan tools are on the left of the canvas. Select an element to edit dimensions, 
 1. Use UPLOAD IMAGE for a tracing underlay, or select a photo in PHOTOS and choose PLAN UNDERLAY.
 2. Choose CALIBRATE, mark two points with a known separation, enter the real distance in the inspector and apply the scale.
 3. Choose WALL, then click successive wall endpoints. Use the interior/exterior preset for the starting thickness. Escape ends the current drawing action.
-4. Place doors and windows on walls. Outline each room with the ROOM tool so it can have its own floor finish and area.
-5. Choose SELECT and click an element. Type precise dimensions in the inspector or drag a wall/corner. Joined geometry follows the edit.
+4. Place doors and windows on walls. Outline each room with the ROOM tool so it can have its own floor finish and area; its corners snap to wall ends and along walls.
+5. Choose SELECT and click an element to select it; a click never moves anything. Type precise dimensions in the inspector, or drag a wall or a selected wall's corner. Joined walls and the floors on them follow the edit.
 6. Use + LEVEL for another storey and set its elevation and wall height. Each level has its own underlay and plan geometry.
 
 <details><summary>Select a wall and change its dimensions</summary>
@@ -173,13 +173,15 @@ In PLAN, use SELECT and click a wall. Edit the wall height in the inspector to e
 
 ### Other features here
 
-**Sticky walls.** Dragging a wall slides its straight run and connected geometry. Hold Alt/Option to move that wall on its own.
+**Sticky walls.** Dragging a wall slides its straight run and connected geometry. Dragging a corner turns the walls there, and walls and floors attached along them stay on them. Hold Alt/Option to move that wall on its own.
 
-**Snapping and dimensions.** SNAP helps with endpoints, axes and angles. DIMS displays wall dimension strings.
+**Floors follow walls.** A floor never moves on its own; dragging one pans the view. Its corners that sit on a wall as drawn are attached and move with the wall. Select a floor to see them: solid corners are attached, hollow ones are loose. Drag a corner to reshape the floor, or use SNAP CORNERS TO WALLS.
 
-**Underlay editing.** Select the image to change opacity, or drag it to align its position. Remove it without deleting the traced walls.
+**Snapping and dimensions.** SNAP helps with wall ends, wall centre lines, floor corners, axes and angles. DIMS displays wall dimension strings.
 
-**Navigation and undo.** Scroll pans. Pinch or Cmd/Ctrl+scroll zooms. Space-drag or middle-drag also pans; F fits the view. Cmd/Ctrl+Z undoes plan edits.
+**Underlay editing.** Click the image to select it and change opacity; drag it only while selected to align it. Remove it without deleting the traced walls.
+
+**Navigation and undo.** Drag empty canvas or a floor to pan. Scroll also pans. Pinch or Cmd/Ctrl+scroll zooms. Space-drag or middle-drag pans anywhere; F fits the view. Cmd/Ctrl+Z undoes plan edits.
 
 > **Good to know:** Calibrate the underlay before tracing: calibration changes the image scale, not walls you already drew. Rooms need their own ROOM polygons to create floor surfaces and floor-area takeoffs. Recheck scan-generated geometry against measurements on site.
 
@@ -598,7 +600,7 @@ Use the visible tooltips and inspector labels when you forget a control. These a
 
 **Save / open.** Cmd/Ctrl+S: save. Cmd/Ctrl+Shift+S: save as. Cmd/Ctrl+O: open.
 
-**Plan navigation.** F: fit view. Scroll: pan. Pinch or Cmd/Ctrl+scroll: zoom. Space-drag or middle-drag: pan. [ and ]: step between levels.
+**Plan navigation.** F: fit view. Scroll or drag empty canvas: pan. Pinch or Cmd/Ctrl+scroll: zoom. Space-drag or middle-drag: pan. [ and ]: step between levels.
 
 **Plan drawing.** V: select. W: wall. D: door. N: window. R: room. C: calibrate. Click the first point or double-click to close a room polygon.
 
@@ -606,7 +608,7 @@ Use the visible tooltips and inspector labels when you forget a control. These a
 
 **Plan undo.** Cmd/Ctrl+Z: undo. Cmd/Ctrl+Shift+Z: redo. Escape ends an active tool action.
 
-**Move one wall.** Alt/Option while dragging isolates that wall from the normal connected-wall behavior.
+**Move one wall.** Alt/Option while dragging isolates that wall from the normal connected-wall behavior; floors stay where they are.
 
 **Where is save/import?.** Open FILE at the top. Project handles .tiksi files; Import handles captures and photos; 3D exchange handles editing in other applications.
 

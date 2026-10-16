@@ -12,7 +12,10 @@ import {
 import { materialSelectHtml } from './materials.js';
 import { icon } from './icons.js';
 import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
-import { planWallMove, applyWallMove, normalOffset, planCornerMove, applyCornerMove } from './wallmove.js';
+import {
+  planWallMove, applyWallMove, normalOffset, planCornerMove, applyCornerMove,
+  floorCornerAttached, floorCornersOf, snapFloorToWalls,
+} from './wallmove.js';
 
 const PRESETS = {
   interior: { thickness: 0.114, material: 'mat-drywall' },   // 4.5 in stud wall
@@ -22,6 +25,7 @@ const DOOR_DEFAULT = { width: 0.813, height: 2.032 };         // 32 x 80 in
 const WINDOW_DEFAULT = { width: 0.914, height: 1.219, sill: 0.762 }; // 36 x 48, sill 30
 
 const RULER = 22;                 // px; rulers sit along the top and left canvas edges
+const DRAG_START = 4;             // px the pointer travels before a press becomes a drag
 const FONT = 'ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
 const MOD = /Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘' : '^';
 // Palette for the drawing surface (kept in sync with css/console.css tokens by hand:
@@ -203,27 +207,62 @@ function redo() { if (!hist || !hist.redo.length) return; const cur = snapshot()
 
 // ---------- snapping ----------
 // Returns the snapped point; snapInfo (module state) records what it snapped to so the
-// renderer can draw guides. Rules are unchanged: endpoint, then axis, then 15 degree angle.
+// renderer can draw guides. Order: a wall end (or, with opts.floors, a floor corner), then a
+// wall's centre line (opts.walls; meeting an anchor's axis when one lines up), then axis
+// alignment and 15 degree angles from opts.from, or axis alignment with any of opts.axes.
 let snapInfo = null;
 function snapPoint(wx, wy, opts) {
   opts = opts || {};
   const tolW = 11 / vs.zoom;
   snapInfo = null;
   const skip = opts.excludeWall instanceof Set ? opts.excludeWall : new Set(opts.excludeWall ? [opts.excludeWall] : []);
-  // Endpoint snap (the SNAP switch gates every kind of snapping, as its label promises).
-  if (snapOn) {
-    let best = null, bestD = tolW;
-    for (const w of curWalls()) {
-      for (const p of [[w.ax, w.ay], [w.bx, w.by]]) {
-        if (skip.has(w.id)) continue;
-        const d = Math.hypot(p[0] - wx, p[1] - wy);
-        if (d < bestD) { bestD = d; best = p; }
-      }
+  const anchors = opts.axes || (opts.from ? [opts.from] : []);
+  // The SNAP switch gates every kind of snapping, as its label promises.
+  if (!snapOn) return [rnd(wx), rnd(wy)];
+  let best = null, bestD = tolW;
+  for (const w of curWalls()) {
+    if (skip.has(w.id)) continue;
+    for (const p of [[w.ax, w.ay], [w.bx, w.by]]) {
+      const d = Math.hypot(p[0] - wx, p[1] - wy);
+      if (d < bestD) { bestD = d; best = p; }
     }
-    if (best) { snapInfo = { kind: 'endpoint' }; return [best[0], best[1]]; }
+  }
+  if (opts.floors) {
+    for (const r of curRooms()) r.pts.forEach((p, i) => {
+      if (opts.skipCorner && opts.skipCorner.r === r && opts.skipCorner.i === i) return;
+      const d = Math.hypot(p[0] - wx, p[1] - wy);
+      if (d < bestD) { bestD = d; best = p; }
+    });
+  }
+  if (best) { snapInfo = { kind: 'endpoint' }; return [best[0], best[1]]; }
+  if (opts.walls) {
+    let bw = null, bd = tolW;
+    for (const w of curWalls()) {
+      if (skip.has(w.id)) continue;
+      const { d } = distToSeg(wx, wy, w.ax, w.ay, w.bx, w.by);
+      if (d < bd) { bd = d; bw = w; }
+    }
+    if (bw) {
+      const L = Math.hypot(bw.bx - bw.ax, bw.by - bw.ay) || 1;
+      const ux = (bw.bx - bw.ax) / L, uy = (bw.by - bw.ay) / L;
+      // Where an anchor's vertical or horizontal crosses this wall, near the cursor.
+      for (const a of anchors) {
+        if (Math.abs(wx - a[0]) < tolW && Math.abs(ux) > 0.2) {
+          const y = bw.ay + uy * (a[0] - bw.ax) / ux;
+          if (Math.abs(y - wy) < tolW * 2) { snapInfo = { kind: 'wall', from: a }; return [a[0], y]; }
+        }
+        if (Math.abs(wy - a[1]) < tolW && Math.abs(uy) > 0.2) {
+          const x = bw.ax + ux * (a[1] - bw.ay) / uy;
+          if (Math.abs(x - wx) < tolW * 2) { snapInfo = { kind: 'wall', from: a }; return [x, a[1]]; }
+        }
+      }
+      const t = (wx - bw.ax) * ux + (wy - bw.ay) * uy;
+      snapInfo = { kind: 'wall' };
+      return [bw.ax + ux * t, bw.ay + uy * t];
+    }
   }
   let x = wx, y = wy;
-  if (snapOn && opts.from) {
+  if (opts.from) {
     const [fx, fy] = opts.from;
     // Axis alignment.
     if (Math.abs(x - fx) < tolW) { x = fx; snapInfo = { kind: 'axis', axis: 'v', from: opts.from }; }
@@ -237,6 +276,15 @@ function snapPoint(wx, wy, opts) {
         x = fx + Math.cos(snapAng) * dist; y = fy + Math.sin(snapAng) * dist;
         snapInfo = { kind: 'angle', from: opts.from, ang: snapAng };
       }
+    }
+  } else {
+    // Line up with any anchor, on each axis independently (a floor corner between two others).
+    let ax = null, ay = null;
+    for (const a of anchors) if (Math.abs(x - a[0]) < tolW) { ax = a; break; }
+    for (const a of anchors) if (Math.abs(y - a[1]) < tolW) { ay = a; break; }
+    if (ax || ay) {
+      snapInfo = { kind: 'axis', axis: ax ? 'v' : 'h', from: ax || ay };
+      return [ax ? ax[0] : rnd(x), ay ? ay[1] : rnd(y)];
     }
   }
   return [rnd(x), rnd(y)];
@@ -282,6 +330,13 @@ function hitTest(wx, wy) {
       for (const [end, p] of [['a', [w.ax, w.ay]], ['b', [w.bx, w.by]]]) {
         if (Math.hypot(...[p[0] - wx, p[1] - wy]) * vs.zoom < 9) return { kind: 'handle', id: w.id, end };
       }
+    }
+  }
+  // Corners of the selected floor.
+  if (selection && selection.kind === 'room') {
+    const r = prop.rooms.find(r => r.id === selection.id);
+    if (r) for (let i = 0; i < r.pts.length; i++) {
+      if (Math.hypot(r.pts[i][0] - wx, r.pts[i][1] - wy) * vs.zoom < 9) return { kind: 'floorCorner', id: r.id, i };
     }
   }
   // Walls.
@@ -887,13 +942,18 @@ function snapMarker(pt) {
   if (snapInfo && snapInfo.kind === 'endpoint') {
     ctx.beginPath(); ctx.arc(s[0], s[1], 6, 0, Math.PI * 2); ctx.stroke();
     ctx.fillStyle = C.accent; ctx.beginPath(); ctx.arc(s[0], s[1], 2, 0, Math.PI * 2); ctx.fill();
+  } else if (snapInfo && snapInfo.kind === 'wall') {
+    // On a wall's centre line: a diamond.
+    ctx.beginPath();
+    ctx.moveTo(s[0], s[1] - 6); ctx.lineTo(s[0] + 6, s[1]); ctx.lineTo(s[0], s[1] + 6); ctx.lineTo(s[0] - 6, s[1]);
+    ctx.closePath(); ctx.stroke();
   } else {
     ctx.beginPath();
     ctx.moveTo(s[0] - 5, s[1]); ctx.lineTo(s[0] + 5, s[1]);
     ctx.moveTo(s[0], s[1] - 5); ctx.lineTo(s[0], s[1] + 5);
     ctx.stroke();
   }
-  if (snapInfo && (snapInfo.kind === 'axis' || snapInfo.kind === 'angle')) {
+  if (snapInfo && snapInfo.from && (snapInfo.kind === 'axis' || snapInfo.kind === 'angle' || snapInfo.kind === 'wall')) {
     // A long guide through the anchor and the snapped point shows what we aligned to.
     const f = w2s(snapInfo.from);
     const dx = s[0] - f[0], dy = s[1] - f[1], L = Math.hypot(dx, dy) || 1;
@@ -906,7 +966,7 @@ function snapMarker(pt) {
 
 function drawDrafts(w, h) {
   if (drawing && hoverPt) {
-    const pt = snapPoint(hoverPt[0], hoverPt[1], { from: drawing.last });
+    const pt = snapPoint(hoverPt[0], hoverPt[1], { from: drawing.last, walls: true });
     const a = w2s(drawing.last), b = w2s(pt);
     crossGuides(pt, w, h, 'rgba(232,151,58,0.18)');
     // Ghost of the wall about to be placed.
@@ -933,7 +993,7 @@ function drawDrafts(w, h) {
       dimString(drawing.last, pt, C.accent, { side: dimSideFor({ ax: drawing.last[0], ay: drawing.last[1], bx: pt[0], by: pt[1] }), gap: th * vs.zoom + 5, offset: th * vs.zoom + 22 });
     }
   } else if (tool === 'wall' && hoverPt && !drag) {
-    const pt = snapPoint(hoverPt[0], hoverPt[1], {});
+    const pt = snapPoint(hoverPt[0], hoverPt[1], { walls: true });
     crossGuides(pt, w, h, 'rgba(232,151,58,0.12)');
     snapMarker(pt);
   }
@@ -942,7 +1002,7 @@ function drawDrafts(w, h) {
     let end = null;
     if (hoverPt) {
       const last = roomDraft.pts[roomDraft.pts.length - 1];
-      const sp = snapPoint(hoverPt[0], hoverPt[1], { from: last });
+      const sp = snapPoint(hoverPt[0], hoverPt[1], { from: last, walls: true, floors: true });
       end = sp;
       crossGuides(sp, w, h, 'rgba(95,179,201,0.18)');
     }
@@ -972,7 +1032,7 @@ function drawDrafts(w, h) {
       }
     }
   } else if (tool === 'room' && hoverPt && !drag) {
-    const pt = snapPoint(hoverPt[0], hoverPt[1], {});
+    const pt = snapPoint(hoverPt[0], hoverPt[1], { walls: true, floors: true });
     crossGuides(pt, w, h, 'rgba(95,179,201,0.12)');
     snapMarker(pt);
   }
@@ -999,7 +1059,43 @@ function drawDrafts(w, h) {
   }
 }
 
+// Floor corners: solid where the corner is attached to a wall (it follows the wall), a hollow
+// ring where it is loose. Shown on the selected floor, and on every floor a drag is carrying.
+function floorCornerMark(p, attached, hot) {
+  const s = w2s(p);
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 3;
+  ctx.beginPath(); ctx.arc(s[0], s[1], 4.5, 0, Math.PI * 2);
+  if (attached) { ctx.fillStyle = hot ? '#ffffff' : C.cyan; ctx.fill(); }
+  else { ctx.fillStyle = C.bg; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = hot ? '#ffffff' : C.cyan; ctx.stroke(); }
+  ctx.restore();
+  if (attached) { ctx.lineWidth = 1.2; ctx.strokeStyle = C.bg; ctx.beginPath(); ctx.arc(s[0], s[1], 4.5, 0, Math.PI * 2); ctx.stroke(); }
+}
+
 function drawSelectionHandles() {
+  drawHandlesOfSelection();
+  // On top: what the current drag carries along (the floor corners attached to the moving
+  // walls, most of which sit under a wall handle) and what the dragged point snapped to.
+  const plan = drag && drag.moved ? (drag.kind === 'wall' ? drag.mv : drag.kind === 'handle' ? drag.joint : null) : null;
+  if (plan) for (const { r, i } of floorCornersOf(plan)) if (r.pts[i]) floorCornerMark(r.pts[i], true, false);
+  if (drag && drag.moved && (drag.kind === 'handle' || drag.kind === 'floorCorner') && snapInfo) {
+    const w = drag.kind === 'handle' && prop.walls.find(w => w.id === drag.id);
+    const p = drag.kind === 'floorCorner' ? drag.r.pts[drag.i] : w && [w[drag.end + 'x'], w[drag.end + 'y']];
+    if (p) snapMarker(p);
+  }
+}
+
+function drawHandlesOfSelection() {
+  if (selection && selection.kind === 'room') {
+    const r = prop.rooms.find(r => r.id === selection.id);
+    if (!r) return;
+    const walls = curWalls();
+    r.pts.forEach((p, i) => {
+      const hot = (hover && hover.kind === 'floorCorner' && hover.i === i) || (drag && drag.kind === 'floorCorner' && drag.i === i);
+      floorCornerMark(p, floorCornerAttached(walls, p[0], p[1]), hot);
+    });
+    return;
+  }
   if (!(selection && selection.kind === 'wall')) return;
   const wl = prop.walls.find(w => w.id === selection.id);
   if (!wl) return;
@@ -1180,12 +1276,16 @@ function canvasPos(e) {
 function updateCursor() {
   if (!canvas) return;
   let c = 'crosshair';
-  if (drag && drag.kind === 'pan') c = 'grabbing';
+  if (drag && drag.kind === 'pan') c = drag.panned ? 'grabbing' : 'default';
   else if (spaceDown) c = 'grab';
   else if (tool === 'select') {
+    // The cursor says what a drag would do: move for walls, openings and a selected underlay,
+    // a pointer for handles, the plain arrow for floors and references (a drag there pans).
     if (!hover) c = 'default';
-    else if (hover.kind === 'handle') c = 'pointer';
-    else c = 'move';
+    else if (hover.kind === 'handle' || hover.kind === 'floorCorner') c = 'pointer';
+    else if (hover.kind === 'wall' || hover.kind === 'opening') c = 'move';
+    else if (hover.kind === 'underlay' && selection && selection.kind === 'underlay') c = 'move';
+    else c = 'default';
   }
   canvas.style.cursor = c;
 }
@@ -1194,7 +1294,7 @@ function updateBadge(wx, wy) {
   if (!badgeEl) return;
   let html = `X <b>${escapeHtml(fmtLen(wx))}</b> &nbsp; Y <b>${escapeHtml(fmtLen(wy))}</b>`;
   if (drawing) {
-    const pt = snapPoint(wx, wy, { from: drawing.last });
+    const pt = snapPoint(wx, wy, { from: drawing.last, walls: true });
     const L = Math.hypot(pt[0] - drawing.last[0], pt[1] - drawing.last[1]);
     const ang = ((Math.atan2(-(pt[1] - drawing.last[1]), pt[0] - drawing.last[0]) * 180 / Math.PI) + 360) % 360;
     html += ` &nbsp; L <b class="ac">${escapeHtml(fmtLen(L))}</b> &nbsp; <b>${Math.round(ang)}&deg;</b>`;
@@ -1210,13 +1310,13 @@ function onPointerDown(e) {
   const [wx, wy] = s2w(sx, sy);
 
   if (e.button === 1 || spaceDown) {
-    drag = { kind: 'pan', sx, sy, panX: vs.panX, panY: vs.panY };
+    drag = { kind: 'pan', sx, sy, panX: vs.panX, panY: vs.panY, panned: true };
     updateCursor();
     return;
   }
 
   if (tool === 'wall') {
-    const pt = drawing ? snapPoint(wx, wy, { from: drawing.last }) : snapPoint(wx, wy, {});
+    const pt = drawing ? snapPoint(wx, wy, { from: drawing.last, walls: true }) : snapPoint(wx, wy, { walls: true });
     if (!drawing) { drawing = { last: pt }; }
     else {
       if (Math.hypot(pt[0] - drawing.last[0], pt[1] - drawing.last[1]) > 0.05) {
@@ -1240,7 +1340,7 @@ function onPointerDown(e) {
     return;
   }
   if (tool === 'room') {
-    const pt = snapPoint(wx, wy, roomDraft && roomDraft.pts.length ? { from: roomDraft.pts[roomDraft.pts.length - 1] } : {});
+    const pt = snapPoint(wx, wy, roomDraft && roomDraft.pts.length ? { from: roomDraft.pts[roomDraft.pts.length - 1], walls: true, floors: true } : { walls: true, floors: true });
     if (!roomDraft) roomDraft = { pts: [] };
     if (roomDraft.pts.length >= 3) {
       const first = w2s(roomDraft.pts[0]);
@@ -1262,23 +1362,31 @@ function onPointerDown(e) {
     return;
   }
 
-  // Select tool.
+  // Select tool. What a press does:
+  //   click (no travel)      selects what is under the cursor; empty canvas clears the selection
+  //   drag a wall            slides its straight run; joined walls and the floors on it follow
+  //   drag a corner handle   moves that joint (selected wall); attached walls and floors follow
+  //   drag a floor corner    reshapes the selected floor, snapping to walls and other floors
+  //   drag an opening        slides it along its wall
+  //   drag a selected image  aligns the underlay
+  //   drag anything else     pans; floors never move on their own, they follow their walls
+  // Alt (Option) detaches a wall or a joint, moving only the one wall. Drags start after
+  // DRAG_START px, so a click never nudges geometry, and take their undo snapshot then.
   const hit = hitTest(wx, wy);
-  if (!hit) {
-    selection = null;
-    drag = { kind: 'pan', sx, sy, panX: vs.panX, panY: vs.panY };
-    renderInspector(); updateCursor();
+  const underlaySelected = selection && selection.kind === 'underlay';
+  if (!hit || hit.kind === 'room' || (hit.kind === 'underlay' && !underlaySelected)) {
+    drag = { kind: 'pan', sx, sy, panX: vs.panX, panY: vs.panY, click: hit || { kind: 'none' }, panned: false };
+    updateCursor();
     return;
   }
-  // Drags take their undo snapshot on the first real move (onPointerMove), so a plain
-  // click-select never touches the history or clears the redo stack.
-  // Walls are sticky: a corner drag moves every wall end and room corner at that joint, a
-  // wall drag slides its straight run along its normal and stretches what is attached.
-  // Alt (Option) detaches, moving only the one wall freely as before.
   if (hit.kind === 'handle') {
     const w = prop.walls.find(w => w.id === hit.id);
     const joint = w && !e.altKey ? planCornerMove(w, hit.end, curWalls(), curRooms(), curOpenings()) : null;
-    drag = { kind: 'handle', id: hit.id, end: hit.end, joint, moved: false };
+    drag = { kind: 'handle', id: hit.id, end: hit.end, joint, sx, sy, moved: false };
+    return;
+  }
+  if (hit.kind === 'floorCorner') {
+    drag = { kind: 'floorCorner', r: prop.rooms.find(r => r.id === hit.id), i: hit.i, sx, sy, moved: false };
     return;
   }
   selection = { kind: hit.kind, id: hit.id };
@@ -1286,15 +1394,12 @@ function onPointerDown(e) {
   if (hit.kind === 'wall') {
     const w = prop.walls.find(w => w.id === hit.id);
     const mv = e.altKey ? null : planWallMove(w, curWalls(), curRooms(), curOpenings());
-    drag = { kind: 'wall', id: hit.id, wx, wy, orig: { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by }, mv: mv && mv.connected ? mv : null, moved: false };
+    drag = { kind: 'wall', id: hit.id, sx, sy, wx, wy, orig: { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by }, mv: mv && mv.connected ? mv : null, moved: false };
   } else if (hit.kind === 'opening') {
-    drag = { kind: 'opening', id: hit.id, moved: false };
-  } else if (hit.kind === 'room') {
-    const r = prop.rooms.find(r => r.id === hit.id);
-    drag = { kind: 'room', id: hit.id, wx, wy, orig: r.pts.map(p => [...p]), moved: false };
+    drag = { kind: 'opening', id: hit.id, sx, sy, moved: false };
   } else if (hit.kind === 'underlay') {
     const pl = curPlan();
-    drag = { kind: 'underlay', pl, wx, wy, ox: pl.offsetX, oy: pl.offsetY, moved: false };
+    drag = { kind: 'underlay', pl, sx, sy, wx, wy, ox: pl.offsetX, oy: pl.offsetY, moved: false };
   }
 }
 
@@ -1310,20 +1415,31 @@ function onPointerMove(e) {
     updateCursor();
     return;
   }
+  const travelled = Math.hypot(sx - drag.sx, sy - drag.sy) >= DRAG_START;
   if (drag.kind === 'pan') {
+    if (!drag.panned && !travelled && drag.click) return;
+    if (!drag.panned) { drag.panned = true; updateCursor(); }
     vs.panX = drag.panX - (sx - drag.sx) / vs.zoom;
     vs.panY = drag.panY - (sy - drag.sy) / vs.zoom;
     return;
   }
-  // First real movement: snapshot the pre-drag state (the underlay is not in the snapshot).
-  if (!drag.moved && drag.kind !== 'underlay') pushUndo();
-  drag.moved = true;
+  if (!drag.moved) {
+    if (!travelled) return;
+    // First real movement: snapshot the pre-drag state (the underlay is not in the snapshot).
+    if (drag.kind !== 'underlay') pushUndo();
+    drag.moved = true;
+  }
   if (drag.kind === 'handle') {
     const w = prop.walls.find(w => w.id === drag.id);
     if (!w) return;
-    const pt = snapPoint(wx, wy, { excludeWall: drag.joint ? new Set(drag.joint.wallIds) : w.id, from: drag.end === 'a' ? [w.bx, w.by] : [w.ax, w.ay] });
+    const pt = snapPoint(wx, wy, { excludeWall: drag.joint ? new Set(drag.joint.wallIds) : w.id, from: drag.end === 'a' ? [w.bx, w.by] : [w.ax, w.ay], walls: true });
     if (drag.joint) applyCornerMove(drag.joint, pt[0], pt[1]);
     else if (drag.end === 'a') { w.ax = pt[0]; w.ay = pt[1]; } else { w.bx = pt[0]; w.by = pt[1]; }
+  } else if (drag.kind === 'floorCorner') {
+    const r = drag.r, n = r && r.pts.length;
+    if (!n || drag.i >= n) return;
+    const axes = [r.pts[(drag.i + n - 1) % n], r.pts[(drag.i + 1) % n]];
+    r.pts[drag.i] = snapPoint(wx, wy, { walls: true, floors: true, skipCorner: { r, i: drag.i }, axes });
   } else if (drag.kind === 'wall') {
     const w = prop.walls.find(w => w.id === drag.id);
     if (!w) return;
@@ -1338,11 +1454,6 @@ function onPointerMove(e) {
     const { t } = distToSeg(wx, wy, p.w.ax, p.w.ay, p.w.bx, p.w.by);
     const minT = Math.min(0.5, o.width / 2 / p.L);
     o.t = Math.max(minT, Math.min(1 - minT, t));
-  } else if (drag.kind === 'room') {
-    const r = prop.rooms.find(r => r.id === drag.id);
-    if (!r) return;
-    const dx = rnd(wx - drag.wx), dy = rnd(wy - drag.wy);
-    r.pts = drag.orig.map(p => [p[0] + dx, p[1] + dy]);
   } else if (drag.kind === 'underlay') {
     drag.pl.offsetX = drag.ox + (wx - drag.wx);
     drag.pl.offsetY = drag.oy + (wy - drag.wy);
@@ -1351,6 +1462,12 @@ function onPointerMove(e) {
 
 function onPointerUp() {
   invalidate();
+  if (drag && drag.kind === 'pan' && drag.click && !drag.panned) {
+    // A click on a floor, the underlay or empty canvas selects it (or clears the selection).
+    const c = drag.click;
+    selection = c.kind === 'none' ? null : c.kind === 'underlay' ? { kind: 'underlay' } : { kind: c.kind, id: c.id };
+    renderInspector();
+  }
   if (drag && drag.moved) { touch(); renderInspector(); }
   drag = null;
   if (hoverPt && tool === 'select') hover = hitTest(hoverPt[0], hoverPt[1]);
@@ -1440,11 +1557,15 @@ function setTool(t) {
 function setHint(text) { if (hintEl) hintEl.textContent = text; }
 function updateHint() {
   const hints = {
-    select: 'Click to select. Drag walls, corners, openings, rooms or the underlay; connected walls follow (hold Alt to detach). Scroll pans, pinch or cmd+scroll zooms. F fits view.',
-    wall: drawing ? 'Click to place the next corner. Double-click or Esc to end the chain.' : 'Click to start a wall chain. Walls snap to endpoints, axes and 15 degree angles.',
+    select: selection && selection.kind === 'room'
+      ? 'Floors follow their walls. Drag a corner to reshape this floor; it snaps to walls. Dragging elsewhere pans.'
+      : selection && selection.kind === 'underlay'
+        ? 'Drag the image to align it with the walls. Esc deselects it; dragging then pans again.'
+        : 'Click to select. Drag a wall or a selected wall\'s corner; joined walls and floors follow (Alt detaches). Drag elsewhere to pan; pinch or cmd+scroll zooms. F fits view.',
+    wall: drawing ? 'Click to place the next corner. Double-click or Esc to end the chain.' : 'Click to start a wall chain. Walls snap to wall ends, along walls (diamond), axes and 15 degree angles.',
     door: 'Click on a wall to place a door.',
     window: 'Click on a wall to place a window.',
-    room: roomDraft ? 'Click corners; click the first point or double-click to close the room.' : 'Click to outline a room polygon (used for floor area, materials and 3D floors).',
+    room: roomDraft ? 'Click corners; click the first point or double-click to close the room.' : 'Click to outline a floor. Corners snap to wall ends and along walls, so the floor follows them when they move.',
     calibrate: (!prop || !curPlan()) ? 'Upload a plan image first (UNDERLAY, left panel).' : 'Click two points a known distance apart on the plan image, then enter the real distance.',
   };
   setHint(hints[tool] || '');
@@ -1514,7 +1635,7 @@ function renderToolCol() {
     ${toolBtn('data-act="upload"', 'upload', 'UPLOAD IMAGE', '', false)}
     <input type="file" class="hidden-file" accept="image/*,.pdf">
     <div class="tool-sep"></div>
-    <label class="tool-check" title="Snap to endpoints, axes and 15 degree angles">${icon('snap')}<span>SNAP</span><input type="checkbox" ${snapOn ? 'checked' : ''} data-chk="snap"></label>
+    <label class="tool-check" title="Snap to wall ends, wall centre lines, floor corners, axes and 15 degree angles">${icon('snap')}<span>SNAP</span><input type="checkbox" ${snapOn ? 'checked' : ''} data-chk="snap"></label>
     <label class="tool-check" title="Show a dimension string on every wall">${icon('dims')}<span>DIMS</span><input type="checkbox" ${dimsOn ? 'checked' : ''} data-chk="dims"></label>
     <div class="tool-sep"></div>
     ${toolBtn('data-act="fit"', 'fit', 'FIT VIEW', 'F', false)}
@@ -1634,6 +1755,7 @@ function bindSourceCard(insp) {
 function renderInspector() {
   if (!inspEl) return;
   const insp = inspEl;
+  if (tool === 'select') updateHint();   // the select hint describes what the selection allows
 
   if (calib && calib.a && calib.b) {
     const measured = Math.hypot(calib.b[0] - calib.a[0], calib.b[1] - calib.a[1]);
@@ -1749,8 +1871,10 @@ function renderInspector() {
       const v = parseLen(e.target.value);
       if (!isNaN(v) && v > 0.05) {
         pushUndo();
+        // The b end moves along the wall like a corner drag: walls joined there and the floor
+        // corners on it come along.
         const ux = (w.bx - w.ax) / L, uy = (w.by - w.ay) / L;
-        w.bx = rnd(w.ax + ux * v); w.by = rnd(w.ay + uy * v);
+        applyCornerMove(planCornerMove(w, 'b', curWalls(), curRooms(), curOpenings()), rnd(w.ax + ux * v), rnd(w.ay + uy * v));
         touch();
       }
       renderInspector();
@@ -1814,14 +1938,26 @@ function renderInspector() {
   if (selection.kind === 'room') {
     const r = prop.rooms.find(r => r.id === selection.id);
     if (!r) { selection = null; return renderInspector(); }
+    const levelWalls = curWalls();
+    const attached = r.pts.filter(p => floorCornerAttached(levelWalls, p[0], p[1])).length, loose = r.pts.length - attached;
     insp.innerHTML = `${head('room', 'ROOM')}
       <div class="field"><label>Name</label><input type="text" data-name value="${escapeHtml(r.name || '')}"></div>
       <div class="field"><label>Floor material</label>${materialSelectHtml('floor', r.material, 'data-mat')}</div>
       ${scopeAssignHtml(r.id)}
       <div class="stat-line"><span>Area</span><b>${fmtArea(polyArea(r.pts))}</b></div>
       <div class="stat-line"><span>Perimeter</span><b>${fmtLen(r.pts.reduce((n, p, i) => n + Math.hypot(p[0] - r.pts[(i + 1) % r.pts.length][0], p[1] - r.pts[(i + 1) % r.pts.length][1]), 0))}</b></div>
-      <div class="stat-line"><span>Corners</span><b>${r.pts.length}</b></div>
+      <div class="stat-line"><span>Corners on walls</span><b>${attached} of ${r.pts.length}</b></div>
+      <div class="empty" style="margin:10px 0">The floor follows its walls: solid corners sit on a wall and move with it. ${loose ? 'Hollow corners are loose and stay put when walls move.' : ''} Drag a corner to reshape the floor; it snaps to walls and other floors.</div>
+      ${loose ? `<button class="btn" data-snap-floor title="Move each loose corner within 30 cm of a wall onto it">${icon('snap')}SNAP CORNERS TO WALLS</button>` : ''}
       <button class="btn danger" data-del>${icon('trash')}DELETE ROOM</button>`;
+    const snapBtn = insp.querySelector('[data-snap-floor]');
+    if (snapBtn) snapBtn.onclick = () => {
+      const before = snapshot();
+      const moved = snapFloorToWalls(r, curWalls());
+      if (moved) { hist.undo.push(before); if (hist.undo.length > 80) hist.undo.shift(); hist.redo.length = 0; touch(); }
+      renderInspector(); invalidate();
+      if (!moved) setHint('No loose corner is within 30 cm of a wall. Drag it onto one instead.');
+    };
     insp.querySelector('[data-name]').onchange = e => { r.name = e.target.value; touch(); };
     insp.querySelector('[data-mat]').onchange = e => { r.material = e.target.value || null; touch(); };
     insp.querySelector('[data-del]').onclick = deleteSelection;
