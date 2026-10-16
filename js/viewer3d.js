@@ -44,6 +44,7 @@ import {
 
 // ---------- persistent GPU state (one context for the life of the page) ----------
 let renderer = null, pmrem = null;
+let hdrSampleCounts = [];      // MSAA sample counts the composer's half-float buffers support
 
 const ENV_DEFAULTS = {
   time: 14.5, azimuth: 200, north: 0, exposure: 1.0, quality: 'high',
@@ -99,7 +100,7 @@ function dpr() { const q = qualityProfile(prop.env.quality); return Math.min((wi
 function modelTop() { return topOfLevels(prop); }
 function lowestElevation() { return prop.levels.reduce((m, l) => Math.min(m, l.elevation), Infinity); }
 function hiddenLevels() { return hiddenLevelsByProp[prop.id] || (hiddenLevelsByProp[prop.id] = new Set()); }
-function requestRender(n) { framesLeft = Math.max(framesLeft, n || 2); }
+function requestRender(n) { framesLeft = Math.max(framesLeft, n || 2); showBusy(); }
 
 // ---------- defaults for old data ----------
 function ensureDefaults(p) {
@@ -132,6 +133,12 @@ function ensureRenderer() {
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.localClippingEnabled = true;
   renderer.domElement.className = 'v-canvas';
+  // Query this format: MAX_SAMPLES alone may overstate half-float support. The answer is fixed
+  // for the context and the query is a synchronous round trip to the GPU process, so ask once,
+  // while its queue is empty. Asked on every mount, it waited behind every shader link still
+  // queued from the previous view: tens of seconds under software rendering.
+  const gl = renderer.getContext();
+  hdrSampleCounts = Array.from(gl.getInternalformatParameter(gl.RENDERBUFFER, gl.RGBA16F, gl.SAMPLES) || []);
   pmrem = new THREE.PMREMGenerator(renderer);
   pmrem.compileEquirectangularShader();
   return renderer;
@@ -326,10 +333,7 @@ function configureRenderQuality(name, forExport = false) {
   passes.gtao.updateGtaoMaterial({ samples: q.aoSamples });
   passes.bloom.enabled = q.bloom;
   // MSAA belongs on the composer's HDR buffers, not the unused default framebuffer.
-  // Query this format: MAX_SAMPLES alone may overstate half-float support.
-  const gl = renderer.getContext();
-  const supported = gl.getInternalformatParameter(gl.RENDERBUFFER, gl.RGBA16F, gl.SAMPLES);
-  const samples = Math.max(0, ...Array.from(supported || []).filter(n => n <= (forExport ? 0 : q.samples)));
+  const samples = Math.max(0, ...hdrSampleCounts.filter(n => n <= (forExport ? 0 : q.samples)));
   for (const target of [composer.renderTarget1, composer.renderTarget2]) {
     if (target.samples !== samples) { target.dispose(); target.samples = samples; }
   }
@@ -790,9 +794,47 @@ function tick(time) {
     // One bad frame must not kill the animation loop for the rest of the session.
     try { renderFrame(); }
     catch (e) { if (!renderFailed) { renderFailed = true; console.error('render failed', e); } }
+    fenceFrame();
   }
+  showBusy();
 }
 let renderFailed = false;
+
+// warmPrograms() only issues shader links; they finish in the GPU process, and the first draw (or
+// any synchronous GL query) that needs one waits for them. KHR_parallel_shader_compile tells
+// without waiting.
+function programsLinked() { return renderer.info.programs.every(p => p.isReady()); }
+// A frame is drawn once the GPU process has run its commands, which under software rendering can
+// be seconds after renderFrame() returns. A fence after the latest frame says when.
+let frameFence = null;
+function fenceFrame() {
+  const gl = renderer.getContext();
+  if (frameFence) gl.deleteSync(frameFence);
+  frameFence = gl.isContextLost() ? null : gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+}
+function framesDrawn() {
+  if (!frameFence) return true;
+  const gl = renderer.getContext();
+  // WebGL updates a sync's status between tasks: this never waits on the GPU.
+  if (!gl.isContextLost() && gl.getSyncParameter(frameFence, gl.SYNC_STATUS) !== gl.SIGNALED) return false;
+  if (!gl.isContextLost()) gl.deleteSync(frameFence);
+  frameFence = null;
+  return true;
+}
+// The view is busy until it has drawn what it is going to show: scans loaded, the environment
+// baked, procedural textures landed, shader programs linked and the frames run on the GPU.
+// Software-rendered browsers spend tens of seconds on this with the page frozen in shader
+// compiles; aria-busy lets assistive technology and browser checks wait for the view instead of
+// guessing a delay. A requested frame marks it busy at once, so a change is never reported
+// settled before it is drawn.
+let shownBusy = true;
+function showBusy() {
+  const busy = framesLeft > 0 || !programsWarm || texturesPending || pendingTextureJobs() > 0
+    || Object.values(scanState).includes('loading') || splatBusy() || !programsLinked() || !framesDrawn();
+  if (busy === shownBusy || !wrapEl) return;
+  shownBusy = busy;
+  wrapEl.setAttribute('aria-busy', String(busy));
+}
 let texturesPending = false, lastTextureRedraw = 0;
 
 // Inside the house there is no sky to bounce light around, so fake the bounce: more, warmer
@@ -2144,7 +2186,7 @@ export function mount(root) {
   root.innerHTML = `
     <div class="editor-layout v-layout">
       <div class="tool-col"></div>
-      <div class="canvas-wrap v-wrap">
+      <div class="canvas-wrap v-wrap" aria-busy="true">
         <div class="v-modes"></div>
         <div class="v-compass" title="North"><div class="v-rose"><span class="n">N</span><span class="e">E</span><span class="s">S</span><span class="w">W</span><i></i></div></div>
         <div class="v-env"></div>
@@ -2155,6 +2197,7 @@ export function mount(root) {
       <div class="inspector"></div>
     </div>`;
   wrapEl = root.querySelector('.canvas-wrap');
+  shownBusy = true;
   inspEl = root.querySelector('.inspector');
   hud = {
     modes: wrapEl.querySelector('.v-modes'), compass: wrapEl.querySelector('.v-rose'), env: wrapEl.querySelector('.v-env'),

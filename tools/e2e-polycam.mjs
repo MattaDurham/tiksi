@@ -195,6 +195,13 @@ async function waitState(states, ms) {
   await page.waitForFunction(s => { const d = document.getElementById('np-dialog'); return d && s.includes(d.dataset.state); }, states, { timeout: ms || 120000 });
   return page.evaluate(() => document.getElementById('np-dialog').dataset.state);
 }
+// The model view is aria-busy until its scans, environment, textures and shader programs are in
+// place and the GPU has drawn them. Under SwiftShader on a loaded CI runner that has taken over
+// 40 s, with the page frozen in shader compiles all the while: a screenshot or a click started
+// then cannot finish inside its own 30 s. Wait for the view, not a guessed delay.
+async function modelSettled() {
+  await page.waitForSelector('.v-wrap[aria-busy="false"]', { timeout: 120000 });
+}
 async function logText() { return page.evaluate(() => Array.from(document.querySelectorAll('#np-dialog .np-step')).map(li => li.textContent.trim().replace(/\s+/g, ' ')).join('\n')); }
 
 try {
@@ -219,7 +226,7 @@ try {
   mkdirSync(outDir, { recursive: true });
   await page.screenshot({ path: resolve(outDir, 'e2e-plan.png') });
   await page.goto(APP + '#/model');
-  await sleep(9000);
+  await modelSettled();
   await page.screenshot({ path: resolve(outDir, 'e2e-model.png') });
   await page.goto(APP + '#/projects');
   await sleep(800);
@@ -295,7 +302,7 @@ try {
   await page.click('#np-dialog [data-np-cancel]');
   page.once('dialog', d => d.accept());
   await page.goto(APP + '#/model');
-  await page.waitForSelector('.v-scan-row', { timeout: 60000 });
+  await modelSettled();
   check(await page.inputValue('[data-env="quality"]') === 'low', 'viewer: functional fixture uses Low render quality');
   await page.waitForFunction(() => { const k = document.querySelector('.v-scan-row .key'); return k && k.textContent.trim() === 'MESH'; }, null, { timeout: 60000 });
   await page.click('.v-scan-row');
@@ -304,6 +311,8 @@ try {
   const toast = await page.evaluate(() => document.querySelector('.v-toast').textContent);
   console.log('       ' + toast);
   check(/5 walls|6 walls|7 walls/.test(toast) && /2 rooms/.test(toast), 'viewer: re-proposal matches');
+  // The rebuilt model compiles and textures its new walls before the next import starts.
+  await modelSettled();
 
   // ---- a second scan joins the plan: the fit reads it, the person says what it is ----
   console.log('\n[additive] a second scan of the same layout, added as the next floor');
@@ -315,6 +324,7 @@ try {
   await page.click('#btn-file');await page.click('[data-file-tab=capture]');
   await page.setInputFiles('[data-any-file]',glbPath);
   await page.waitForSelector('[data-file-dialog]',{state:'detached'});
+  await modelSettled();
   await page.locator('.v-scan-row').last().click();await page.click('.inspector [data-plan]');
   await page.waitForSelector('.sp [data-mode]', { timeout: 120000 });
   const suggested = await page.evaluate(() => document.querySelector('.sp-choice.suggested').dataset.mode);
