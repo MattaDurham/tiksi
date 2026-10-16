@@ -5,7 +5,7 @@ import { test } from 'node:test';
 
 globalThis.indexedDB = { open() { throw new Error('no IndexedDB under Node'); } };
 const store = await import('../js/store.js');
-const { mirrorSpec, mergeMirror, syncedState, specSignature, mirrorFileName } = await import('../js/sketchup-mirror.js');
+const { mirrorSpec, mergeMirror, syncedState, specSignature, mirrorFileName, sketchupImageBytes } = await import('../js/sketchup-mirror.js');
 
 function room() {
   const p = store.propertyTemplate('Synthetic room');
@@ -209,4 +209,18 @@ test('the property survives store validation after a merge', () => {
   store.ws.data = store.emptyWorkspace();
   const ids = store.mergeWorkspace({ version: 2, properties: [p], materials: [], products: [], projects: [] });
   assert.deepEqual(ids, ['prop-syn']);
+});
+
+test('underlays SketchUp cannot read are re-encoded, the rest are sent as they are', async () => {
+  const sent = [];
+  const encode = async bytes => { sent.push(Array.from(bytes)); return new Uint8Array([0xff, 0xd8, 0xff]); };
+  const webp = await sketchupImageBytes('data:image/webp;base64,UklGRg==', encode);
+  assert.equal(webp.ext, 'jpg', 'a scan underlay (WebP) goes to SketchUp as JPEG');
+  assert.deepEqual(Array.from(webp.bytes), [0xff, 0xd8, 0xff]);
+  assert.deepEqual(sent, [[0x52, 0x49, 0x46, 0x46]], 'the encoder received the original WebP bytes');
+  const png = await sketchupImageBytes('data:image/png;base64,iVBORw==', encode);
+  assert.equal(png.ext, 'png');
+  assert.deepEqual(Array.from(png.bytes), [0x89, 0x50, 0x4e, 0x47]);
+  assert.equal(sent.length, 1, 'PNG and JPEG need no re-encoding');
+  assert.equal(await sketchupImageBytes('data:image/gif;base64,R0lGOD', encode), null, 'unsupported images are not sent');
 });
