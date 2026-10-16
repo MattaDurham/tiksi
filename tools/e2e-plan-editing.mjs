@@ -1,4 +1,5 @@
-// Plan editing on the real canvas: what a click and a drag do in the SELECT tool.
+// Plan editing on the real canvas: what a click and a drag do in the SELECT tool, and the
+// ROOM tool's single click that floors an area the walls enclose.
 // A synthetic 6 x 4 m house split by a partition at x = 3, two floors drawn on the wall
 // centre lines and a tracing underlay. Ephemeral origin and browser profile; no live state.
 // Run: node tools/e2e-plan-editing.mjs (Playwright + Chromium installed).
@@ -163,6 +164,39 @@ try {
   assert.match(await inspector(), /PLAN UNDERLAY/);
   await dragPath([7.3, 5.3], [7.8, 5.3]);
   near((await state()).plan.x, before.x + 0.5, 0.02, 'a selected underlay drags');
+  await page.keyboard.press('Escape');
+
+  // 8. ROOM: one click inside a closed wall loop floors it on the wall centre lines.
+  const hint = () => page.locator('.canvas-hint').innerText();
+  await page.keyboard.press('r');
+  await page.mouse.click(...at(1.5, 2));               // the left half already has its floor
+  assert.equal(await page.locator('.inspector [data-name]').inputValue(), 'Left', 'an area with a floor selects it');
+  assert.match(await hint(), /Left already covers this area/);
+  assert.deepEqual((await state()).rooms, start.rooms, 'no second floor over the same area');
+  await page.keyboard.press('Delete');
+  assert.deepEqual(Object.keys((await state()).rooms), ['right']);
+  assert.doesNotMatch(await hint(), /already covers/, 'the note goes with the floor');
+  await page.mouse.click(...at(1.5, 2));
+  now = await state();
+  const filled = Object.keys(now.rooms).find(id => id !== 'right');
+  assert.deepEqual(now.rooms[filled], [[0, 0], [3, 0], [3, 4], [0, 4]], 'filled floor sits on the wall centre lines');
+  assert.match(await inspector(), /Corners on walls\s*4 of 4/);
+  // Outside the walls, or with Alt held, a click starts a corner-by-corner outline instead.
+  await page.mouse.click(...at(-1, -1));
+  assert.match(await hint(), /Click corners/);
+  await page.keyboard.press('Escape');
+  await page.keyboard.down('Alt');
+  await page.mouse.click(...at(4.5, 2));
+  await page.keyboard.up('Alt');
+  assert.match(await hint(), /Click corners/);
+  await page.keyboard.press('Escape');
+  assert.equal(Object.keys((await state()).rooms).length, 2, 'outlines that were not closed add nothing');
+  // The filled floor follows the partition like any floor on its walls.
+  await page.keyboard.press('v');
+  await dragPath([3, 2], [4, 2.3]);
+  now = await state();
+  near(now.walls.mid[0], 4, 0.01, 'partition moved');
+  assert.deepEqual(now.rooms[filled].map(p => p[0]), [0, now.walls.mid[0], now.walls.mid[0], 0], 'filled floor followed the partition');
 
   assert.deepEqual(errors, [], 'no page errors');
   console.log('Plan editing click/drag model passed.');
