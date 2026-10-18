@@ -208,8 +208,13 @@ class SketchUpBuildTests(unittest.TestCase):
     def test_archive_from_builder_files_without_a_journal(self):
         first, second = self.file('a.py', 'walls()\n'), self.file('b.py', 'racks()\n')
         model = self.file('exports/Room v8.skp', MODEL)
-        target, plans = sb.archive(self.args(code=[first, second], skp=[str(model)], step=['Add labels']), self.data)
+        self.file('pipeline/annotate.py', 'print("dimensions")\n')
+        texture = self.file('pipeline/textures/tile.png', b'\x89PNG synthetic')
+        target, plans = sb.archive(self.args(code=[first, second], skp=[str(model)], step=['Add labels'],
+                                             post=[self.base / 'pipeline']), self.data)
         self.assertEqual(plans, [])
+        self.assertEqual((target / 'post/textures/tile.png').read_bytes(), texture.read_bytes())
+        self.assertTrue((target / 'post/annotate.py').is_file())
         readme = (target / 'README.md').read_text(encoding='utf-8')
         self.assertIn('1. `build_model` with `clean: true` and the code in `code/a.py`.', readme)
         self.assertIn('2. `build_model` and the code in `code/b.py`.', readme)
@@ -230,6 +235,10 @@ class SketchUpBuildTests(unittest.TestCase):
             sb.archive(self.args(code=[code_file], save=[3]), self.data)
         with self.assertRaisesRegex(sb.BuildError, 'No file at'):
             sb.archive(self.args(code=[self.base / 'missing.py']), self.data)
+        (self.base / 'empty-pipeline').mkdir()
+        with self.assertRaisesRegex(sb.BuildError, 'holds no files'):
+            sb.archive(self.args(code=[code_file], post=[self.base / 'empty-pipeline'],
+                                 skp=[str(self.file('ok.skp', MODEL))]), self.data)
         with self.assertRaisesRegex(sb.BuildError, 'No project folder'):
             sb.archive(self.args(project='nowhere', code=[code_file]), self.data)
         with self.assertRaisesRegex(sb.BuildError, 'label'):

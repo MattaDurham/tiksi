@@ -282,8 +282,10 @@ def archive(args, data=None):
         raise BuildError('Give the build code: --code FILE (in run order) and/or --session ID.')
     if args.save and not args.session:
         raise BuildError('--save numbers refer to a session journal; add --session.')
-    for path in [*args.code, *args.post]:
+    for path in args.code:
         if not path.is_file(): raise BuildError(f'No file at {path}.')
+    for path in args.post:
+        if not path.exists(): raise BuildError(f'No file or folder at {path}.')
     project = project_folder(args.project, data)
     target = project / 'build' / args.label
     if target.exists(): raise BuildError(f'{target} exists; choose a new label.')
@@ -337,7 +339,13 @@ def archive(args, data=None):
                 if not path.is_file(): raise BuildError(f'No .skp at {path}.')
                 check_skp(path, str(path))
                 place(path, staging, f'models/{path.name}', files, 'model')
-        for path in args.post: place(path, staging, f'post/{path.name}', files, 'post')
+        for path in args.post:
+            # A folder (a whole local pipeline) keeps its layout inside post/.
+            sources = [path] if path.is_file() else sorted(item for item in path.rglob('*') if item.is_file())
+            if not sources: raise BuildError(f'{path} holds no files.')
+            for item in sources:
+                name = item.name if item == path else item.relative_to(path).as_posix()
+                place(item, staging, f'post/{name}', files, 'post')
         if not any(entry['role'] == 'model' for entry in files):
             raise BuildError('No model to keep: pass --skp or --session with a saved model.')
         for entry in files:
@@ -508,7 +516,8 @@ def main(argv=None):
     archive_parser.add_argument('--save', action='append', default=[], type=int,
                                 help='journal number of a save to file (default: the latest)')
     archive_parser.add_argument('--skp', action='append', default=[], help='a .skp file or https link to keep')
-    archive_parser.add_argument('--post', action='append', default=[], type=Path, help='a local post-step script')
+    archive_parser.add_argument('--post', action='append', default=[], type=Path,
+                                help='a local post-step script, or a folder of them (copied into post/)')
     archive_parser.add_argument('--step', action='append', default=[], help='a step after the cloud build, in order')
     archive_parser.add_argument('--note', action='append', default=[], help='a note for the README')
     archive_parser.add_argument('--source', help='where the build came from, e.g. a conversation')
