@@ -20,3 +20,10 @@ Instructions live in these AGENTS files; do not add model-specific rule files.
   owner's explicit instruction. Local/private instructions can narrow this.
 - Hand over a running preview, a PR, completed CI results, and a clear account
   of private state touched. Watch CI and fix failures yourself.
+- A SketchUp cloud model (`build_model`/`save_model`) changes only by re-running
+  its code, so file every saved model's build beside it with
+  `python3 scripts/sketchup-build.py archive --project <local-data folder>
+  --label <draft>`: `--session` replays the Claude Code hook's journal in
+  `local-data/.sketchup-journal/`, `--code` takes builder files, and `--post`
+  and `--step` record local post-steps. No hook reminder after `save_model`
+  means no journal: save the code you ran to files and use `--code`.

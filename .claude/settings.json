@@ -1,0 +1,39 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "^mcp__.*__(build_model|save_model)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=\"$CLAUDE_PROJECT_DIR\"; [ -f \"$d/scripts/sketchup-build.py\" ] || d=$(git rev-parse --show-toplevel 2>/dev/null); [ -f \"$d/scripts/sketchup-build.py\" ] && exec python3 \"$d/scripts/sketchup-build.py\" hook; exit 0",
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "^mcp__.*__(build_model|save_model)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=\"$CLAUDE_PROJECT_DIR\"; [ -f \"$d/scripts/sketchup-build.py\" ] || d=$(git rev-parse --show-toplevel 2>/dev/null); [ -f \"$d/scripts/sketchup-build.py\" ] && exec python3 \"$d/scripts/sketchup-build.py\" hook; exit 0",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=\"$CLAUDE_PROJECT_DIR\"; [ -f \"$d/scripts/sketchup-build.py\" ] || d=$(git rev-parse --show-toplevel 2>/dev/null); [ -f \"$d/scripts/sketchup-build.py\" ] && exec python3 \"$d/scripts/sketchup-build.py\" hook; exit 0",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
