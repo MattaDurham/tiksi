@@ -367,6 +367,32 @@ Public instructions live in `AGENTS.md` and `AGENTS.local.example.md`; the
 owner's `AGENTS.local.md` is seeded once and never overwritten by template
 updates. `python3 scripts/agents-local.py diff` supports deliberate review.
 
+### SketchUp cloud builds
+
+Agents design rooms with the SketchUp cloud MCP, which builds a model only by
+running Python and cannot open a `.skp`; its session also expires. A model can
+therefore be revised only by re-running its code, so every saved model keeps
+that code beside it:
+
+```sh
+python3 scripts/sketchup-build.py archive --project <local-data folder> --label draft-8 \
+  --session <id> --save 41 --save 44 --post pipeline --step "Run post/add-labels.py on each model"
+python3 scripts/sketchup-build.py pending     # journaled saves, filed or not
+python3 scripts/sketchup-build.py verify local-data/<project>/build/draft-8
+```
+
+`archive` writes `local-data/<project>/build/<label>/`: the builder code, the
+`.skp` files, local post-step scripts, a README with the exact run steps and a
+manifest of SHA-256 checksums. It refuses an existing label, a file that is not
+a SketchUp model and a folder Git would track. `--code` takes builder files in
+run order; `--post` takes a script or a whole folder of local post-steps. In
+Claude Code, the hooks in `.claude/settings.json` journal every `build_model`
+call (failed ones too) and download every `save_model` `.skp` into ignored
+`local-data/.sketchup-journal/<session>/`, remind the agent to file each save,
+and hold the end of a turn once while the latest save is unfiled. `--session`
+replays that journal exactly: each save link carries the cloud session's step
+counter, which pins the call the saved model was built from.
+
 ## Testing
 
 Install the pinned test dependencies and browser once. The app itself still has
