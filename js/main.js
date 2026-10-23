@@ -30,6 +30,7 @@ import {
   initFiles, bindFileIntake, saveProject, openProjectPicker, openFromFile, openFromUrl, linkFolder, unlinkFolder, reconnectFolder,
   linkProjectFolder, unlinkProjectFolder, projectFolder,
   listFolder, openFromFolder, scheduleFolderSync, filesState, onFilesChange, isDirty, saveTarget, FSA, FSA_DIR, mirrorStatus,
+  editInSketchUp, NeedsFolder,
 } from './files.js';
 
 const VIEWS = {
@@ -206,6 +207,7 @@ function bindTopbar() {
   };
 
   document.addEventListener('tiksi:files',e=>openFileMenu(e.detail?.tab || 'project',e.detail?.selected));
+  document.addEventListener('tiksi:edit-in-sketchup',()=>openInSketchUp());
 
   const fileBtn = document.getElementById('btn-file');
   fileBtn.onclick = () => openFileMenu();
@@ -308,6 +310,26 @@ function openFileMenu(initialTab = 'project', selected) {
     if(!confirm('Replace the workspace with '+file.name+'? This is the explicit backup-restore action.'))return;
     if(/\.json$/i.test(file.name))replaceWorkspace(JSON.parse(await file.text()));else if(!await importBundle(file,{confirm:false}))return;
     afterWorkspaceReplaced();refreshTopbar();dialog.close();});
+}
+
+// EDIT IN SKETCHUP (PLAN and MODEL tool columns): open this project's .skp in SketchUp. Without a
+// folder there is no .skp yet, so Settings opens where the folder is chosen.
+let openingSketchUp = false;
+async function openInSketchUp() {
+  const prop = activeProperty();
+  if (openingSketchUp || !prop) return;
+  openingSketchUp = true;
+  showToast('Bringing ' + prop.name + ' up to date in its SketchUp model…', 'info');
+  try {
+    const r = await editInSketchUp(prop);
+    showToast('Opened ' + r.file + ' in ' + r.app + '. Save there and the changes come back here.');
+  } catch (e) {
+    if (e instanceof NeedsFolder) {
+      openFileMenu('settings');
+      const status = document.querySelector('[data-file-dialog] [data-file-status]');
+      if (status) status.textContent = e.message;
+    } else showToast(e.message, 'error');
+  } finally { openingSketchUp = false; }
 }
 
 // One-line confirmation at the bottom of the window (styles: .toast in console.css). Inside an

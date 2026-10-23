@@ -273,6 +273,24 @@ async function post(op, body) {
   return r.arrayBuffer();
 }
 
+// Ask the local server to open the mirror in SketchUp. The browser cannot say where the
+// project folder is, so it describes the file: { name, size, mtime, folder, parent, hint };
+// the server finds it (server/sketchup_open.py) and answers { path, app }.
+export async function openInSketchUp(file) {
+  for (let attempt = 0; ; attempt++) {
+    const cap = await mirrorCapabilities(attempt > 0);
+    const r = await fetch('/api/model-conversion/open-in-sketchup', {
+      method: 'POST', body: JSON.stringify(file),
+      headers: { 'X-Tiksi-Token': cap.token || '', 'Content-Type': 'application/json' },
+    });
+    if (r.ok) return r.json();
+    let msg = 'Opening SketchUp failed (' + r.status + ')';
+    try { msg = (await r.json()).error || msg; } catch (e) { /* not JSON */ }
+    if (r.status === 403 && attempt === 0 && /reconnect/i.test(msg)) continue;   // server restarted: fresh token
+    throw new Error(msg);
+  }
+}
+
 export async function readMirror(buffer) {
   return JSON.parse(new TextDecoder().decode(await post('read', buffer)));
 }

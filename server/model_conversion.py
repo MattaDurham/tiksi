@@ -34,7 +34,7 @@ class ModelConversionService:
     def capabilities(self):
         return {'token':self.token,'blender':bool(self.blender),'sketchup':self.sketchup,'cad':self.python.is_file(),
                 'imports':sorted((BLENDER if self.blender else set()) | (CAD if self.python.is_file() else set()) | ({'.skp'} if self.sketchup else set())),
-                'exports':(['blend'] if self.blender else [])+(['skp'] if self.sketchup else [])+(['ifc'] if self.python.is_file() else []),'mirror':self.sketchup,'maxBytes':MAX_BYTES}
+                'exports':(['blend'] if self.blender else [])+(['skp'] if self.sketchup else [])+(['ifc'] if self.python.is_file() else []),'mirror':self.sketchup,'openSketchUp':self.sketchup and sys.platform=='darwin','maxBytes':MAX_BYTES}
     def active_jobs(self):return int(self.lock.locked())
     def cancel(self):
         if self.process and self.process.poll() is None:self.process.terminate()
@@ -147,6 +147,9 @@ class ModelConversionService:
         finally:
             if folder:shutil.rmtree(folder,ignore_errors=True)
             self.lock.release()
+    def open_sketchup(self,request):
+        from server.sketchup_open import open_in_sketchup
+        return open_in_sketchup(request)
     def dispatch(self,h):
         base='/api/model-conversion';path=urlsplit(h.path).path
         if path!=base and not path.startswith(base+'/'):return False
@@ -154,7 +157,12 @@ class ModelConversionService:
             origin=h.headers.get('Origin')
             if origin and urlsplit(origin).netloc!=h.headers.get('Host'):raise ConversionError('Use the Tiksi app on this server',403)
             if h.headers.get('Sec-Fetch-Site')=='cross-site':raise ConversionError('Cross-site conversion is refused',403)
-            if path==base+'/capabilities' and h.command=='GET':self.reply(h,200,json.dumps(self.capabilities()).encode(),'application/json');return True
+            if path==base+'/capabilities' and h.command=='GET':
+                caps=self.capabilities()
+                # Edit in SketchUp opens the app on this Mac, so only a browser on this Mac is offered it.
+                from server.sketchup_open import at_this_mac
+                caps['openSketchUp']=caps['openSketchUp'] and at_this_mac(getattr(h,'client_address',('',))[0],h.headers.get('Host'))
+                self.reply(h,200,json.dumps(caps).encode(),'application/json');return True
             if not secrets.compare_digest(h.headers.get('X-Tiksi-Token',''),self.token):raise ConversionError('Reconnect to the conversion server',403)
             if path==base+'/cancel' and h.command=='POST':self.reply(h,200,json.dumps(self.cancel()).encode(),'application/json');return True
             if path==base+'/convert' and h.command=='POST':
@@ -174,6 +182,20 @@ class ModelConversionService:
                 if len(data)!=length:raise ConversionError('Upload was truncated')
                 op=h.headers.get('X-Mirror-Op','');data=self.mirror(op,data)
                 self.reply(h,200,data,'application/json' if op=='read' else 'application/octet-stream');return True
+            if path==base+'/open-in-sketchup' and h.command=='POST':
+                # Opens the browser's mirror file in SketchUp on this Mac (sketchup_open.py).
+                from server.sketchup_open import at_this_mac,OpenError
+                if not self.sketchup:raise ConversionError('Edit in SketchUp needs SketchUp installed on this Mac',422)
+                if not at_this_mac(getattr(h,'client_address',('',))[0],h.headers.get('Host')):raise ConversionError('Edit in SketchUp opens SketchUp on the Mac running Tiksi; use Tiksi at localhost on that Mac',403)
+                try:length=int(h.headers.get('Content-Length','0'))
+                except ValueError:raise ConversionError('Invalid content length')
+                if not 0<length<=4096:raise ConversionError('Invalid open request',413)
+                try:request=json.loads(h.rfile.read(length))
+                except ValueError:raise ConversionError('Open request must be JSON')
+                if not isinstance(request,dict):raise ConversionError('Open request must be an object')
+                try:result=self.open_sketchup(request)
+                except OpenError as e:raise ConversionError(str(e),e.status)
+                self.reply(h,200,json.dumps(result).encode(),'application/json');return True
             if path==base+'/jobs' and h.command=='GET':
                 jobs=[json.loads(p.read_text()) for p in self.root.glob('*/report.json')]
                 self.reply(h,200,json.dumps({'jobs':jobs}).encode(),'application/json');return True

@@ -21,7 +21,7 @@ import {
   ws, activeProperty, projectSlice, projectFileName, exportProjectBlob, importProject, readBundle, importBundle,
   putFile, getFile, deleteFile, handleKey, setSaveStatus, mergeWorkspace, replaceWorkspace, touch,
 } from './store.js';
-import { syncMirror, mirrorCapabilities, mirrorChangedOnDisk, MirrorBusy } from './sketchup-mirror.js';
+import { syncMirror, mirrorCapabilities, mirrorChangedOnDisk, MirrorBusy, openInSketchUp } from './sketchup-mirror.js';
 
 export const FSA = typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function';
 export const FSA_DIR = typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
@@ -548,6 +548,50 @@ function startMirrorPoll() {
       catch (e) { /* the next tick tries again */ }
     }
   }, 4000);
+}
+
+// ---------- edit in SketchUp ----------
+// The .skp beside a project is the same model in SketchUp: EDIT IN SKETCHUP brings it up to
+// date, then has the local server open it there, and a save in SketchUp comes back through the
+// mirror poll above. The browser never learns the folder's path, so the server finds the file
+// from its name, size and time; the path it found is kept as the next lookup's hint.
+export class NeedsFolder extends Error {}
+
+export async function editInSketchUp(prop) {
+  if (!prop) throw new Error('Open a property first.');
+  const cap = await mirrorCapabilities(true);
+  state.mirror.available = !!cap.mirror;
+  if (!cap.openSketchUp) {
+    throw new Error(cap.sketchup ? 'Edit in SketchUp opens SketchUp on the Mac running Tiksi: use Tiksi at localhost on that Mac.'
+      : 'Edit in SketchUp needs the local Tiksi server on a Mac with SketchUp installed.');
+  }
+  // This click is the user gesture a folder waiting for permission needs (it lasts a few
+  // seconds, well past the capability check).
+  const own = state.projectFolders.get(prop.id);
+  if (own && !own.permitted) await reconnectProjectFolders(true, prop.id);
+  else if (!own && !state.folder && state.folderNeedsPermission) await reconnectSharedFolder(true);
+  notify();
+  const folder = folderOf(prop.id);
+  if (!folder) throw new NeedsFolder('Choose a folder for ' + prop.name + ' first: its SketchUp model (.skp) is kept there, beside the project file.');
+  if (ws.data.settings.sketchupMirror === false) { ws.data.settings.sketchupMirror = true; touch(); }
+  // Write the plan into the .skp before SketchUp opens it.
+  clearTimeout(state.syncTimer);
+  while (state.syncing) await new Promise(r => setTimeout(r, 100));
+  await syncFolder();
+  if (state.mirror.errors.has(prop.id)) throw new Error(mirrorStatus(prop.id));
+  const ms = state.folderMap[prop.id] && state.folderMap[prop.id].mirror;
+  if (!ms || !ms.file) throw new Error(mirrorStatus(prop.id));
+  let file;
+  try { file = await (await folder.getFileHandle(ms.file)).getFile(); }
+  catch (e) { if (e.name === 'NotFoundError') throw new Error(ms.file + ' is not in ' + folder.name + ' yet; try again in a moment.'); throw e; }
+  const opened = await openInSketchUp({
+    name: file.name, size: file.size, mtime: file.lastModified, folder: folder.name,
+    parent: (own && own.parentName) || '', hint: ms.path || '',
+  });
+  ms.path = opened.path;
+  saveFolderMap();
+  notify();
+  return { file: file.name, path: opened.path, app: opened.app || 'SketchUp' };
 }
 
 export function mirrorStatus(propId) {
