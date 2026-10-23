@@ -246,17 +246,19 @@ start to the file's date. Three ways to keep it, none of which needs a server:
   save writes there silently, and the file is remembered across visits. Other
   browsers download the file. SAVE AS… (Cmd+Shift+S) picks a new file. The FILE
   button carries a dot while the browser copy is ahead of the file.
-- **A project folder.** FILE → Settings → LINK FOLDER picks a folder once; from
-  then on every property is kept there as its own `.tiksi`, rewritten a few
-  seconds after each change. Put the folder in iCloud Drive, Dropbox or OneDrive
-  and your projects follow you to the next machine, where OPEN FROM FOLDER lists
-  them. If the folder holds a newer copy than this browser (you edited elsewhere),
-  FILE warns and OPEN FROM FOLDER pulls it in rather than overwriting it.
-- **A project's own folder.** FILE → Settings → LINK THIS PROJECT'S FOLDER keeps the open
-  property in a folder of its own, for example `<project>/Tiksi/` beside the project's other
-  documents, instead of the shared folder. Only that property (and its `.skp` mirror) is
-  written there. If the folder already holds the property's `.tiksi`, Tiksi offers to open it;
-  keeping the browser copy saves it under a new name instead of writing over the file.
+- **Where a project is kept.** FILE → Settings → Where this project is kept → CHOOSE FOLDER.
+  Pick the project's own folder (where its other documents live) and Tiksi keeps its files in
+  a `Tiksi` folder inside it, made when missing: the `.tiksi`, rewritten a few seconds after
+  each change, and its `.skp` mirror. Picking a folder named `Tiksi`, or one that already holds
+  the project's `.tiksi`, uses that folder as it is. Only that project is written there. If the
+  folder already holds the project's `.tiksi`, Tiksi offers to open it; keeping the browser copy
+  saves it under a new name instead of writing over the file. STOP KEEPING IT IN A FOLDER leaves
+  the files where they are. If the folder holds a newer copy than this browser (you edited
+  elsewhere), FILE warns and OPEN FROM FOLDER pulls it in rather than overwriting it.
+- **Projects without their own folder.** FILE → Settings → Workspace backup & maintenance →
+  KEEP THEM IN ONE FOLDER keeps every other property in one folder as its own `.tiksi`. Put that
+  folder in iCloud Drive, Dropbox or OneDrive and those projects follow you to the next machine,
+  where OPEN FROM FOLDER lists them.
 - **A SketchUp mirror.** With a project folder linked and the local server running on a
   Mac with SketchUp installed, every `<name>.tiksi` in the folder gets a `<name>.skp` beside
   it. Walls (with their openings cut), openings, room floors, level tags and plan underlays

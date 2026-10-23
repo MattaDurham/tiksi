@@ -7,8 +7,9 @@
 //   PROJECT FOLDER   Pick a folder once (an iCloud Drive, Dropbox or OneDrive folder syncs it
 //                    across machines) and every property is kept there as <name>.tiksi,
 //                    rewritten a few seconds after each change. OPEN lists what the folder holds.
-//                    A property can instead have a folder of its own, such as <project>/Tiksi/
-//                    beside the project's other documents; only that property is written there.
+//                    A property can instead have a folder of its own: pick the project's folder
+//                    and Tiksi keeps its files in a Tiksi folder inside it, beside the project's
+//                    other documents. Only that property is written there.
 //   OPEN             A picker, a drop on the window, a folder entry, or #/open?url=<file> for a
 //                    project hosted anywhere that allows cross-origin reads.
 //
@@ -29,7 +30,7 @@ const OPEN_PICKER_TYPES = [{ description: 'tiksi project or workspace', accept: 
 const FOLDER_MAP_KEY = 'tiksi.folder.v1';
 const SYNC_DELAY_MS = 4000;
 
-let app = { remount() {}, refresh() {}, afterReplace() {} };
+let app = { remount() {}, refresh() {}, afterReplace() {}, opened() {} };
 export function initFiles(hooks) { app = Object.assign(app, hooks || {}); }
 
 // ---------- state ----------
@@ -75,7 +76,7 @@ export function isDirty(propId) {
 export function saveTarget(propId) {
   if (state.fileHandles.has(propId)) return { kind: 'file', name: state.fileHandles.get(propId).name };
   const folder = folderOf(propId), entry = state.folderMap[propId];
-  if (folder && entry && entry.file) return { kind: 'folder', name: entry.file, folder: folder.name };
+  if (folder && entry && entry.file) return { kind: 'folder', name: entry.file, folder: folderLabel(propId) || folder.name };
   return null;
 }
 
@@ -196,12 +197,14 @@ export async function openFromFile(file) {
     parsed = { data, manifest: null };
   } else parsed = await readBundle(file);
   const { data, manifest } = parsed;
+  const before = new Set(ws.data.properties.map(p => p.id));
   // Opening always adds/updates imported properties. Replacement is a separate explicit action.
   const ids = /\.json$/i.test(file.name) ? mergeWorkspace(data, { fromFile: true }) : await importProject(file);
   for (const id of ids) state.savedSig.set(id, signatureOf(id));
   app.refresh(); app.remount();
   setSaveStatus('OPENED ' + file.name.toUpperCase(), false);
   notify();
+  try { app.opened({ ids, name: file.name, replaced: ids.filter(id => before.has(id)) }); } catch (e) { console.error(e); }
   return ids;
 }
 
@@ -315,43 +318,66 @@ async function reconnectProjectFolders(interactive, only) {
   let any = false;
   for (const [id, entry] of Object.entries(state.folderMap)) {
     if (!entry || !entry.own || (only && id !== only)) continue;
-    let handle = state.projectFolders.get(id)?.handle || null;
-    if (!handle) { try { handle = (await getFile(handleKey('folder:' + id)))?.handle || null; } catch (e) { /* no store */ } }
+    const known = state.projectFolders.get(id);
+    let root = (known && (known.root || known.handle)) || null;
+    if (!root) { try { root = (await getFile(handleKey('folder:' + id)))?.handle || null; } catch (e) { /* no store */ } }
     // Without its handle the property stays unwritten until its folder is linked again.
-    const permitted = !!handle && await ensurePermission(handle, !!interactive);
-    state.projectFolders.set(id, { handle, name: handle ? handle.name : (entry.folderName || ''), permitted });
-    any = any || permitted;
+    const permitted = !!root && await ensurePermission(root, !!interactive);
+    let handle = root;
+    if (permitted && entry.sub) { try { handle = await root.getDirectoryHandle(entry.sub, { create: true }); } catch (e) { handle = null; } }
+    state.projectFolders.set(id, { handle, root, name: entry.folderName || (handle ? handle.name : ''), parentName: entry.parentName, permitted: permitted && !!handle });
+    any = any || (permitted && !!handle);
   }
   return any;
 }
 
 // ---------- a project's own folder ----------
-// { name, permitted } when the property is kept in a folder of its own, otherwise null.
+// { name, parentName, label, permitted } when the property is kept in a folder of its own, otherwise null.
 export function projectFolder(propId) {
   const own = state.projectFolders.get(propId);
-  return own ? { name: own.name, permitted: own.permitted } : null;
+  return own ? { name: own.name, parentName: own.parentName || null, label: folderLabel(propId), permitted: own.permitted } : null;
 }
 
-// Keep one property in a folder of its own, for example <project>/Tiksi/ beside the project's
-// other documents. When that folder already holds the property's project file (a project moved
-// there), `choose` decides whether to open it ('open') or keep this browser's copy ('keep');
-// keeping writes the browser copy beside it under a new name, so no file is overwritten.
+// "68 Chatsworth › Tiksi" when Tiksi made its folder inside the one picked, else the folder's name.
+export function folderLabel(propId) {
+  const own = state.projectFolders.get(propId);
+  if (!own) return '';
+  return own.parentName ? own.parentName + ' \u203a ' + own.name : own.name;
+}
+
+// The folder Tiksi keeps a project in, given the folder that was picked: the picked folder itself
+// when it is a Tiksi folder or already holds this project's file, otherwise a Tiksi folder inside
+// it (made when missing), so the project's own documents stay beside Tiksi's files.
+async function tiksiFolderIn(dir, prop) {
+  if (/^tiksi$/i.test(dir.name)) return { folder: dir, sub: null };
+  try { await dir.getFileHandle(projectFileName(prop)); return { folder: dir, sub: null }; }
+  catch (e) { if (e.name !== 'NotFoundError' && e.name !== 'TypeMismatchError') throw e; }
+  return { folder: await dir.getDirectoryHandle('Tiksi', { create: true }), sub: 'Tiksi' };
+}
+
+// Keep one property in a folder of its own. Pick the project's folder and Tiksi uses a Tiksi
+// folder inside it (see tiksiFolderIn). Returns null when no folder was chosen. When the folder
+// already holds the property's project file (a project moved there), `choose` decides whether to
+// open it ('open') or keep this browser's copy ('keep'); keeping writes the browser copy beside it
+// under a new name, so no file is overwritten.
 export async function linkProjectFolder(prop, opts) {
   opts = opts || {};
   if (!FSA_DIR) throw new Error('This browser cannot keep a project folder (Chrome and Edge can). Use SAVE to write project files instead.');
   if (!prop) throw new Error('Open a property first.');
   const own = state.projectFolders.get(prop.id);
-  if (own && own.handle && !own.permitted && !opts.pick) {
-    if (await reconnectProjectFolders(true, prop.id)) { notify(); scheduleFolderSync(0); return own.handle; }
+  if (own && (own.root || own.handle) && !own.permitted && !opts.pick) {
+    if (await reconnectProjectFolders(true, prop.id)) { notify(); scheduleFolderSync(0); return state.projectFolders.get(prop.id).handle; }
   }
-  let dir;
-  try { dir = await window.showDirectoryPicker({ mode: 'readwrite', id: 'tiksi-project-folder' }); }
+  let picked;
+  try { picked = await window.showDirectoryPicker({ mode: 'readwrite', id: 'tiksi-project-folder' }); }
   catch (e) { if (e && e.name === 'AbortError') return null; throw e; }
+  const { folder: dir, sub } = await tiksiFolderIn(picked, prop);
   const previous = state.folderMap[prop.id];
-  state.projectFolders.set(prop.id, { handle: dir, name: dir.name, permitted: true });
-  state.folderMap[prop.id] = { own: true, folderName: dir.name, shared: previous && !previous.own ? previous : (previous && previous.shared) || undefined };
+  const parentName = sub ? picked.name : undefined;
+  state.projectFolders.set(prop.id, { handle: dir, root: picked, name: dir.name, parentName, permitted: true });
+  state.folderMap[prop.id] = { own: true, folderName: dir.name, parentName, sub: sub || undefined, shared: previous && !previous.own ? previous : (previous && previous.shared) || undefined };
   state.conflicts.delete(prop.id);
-  try { await putFile(handleKey('folder:' + prop.id), null, { kind: 'handle', handle: dir }); } catch (e) { /* session only */ }
+  try { await putFile(handleKey('folder:' + prop.id), null, { kind: 'handle', handle: picked }); } catch (e) { /* session only */ }
   const existing = (await listFolder(dir)).find(en => en.name === projectFileName(prop));
   if (existing) {
     const choose = opts.choose || (en => (window.confirm(dir.name + ' already holds ' + en.name + ' (saved ' + new Date(en.lastModified).toLocaleString() + '). Open it?\n\nOK opens that file and replaces this browser\'s copy of ' + prop.name + '. Cancel keeps this browser\'s copy and saves it beside the file under a new name.') ? 'open' : 'keep'));
@@ -402,8 +428,11 @@ export async function openFromFolder(entry, folder) {
     const id = ids[0], record = { file: entry.name, sig: signatureOf(id), mtime: file.lastModified };
     const before = state.folderMap[id];
     if (folder !== state.folder) {
-      // Opened from a project's own folder: the property is kept there from now on.
-      state.folderMap[id] = Object.assign(record, { own: true, folderName: folder.name, shared: before && !before.own ? before : before && before.shared });
+      // Opened from a project's own folder: the property is kept there from now on. When that is
+      // the folder it is already linked to, keep how it was reached (a Tiksi folder inside the pick).
+      const same = state.projectFolders.get(id)?.handle === folder && before && before.own;
+      state.folderMap[id] = Object.assign(record, { own: true, folderName: folder.name, parentName: same ? before.parentName : undefined, sub: same ? before.sub : undefined,
+        shared: before && !before.own ? before : before && before.shared });
       if (state.projectFolders.get(id)?.handle !== folder) {
         state.projectFolders.set(id, { handle: folder, name: folder.name, permitted: true });
         try { await putFile(handleKey('folder:' + id), null, { kind: 'handle', handle: folder }); } catch (e) { /* session only */ }
@@ -433,7 +462,7 @@ export async function syncFolder() {
   try {
     if (state.folder && !(await ensurePermission(state.folder, false))) { state.folder = null; state.folderNeedsPermission = true; notify(); }
     for (const own of state.projectFolders.values()) {
-      if (own.permitted && !(await ensurePermission(own.handle, false))) { own.permitted = false; notify(); }
+      if (own.permitted && !(await ensurePermission(own.root || own.handle, false))) { own.permitted = false; notify(); }
     }
     if (!anyFolder()) return;
     const mirrorOn = await mirrorEnabled();
@@ -524,8 +553,8 @@ function startMirrorPoll() {
 export function mirrorStatus(propId) {
   if (ws.data.settings.sketchupMirror === false) return 'SketchUp mirror is off.';
   const own = state.projectFolders.get(propId);
-  if (own && !own.permitted) return 'SketchUp mirror waits for this project\'s folder (' + own.name + ') to be reconnected.';
-  if (!folderOf(propId)) return 'Link a project folder to keep a SketchUp mirror (.skp) beside each project.';
+  if (own && !own.permitted) return 'SketchUp mirror waits for this project\'s folder (' + folderLabel(propId) + ') to be reconnected.';
+  if (!folderOf(propId)) return 'Choose a folder for this project to keep a SketchUp mirror (.skp) beside it.';
   if (state.mirror.available === false) return 'SketchUp mirror needs the local Tiksi server on a Mac with SketchUp installed.';
   if (state.mirror.errors.has(propId)) return 'SketchUp mirror: ' + state.mirror.errors.get(propId);
   const ms = state.folderMap[propId] && state.folderMap[propId].mirror;

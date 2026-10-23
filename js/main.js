@@ -64,7 +64,7 @@ async function boot() {
   refreshTopbar();
   onChange(refreshTopbar);
   // Projects are files: SAVE, the FILE menu, drops, Cmd+S/Cmd+O, and the linked folder.
-  initFiles({ remount: remountView, refresh: refreshTopbar, afterReplace: afterWorkspaceReplaced });
+  initFiles({ remount: remountView, refresh: refreshTopbar, afterReplace: afterWorkspaceReplaced, opened: confirmOpened });
   bindFileIntake(importAnyFile);
   onChange(() => { scheduleFolderSync(); refreshSaveButton(); });
   onFilesChange(refreshSaveButton);
@@ -242,10 +242,9 @@ function openFileMenu(initialTab = 'project', selected) {
       <button class="btn" data-new-property>NEW PROPERTY</button></section>
     <section data-file-panel="capture" hidden><h3>Bring your room into Tiksi</h3><p>Choose photos, a scan, a 3D model or a saved project. Imported projects add or update properties here.</p><button class="btn primary" data-capture-open>CHOOSE FILES…</button><button class="btn" data-polycam>POLYCAM LINK</button><button class="btn" data-photo3d>PHOTOS → 3D</button></section>
     <section data-file-panel="exchange" hidden data-file-exchange></section>
-    <section data-file-panel="settings" hidden><h3>Display</h3><label>Units <select data-file-units><option value="imperial">Feet / square feet</option><option value="metric">Metres / square metres</option></select></label><details><summary>Model environment</summary><div data-file-env></div></details><h3>Project folder</h3><p data-folder-label></p><div class="file-actions"><button class="btn" data-folder-link>LINK FOLDER</button><button class="btn" data-folder-open>OPEN FROM FOLDER</button><button class="btn" data-folder-unlink>UNLINK</button></div>
-      <h3>This project's folder</h3><p data-own-folder-label></p><div class="file-actions"><button class="btn" data-own-folder-link>LINK THIS PROJECT'S FOLDER</button><button class="btn" data-own-folder-unlink>USE THE SHARED FOLDER</button></div>
+    <section data-file-panel="settings" hidden><h3>Display</h3><label>Units <select data-file-units><option value="imperial">Feet / square feet</option><option value="metric">Metres / square metres</option></select></label><details><summary>Model environment</summary><div data-file-env></div></details><h3>Where this project is kept</h3><p data-own-folder-label></p><div class="file-actions"><button class="btn primary" data-own-folder-link>CHOOSE FOLDER</button><button class="btn" data-folder-open>OPEN FROM FOLDER</button><button class="btn" data-own-folder-unlink>STOP KEEPING IT IN A FOLDER</button></div>
       <label>Keep a SketchUp mirror (.skp) beside each project <input type="checkbox" data-mirror-on></label><p data-mirror-label></p>
-      <details><summary>Workspace backup & maintenance</summary><p>Project saves are usually enough. A workspace backup carries every property.</p><button class="btn" data-workspace-save>SAVE WORKSPACE BACKUP</button><button class="btn" data-demo>ADD DEMO PROJECTS</button><button class="btn" data-storage>CLEAN UNUSED STORAGE</button><p>Replace workspace is available only when you intentionally want to restore a full backup.</p><button class="btn" data-workspace-replace>REPLACE FROM BACKUP…</button></details></section>
+      <details><summary>Workspace backup & maintenance</summary><h3>Projects without their own folder</h3><p data-folder-label></p><div class="file-actions"><button class="btn" data-folder-link>KEEP THEM IN ONE FOLDER</button><button class="btn" data-folder-unlink>UNLINK</button></div><p>Project saves are usually enough. A workspace backup carries every property.</p><button class="btn" data-workspace-save>SAVE WORKSPACE BACKUP</button><button class="btn" data-demo>ADD DEMO PROJECTS</button><button class="btn" data-storage>CLEAN UNUSED STORAGE</button><p>Replace workspace is available only when you intentionally want to restore a full backup.</p><button class="btn" data-workspace-replace>REPLACE FROM BACKUP…</button></details></section>
     <p role="status" data-file-status></p><input type="file" data-any-file hidden multiple accept=".tiksi,.json,${SCAN_ACCEPT},.c4d,.max,.ma,.mb,.rfa,.dwf,.mtl,.bin,.tga,.jpg,.jpeg,.png,.webp,.heic,.heif,.tif,.tiff,.avif"><input type="file" data-replace-file hidden accept=".json,.zip,.tiksi">`;
   document.body.append(dialog);dialog.showModal();dialog.addEventListener('close',()=>dialog.remove());
   const envHost=dialog.querySelector('[data-file-env]');
@@ -255,17 +254,21 @@ function openFileMenu(initialTab = 'project', selected) {
   const refresh=()=>{
     const st=filesState(),target=prop && saveTarget(prop.id);
     dialog.querySelector('[data-file-target]').textContent=target?'Saving to '+target.name:'Choose a file on first save. Cmd+S saves again; Cmd+O opens a project.';
-    dialog.querySelector('[data-folder-label]').textContent=st.folderName || 'Optionally keep project files in a synced folder.';
     const own=prop&&projectFolder(prop.id);
-    dialog.querySelector('[data-own-folder-label]').textContent=!prop?'Open a property to give it a folder of its own.':own?('Kept in '+own.name+(own.permitted?'. Only this project is written there.':', which needs permission again: LINK THIS PROJECT\'S FOLDER reconnects it.')):'Kept in the shared folder. A folder of its own keeps this project beside its other documents, for example in a Tiksi folder inside the project\'s folder.';
-    const ownLink=dialog.querySelector('[data-own-folder-link]');ownLink.disabled=!FSA_DIR||!prop;ownLink.textContent=own&&!own.permitted?'RECONNECT THIS PROJECT\'S FOLDER':'LINK THIS PROJECT\'S FOLDER';
+    dialog.querySelector('[data-own-folder-label]').textContent=!prop?'Open a property to choose where it is kept.'
+      :own?(own.permitted?'Kept in '+own.label+'. Only this project is written there.':'Kept in '+own.label+', which needs permission again: RECONNECT FOLDER asks for it.')
+      :st.folder?'Kept in '+st.folderName+' with the other projects that have no folder of their own. CHOOSE FOLDER keeps it in its own folder instead.'
+      :'Kept in this browser only. CHOOSE FOLDER and pick the project\'s folder: Tiksi keeps its files in a Tiksi folder inside it, beside the project\'s other documents.';
+    const ownLink=dialog.querySelector('[data-own-folder-link]');ownLink.disabled=!FSA_DIR||!prop;ownLink.textContent=own&&!own.permitted?'RECONNECT FOLDER':'CHOOSE FOLDER';
     dialog.querySelector('[data-own-folder-unlink]').disabled=!own;
+    dialog.querySelector('[data-folder-label]').textContent=st.folderNeedsPermission?st.folderName+' needs permission again: RECONNECT asks for it.':st.folder?'Saved as files in '+st.folderName+'.':'They are kept in this browser only. Pick one folder to keep them all there as files.';
+    const sharedLink=dialog.querySelector('[data-folder-link]');sharedLink.textContent=st.folderNeedsPermission?'RECONNECT':'KEEP THEM IN ONE FOLDER';
     dialog.querySelector('[data-folder-link]').disabled=!FSA_DIR;dialog.querySelector('[data-folder-open]').disabled=!st.folder&&!(own&&own.permitted);dialog.querySelector('[data-folder-unlink]').disabled=!st.folder && !st.folderNeedsPermission;
     dialog.querySelector('[data-mirror-on]').checked=ws.data.settings.sketchupMirror!==false;dialog.querySelector('[data-mirror-label]').textContent=prop?mirrorStatus(prop.id):'';
   };
   const stopWatching=onFilesChange(refresh);dialog.addEventListener('close',stopWatching);
   let busy=false;
-  const run=async fn=>{if(busy)return;busy=true;const disabled=Array.from(dialog.querySelectorAll('button')).filter(b=>!b.disabled);disabled.forEach(b=>b.disabled=true);dialog.oncancel=e=>e.preventDefault();try {status.textContent='Working…';await fn();status.textContent='Done.';refresh();}catch(e){status.textContent=e.message;}finally{busy=false;dialog.oncancel=null;disabled.forEach(b=>b.disabled=false);refresh();}};
+  const run=async fn=>{if(busy)return;busy=true;const disabled=Array.from(dialog.querySelectorAll('button')).filter(b=>!b.disabled);disabled.forEach(b=>b.disabled=true);dialog.oncancel=e=>e.preventDefault();try {status.textContent='Working…';const said=await fn();status.textContent=typeof said==='string'?said:'Done.';refresh();}catch(e){status.textContent=e.message;}finally{busy=false;dialog.oncancel=null;disabled.forEach(b=>b.disabled=false);refresh();}};
   let exchangeMounted=false;
   const mountExchange=()=>{if(exchangeMounted)return;exchangeMounted=true;if(currentName==='model'){const image=document.createElement('button');image.className='btn';image.textContent='SAVE VIEW IMAGE';image.dataset.saveView='';image.onclick=()=>{dialog.close();viewer3d.openStillDialog();};dialog.querySelector('[data-file-exchange]').append(image);}if(prop) openExchangeDialog(prop,{selected,host:dialog.querySelector('[data-file-exchange]'),close:()=>dialog.close(),imported:async scan=>{viewer3d.focusScanOnMount(scan.id);refreshTopbar();if(currentName==='model')remountView();else location.hash='#/model';},changed:remountView});};
   const tab=id=>{if(id==='exchange')mountExchange();dialog.querySelectorAll('[data-file-panel]').forEach(p=>p.hidden=p.dataset.filePanel!==id);dialog.querySelectorAll('[data-file-tab]').forEach(b=>{b.classList.toggle('active',b.dataset.fileTab===id);b.setAttribute('aria-current',b.dataset.fileTab===id?'true':'false');});};
@@ -286,10 +289,18 @@ function openFileMenu(initialTab = 'project', selected) {
   on('[data-photo3d]',()=>{dialog.close();location.hash='#/reconstruct';});
   dialog.querySelector('[data-file-units]').value=ws.data.settings.units;
   dialog.querySelector('[data-file-units]').onchange=e=>{ws.data.settings.units=e.target.value;touch();remountView();};
-  on('[data-folder-link]',()=>run(()=>filesState().folderNeedsPermission?reconnectFolder(true):linkFolder()));
+  on('[data-folder-link]',()=>run(async()=>{
+    if(filesState().folderNeedsPermission)return await reconnectFolder(true)?'Reconnected '+filesState().folderName+'.':'Permission was not given; nothing changed.';
+    const dir=await linkFolder();return dir?'Projects without their own folder are now saved in '+dir.name+'.':'No folder chosen; nothing changed.';}));
   dialog.querySelector('[data-mirror-on]').onchange=e=>{ws.data.settings.sketchupMirror=e.target.checked;touch();scheduleFolderSync(0);refresh();};
-  on('[data-folder-open]',()=>openFolderList(dialog.querySelector('[data-folder-open]')));on('[data-folder-unlink]',()=>{unlinkFolder();refresh();});
-  on('[data-own-folder-link]',()=>run(async()=>{await linkProjectFolder(prop);refreshTopbar();remountView();}));on('[data-own-folder-unlink]',()=>run(()=>unlinkProjectFolder(prop.id)));
+  on('[data-folder-open]',()=>openFolderList(dialog.querySelector('[data-folder-open]')));
+  on('[data-folder-unlink]',()=>run(async()=>{await unlinkFolder();return 'Unlinked. Projects without their own folder are kept in this browser only.';}));
+  on('[data-own-folder-link]',()=>run(async()=>{
+    const dir=await linkProjectFolder(prop);if(!dir)return 'No folder chosen; nothing changed.';
+    refreshTopbar();remountView();const own=projectFolder(prop.id);
+    return own&&own.permitted?'Kept in '+own.label+'.':'Permission was not given; nothing changed.';}));
+  on('[data-own-folder-unlink]',()=>run(async()=>{await unlinkProjectFolder(prop.id);const st=filesState();
+    return st.folder?'Back with the other projects in '+st.folderName+'. The files in its folder stay where they are.':'Kept in this browser only now. The files in its folder stay where they are.';}));
   on('[data-workspace-save]',()=>run(runExportBundle));on('[data-storage]',()=>run(()=>offerStorageCleanup(false)));
   on('[data-demo]',()=>{mergeWorkspace(demoWorkspace());ensureBuiltinMaterials();refreshTopbar();remountView();dialog.close();});
   const replace=dialog.querySelector('[data-replace-file]');on('[data-workspace-replace]',()=>replace.click());
@@ -297,6 +308,25 @@ function openFileMenu(initialTab = 'project', selected) {
     if(!confirm('Replace the workspace with '+file.name+'? This is the explicit backup-restore action.'))return;
     if(/\.json$/i.test(file.name))replaceWorkspace(JSON.parse(await file.text()));else if(!await importBundle(file,{confirm:false}))return;
     afterWorkspaceReplaced();refreshTopbar();dialog.close();});
+}
+
+// One-line confirmation at the bottom of the window (styles: .toast in console.css). Inside an
+// open dialog so a modal does not cover it.
+function showToast(text, kind) {
+  document.querySelectorAll('.toast').forEach(t => t.remove());
+  const el = document.createElement('div');
+  el.className = 'toast ' + (kind || 'ok'); el.setAttribute('role', 'status'); el.textContent = text;
+  (document.querySelector('dialog[open]') || document.body).append(el);
+  setTimeout(() => { el.classList.add('leaving'); setTimeout(() => el.remove(), 200); }, 6000);
+}
+
+// Opening a project always says what it opened, also when that file was already open here.
+function confirmOpened({ ids, name, replaced }) {
+  const props = ids.map(id => ws.data.properties.find(p => p.id === id)).filter(Boolean);
+  if (!props.length) { showToast('Opened ' + name + ', but it holds no properties.', 'error'); return; }
+  if (props.length > 1) { showToast('Opened ' + name + ': ' + props.length + ' properties' + (replaced.length ? ', ' + replaced.length + ' of them replacing this browser\'s copy' : '') + '.'); return; }
+  const p = props[0], count = (n, one) => n + ' ' + one + (n === 1 ? '' : 's');
+  showToast('Opened ' + p.name + (replaced.includes(p.id) ? ', replacing this browser\'s copy' : '') + ': ' + count((p.scans || []).length, 'model') + ', ' + count((p.photos || []).length, 'photo') + ', ' + count((p.walls || []).length, 'wall') + '.');
 }
 
 async function openFolderList(anchor) {

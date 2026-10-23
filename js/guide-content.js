@@ -41,8 +41,7 @@ export const chapters = [
       'Use SAVE AS when you want another file destination. Later SAVE PROJECT actions update the remembered file in browsers that support it, or download a file in other browsers.',
       'To reopen work, choose OPEN / IMPORT and select its .tiksi file, or drop the file on Tiksi.',
       'Opening updates the property with the same ID and leaves unrelated properties in place. Choose the property at the top of the app to switch between them.',
-      'To keep a whole project folder, use FILE → Settings → LINK FOLDER. Use OPEN FROM FOLDER to inspect and reopen its project files.',
-      'To keep one project beside its other documents, open it and use FILE → Settings → LINK THIS PROJECT\'S FOLDER, for example on a Tiksi folder inside the project\'s own folder. Only that project is written there; USE THE SHARED FOLDER moves it back.',
+      'To keep a project as files beside its other documents, open it and use FILE → Settings → Where this project is kept → CHOOSE FOLDER, then pick the project\'s folder. Tiksi keeps its files in a Tiksi folder inside it. Use OPEN FROM FOLDER to reopen a project file kept there.',
     ],
     features: [
       ['Keyboard saving', 'Cmd/Ctrl+S saves; Cmd/Ctrl+Shift+S saves a new copy; Cmd/Ctrl+O opens a project file.'],
@@ -332,8 +331,8 @@ export const chapters = [
     steps: [
       'Open FILE → Settings to choose feet/square feet or metres/square metres.',
       'For rendering, open MODEL first, then FILE → Settings → Model environment. Adjust quality, lighting and the offered view settings.',
-      'Use LINK FOLDER for file-based project keeping, OPEN FROM FOLDER to reopen a project and UNLINK to stop using the folder.',
-      'Use LINK THIS PROJECT\'S FOLDER to keep the open project in a folder of its own. If that folder already holds the project\'s file, Tiksi offers to open it instead of writing over it.',
+      'Under Where this project is kept, CHOOSE FOLDER keeps the open project in its own folder, OPEN FROM FOLDER reopens a project file and STOP KEEPING IT IN A FOLDER leaves the files where they are. If the folder already holds the project\'s file, Tiksi offers to open it instead of writing over it.',
+      'Under Workspace backup & maintenance, KEEP THEM IN ONE FOLDER keeps every project without a folder of its own in one folder, for example a synced one.',
       'Open Workspace backup & maintenance when you want a whole-workspace backup or need to inspect unused browser storage.',
     ],
     features: [
