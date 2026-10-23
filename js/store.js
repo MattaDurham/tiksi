@@ -570,10 +570,29 @@ function migrate(d) {
       if (typeof ph.thumb !== 'string' || (ph.thumb && !THUMB_RE.test(ph.thumb))) ph.thumb = '';
     }
   }
-  for (const pr of d.projects) pr.items = pr.items || [];
+  for (const pr of d.projects) {
+    pr.items = pr.items || [];
+    // Subprojects (see subprojectsOf): '' means none for each of these.
+    if (typeof pr.parentId !== 'string') pr.parentId = '';
+    if (!PRIORITIES.includes(pr.priority)) pr.priority = '';
+    if (typeof pr.roomId !== 'string') pr.roomId = '';
+    if (typeof pr.source !== 'string') pr.source = '';
+  }
   sanitiseIds(d);
+  fixParents(d);
   d.version = SCHEMA_VERSION;
   return d;
+}
+
+// A subproject's parent must be a top-level project on the same property. A link to a missing
+// project, to itself, across properties or to another subproject makes it a top-level project,
+// so nesting is never deeper than one level and never loops.
+function fixParents(d) {
+  const byId = new Map(d.projects.map(pr => [pr.id, pr]));
+  for (const pr of d.projects) {
+    const parent = pr.parentId ? byId.get(pr.parentId) : null;
+    if (!parent || parent === pr || parent.parentId || parent.propertyId !== pr.propertyId) pr.parentId = '';
+  }
 }
 
 export function emptyWorkspace() {
@@ -605,6 +624,17 @@ export function materialById(id) {
 }
 
 export function projectById(id) { return ws.data.projects.find(p => p.id === id) || null; }
+
+// Subprojects: small pieces of work inside a project (a punch list, a room's fixes). Each is an
+// ordinary project with its own status, scope and budget, plus a parentId naming a top-level
+// project on the same property, a priority, an optional room and where it came from (source).
+export const PRIORITIES = ['high', 'medium', 'low'];
+export function subprojectsOf(pr) { return pr ? ws.data.projects.filter(x => x.parentId === pr.id) : []; }
+// "Parent / Child" for a subproject, the plain name otherwise.
+export function projectLabel(pr) {
+  const parent = pr.parentId ? projectById(pr.parentId) : null;
+  return parent ? parent.name + ' / ' + pr.name : pr.name;
+}
 
 export function allScopeItems() {
   // [{project, item}] across all projects, in project order.
