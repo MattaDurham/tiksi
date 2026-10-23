@@ -91,6 +91,8 @@ Program side:
 
 - Capture project ideas, scope them into line items with quantity, unit and
   low/likely/high budget ranges
+- Break a project into subprojects for small jobs such as a punch list, each with
+  its own status, priority, room and source, listed under its project
 - Link scope items to model elements (the digital-twin thread: a wall knows which
   scope item rebuilds it, which products are specified for it, and which site
   photos document it)

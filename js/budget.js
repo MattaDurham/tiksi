@@ -3,7 +3,7 @@
 
 import {
   ws, touch, fmtMoney, parseMoney, escapeHtml, projectTotals, selectedTotals,
-  fmtDate, isoToday,
+  fmtDate, isoToday, projectLabel,
 } from './store.js';
 import { icon } from './icons.js';
 
@@ -111,7 +111,7 @@ function projRow(p, maxLikely) {
   const w = Math.round(t.likely / maxLikely * 100);
   return `<tr>
     <td style="width:30px"><input type="checkbox" ${p.selected ? 'checked' : ''} data-sel="${escapeHtml(p.id)}"></td>
-    <td><b>${escapeHtml(p.name)}</b></td>
+    <td><b>${escapeHtml(projectLabel(p))}</b></td>
     <td><span class="chip status-${escapeHtml(p.status)}">${escapeHtml(p.status)}</span></td>
     <td class="muted">${escapeHtml(p.category)}</td>
     <td class="num">${fmtMoney(t.low)}</td>
@@ -160,7 +160,7 @@ export function budgetReportHtml() {
     <table><thead><tr><th>Project / item</th><th class="num">Qty</th><th class="num">Low</th><th class="num">Likely</th><th class="num">High</th></tr></thead>
       <tbody>${selectedProjects.map(p => {
         const t = projectTotals(p);
-        return `<tr><td><b>${escapeHtml(p.name)}</b> <span style="color:#888">(${escapeHtml(p.status)})</span></td><td></td>
+        return `<tr><td><b>${escapeHtml(projectLabel(p))}</b> <span style="color:#888">(${escapeHtml(p.status)})</span></td><td></td>
           <td class="num"><b>${fmtMoney(t.low)}</b></td><td class="num"><b>${fmtMoney(t.likely)}</b></td><td class="num"><b>${fmtMoney(t.high)}</b></td></tr>` + itemRows(p);
       }).join('')}</tbody></table>
 
@@ -170,7 +170,7 @@ export function budgetReportHtml() {
         `<tr><td>${escapeHtml(c)}</td><td class="num">${t.n}</td><td class="num">${fmtMoney(t.likely)}</td></tr>`).join('')}</tbody></table>
 
     ${parked.length ? `<h2>Parked (not in program)</h2>
-    <table><tbody>${parked.map(p => `<tr><td>${escapeHtml(p.name)}</td>
+    <table><tbody>${parked.map(p => `<tr><td>${escapeHtml(projectLabel(p))}</td>
       <td class="num">${fmtMoney(projectTotals(p).likely)} likely</td></tr>`).join('')}</tbody></table>` : ''}
 
     <div class="s-foot"><span>tiksi design console</span><span>${fmtDate(isoToday())}</span></div>
