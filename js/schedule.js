@@ -2,7 +2,7 @@
 // rendered as an SVG Gantt. Forward/backward pass, slack, dependency arrows.
 
 import {
-  ws, touch, escapeHtml, fmtDate, addDays, dayDiff, isoToday,
+  ws, touch, escapeHtml, fmtDate, addDays, dayDiff, isoToday, projectLabel,
 } from './store.js';
 import { icon } from './icons.js';
 
@@ -129,7 +129,7 @@ function criticalPathLine(x) {
     .map(i => escapeHtml(i.name));
   if (!names.length) return '';
   return `<div class="mono" style="font-size:11px; margin-top:10px; color:var(--dim); line-height:1.7">
-    <span style="color:var(--accent); letter-spacing:0.08em">CRITICAL / ${escapeHtml(x.p.name).toUpperCase()}:</span>
+    <span style="color:var(--accent); letter-spacing:0.08em">CRITICAL / ${escapeHtml(projectLabel(x.p)).toUpperCase()}:</span>
     ${names.join(' <span style="color:var(--faint)">&rsaquo;</span> ')}
     ${x.cyclic ? ' <span style="color:var(--red)">(dependency cycle detected; some links ignored)</span>' : ''}
   </div>`;
@@ -208,7 +208,7 @@ function ganttSvg(plans, startIso, programEnd) {
       const { p } = r.x;
       const x0 = X(r.x.offset), x1 = X(r.x.finish);
       svg += `<g class="g-rowg"><rect class="g-row" x="0" y="${y}" width="${width}" height="${PROJH}"/>`;
-      svg += `<text x="12" y="${y + 19}" fill="#e9eef3" font-size="11.5" font-weight="700" letter-spacing="0.08em">${escapeHtml(p.name).toUpperCase()}</text>`;
+      svg += `<text x="12" y="${y + 19}" fill="#e9eef3" font-size="11.5" font-weight="700" letter-spacing="0.08em">${escapeHtml(projectLabel(p)).toUpperCase()}</text>`;
       svg += `<rect x="${x0}" y="${y + 10}" width="${Math.max(x1 - x0, 2)}" height="8" rx="4" fill="url(#g-proj)" stroke="rgba(232,151,58,0.45)"/>`;
       svg += `<text x="${x1 + 8}" y="${y + 19}" fill="#5d6a76" font-size="9.5">${fmtDate(addDays(startIso, r.x.finish))}</text></g>`;
       y += PROJH;

@@ -426,6 +426,7 @@ Choose a project to edit its scope. Each row can carry quantity, unit, low/likel
 4. Add duration in days. Use the predecessor summary control to choose the items that must finish first.
 5. Link model elements from the PLAN/MODEL inspector and products from PRODUCTS. Relevant photos can be linked in PHOTOS.
 6. Use the project’s selection checkbox to include or exclude it from the budget program and schedule.
+7. For a list of small jobs, such as a punch list, use ADD SUBPROJECT. Each subproject has its own status, priority, room and source, and is listed under its project, open ones first.
 
 ### Other features here
 
@@ -436,6 +437,8 @@ Choose a project to edit its scope. Each row can carry quantity, unit, low/likel
 **Element links.** A scope item can refer to the wall, room or model surface that generated the work.
 
 **Selection vs deletion.** Deselecting a project removes it from program calculations while retaining its scope for comparison.
+
+**Subprojects.** A subproject is a project inside a project, one level deep. Change its priority and status from the parent’s SUBPROJECTS table, move it with Part of, and record where it came from in Source. BUDGET and SCHEDULE show it as Project / Subproject. Deleting a project deletes its subprojects.
 
 **Across properties.** PROJECTS lists workspace-wide work. A new project belongs to the active property, but selecting another property does not filter the project list, budget or schedule.
 

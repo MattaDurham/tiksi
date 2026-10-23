@@ -24,7 +24,7 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 import {
   ws, activeProperty, uid, touch, fmtLen, parseLen, fmtArea, polyArea,
-  escapeHtml, deleteFile, getFile, itemById, materialById, isoToday,
+  escapeHtml, deleteFile, getFile, itemById, materialById, isoToday, projectLabel,
   ensureLevels, wallsOn, roomsOn, wallHeightOf, levelOfWall, levelOfRoom, levelHeight, topOfLevels,
 } from './store.js';
 import { placeScanBytes, seedProject, proposalSummary } from './scan2plan.js';
@@ -1642,7 +1642,7 @@ function scopeAssignHtml(elementId) {
   for (const pr of ws.data.projects) for (const it of pr.items) if ((it.elementIds || []).includes(elementId)) current = it.id;
   const groups = ws.data.projects.map(pr => {
     const opts = pr.items.map(it => `<option value="${escapeHtml(it.id)}" ${it.id === current ? 'selected' : ''}>${escapeHtml(it.name)}</option>`).join('');
-    return opts ? `<optgroup label="${escapeHtml(pr.name)}">${opts}</optgroup>` : '';
+    return opts ? `<optgroup label="${escapeHtml(projectLabel(pr))}">${opts}</optgroup>` : '';
   }).join('');
   return `<div class="field"><label>Scope item (digital twin link)</label>
     <select data-assign="${escapeHtml(elementId)}"><option value="">(not assigned)</option>${groups}</select></div>`;
