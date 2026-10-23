@@ -42,6 +42,7 @@ export const chapters = [
       'To reopen work, choose OPEN / IMPORT and select its .tiksi file, or drop the file on Tiksi.',
       'Opening updates the property with the same ID and leaves unrelated properties in place. Choose the property at the top of the app to switch between them.',
       'To keep a whole project folder, use FILE → Settings → LINK FOLDER. Use OPEN FROM FOLDER to inspect and reopen its project files.',
+      'To keep one project beside its other documents, open it and use FILE → Settings → LINK THIS PROJECT\'S FOLDER, for example on a Tiksi folder inside the project\'s own folder. Only that project is written there; USE THE SHARED FOLDER moves it back.',
     ],
     features: [
       ['Keyboard saving', 'Cmd/Ctrl+S saves; Cmd/Ctrl+Shift+S saves a new copy; Cmd/Ctrl+O opens a project file.'],
@@ -332,6 +333,7 @@ export const chapters = [
       'Open FILE → Settings to choose feet/square feet or metres/square metres.',
       'For rendering, open MODEL first, then FILE → Settings → Model environment. Adjust quality, lighting and the offered view settings.',
       'Use LINK FOLDER for file-based project keeping, OPEN FROM FOLDER to reopen a project and UNLINK to stop using the folder.',
+      'Use LINK THIS PROJECT\'S FOLDER to keep the open project in a folder of its own. If that folder already holds the project\'s file, Tiksi offers to open it instead of writing over it.',
       'Open Workspace backup & maintenance when you want a whole-workspace backup or need to inspect unused browser storage.',
     ],
     features: [
