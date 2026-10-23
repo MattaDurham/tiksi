@@ -28,6 +28,7 @@ import { initNewProperty, openNewPropertyDialog, dialogOpen } from './newpropert
 import { parseCaptureUrl } from './polycam.js';
 import {
   initFiles, bindFileIntake, saveProject, openProjectPicker, openFromFile, openFromUrl, linkFolder, unlinkFolder, reconnectFolder,
+  linkProjectFolder, unlinkProjectFolder, projectFolder,
   listFolder, openFromFolder, scheduleFolderSync, filesState, onFilesChange, isDirty, saveTarget, FSA, FSA_DIR, mirrorStatus,
 } from './files.js';
 
@@ -242,6 +243,7 @@ function openFileMenu(initialTab = 'project', selected) {
     <section data-file-panel="capture" hidden><h3>Bring your room into Tiksi</h3><p>Choose photos, a scan, a 3D model or a saved project. Imported projects add or update properties here.</p><button class="btn primary" data-capture-open>CHOOSE FILES…</button><button class="btn" data-polycam>POLYCAM LINK</button><button class="btn" data-photo3d>PHOTOS → 3D</button></section>
     <section data-file-panel="exchange" hidden data-file-exchange></section>
     <section data-file-panel="settings" hidden><h3>Display</h3><label>Units <select data-file-units><option value="imperial">Feet / square feet</option><option value="metric">Metres / square metres</option></select></label><details><summary>Model environment</summary><div data-file-env></div></details><h3>Project folder</h3><p data-folder-label></p><div class="file-actions"><button class="btn" data-folder-link>LINK FOLDER</button><button class="btn" data-folder-open>OPEN FROM FOLDER</button><button class="btn" data-folder-unlink>UNLINK</button></div>
+      <h3>This project's folder</h3><p data-own-folder-label></p><div class="file-actions"><button class="btn" data-own-folder-link>LINK THIS PROJECT'S FOLDER</button><button class="btn" data-own-folder-unlink>USE THE SHARED FOLDER</button></div>
       <label>Keep a SketchUp mirror (.skp) beside each project <input type="checkbox" data-mirror-on></label><p data-mirror-label></p>
       <details><summary>Workspace backup & maintenance</summary><p>Project saves are usually enough. A workspace backup carries every property.</p><button class="btn" data-workspace-save>SAVE WORKSPACE BACKUP</button><button class="btn" data-demo>ADD DEMO PROJECTS</button><button class="btn" data-storage>CLEAN UNUSED STORAGE</button><p>Replace workspace is available only when you intentionally want to restore a full backup.</p><button class="btn" data-workspace-replace>REPLACE FROM BACKUP…</button></details></section>
     <p role="status" data-file-status></p><input type="file" data-any-file hidden multiple accept=".tiksi,.json,${SCAN_ACCEPT},.c4d,.max,.ma,.mb,.rfa,.dwf,.mtl,.bin,.tga,.jpg,.jpeg,.png,.webp,.heic,.heif,.tif,.tiff,.avif"><input type="file" data-replace-file hidden accept=".json,.zip,.tiksi">`;
@@ -254,7 +256,11 @@ function openFileMenu(initialTab = 'project', selected) {
     const st=filesState(),target=prop && saveTarget(prop.id);
     dialog.querySelector('[data-file-target]').textContent=target?'Saving to '+target.name:'Choose a file on first save. Cmd+S saves again; Cmd+O opens a project.';
     dialog.querySelector('[data-folder-label]').textContent=st.folderName || 'Optionally keep project files in a synced folder.';
-    dialog.querySelector('[data-folder-link]').disabled=!FSA_DIR;dialog.querySelector('[data-folder-open]').disabled=!st.folder;dialog.querySelector('[data-folder-unlink]').disabled=!st.folder && !st.folderNeedsPermission;
+    const own=prop&&projectFolder(prop.id);
+    dialog.querySelector('[data-own-folder-label]').textContent=!prop?'Open a property to give it a folder of its own.':own?('Kept in '+own.name+(own.permitted?'. Only this project is written there.':', which needs permission again: LINK THIS PROJECT\'S FOLDER reconnects it.')):'Kept in the shared folder. A folder of its own keeps this project beside its other documents, for example in a Tiksi folder inside the project\'s folder.';
+    const ownLink=dialog.querySelector('[data-own-folder-link]');ownLink.disabled=!FSA_DIR||!prop;ownLink.textContent=own&&!own.permitted?'RECONNECT THIS PROJECT\'S FOLDER':'LINK THIS PROJECT\'S FOLDER';
+    dialog.querySelector('[data-own-folder-unlink]').disabled=!own;
+    dialog.querySelector('[data-folder-link]').disabled=!FSA_DIR;dialog.querySelector('[data-folder-open]').disabled=!st.folder&&!(own&&own.permitted);dialog.querySelector('[data-folder-unlink]').disabled=!st.folder && !st.folderNeedsPermission;
     dialog.querySelector('[data-mirror-on]').checked=ws.data.settings.sketchupMirror!==false;dialog.querySelector('[data-mirror-label]').textContent=prop?mirrorStatus(prop.id):'';
   };
   const stopWatching=onFilesChange(refresh);dialog.addEventListener('close',stopWatching);
@@ -283,6 +289,7 @@ function openFileMenu(initialTab = 'project', selected) {
   on('[data-folder-link]',()=>run(()=>filesState().folderNeedsPermission?reconnectFolder(true):linkFolder()));
   dialog.querySelector('[data-mirror-on]').onchange=e=>{ws.data.settings.sketchupMirror=e.target.checked;touch();scheduleFolderSync(0);refresh();};
   on('[data-folder-open]',()=>openFolderList(dialog.querySelector('[data-folder-open]')));on('[data-folder-unlink]',()=>{unlinkFolder();refresh();});
+  on('[data-own-folder-link]',()=>run(async()=>{await linkProjectFolder(prop);refreshTopbar();remountView();}));on('[data-own-folder-unlink]',()=>run(()=>unlinkProjectFolder(prop.id)));
   on('[data-workspace-save]',()=>run(runExportBundle));on('[data-storage]',()=>run(()=>offerStorageCleanup(false)));
   on('[data-demo]',()=>{mergeWorkspace(demoWorkspace());ensureBuiltinMaterials();refreshTopbar();remountView();dialog.close();});
   const replace=dialog.querySelector('[data-replace-file]');on('[data-workspace-replace]',()=>replace.click());
@@ -293,12 +300,16 @@ function openFileMenu(initialTab = 'project', selected) {
 }
 
 async function openFolderList(anchor) {
-  let entries;
-  try { entries = await listFolder(); } catch (e) { alert('Could not read the folder: ' + e.message); return; }
-  if (!entries.length) { openMenu(anchor, [{ label: 'NO PROJECT FILES IN ' + filesState().folderName.toUpperCase(), hint: 'save a property and it appears here', run() {} }]); return; }
+  // The shared folder, plus the active project's own folder when it has one.
+  const prop = activeProperty(), st = filesState(), own = prop && st.projectFolders.get(prop.id);
+  const folders = [st.folder, own && own.permitted ? own.handle : null].filter(Boolean);
+  let entries = [];
+  try { for (const folder of folders) entries.push(...await listFolder(folder)); } catch (e) { alert('Could not read the folder: ' + e.message); return; }
+  const names = folders.map(f => f.name).join(' OR ');
+  if (!entries.length) { openMenu(anchor, [{ label: 'NO PROJECT FILES IN ' + names.toUpperCase(), hint: 'save a property and it appears here', run() {} }]); return; }
   openMenu(anchor, entries.map(en => ({
     label: en.name.replace(/\.tiksi$/i, '').toUpperCase(),
-    hint: fmtBytes(en.size) + ', ' + new Date(en.lastModified).toLocaleString() + (en.inWorkspace ? ' (open here)' : ''),
+    hint: (folders.length > 1 ? en.folder.name + ': ' : '') + fmtBytes(en.size) + ', ' + new Date(en.lastModified).toLocaleString() + (en.inWorkspace ? ' (open here)' : ''),
     run: () => openFromFolder(en).catch(e => alert('Open failed: ' + e.message)),
   })));
 }
@@ -314,7 +325,7 @@ function refreshSaveButton() {
   const conflict = st.conflicts.has(prop.id);
   btn.classList.toggle('warn', conflict);
   btn.classList.toggle('dirty', !conflict && isDirty(prop.id));
-  btn.title = conflict ? 'A newer ' + target.name + ' is in ' + st.folderName + '. FILE > OPEN FROM FOLDER pulls it in; SAVE would keep this copy.'
+  btn.title = conflict ? 'A newer ' + target.name + ' is in ' + (target.folder || st.folderName) + '. FILE > OPEN FROM FOLDER pulls it in; SAVE would keep this copy.'
     : target ? (isDirty(prop.id) ? 'Changes since the last save to ' + target.name + ' (Cmd+S)' : 'Saved to ' + target.name)
     : 'Save this property as a project file (Cmd+S)';
 }

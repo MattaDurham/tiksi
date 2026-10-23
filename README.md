@@ -252,6 +252,11 @@ start to the file's date. Three ways to keep it, none of which needs a server:
   and your projects follow you to the next machine, where OPEN FROM FOLDER lists
   them. If the folder holds a newer copy than this browser (you edited elsewhere),
   FILE warns and OPEN FROM FOLDER pulls it in rather than overwriting it.
+- **A project's own folder.** FILE → Settings → LINK THIS PROJECT'S FOLDER keeps the open
+  property in a folder of its own, for example `<project>/Tiksi/` beside the project's other
+  documents, instead of the shared folder. Only that property (and its `.skp` mirror) is
+  written there. If the folder already holds the property's `.tiksi`, Tiksi offers to open it;
+  keeping the browser copy saves it under a new name instead of writing over the file.
 - **A SketchUp mirror.** With a project folder linked and the local server running on a
   Mac with SketchUp installed, every `<name>.tiksi` in the folder gets a `<name>.skp` beside
   it. Walls (with their openings cut), openings, room floors, level tags and plan underlays
