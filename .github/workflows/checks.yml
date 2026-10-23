@@ -1,7 +1,11 @@
 name: Checks
+# One run per change: a branch is tested through its pull request, and main is tested after a
+# merge lands. Listing codex/** under push as well ran every PR branch twice per push (the push
+# and pull_request runs use different concurrency groups), doubling CI time and the chance that
+# one slow run blocks a landing, since the merge gate needs every run green.
 on:
   push:
-    branches: [main, 'codex/**']
+    branches: [main]
   pull_request:
 permissions:
   contents: read
@@ -16,7 +20,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # The full preflight (every browser e2e suite) takes 14-16 minutes on hosted runners, so a
+    # 15-minute cap cut passing runs off. 25 minutes leaves room to grow and still stops a hang.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
