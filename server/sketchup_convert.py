@@ -60,6 +60,19 @@ def transform(p,m): return [sum(m[k*4+r]*v for k,v in enumerate([p.x,p.y,p.z,1])
 def from_skp(p): return [p[0]*.0254,p[2]*.0254,-p[1]*.0254]
 def to_skp(p): return Point(p[0]/.0254,-p[2]/.0254,p[1]/.0254)
 
+def hidden_warnings(tag_faces, hidden):
+    """Import warnings for the geometry read_skp leaves out because the SKP hides it.
+    tag_faces: faces per hidden tag; hidden: faces in, and counts of, entities hidden themselves."""
+    def count(n, noun): return f'{n:,} ' + (noun if n != 1 else noun[:-1])
+    out = []
+    if tag_faces:
+        names = sorted(tag_faces, key=lambda tag: (-tag_faces[tag], tag.casefold()))
+        listed = ', '.join(names[:24]) + (f' and {len(names)-24} more' if len(names) > 24 else '')
+        out.append(f'{count(sum(tag_faces.values()),"faces")} on {count(len(names),"hidden tags")} ({listed}) kept in the source SKP, not shown')
+    parts = [count(n, kind) for kind, n in hidden.items() if kind != 'total' and n]
+    if parts: out.append(f'{count(hidden["total"],"faces")} hidden in SketchUp ({", ".join(parts)}) kept in the source SKP, not shown')
+    return out
+
 
 def read_skp(source, output):
     if __package__:from .mesh_exchange import write_glb
@@ -79,11 +92,46 @@ def read_skp(source, output):
                 path = Path(output).parent / ('texture-' + str(len(material_cache)) + '.png')
                 api.call('SUTextureWriteToFile',tex,os.fsencode(path)); spec['texture']=str(path)
             material_cache[ref.ptr]=spec; return spec
+        # Geometry the file hides stays in the source SKP and is counted for the import warning.
+        tags = {}; tag_faces = {}; hidden = {'total':0,'groups':0,'component instances':0,'single faces':0}; face_totals = {}
+        untagged = api.ref('SUModelGetDefaultLayer',model)
+        def hidden_tag(element, nested):
+            """Name of the element's tag when that tag, or a tag folder holding it, is switched off.
+            As in SketchUp, untagged entities inside a group or component follow their container."""
+            layer = Ref()
+            if api.call('SUDrawingElementGetLayer',element,C.byref(layer),optional=True) or not layer.ptr: return None
+            if nested and layer.ptr == untagged.ptr: return None
+            if layer.ptr not in tags:
+                visible = C.c_bool(True); api.call('SULayerGetVisibility',layer,C.byref(visible),optional=True); shown = visible.value
+                folder, child, parent = Ref(), layer, 'SULayerGetParentLayerFolder'
+                while shown and hasattr(api.lib,parent) and not api.call(parent,child,C.byref(folder),optional=True) and folder.ptr:
+                    api.call('SULayerFolderGetVisibility',folder,C.byref(visible),optional=True); shown = visible.value
+                    folder, child, parent = Ref(), folder, 'SULayerFolderGetParentLayerFolder'
+                tags[layer.ptr] = None if shown else api.text('SULayerGetDisplayName' if hasattr(api.lib,'SULayerGetDisplayName') else 'SULayerGetName', layer)
+            return tags[layer.ptr]
+        def faces_within(entities, depth):
+            if depth > 64: raise ValueError('SKP hierarchy limit exceeded')
+            if entities.ptr not in face_totals:
+                count = C.c_size_t(); api.call('SUEntitiesGetNumFaces',entities,C.byref(count))
+                groups = [api.ref('SUGroupGetEntities',g) for g in api.collection(entities,'Groups')]
+                instances = [api.ref('SUComponentDefinitionGetEntities',api.ref('SUComponentInstanceGetDefinition',i)) for i in api.collection(entities,'Instances')]
+                face_totals[entities.ptr] = count.value+sum(faces_within(nested,depth+1) for nested in groups+instances)
+            return face_totals[entities.ptr]
+        def left_out(element, kind, faces, depth):
+            """True when SketchUp does not draw this face, group or instance, nor anything inside it.
+            faces() counts the faces that leaves out."""
+            tag = hidden_tag(element, depth > 0)
+            if tag is not None: tag_faces[tag] = tag_faces.get(tag,0)+faces(); return True
+            flag = C.c_bool(False); api.call('SUDrawingElementGetHidden',element,C.byref(flag),optional=True)
+            if flag.value: hidden[kind] += 1; hidden['total'] += faces()
+            return flag.value
+        to_element = api.lib.SUFaceToDrawingElement; to_element.restype = Ref
         def walk(entities, matrix, name, inherited=Ref(), depth=0):
             if depth > 64 or len(meshes) > 2000000: raise ValueError('SKP hierarchy limit exceeded')
             faces = api.collection(entities,'Faces')
             batches = {}
             for face in faces:
+                if left_out(to_element(face),'single faces',lambda:1,depth): continue
                 mat = Ref(); api.call('SUFaceGetFrontMaterial',face,C.byref(mat),optional=True)
                 if not mat.ptr: mat=inherited
                 batch = batches.setdefault(mat.ptr,{'name':name,'positions':[],'uv':[],'indices':[],'material':material(mat)})
@@ -114,15 +162,16 @@ def read_skp(source, output):
                     else:
                         instance=child;definition=api.ref('SUComponentInstanceGetDefinition',child)
                         nested=api.ref('SUComponentDefinitionGetEntities',definition);child_name=api.text('SUComponentDefinitionGetName',definition)
+                    get=api.lib.SUComponentInstanceToDrawingElement;get.restype=Ref;drawn=get(instance)
+                    if left_out(drawn,'groups' if kind=='Groups' else 'component instances',lambda:faces_within(nested,depth+1),depth):continue
                     t=Transform();api.call('SUComponentInstanceGetTransform',instance,C.byref(t))
-                    mat=Ref();get=api.lib.SUComponentInstanceToDrawingElement;get.restype=Ref
-                    api.call('SUDrawingElementGetMaterial',get(instance),C.byref(mat),optional=True)
+                    mat=Ref();api.call('SUDrawingElementGetMaterial',drawn,C.byref(mat),optional=True)
                     walk(nested,multiply(matrix,list(t.values)),child_name or name,mat if mat.ptr else inherited,depth+1)
             for suffix in ['Images','Texts','Dimensions','SectionPlanes']:
                 count=C.c_size_t();api.call('SUEntitiesGetNum'+suffix,entities,C.byref(count))
                 if count.value:warnings.append(f'{count.value} {suffix.lower()} retained in original SKP; not represented in mesh')
         walk(entities,IDENTITY,'SketchUp model');write_glb(meshes,output)
-        return {'warnings': sorted(set(warnings))+['Native SKP faces, holes, component placements, names, diffuse textures and colours converted. Scenes, guides, dynamic component logic and PBR extensions remain in the source SKP.']}
+        return {'warnings': hidden_warnings(tag_faces,hidden)+sorted(set(warnings))+['Native SKP faces, holes, component placements, names, diffuse textures and colours converted. Scenes, guides, dynamic component logic and PBR extensions remain in the source SKP.']}
     finally:
         if model.ptr:api.call('SUModelRelease',C.byref(model))
         api.lib.SUTerminate()
