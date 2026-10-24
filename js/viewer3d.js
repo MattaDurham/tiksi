@@ -1,8 +1,8 @@
 // 3D model view: a rendering, not a debug scene.
 // Physically based sun + sky with soft shadows, image-based lighting, ambient occlusion,
 // bloom and SMAA through one persistent WebGL context; orbit / walk / top / section camera
-// modes; selection and hover outlines; measure and photo-pin tools; point clouds, meshes
-// and Gaussian splats as reference scans; a still-image renderer.
+// modes; selection and hover outlines; measure and photo-pin tools; notes pinned with a
+// right-click; point clouds, meshes and Gaussian splats as reference scans; a still-image renderer.
 
 import * as THREE from 'three';
 import { modelTakeoff, createModelEstimate } from './model-takeoff.js';
@@ -49,19 +49,20 @@ const ENV_DEFAULTS = {
   time: 14.5, azimuth: 200, north: 0, exposure: 1.0, quality: 'high',
   sky: 'dynamic', panoPhotoId: null,
   showCeilings: true, showGround: true, showGrid: false, nightLights: true,
+  showPins: true, showNotes: true,
 };
 
 // ---------- per-mount state ----------
 let el = null, wrapEl = null, inspEl = null, hud = {};
 let scene = null, camera = null, controls = null, walk = null, gizmo = null, composer = null, passes = {};
 let sky = null, envSky = null, sun = null, hemi = null, envRT = null, skyScene = null, panoTex = null, panoId = null;
-let modelGroup = null, groundGroup = null, scanRoot = null, pinRoot = null, lightRoot = null, measureRoot = null;
+let modelGroup = null, groundGroup = null, scanRoot = null, pinRoot = null, noteRoot = null, lightRoot = null, measureRoot = null;
 let prop = null;
-let selection = null;          // {kind:'wall'|'room'|'opening'|'scan'|'pin', id}
+let selection = null;          // {kind:'wall'|'room'|'opening'|'scan'|'pin'|'note', id}
 let selectionVersion = 0;      // late mount focus must not replace a newer user selection
 let hoverTarget = null;
 let mode = 'orbit';            // orbit | walk | top
-let tool = 'select';           // select | move | measure | pin
+let tool = 'select';           // select | move | measure | pin | note
 let xray = false;
 let section = { on: false, height: 1.2 };
 const clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 1.2);
@@ -73,6 +74,10 @@ const measures = [];           // {a, b, line, label}
 const scanObjs = {};           // scanId -> Object3D
 const scanState = {};          // scanId -> 'loading' | 'ready' | 'missing' | 'failed'
 const pinObjs = {};            // photoId -> {group, sprite, line, dot, aspect}
+const noteObjs = {};           // noteId -> {group, sprite, line, dot, aspect}
+let movingNoteId = null;       // note being re-placed by the NOTE tool (null: the tool adds one)
+let rightPress = null;         // a right-click (or Ctrl-click) in progress: opens the menu if it does not drag
+let ctxMenu = null, noteEditor = null;
 const walkKeys = {};
 let walkLocked = false, dragLook = null;
 let walkFloor = 0;             // elevation of the level the walk started on (eye height sits 1.6 m above)
@@ -105,6 +110,7 @@ function requestRender(n) { framesLeft = Math.max(framesLeft, n || 2); }
 function ensureDefaults(p) {
   p.env = Object.assign({}, ENV_DEFAULTS, p.env || {});
   p.photos = p.photos || [];
+  p.notePins = p.notePins || [];
   p.scans = p.scans || [];
   p.rooms = p.rooms || []; p.walls = p.walls || []; p.openings = p.openings || [];
   ensureLevels(p);
@@ -168,6 +174,7 @@ function setupScene() {
   lightRoot = new THREE.Group(); lightRoot.name = 'nightlights'; scene.add(lightRoot);
   scanRoot = new THREE.Group(); scanRoot.name = 'scans'; scene.add(scanRoot);
   pinRoot = new THREE.Group(); pinRoot.name = 'pins'; scene.add(pinRoot);
+  noteRoot = new THREE.Group(); noteRoot.name = 'notes'; scene.add(noteRoot);
   measureRoot = new THREE.Group(); measureRoot.name = 'measures'; scene.add(measureRoot);
 
   controls = new OrbitControls(camera, renderer.domElement);
@@ -261,8 +268,15 @@ function setupComposer() {
   passes.gtao.updateGtaoMaterial({ radius: 0.35, distanceExponent: 1.2, thickness: 1, scale: 1.1, samples: 16, distanceFallOff: 1, screenSpaceRadius: false });
   passes.gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 4, radiusExponent: 1, rings: 2, samples: 16 });
   // Splats are drawn by Spark inside the render pass; they must not feed the AO normal buffer.
+  // Nor may photo-pin and note cards: under the pass's override material a sprite is no
+  // billboard but a flat quad in world space, which shades the floor and darkens the card.
   const gtaoRender = passes.gtao.render.bind(passes.gtao);
-  passes.gtao.render = (...args) => { const hidden = hideSplats(); gtaoRender(...args); hidden.forEach(o => { o.visible = true; }); };
+  passes.gtao.render = (...args) => {
+    const hidden = hideSplats();
+    for (const o of [pinRoot, noteRoot]) if (o && o.visible) { o.visible = false; hidden.push(o); }
+    gtaoRender(...args);
+    hidden.forEach(o => { o.visible = true; });
+  };
 
   passes.outline = new OutlinePass(new THREE.Vector2(w, h), scene, camera);
   passes.outline.visibleEdgeColor.set('#e8973a');
@@ -829,6 +843,7 @@ function renderFrame() {
   const levels = modelGroup && modelGroup.userData.levels;
   if (levels) for (const l of levels) l.ceilings.visible = prop.env.showCeilings !== false && (mode === 'walk' || camera.position.y < l.top - 0.05);
   updatePins();
+  updateNotes();
   updateMeasureLabels();
   updateCompass();
   composer.render();
@@ -860,7 +875,7 @@ export function openStillDialog() {
     <p>Save the current camera view as a PNG. Image size is independent of your window.</p>
     <label>Long edge <select data-export-size><option value="1920">1920 px</option><option value="3840" selected>3840 px (4K)</option><option value="5760">5760 px (6K)</option><option value="7680">7680 px (wide views)</option></select></label>
     <label>Render quality <select data-export-quality><option value="high">High</option><option value="ultra">Ultra (32 AO samples)</option></select></label>
-    <label class="v-export-check"><input type="checkbox" data-export-annotations> Include measurements and photo pins</label>
+    <label class="v-export-check"><input type="checkbox" data-export-annotations> Include measurements, photo pins and notes</label>
     <p class="v-export-size" data-export-dimensions></p>
     <p class="v-export-note">Surface detail follows ENVIRONMENT quality. Ultra uses sharper material textures. Up to 24 megapixels, subject to GPU limits.</p>
     <p role="status" data-export-status></p>
@@ -909,7 +924,7 @@ async function renderStillPrepared(options) {
   const { width, height } = options;
   const c = composer, r = renderer;
   const savedPasses = [passes.outline, passes.hover].map(p => [p, p.enabled]);
-  const roots = [pinRoot, measureRoot, gizmo.getHelper()].map(o => [o, o.visible]);
+  const roots = [pinRoot, noteRoot, measureRoot, gizmo.getHelper()].map(o => [o, o.visible]);
   const oldAspect = camera.aspect;
   exportingStill = true;
   options.status.textContent = 'Rendering ' + width + ' × ' + height + '…';
@@ -920,7 +935,8 @@ async function renderStillPrepared(options) {
     // High-resolution stills use SMAA at output size; avoid multiplying their HDR memory by MSAA.
     configureRenderQuality(options.quality, true);
     for (const [p] of savedPasses) p.enabled = false;
-    for (const [o] of roots) o.visible = options.annotations && o !== gizmo.getHelper();
+    // Photo pins and notes hidden with their toggles stay out of the image too.
+    for (const [o, visible] of roots) o.visible = options.annotations && visible && o !== gizmo.getHelper();
     r.setPixelRatio(1); c.setPixelRatio(1);
     r.setSize(width, height, false); c.setSize(width, height);
     camera.aspect = width / height; camera.updateProjectionMatrix();
@@ -968,6 +984,7 @@ function pick(e, opts) {
   const targets = [];
   if (modelGroup) targets.push(modelGroup);
   if (opts.pins !== false && pinRoot) targets.push(pinRoot);
+  if (opts.notes !== false && noteRoot) targets.push(noteRoot);
   if (opts.scans !== false && scanRoot) targets.push(scanRoot);
   if (opts.ground && groundGroup) targets.push(groundGroup);
   const hits = raycaster.intersectObjects(targets, true);
@@ -982,7 +999,7 @@ function pick(e, opts) {
     while (o && (!o.userData || !o.userData.kind)) o = o.parent;
     if (!o) continue;
     if (o.userData.kind === 'grid') continue;
-    if (opts.surfaceOnly && o.userData.kind === 'pin') continue;
+    if (opts.surfaceOnly && (o.userData.kind === 'pin' || o.userData.kind === 'note')) continue;
     const n = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : new THREE.Vector3(0, 1, 0);
     return { kind: o.userData.kind, id: o.userData.id, point: h.point, normal: n, object: o, wallId: o.userData.wallId };
   }
@@ -990,11 +1007,16 @@ function pick(e, opts) {
 }
 
 function onPointerDown(e) {
-  if (e.button !== 0) { pressed = null; return; }
+  closeContextMenu();
+  // A right-click (Ctrl-click on a Mac) that does not drag opens the menu on release; a drag pans.
+  rightPress = (e.button === 2 || (e.button === 0 && e.ctrlKey)) && mode !== 'walk' ? { x: e.clientX, y: e.clientY } : null;
+  if (e.button !== 0 || rightPress) { pressed = null; return; }
   pressed = { x: e.clientX, y: e.clientY };
   if (mode === 'walk' && !walkLocked) dragLook = { x: e.clientX, y: e.clientY };
 }
 function onPointerUp(e) {
+  const rp = rightPress; rightPress = null;
+  if (rp) { if (Math.hypot(e.clientX - rp.x, e.clientY - rp.y) <= 5) openContextMenu(e); return; }
   const p = pressed; pressed = null; dragLook = null;
   if (!p || e.button !== 0 || gizmo.dragging) return;
   if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > 5) return;      // it was a drag, not a click
@@ -1005,9 +1027,11 @@ function onPointerUp(e) {
   }
   if (tool === 'measure') return addMeasurePoint(e);
   if (tool === 'pin') return placePin(e);
+  if (tool === 'note') return placeNote(e);
   const hit = pick(e);
   if (!hit || hit.kind === 'ground') { setSelection(null); return; }
   if (hit.kind === 'pin') { setSelection({ kind: 'pin', id: hit.id }); openLightbox(hit.id); return; }
+  if (hit.kind === 'note') { setSelection({ kind: 'note', id: hit.id }); return; }
   if (hit.kind === 'ceiling') { setSelection({ kind: 'room', id: hit.id }); return; }
   setSelection({ kind: hit.kind, id: hit.id });
 }
@@ -1030,7 +1054,7 @@ function onPointerMove(e) {
     if (!scene) return;
     const hit = pick(e, { scans: false, ground: false });
     const next = hit && ['wall', 'room', 'opening', 'ceiling'].includes(hit.kind) ? hit.object : null;
-    if (tool === 'measure' || tool === 'pin') renderer.domElement.style.cursor = hit ? 'crosshair' : 'default';
+    if (tool === 'measure' || tool === 'pin' || tool === 'note') renderer.domElement.style.cursor = hit ? 'crosshair' : 'default';
     else renderer.domElement.style.cursor = (hit && hit.kind !== 'ground') ? 'pointer' : 'default';
     if (next !== hoverTarget) { hoverTarget = next; updateOutlineTargets(); requestRender(2); }
   });
@@ -1048,6 +1072,7 @@ function selectedObject() {
   if (!selection) return null;
   if (selection.kind === 'scan') return scanObjs[selection.id] || null;
   if (selection.kind === 'pin') return pinObjs[selection.id] ? pinObjs[selection.id].sprite : null;
+  if (selection.kind === 'note') return noteObjs[selection.id] ? noteObjs[selection.id].sprite : null;
   return findGroupFor(selection.kind, selection.id);
 }
 function updateOutlineTargets() {
@@ -1067,7 +1092,10 @@ function updateOutlineTargets() {
 }
 function setSelection(sel) {
   selectionVersion++;
+  const was = selection;
   selection = sel;
+  // A selected note card is drawn with an accent border.
+  for (const s of [was, sel]) if (s && s.kind === 'note') redrawNoteCard(s.id);
   updateOutlineTargets();
   reattachGizmo();
   renderInspector();
@@ -1286,6 +1314,7 @@ function pinHint() {
   return 'PIN PHOTO: click where "' + ph.name + '" was taken' + (pinBatch && left > 1 ? ' (' + left + ' to place; the next one follows)' : '') + '. Esc stops.';
 }
 function startPinMode(photoId) {
+  showMarkers('pins');
   tool = 'pin';
   const first = nextUnpinned(null);
   pinPhotoId = photoId || (first && first.id) || pinPhotoId || (prop.photos[0] && prop.photos[0].id) || null;
@@ -1357,7 +1386,10 @@ function placePin(e) {
   setHint('');
 }
 function flyToPin(id) {
-  const r = pinObjs[id];
+  showMarkers('pins');
+  flyToMarker(pinObjs[id]);
+}
+function flyToMarker(r) {
   if (!r) return;
   const dir = r.normal.clone();
   if (Math.abs(dir.y) > 0.8) dir.add(new THREE.Vector3(0.4, 0, 0.6)).normalize();
@@ -1365,6 +1397,323 @@ function flyToPin(id) {
   if (mode === 'walk') setMode('orbit');
   flyTo(pos, r.anchor.clone(), 700);
 }
+
+// ---------- notes ----------
+// A note is text pinned to a point in the model: right-click a surface and ADD NOTE HERE, or
+// use the NOTE tool. It draws like a photo pin (anchor dot, leader, a card that stays
+// legible from any distance), as a sticky note carrying its text. Notes live on the property
+// (`notePins`) and link to the room and wall they sit on, as pinned photos do.
+const NOTE_FONT = '500 30px -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+const NOTE_W = 300, NOTE_LINE = 38, NOTE_INSET = 20, NOTE_PAD = 24, NOTE_MAX_LINES = 6;
+function noteById(id) { return prop.notePins.find(n => n.id === id) || null; }
+function noteLines(ctx, text, width) {
+  const lines = [];
+  for (const para of String(text || '').split('\n')) {
+    let line = '';
+    for (let word of para.split(/\s+/).filter(Boolean)) {
+      const next = line ? line + ' ' + word : word;
+      if (ctx.measureText(next).width <= width) { line = next; continue; }
+      if (line) lines.push(line);
+      // A word wider than the card is cut where it overflows.
+      while (word.length > 1 && ctx.measureText(word).width > width) {
+        let k = word.length - 1;
+        while (k > 1 && ctx.measureText(word.slice(0, k)).width > width) k--;
+        lines.push(word.slice(0, k));
+        word = word.slice(k);
+      }
+      line = word;
+    }
+    lines.push(line);
+  }
+  while (lines.length > 1 && !lines[lines.length - 1]) lines.pop();
+  if (lines.length > NOTE_MAX_LINES) {
+    lines.length = NOTE_MAX_LINES;
+    let last = lines[NOTE_MAX_LINES - 1];
+    while (last && ctx.measureText(last + '…').width > width) last = last.slice(0, -1);
+    lines[NOTE_MAX_LINES - 1] = last + '…';
+  }
+  return lines;
+}
+function noteCanvas(note, selected) {
+  const c = document.createElement('canvas');
+  let ctx = c.getContext('2d');
+  ctx.font = NOTE_FONT;
+  const inner = NOTE_W - NOTE_INSET * 2;
+  const empty = !String(note.text || '').trim();
+  const lines = empty ? ['(empty note)'] : noteLines(ctx, note.text, inner);
+  const H = NOTE_INSET * 2 + lines.length * NOTE_LINE;
+  c.width = NOTE_W + NOTE_PAD * 2; c.height = H + NOTE_PAD * 2;
+  ctx = c.getContext('2d');   // resizing reset the context state
+  ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 20; ctx.shadowOffsetY = 7;
+  ctx.fillStyle = '#ffd23c';
+  ctx.beginPath();
+  // A sticky note with its bottom right corner folded up.
+  const x0 = NOTE_PAD, y0 = NOTE_PAD, x1 = NOTE_PAD + NOTE_W, y1 = NOTE_PAD + H, fold = 26;
+  ctx.moveTo(x0, y0); ctx.lineTo(x1, y0); ctx.lineTo(x1, y1 - fold); ctx.lineTo(x1 - fold, y1); ctx.lineTo(x0, y1); ctx.closePath();
+  ctx.fill();
+  ctx.shadowColor = 'transparent';
+  ctx.fillStyle = '#d9a922';
+  ctx.beginPath(); ctx.moveTo(x1, y1 - fold); ctx.lineTo(x1 - fold, y1 - fold); ctx.lineTo(x1 - fold, y1); ctx.closePath(); ctx.fill();
+  if (selected) {
+    ctx.strokeStyle = '#e8973a'; ctx.lineWidth = 7; ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y0); ctx.lineTo(x1, y1 - fold); ctx.lineTo(x1 - fold, y1); ctx.lineTo(x0, y1); ctx.closePath(); ctx.stroke();
+  }
+  ctx.font = NOTE_FONT;
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = empty ? 'rgba(42,36,16,0.45)' : '#2a2410';
+  lines.forEach((line, i) => ctx.fillText(line, x0 + NOTE_INSET, y0 + NOTE_INSET + NOTE_LINE * (i + 0.5)));
+  return c;
+}
+function buildNote(note) {
+  removeNote(note.id);
+  const canvas = noteCanvas(note, !!(selection && selection.kind === 'note' && selection.id === note.id));
+  const group = new THREE.Group();
+  group.userData = { kind: 'note', id: note.id };
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  // The output pass tone-maps the whole frame; a little extra brightness keeps the paper yellow.
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, color: new THREE.Color(1.1, 1.1, 1.1), transparent: true, depthTest: true, toneMapped: false }));
+  sprite.userData = { kind: 'note', id: note.id };
+  sprite.material.userData.noClip = true;
+  group.add(sprite);
+  const lineGeo = new THREE.BufferGeometry();
+  lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3));
+  const line = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xf5d66a, transparent: true, opacity: 0.85, depthTest: false }));
+  line.renderOrder = 990;
+  line.raycast = () => {};   // decoration only, as on photo pins
+  group.add(line);
+  const dot = new THREE.Mesh(new THREE.CircleGeometry(0.03, 20), new THREE.MeshBasicMaterial({ color: 0xf2c33d, side: THREE.DoubleSide }));
+  dot.userData = { kind: 'note', id: note.id };
+  group.add(dot);
+  noteRoot.add(group);
+  const rec = { group, sprite, line, dot, aspect: canvas.width / canvas.height };
+  noteObjs[note.id] = rec;
+  const n = new THREE.Vector3(note.nx || 0, note.ny == null ? 1 : note.ny, note.nz || 0).normalize();
+  rec.anchor = new THREE.Vector3(note.x, note.y, note.z);
+  rec.normal = n;
+  rec.dot.position.copy(rec.anchor).addScaledVector(n, 0.004);
+  rec.dot.lookAt(rec.anchor.clone().add(n));
+  rec.size = note.size || 0.45;
+  requestRender(2);
+}
+function redrawNoteCard(id) {
+  const note = noteRoot && noteById(id), rec = noteObjs[id];
+  if (!note || !rec) return;
+  const canvas = noteCanvas(note, !!(selection && selection.kind === 'note' && selection.id === id));
+  rec.sprite.material.map.dispose();
+  const t = new THREE.CanvasTexture(canvas);
+  t.colorSpace = THREE.SRGBColorSpace;
+  rec.sprite.material.map = t; rec.sprite.material.needsUpdate = true;
+  rec.aspect = canvas.width / canvas.height;
+  requestRender(2);
+}
+function removeNote(id) {
+  const rec = noteObjs[id];
+  if (!rec) return;
+  noteRoot.remove(rec.group);
+  rec.sprite.material.map.dispose(); rec.sprite.material.dispose();
+  rec.line.geometry.dispose(); rec.line.material.dispose();
+  rec.dot.geometry.dispose(); rec.dot.material.dispose();
+  delete noteObjs[id];
+}
+function updateNotes() {
+  for (const id of Object.keys(noteObjs)) {
+    const r = noteObjs[id];
+    // The card is sized by its width, so a long note grows downwards, not wider. Far off it
+    // grows with the distance, which keeps its text about 12 px tall on screen.
+    const d = camera.position.distanceTo(r.anchor);
+    const w = THREE.MathUtils.clamp(Math.max(r.size, d * 0.1), 0.2, 3.2) * 1.5;
+    const h = w / r.aspect;
+    r.sprite.scale.set(w, h, 1);
+    r.sprite.position.copy(r.anchor).addScaledVector(r.normal, 0.12 + h * 0.55);
+    if (Math.abs(r.normal.y) < 0.5) r.sprite.position.y += h * 0.2;
+    const pos = r.line.geometry.getAttribute('position');
+    pos.setXYZ(0, r.anchor.x, r.anchor.y, r.anchor.z);
+    pos.setXYZ(1, r.sprite.position.x, r.sprite.position.y, r.sprite.position.z);
+    pos.needsUpdate = true;
+  }
+}
+function buildAllNotes() {
+  for (const id of Object.keys(noteObjs)) removeNote(id);
+  for (const n of prop.notePins) buildNote(n);
+}
+function noteWhere(note) {
+  const room = note.roomId && prop.rooms.find(r => r.id === note.roomId);
+  return room ? (room.name || 'the room') : '';
+}
+// The NOTE tool: a click on a surface opens the note editor there (or moves the note being moved).
+function startNoteMode(moveId) {
+  showMarkers('notes');
+  movingNoteId = moveId || null;
+  setTool('note');
+}
+function noteHint() {
+  const n = movingNoteId && noteById(movingNoteId);
+  return n ? 'MOVE NOTE: click where the note belongs. Esc stops.' : 'NOTE: click a surface to pin a note there (or right-click anywhere). Esc stops.';
+}
+function placeNote(e) {
+  const hit = pick(e, { ground: true, surfaceOnly: true, scans: true });
+  if (!hit) { toast('Click a surface: a wall, floor, scan or the ground.', 'warn'); return; }
+  const moving = movingNoteId && noteById(movingNoteId);
+  if (moving) {
+    Object.assign(moving, anchorOf(hit));
+    moving.roomId = ''; moving.elementIds = [];
+    linkPinToPlan(moving, hit);
+    touch();
+    buildNote(moving);
+    movingNoteId = null;
+    setTool('select');
+    setSelection({ kind: 'note', id: moving.id });
+    toast('Note moved' + (noteWhere(moving) ? ' to ' + noteWhere(moving) : '') + '.', 'ok');
+    return;
+  }
+  openNoteEditor({ hit, at: { x: e.clientX, y: e.clientY } });
+}
+function anchorOf(hit) {
+  return { x: hit.point.x, y: hit.point.y, z: hit.point.z, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z };
+}
+function addNote(hit, text) {
+  const note = Object.assign({ id: uid('note'), text, roomId: '', elementIds: [], createdAt: new Date().toISOString() }, anchorOf(hit));
+  // Where a note lands says where it belongs, as for a photo pin: the room and wall there.
+  linkPinToPlan(note, hit);
+  prop.notePins.push(note);
+  showMarkers('notes');
+  touch();
+  buildNote(note);
+  if (tool === 'note') setTool('select');
+  setSelection({ kind: 'note', id: note.id });
+  toast('Note pinned' + (noteWhere(note) ? ' in ' + noteWhere(note) : '') + '. Right-click it to edit, move or delete.', 'ok');
+  return note;
+}
+function deleteNote(id) {
+  const note = noteById(id);
+  if (!note) return;
+  prop.notePins = prop.notePins.filter(n => n.id !== id);
+  removeNote(id);
+  touch();
+  if (selection && selection.kind === 'note' && selection.id === id) setSelection(null);
+  else { renderInspector(); requestRender(2); }
+  toast('Note deleted.', 'ok');
+}
+function flyToNote(id) {
+  showMarkers('notes');
+  flyToMarker(noteObjs[id]);
+}
+
+// The note editor floats where the note goes. Enter saves, Shift+Enter starts a new line.
+function openNoteEditor(opts) {
+  closeNoteEditor();
+  closeContextMenu();
+  const note = opts.note || null;
+  const box = document.createElement('div');
+  box.className = 'v-note-edit';
+  box.innerHTML = `<label>${note ? 'EDIT NOTE' : 'NEW NOTE'}</label>
+    <textarea rows="3" maxlength="2000" placeholder="Type the note. Enter saves; Shift+Enter adds a line."></textarea>
+    <div class="v-note-actions"><button class="btn small" data-cancel>CANCEL</button><button class="btn small primary" data-save>${note ? 'SAVE' : 'PIN NOTE'}</button></div>`;
+  wrapEl.appendChild(box);
+  const rect = wrapEl.getBoundingClientRect();
+  const x = THREE.MathUtils.clamp(opts.at.x - rect.left + 12, 8, Math.max(8, rect.width - box.offsetWidth - 8));
+  const y = THREE.MathUtils.clamp(opts.at.y - rect.top + 12, 8, Math.max(8, rect.height - box.offsetHeight - 8));
+  box.style.left = x + 'px'; box.style.top = y + 'px';
+  const ta = box.querySelector('textarea');
+  ta.value = note ? note.text || '' : '';
+  noteEditor = box;
+  const save = () => {
+    const text = ta.value.trim();
+    closeNoteEditor();
+    if (note) {
+      if (text === (note.text || '')) return;
+      if (!text) { toast('A note needs text; DELETE NOTE removes it.', 'warn'); return; }
+      note.text = text; note.updatedAt = new Date().toISOString();
+      touch(); redrawNoteCard(note.id); renderInspector();
+      return;
+    }
+    if (text) addNote(opts.hit, text);
+  };
+  ta.onkeydown = e => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); save(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeNoteEditor(); }
+  };
+  box.querySelector('[data-save]').onclick = save;
+  box.querySelector('[data-cancel]').onclick = closeNoteEditor;
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+function closeNoteEditor() {
+  if (noteEditor) { noteEditor.remove(); noteEditor = null; }
+}
+
+// ---------- right-click menu ----------
+function openContextMenu(e) {
+  closeContextMenu();
+  closeNoteEditor();
+  const hit = pick(e, { ground: true, scans: true });
+  const at = { x: e.clientX, y: e.clientY };
+  const items = [];
+  if (hit && hit.kind === 'note') {
+    items.push(['edit', 'EDIT NOTE', () => openNoteEditor({ note: noteById(hit.id), at })]);
+    items.push(['move', 'MOVE NOTE', () => { setSelection({ kind: 'note', id: hit.id }); startNoteMode(hit.id); }]);
+    items.push(['delete', 'DELETE NOTE', () => deleteNote(hit.id)]);
+  } else if (hit && hit.kind === 'pin') {
+    items.push(['photo', 'OPEN PHOTO', () => { setSelection({ kind: 'pin', id: hit.id }); openLightbox(hit.id); }]);
+  } else if (hit) {
+    items.push(['add-note', 'ADD NOTE HERE', () => openNoteEditor({ hit, at })]);
+  } else {
+    items.push(['none', 'Right-click a surface to pin a note', null]);
+  }
+  const nNotes = prop.notePins.length, nPins = prop.photos.filter(ph => ph.pin).length;
+  items.push(null);
+  items.push(['toggle-notes', (markersShown('notes') ? 'HIDE NOTES' : 'SHOW NOTES') + ' (' + nNotes + ')', () => toggleMarkers('notes')]);
+  items.push(['toggle-pins', (markersShown('pins') ? 'HIDE PHOTO PINS' : 'SHOW PHOTO PINS') + ' (' + nPins + ')', () => toggleMarkers('pins')]);
+  const menu = document.createElement('div');
+  menu.className = 'v-ctx';
+  menu.setAttribute('role', 'menu');
+  menu.innerHTML = items.map(it => !it ? '<div class="v-ctx-sep"></div>'
+    : it[2] ? `<button role="menuitem" data-ctx="${it[0]}">${escapeHtml(it[1])}</button>`
+    : `<div class="v-ctx-info">${escapeHtml(it[1])}</div>`).join('');
+  wrapEl.appendChild(menu);
+  const rect = wrapEl.getBoundingClientRect();
+  menu.style.left = THREE.MathUtils.clamp(at.x - rect.left, 4, Math.max(4, rect.width - menu.offsetWidth - 4)) + 'px';
+  menu.style.top = THREE.MathUtils.clamp(at.y - rect.top, 4, Math.max(4, rect.height - menu.offsetHeight - 4)) + 'px';
+  for (const it of items) {
+    if (!it || !it[2]) continue;
+    menu.querySelector(`[data-ctx="${it[0]}"]`).onclick = () => { closeContextMenu(); it[2](); };
+  }
+  menu.addEventListener('contextmenu', ev => ev.preventDefault());
+  ctxMenu = menu;
+  // Any press elsewhere, a scroll or Esc closes it.
+  setTimeout(() => { if (ctxMenu === menu) window.addEventListener('pointerdown', onOutsideMenu, true); }, 0);
+  const first = menu.querySelector('button');
+  if (first) first.focus({ preventScroll: true });
+}
+function onOutsideMenu(e) { if (ctxMenu && !ctxMenu.contains(e.target)) closeContextMenu(); }
+function closeContextMenu() {
+  window.removeEventListener('pointerdown', onOutsideMenu, true);
+  if (ctxMenu) { ctxMenu.remove(); ctxMenu = null; }
+}
+
+// ---------- photo pins and notes on and off ----------
+// Both are kept per property in the environment, so a property opens the way it was left.
+function markersShown(kind) { return prop.env[kind === 'notes' ? 'showNotes' : 'showPins'] !== false; }
+function applyMarkerVisibility() {
+  if (pinRoot) pinRoot.visible = markersShown('pins');
+  if (noteRoot) noteRoot.visible = markersShown('notes');
+  const sel = selection && (selection.kind === 'pin' || selection.kind === 'note') ? selectedObject() : null;
+  if (sel && !isVisibleChain(sel)) setSelection(null);
+  requestRender(2);
+}
+function toggleMarkers(kind, on) {
+  const key = kind === 'notes' ? 'showNotes' : 'showPins';
+  const next = on == null ? !markersShown(kind) : !!on;
+  if (next === markersShown(kind)) return;
+  prop.env[key] = next;
+  applyMarkerVisibility();
+  touch();
+  renderHud();
+  renderInspector();
+}
+// Placing, moving or locating a pin or note shows that kind first.
+function showMarkers(kind) { toggleMarkers(kind, true); }
 
 // ---------- lightbox ----------
 async function openLightbox(photoId) {
@@ -1488,9 +1837,10 @@ function defaultHint() {
   if (mode === 'walk') return walkLocked ? 'WALK: WASD / arrows move, Shift runs, mouse looks. Esc releases the mouse.' : 'WALK: WASD / arrows move, Shift runs. Drag to look or click to capture the mouse. Esc exits.';
   if (tool === 'measure') return 'MEASURE: click two points on any surface.';
   if (tool === 'pin') return 'PIN PHOTO: choose a photo, then click a surface.';
+  if (tool === 'note') return noteHint();
   if (tool === 'move') return 'MOVE WALLS: select a wall, drag the gizmo arrow to slide it; connected walls follow on release.';
   if (section.on) return 'SECTION: slide the cut height in the mode bar to look inside.';
-  return 'Drag to orbit, right-drag to pan, scroll to zoom. Click elements to inspect; hover shows outlines.';
+  return 'Drag to orbit, right-drag to pan, scroll to zoom. Click elements to inspect; right-click to pin a note.';
 }
 function showProgress(label, frac) {
   const p = hud.progress;
@@ -1520,8 +1870,12 @@ function renderHud() {
     ${section.on ? `<input type="range" class="v-section-range" min="${lo.toFixed(2)}" max="${(H + 0.3).toFixed(2)}" step="0.05" value="${section.height}" title="Cut height (world elevation)">
       <span class="v-section-val">${escapeHtml(fmtLen(section.height))}</span>` : ''}
     <span class="v-pill-sep"></span>
-    <button class="v-pill ${xray ? 'active' : ''}" data-xray title="X-ray (X)">X-RAY</button>`;
+    <button class="v-pill ${xray ? 'active' : ''}" data-xray title="X-ray (X)">X-RAY</button>
+    <span class="v-pill-sep"></span>
+    <button class="v-pill ${markersShown('pins') ? 'active' : ''}" data-show="pins" aria-pressed="${markersShown('pins')}" title="${markersShown('pins') ? 'Hide' : 'Show'} photo pins (${prop.photos.filter(ph => ph.pin).length})">PHOTOS</button>
+    <button class="v-pill ${markersShown('notes') ? 'active' : ''}" data-show="notes" aria-pressed="${markersShown('notes')}" title="${markersShown('notes') ? 'Hide' : 'Show'} notes (${prop.notePins.length}); right-click the model to pin one">NOTES</button>`;
   bar.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => setMode(b.dataset.mode));
+  bar.querySelectorAll('[data-show]').forEach(b => b.onclick = () => toggleMarkers(b.dataset.show));
   bar.querySelector('[data-section]').onclick = toggleSection;
   bar.querySelector('[data-xray]').onclick = toggleXray;
   const range = bar.querySelector('.v-section-range');
@@ -1729,6 +2083,21 @@ function bindPinsList(root) {
   root.querySelectorAll('[data-locate]').forEach(b => b.onclick = () => { setSelection({ kind: 'pin', id: b.dataset.locate }); flyToPin(b.dataset.locate); });
   root.querySelectorAll('[data-unpin]').forEach(b => b.onclick = () => unpin(b.dataset.unpin));
 }
+function notesListHtml() {
+  if (!prop.notePins.length) return '';
+  const hidden = markersShown('notes') ? '' : ' <span class="muted">(hidden)</span>';
+  return `<h3 style="margin-top:14px">NOTES${hidden}</h3>` + prop.notePins.map(n => `
+    <div class="v-pin-row v-note-row">
+      <i class="v-note-chip" aria-hidden="true"></i>
+      <span class="v-pin-name" title="${escapeHtml(n.text)}">${escapeHtml(n.text || '(empty note)')}</span>
+      <button class="btn small" data-locate-note="${escapeHtml(n.id)}" title="Fly to note">LOCATE</button>
+      <button class="btn small danger" data-delete-note="${escapeHtml(n.id)}" title="Delete note">&times;</button>
+    </div>`).join('');
+}
+function bindNotesList(root) {
+  root.querySelectorAll('[data-locate-note]').forEach(b => b.onclick = () => { flyToNote(b.dataset.locateNote); setSelection({ kind: 'note', id: b.dataset.locateNote }); });
+  root.querySelectorAll('[data-delete-note]').forEach(b => b.onclick = () => deleteNote(b.dataset.deleteNote));
+}
 function unpin(id) {
   const ph = photoById(prop, id);
   if (!ph) return;
@@ -1793,10 +2162,13 @@ function renderInspector() {
       <div class="stat-line"><span>Rooms</span><b>${prop.rooms.length}</b></div>
       <div class="stat-line"><span>Scans</span><b>${prop.scans.length}</b></div>
       <div class="stat-line"><span>Photos</span><b>${prop.photos.length}</b></div>
+      <div class="stat-line"><span>Notes</span><b>${prop.notePins.length}</b></div>
       <div class="empty" style="margin-top:12px">
-        Click a wall, door, window or floor to inspect and edit it. The model regenerates from the plan; edits here write back to the same data.</div>
-      ${pinsListHtml()}`;
+        Click a wall, door, window or floor to inspect and edit it. The model regenerates from the plan; edits here write back to the same data. Right-click anywhere on the model to pin a note.</div>
+      ${pinsListHtml()}
+      ${notesListHtml()}`;
     bindPinsList(inspEl);
+    bindNotesList(inspEl);
     return;
   }
   if (selection.kind === 'wall') {
@@ -1922,6 +2294,28 @@ function renderInspector() {
     inspEl.querySelector('[data-unpin]').onclick = () => unpin(ph.id);
     return;
   }
+  if (selection.kind === 'note') {
+    const n = noteById(selection.id);
+    if (!n) { selection = null; return renderInspector(); }
+    const where = noteWhere(n), added = new Date(n.createdAt);
+    inspEl.innerHTML = `<h3>NOTE</h3>
+      <div class="field"><label>Text</label><textarea data-text rows="5" maxlength="2000">${escapeHtml(n.text || '')}</textarea></div>
+      ${where ? `<div class="stat-line"><span>Room</span><b>${escapeHtml(where)}</b></div>` : ''}
+      ${Number.isFinite(added.getTime()) && added.getTime() > 0 ? `<div class="stat-line"><span>Added</span><b>${escapeHtml(added.toLocaleDateString())}</b></div>` : ''}
+      <div class="field"><label>Card size</label><input type="range" min="0.2" max="2" step="0.05" value="${finiteNum(n.size, 0.45)}" data-size></div>
+      <button class="btn" data-locate>LOCATE</button>
+      <button class="btn" data-move>MOVE NOTE</button>
+      <button class="btn danger" data-del>DELETE NOTE</button>`;
+    const text = inspEl.querySelector('[data-text]');
+    text.oninput = () => { n.text = text.value; redrawNoteCard(n.id); };
+    text.onchange = () => { n.text = text.value.trim(); n.updatedAt = new Date().toISOString(); touch(); redrawNoteCard(n.id); };
+    inspEl.querySelector('[data-size]').oninput = e => { n.size = parseFloat(e.target.value); const r = noteObjs[n.id]; if (r) r.size = n.size; requestRender(2); };
+    inspEl.querySelector('[data-size]').onchange = () => touch();
+    inspEl.querySelector('[data-locate]').onclick = () => flyToNote(n.id);
+    inspEl.querySelector('[data-move]').onclick = () => startNoteMode(n.id);
+    inspEl.querySelector('[data-del]').onclick = () => deleteNote(n.id);
+    return;
+  }
   if (selection.kind === 'scan') {
     const s = prop.scans.find(s => s.id === selection.id);
     if (!s) { selection = null; return renderInspector(); }
@@ -2038,6 +2432,8 @@ function renderToolCol() {
     ${tb('measure', 'measure', 'MEASURE', 'D', tool === 'measure')}
     ${measures.length ? tb('clearm', 'close', 'CLEAR MEASURES') : ''}
     ${tb('pin', 'pin', 'PIN PHOTO', 'P', tool === 'pin')}
+    ${tb('note', 'note', 'NOTE', 'N', tool === 'note')}
+    ${tb('sketchup', 'external', 'EDIT IN SKETCHUP')}
     <div class="tool-sep"></div>
     <div class="tool-head">LEVELS</div>
     ${levelRows}
@@ -2060,6 +2456,11 @@ function renderToolCol() {
   on('measure', () => setTool(tool === 'measure' ? 'select' : 'measure'));
   on('clearm', () => { clearMeasures(); renderToolCol(); });
   on('pin', () => { if (tool === 'pin') setTool('select'); else startPinMode(null); });
+  on('note', () => { if (tool === 'note') setTool('select'); else startNoteMode(null); });
+  on('sketchup', () => document.dispatchEvent(new CustomEvent('tiksi:edit-in-sketchup')));
+  const su = tc.querySelector('[data-act=sketchup]');
+  if (su) su.classList.add('tb-wrap');
+  if (su) su.title = 'Open this project\'s SketchUp model (the .skp kept beside the project file) in SketchUp. Saves there come back here.';
   on('section', toggleSection);
   on('xray', toggleXray);
   on('render', openStillDialog);
@@ -2079,12 +2480,13 @@ function renderToolCol() {
   on('before',()=>compare('before'));on('after',()=>compare('after'));
   tc.querySelectorAll('[data-scan]').forEach(b => b.onclick = () => setSelection({ kind: 'scan', id: b.dataset.scan }));
   tc.querySelectorAll('[data-level]').forEach(b => b.onclick = () => toggleLevel(b.dataset.level));
-  on('rebuild', () => { rebuildModel(); rebuildGround(); buildAllPins(); });
+  on('rebuild', () => { rebuildModel(); rebuildGround(); buildAllPins(); buildAllNotes(); });
 }
 function setTool(next) {
   if (tool === 'measure' && next !== 'measure') { measureDraft = null; measureRoot.children.filter(c => c.userData.draft).forEach(c => { measureRoot.remove(c); c.geometry.dispose(); c.material.dispose(); }); }
   tool = next;
   if (next !== 'pin') pinBatch = false;
+  if (next !== 'note') movingNoteId = null;
   reattachGizmo();
   renderToolCol();
   renderInspector();
@@ -2096,6 +2498,7 @@ function setTool(next) {
 function onKeyDown(e) {
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+  if (ctxMenu && e.code === 'Escape') { closeContextMenu(); e.preventDefault(); return; }
   if (mode === 'walk') {
     walkKeys[e.code] = true;
     if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) { e.preventDefault(); requestRender(2); }
@@ -2111,6 +2514,7 @@ function onKeyDown(e) {
     case 'KeyM': setTool(tool === 'move' ? 'select' : 'move'); break;
     case 'KeyD': setTool(tool === 'measure' ? 'select' : 'measure'); break;
     case 'KeyP': if (tool === 'pin') setTool('select'); else startPinMode(null); break;
+    case 'KeyN': if (tool === 'note') setTool('select'); else startNoteMode(null); break;
     case 'KeyC': toggleSection(); break;
     case 'KeyX': toggleXray(); break;
     case 'Escape':
@@ -2121,6 +2525,7 @@ function onKeyDown(e) {
       if (selection && selection.kind === 'wall') inspEl.querySelector('[data-del]') && inspEl.querySelector('[data-del]').click();
       else if (selection && selection.kind === 'opening') inspEl.querySelector('[data-del]') && inspEl.querySelector('[data-del]').click();
       else if (selection && selection.kind === 'pin') unpin(selection.id);
+      else if (selection && selection.kind === 'note') deleteNote(selection.id);
       break;
     default: return;
   }
@@ -2161,6 +2566,7 @@ export function mount(root) {
     progress: wrapEl.querySelector('.v-progress'), toast: wrapEl.querySelector('.v-toast'), hint: wrapEl.querySelector('.v-hint'),
   };
   mode = 'orbit'; tool = 'select'; selection = null; hoverTarget = null; tween = null; measureDraft = null; pinPhotoId = null;
+  movingNoteId = null; rightPress = null; ctxMenu = null; noteEditor = null;
   panoNagged = false; panoPending = null; panoMissing = null;
   for (const k of Object.keys(scanState)) delete scanState[k];
   mountId++;
@@ -2174,6 +2580,8 @@ export function mount(root) {
   applyQuality();
   applyEnvironment();
   buildAllPins();
+  buildAllNotes();
+  applyMarkerVisibility();
   presetView('frame', true);
   renderHud();
   renderEnvPanel();
@@ -2188,6 +2596,7 @@ export function mount(root) {
   c.addEventListener('pointermove', onPointerMove);
   c.addEventListener('pointerleave', onPointerLeave);
   c.addEventListener('contextmenu', onContextMenu);
+  c.addEventListener('wheel', closeContextMenu, { passive: true });
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
   resizeObs = new ResizeObserver(resize);
@@ -2249,7 +2658,10 @@ export function unmount() {
     c.removeEventListener('pointermove', onPointerMove);
     c.removeEventListener('pointerleave', onPointerLeave);
     c.removeEventListener('contextmenu', onContextMenu);
+    c.removeEventListener('wheel', closeContextMenu);
   }
+  closeContextMenu();
+  closeNoteEditor();
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
   clearTimeout(pmremTimer);
   if (mode === 'walk' && walk) { if (walkLocked) walk.unlock(); }
@@ -2263,6 +2675,7 @@ export function unmount() {
   if (lightRoot) { lightRoot.traverse(o => { if (o.geometry) o.geometry.dispose(); }); lightRoot = null; }
   clearMeasures();
   for (const id of Object.keys(pinObjs)) removePin(id);
+  for (const id of Object.keys(noteObjs)) removeNote(id);
   for (const id of Object.keys(scanObjs)) { disposeScanObject(scanObjs[id]); delete scanObjs[id]; }
   for (const id of Object.keys(scanState)) delete scanState[id];
   releaseSplatRenderer();
@@ -2282,7 +2695,7 @@ export function unmount() {
     renderer.clear();
   }
   scene = null; camera = null; skyScene = null; sun = null; hemi = null;
-  scanRoot = null; pinRoot = null; measureRoot = null;
+  scanRoot = null; pinRoot = null; noteRoot = null; measureRoot = null;
   el = null; wrapEl = null; inspEl = null; hud = {};
-  selection = null; hoverTarget = null; tween = null; pressed = null; dragLook = null;
+  selection = null; hoverTarget = null; tween = null; pressed = null; dragLook = null; rightPress = null; movingNoteId = null;
 }

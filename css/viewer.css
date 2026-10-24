@@ -189,3 +189,29 @@
 .v-export-dialog .v-export-note { font-size: 11px; }
 .v-export-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .v-export-actions .btn { width: auto; }
+
+/* ---------- right-click menu and the note editor ---------- */
+.v-ctx, .v-note-edit {
+  position: absolute; z-index: 8; border-radius: 6px;
+  background: rgba(12, 16, 19, 0.92); border: 1px solid rgba(139, 154, 167, 0.28);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2); backdrop-filter: blur(12px) saturate(1.2);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.v-ctx { min-width: 190px; padding: 4px; display: flex; flex-direction: column; }
+.v-ctx button {
+  background: transparent; border: 0; border-radius: 4px; color: var(--ink); cursor: pointer; text-align: left;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.08em; padding: 7px 10px; white-space: nowrap;
+}
+.v-ctx button:hover, .v-ctx button:focus-visible { background: var(--accent); color: var(--accent-ink); outline: none; }
+.v-ctx-info { font-size: 11px; color: var(--dim); padding: 7px 10px; }
+.v-ctx-sep { height: 1px; margin: 4px 6px; background: rgba(139, 154, 167, 0.22); }
+.v-note-edit { width: 260px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.v-note-edit label { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em; color: #f5d66a; }
+.v-note-edit textarea {
+  width: 100%; resize: vertical; min-height: 64px; font: 13px/1.4 var(--sans); color: #2a2410;
+  background: #f5d66a; border: 0; border-radius: 3px; padding: 8px 9px; outline: none;
+}
+.v-note-edit textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
+.v-note-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.v-note-actions .btn { width: auto; margin: 0; }
+.v-note-chip { flex: none; width: 18px; height: 18px; border-radius: 2px; background: #f5d66a; box-shadow: inset -5px -5px 0 -2px #d9b84a; }

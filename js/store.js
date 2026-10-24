@@ -297,6 +297,7 @@ export function defaultEnv() {
     time: 14.5, azimuth: 200, north: 0, exposure: 1.0, quality: 'high',
     sky: 'dynamic', panoPhotoId: null,
     showCeilings: true, showGround: true, showGrid: false, nightLights: true,
+    showPins: true, showNotes: true,
   };
 }
 
@@ -315,7 +316,7 @@ export function propertyTemplate(name) {
   return {
     id: uid('prop'), name: name || 'New property', notes: '', wallHeight: 2.44,
     levels: [levelTemplate('lvl-0', 'Main level', 0, 2.44)], activeLevelId: 'lvl-0',
-    walls: [], openings: [], rooms: [], scans: [], photos: [], env: defaultEnv(), source: null,
+    walls: [], openings: [], rooms: [], scans: [], photos: [], notePins: [], env: defaultEnv(), source: null,
   };
 }
 
@@ -476,6 +477,7 @@ function sanitiseIds(d) {
     for (const r of p.rooms) fix(r, 'r');
     for (const s of p.scans) fix(s, 'scan');
     for (const ph of p.photos) fix(ph, 'ph');
+    for (const n of p.notePins) fix(n, 'note');
   }
   for (const m of d.materials) fix(m, 'mat');
   for (const pr of d.products) fix(pr, 'prod');
@@ -506,7 +508,7 @@ function validateWorkspace(d) {
     if (d[key] != null && !Array.isArray(d[key])) throw new Error(key + ' must be a list');
     for (const rec of d[key] || []) if (!rec || typeof rec !== 'object' || Array.isArray(rec)) throw new Error(key + ' contains an invalid record');
   }
-  for (const p of d.properties || []) for (const key of ['levels','walls','openings','rooms','scans','photos']) {
+  for (const p of d.properties || []) for (const key of ['levels','walls','openings','rooms','scans','photos','notePins']) {
     if (p[key] != null && !Array.isArray(p[key])) throw new Error('property ' + key + ' must be a list');
     for (const rec of p[key] || []) if (!rec || typeof rec !== 'object' || Array.isArray(rec)) throw new Error('property ' + key + ' contains an invalid record');
   }
@@ -568,6 +570,18 @@ function migrate(d) {
       if (!ph.createdAt) ph.createdAt = new Date(0).toISOString();
       // '' is the slim localStorage form (thumbnail lives in IndexedDB, see persistable).
       if (typeof ph.thumb !== 'string' || (ph.thumb && !THUMB_RE.test(ph.thumb))) ph.thumb = '';
+    }
+    // Notes pinned to a point in the model (MODEL, right-click). `notes` on the property is
+    // its own free text; these are separate.
+    const num = v => typeof v === 'number' || (typeof v === 'string' && v.trim()) ? Number(v) : NaN;
+    p.notePins = (p.notePins || []).filter(n => ['x', 'y', 'z'].every(k => Number.isFinite(num(n[k]))));
+    for (const n of p.notePins) {
+      for (const k of ['x', 'y', 'z']) n[k] = num(n[k]);
+      for (const k of ['nx', 'ny', 'nz']) n[k] = Number.isFinite(num(n[k])) ? num(n[k]) : (k === 'ny' ? 1 : 0);
+      if (typeof n.text !== 'string') n.text = '';
+      if (typeof n.roomId !== 'string') n.roomId = '';
+      if (!Array.isArray(n.elementIds)) n.elementIds = [];
+      if (!n.createdAt) n.createdAt = new Date(0).toISOString();
     }
   }
   for (const pr of d.projects) {

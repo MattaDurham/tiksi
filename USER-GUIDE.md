@@ -217,7 +217,11 @@ Use the tool column for camera and inspection actions. The inspector follows the
 
 **Imported references.** Select a scan/model to inspect placement, scale and available materials. A reference remains separate from native plan elements.
 
-**Photos on surfaces.** Pinned photos stay attached to the model. Select a pin to open its reference image.
+**Photos on surfaces.** Pinned photos stay attached to the model. Select a pin to open its reference image. PHOTOS in the mode bar hides or shows every pin.
+
+**Notes anywhere.** Right-click a wall, floor, scan or the ground and choose ADD NOTE HERE, or use NOTE (N) and click. The note links to the room and wall under it. Right-click a note to edit, move or delete it; NOTES in the mode bar hides or shows them all. Both switches are kept with the property.
+
+**Edit in SketchUp.** EDIT IN SKETCHUP (in MODEL and PLAN) brings the project's .skp up to date and opens it in SketchUp. Save there and walls, openings and rooms come back. It needs the project kept in a folder and Tiksi running on the Mac with SketchUp.
 
 **Finish takeoff.** A selected imported model can map material slots and create a measured finish estimate. See the exchange chapter for that workflow.
 
@@ -584,7 +588,7 @@ Settings groups display, model environment, project-folder controls and the sepa
 
 ### Other features here
 
-**Keep a SketchUp mirror.** With a linked folder and SketchUp installed on this Mac, each project also gets a .skp beside its .tiksi. Walls, openings and rooms you move, resize, copy, delete or rename in SketchUp come back into the plan when you save there. The status line under the switch shows the last sync and any conflicts.
+**Keep a SketchUp mirror.** With a linked folder and SketchUp installed on this Mac, each project also gets a .skp beside its .tiksi. Walls, openings and rooms you move, resize, copy, delete or rename in SketchUp come back into the plan when you save there. The status line under the switch shows the last sync and any conflicts. EDIT IN SKETCHUP in MODEL or PLAN opens that .skp in SketchUp.
 
 **Save workspace backup.** Exports every property together. Keep a .tiksi per property for ordinary project handoffs.
 
@@ -610,7 +614,7 @@ Use the visible tooltips and inspector labels when you forget a control. These a
 
 **Plan drawing.** V: select. W: wall. D: door. N: window. R: room. C: calibrate. With ROOM, a click inside closed walls floors that room and Alt-click starts an outline; click the first point or double-click to close an outline.
 
-**Model navigation.** F: frame. O: orbit. W: walk. T: top. C: section. X: X-ray. M: move walls. D: measure. P: pin photo.
+**Model navigation.** F: frame. O: orbit. W: walk. T: top. C: section. X: X-ray. M: move walls. D: measure. P: pin photo. N: note. Right-click: note menu.
 
 **Plan undo.** Cmd/Ctrl+Z: undo. Cmd/Ctrl+Shift+Z: redo. Escape ends an active tool action.
 

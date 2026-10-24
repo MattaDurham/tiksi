@@ -299,6 +299,9 @@ h3.kicker { font-weight: 700; }
 }
 .tool-btn .ic { opacity: 0.7; transition: opacity var(--dur) var(--ease); }
 .tool-btn .tb-text { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+/* A label too long for the column (EDIT IN SKETCHUP) takes two lines instead of an ellipsis. */
+.tool-btn.tb-wrap { white-space: normal; }
+.tool-btn.tb-wrap .tb-text { line-height: 1.35; }
 .tool-btn:hover { color: var(--ink); background: rgba(255, 255, 255, 0.04); border-color: var(--line); }
 .tool-btn:hover .ic { opacity: 1; }
 .tool-btn:active { background: rgba(255, 255, 255, 0.07); }

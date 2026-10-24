@@ -1686,6 +1686,7 @@ function renderToolCol() {
   tc.innerHTML = `
     <div class="tool-head">Tools</div>
     ${tools.map(([id, name, key, ic]) => toolBtn(`data-tool="${id}"`, ic, name, key, tool === id)).join('')}
+    ${toolBtn('data-act="sketchup"', 'external', 'EDIT IN SKETCHUP', '', false)}
     <div class="tool-sep"></div>
     <div class="tool-head">Level</div>
     ${levelRows}
@@ -1718,6 +1719,10 @@ function renderToolCol() {
   tc.querySelector('[data-act=fit]').onclick = fitView;
   tc.querySelector('[data-act=undo]').onclick = undo;
   tc.querySelector('[data-act=redo]').onclick = redo;
+  const su = tc.querySelector('[data-act=sketchup]');
+  su.classList.add('tb-wrap');
+  su.title = 'Open this project\'s SketchUp model (the .skp kept beside the project file) in SketchUp. Saves there come back to the plan.';
+  su.onclick = () => document.dispatchEvent(new CustomEvent('tiksi:edit-in-sketchup'));
   tc.querySelectorAll('[data-chk]').forEach(c => c.onchange = () => {
     if (c.dataset.chk === 'snap') snapOn = c.checked;
     if (c.dataset.chk === 'dims') dimsOn = c.checked;
