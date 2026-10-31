@@ -13,6 +13,7 @@
 // house: door jambs, casings and leaves, window frames with sash and mullions and real
 // glass, baseboards, ceilings, and a ground disc.
 
+import { setModelXray } from './model-xray.js';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { materialById, ensureLevels, levelHeight, levelOfRoom, wallsOn, roomsOn, openingsOn } from './store.js';
@@ -710,7 +711,7 @@ export function roomCentres(property) {
 }
 
 // ---------- property ----------
-// opts: { xray: bool, hiddenLevels: Set of level ids }
+// opts: { xray: bool, xrayOpacity: number, hiddenLevels: Set of level ids }
 // One group per level, lifted to its elevation, holding that level's floors, walls and a
 // ceilings group; element groups keep their { kind, id } userData for picking. The root's
 // userData lists the levels ({ id, name, group, ceilings, elevation, top }) and the shared glass.
@@ -719,10 +720,8 @@ export function buildPropertyGroup(property, opts) {
   if (!Array.isArray(property.levels) || !property.levels.length) ensureLevels(property);
   const root = new THREE.Group();
   root.name = 'property';
-  const matOpts = opts.xray ? { transparent: true, opacity: 0.35 } : undefined;
   const glass = glassMat();
-  if (opts.xray) { glass.transmission = 0; glass.opacity = 0.25; }
-  const ctx = { matOpts, glass };
+  const ctx = { glass };
   const hidden = opts.hiddenLevels || null;
   const levels = [];
 
@@ -757,6 +756,7 @@ export function buildPropertyGroup(property, opts) {
     levels.push({ id: lvl.id, name: lvl.name, group: lg, ceilings, elevation: lvl.elevation, top: lvl.elevation + H });
   }
   root.userData = { levels, glass };
+  if (opts.xray) setModelXray(root, opts.xrayOpacity ?? 0.35);
   return root;
 }
 
@@ -892,6 +892,7 @@ export function modelBounds(property, opts) {
 // Dispose geometries and the materials this module created for one build.
 // Shared materials (textures.js cache, module-level fallbacks) are left alone.
 export function disposeBuilt(obj) {
+  setModelXray(obj, null);
   obj.traverse(o => {
     if (o.geometry) o.geometry.dispose();
     const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);

@@ -289,12 +289,12 @@ function hydrateThumbs() {
 
 // ---------- schema defaults (v2) ----------
 
-// Environment / rendering settings per property. `time` is local solar hours (sunrise 6,
-// noon 12, sunset 20); `azimuth` is the sun's compass heading the user drags; `north`
-// rotates the compass rose relative to plan +x.
+// Rendering settings are saved per property; location mode uses local clock time and an IANA zone.
 export function defaultEnv() {
   return {
     time: 14.5, azimuth: 200, north: 0, exposure: 1.0, quality: 'high',
+    sunMode: 'manual', latitude: null, longitude: null, date: isoToday(),
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', xrayOpacity: 0.35,
     sky: 'dynamic', panoPhotoId: null,
     showCeilings: true, showGround: true, showGrid: false, nightLights: true,
     showPins: true, showNotes: true,

@@ -3,6 +3,7 @@
 // (point cloud, mesh or Gaussian splat) wrapped in a transform group the inspector edits.
 // Point clouds parse in a Worker created from a Blob URL so the UI never freezes.
 
+import { setModelXray } from './model-xray.js';
 import * as THREE from 'three';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
@@ -343,7 +344,7 @@ async function buildMesh(buffer, e, scan, inner, hooks) {
     for (const m of Array.isArray(o.material) ? o.material : [o.material]) for (const key of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) {
       if (m && m[key]) { m[key].anisotropy = anisotropy; m[key].needsUpdate = true; }
     }
-    o.receiveShadow = true; count += o.geometry.index ? o.geometry.index.count / 3 : o.geometry.getAttribute('position').count / 3; } });
+    o.castShadow = true; o.receiveShadow = true; count += o.geometry.index ? o.geometry.index.count / 3 : o.geometry.getAttribute('position').count / 3; } });
   inner.add(obj);
   return { count, label: Math.round(count).toLocaleString() + ' triangles' };
 }
@@ -477,6 +478,7 @@ export function centerScanOnModel(scan, obj, bounds) {
 
 export function disposeScanObject(obj) {
   if (!obj) return;
+  setModelXray(obj, null);
   if (obj.userData.splat) disposeSplat(obj.userData.splat);
   const disposedMaterials=new Set(),disposedTextures=new Set();
   obj.traverse(o => {
