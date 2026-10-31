@@ -86,10 +86,6 @@
 .v-row-sel { grid-template-columns: 78px 1fr; }
 .v-row-sel select { width: 100%; font-size: 11px; padding: 3px 5px; }
 .v-row-sel select + select { grid-column: 2; margin-top: 4px; }
-.v-arc { position: relative; height: 6px; border-radius: 3px; overflow: visible;
-  background: linear-gradient(90deg, #0d1522 0%, #0d1522 22%, #e3b78a 27%, #cfe0f2 50%, #e3b78a 81%, #0d1522 86%, #0d1522 100%); }
-.v-arc i { position: absolute; top: -3px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%;
-  background: var(--accent); box-shadow: 0 0 8px var(--accent); }
 .v-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; margin-top: 8px; }
 .v-checks label { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; color: var(--dim); cursor: pointer; }
 
@@ -215,3 +211,12 @@
 .v-note-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .v-note-actions .btn { width: auto; margin: 0; }
 .v-note-chip { flex: none; width: 18px; height: 18px; border-radius: 2px; background: #f5d66a; box-shadow: inset -5px -5px 0 -2px #d9b84a; }
+
+.v-modes { max-width: calc(100% - 24px); flex-wrap: wrap; justify-content: center; width: max-content; border-radius: 20px; }
+.v-xray-control { position: absolute; top: calc(100% + 8px); display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 16px; background: rgba(12, 16, 19, 0.88); border: 1px solid var(--line-2); color: var(--dim); font: 9px var(--mono); white-space: nowrap; }
+.v-xray-range { width: 110px; accent-color: var(--accent); }
+.v-xray-control output { min-width: 32px; color: var(--accent); }
+.v-env { max-height: calc(100% - 130px); overflow-y: auto; }
+.v-row input:not([type=range]) { width: 100%; min-width: 0; font-size: 11px; padding: 3px 5px; }
+.v-env-help { color: var(--dim); font-size: 11px; line-height: 1.4; margin: 8px 0; }
+.v-env-help:empty { display: none; }

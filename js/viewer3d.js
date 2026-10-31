@@ -4,6 +4,8 @@
 // modes; selection and hover outlines; measure and photo-pin tools; notes pinned with a
 // right-click; point clouds, meshes and Gaussian splats as reference scans; a still-image renderer.
 
+import { environmentSun, dayOfYear, dateForDay, daysInYear, validTimeZone } from './solar.js';
+import { setModelXray } from './model-xray.js';
 import * as THREE from 'three';
 import { modelTakeoff, createModelEstimate } from './model-takeoff.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -23,7 +25,7 @@ import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 import {
-  ws, activeProperty, uid, touch, fmtLen, parseLen, fmtArea, polyArea,
+  ws, activeProperty, defaultEnv, uid, touch, fmtLen, parseLen, fmtArea, polyArea,
   escapeHtml, deleteFile, getFile, itemById, materialById, isoToday, projectLabel,
   ensureLevels, wallsOn, roomsOn, wallHeightOf, levelOfWall, levelOfRoom, levelHeight, topOfLevels,
 } from './store.js';
@@ -44,13 +46,6 @@ import {
 
 // ---------- persistent GPU state (one context for the life of the page) ----------
 let renderer = null, pmrem = null;
-
-const ENV_DEFAULTS = {
-  time: 14.5, azimuth: 200, north: 0, exposure: 1.0, quality: 'high',
-  sky: 'dynamic', panoPhotoId: null,
-  showCeilings: true, showGround: true, showGrid: false, nightLights: true,
-  showPins: true, showNotes: true,
-};
 
 // ---------- per-mount state ----------
 let el = null, wrapEl = null, inspEl = null, hud = {};
@@ -108,7 +103,13 @@ function requestRender(n) { framesLeft = Math.max(framesLeft, n || 2); }
 
 // ---------- defaults for old data ----------
 function ensureDefaults(p) {
-  p.env = Object.assign({}, ENV_DEFAULTS, p.env || {});
+  const defaults = defaultEnv();
+  p.env = Object.assign({}, defaults, p.env || {});
+  const date = new Date(p.env.date + 'T00:00:00Z');
+  if (!Number.isFinite(+date) || date.toISOString().slice(0, 10) !== p.env.date) p.env.date = defaults.date;
+  if (!validTimeZone(p.env.timeZone)) p.env.timeZone = defaults.timeZone;
+  if (!Number.isFinite(p.env.xrayOpacity)) p.env.xrayOpacity = defaults.xrayOpacity;
+  p.env.xrayOpacity = Math.max(0, Math.min(1, p.env.xrayOpacity));
   p.photos = p.photos || [];
   p.notePins = p.notePins || [];
   p.scans = p.scans || [];
@@ -213,49 +214,12 @@ function makeSky(forEnv) {
   s.material.uniforms.cloudCoverage.value = 0.35;
   s.material.uniforms.cloudDensity.value = 0.45;
   // Scale the sky into the same range as the sun-lit model and clamp it so bloom and the
-  // PMREM never see infinities (the raw shader reaches 1e7 in the sun disc).
+  // PMREM never see infinities. Keep the visible sun below the bloom threshold too.
   let fs = s.material.fragmentShader;
-  fs = fs.replace('gl_FragColor = vec4( texColor, 1.0 );', 'gl_FragColor = vec4( min( texColor * ' + (forEnv ? ENV_SKY_SCALE : SKY_SCALE) + ', vec3( ' + (forEnv ? '2.0' : '40.0') + ' ) ), 1.0 );');
+  fs = fs.replace('gl_FragColor = vec4( texColor, 1.0 );', 'gl_FragColor = vec4( min( texColor * ' + (forEnv ? ENV_SKY_SCALE : SKY_SCALE) + ', vec3( 2.0 ) ), 1.0 );');
   s.material.fragmentShader = fs;
   s.material.needsUpdate = true;
   return s;
-}
-
-// CPU port of the Sky shader's atmosphere term, evaluated just above the horizon and averaged
-// over the compass, so the fog that hides the ground's edge is the same colour as the sky
-// meeting it. No GPU readback needed.
-function skyHorizonColor() {
-  const u = sky.material.uniforms;
-  const sunDir = u.sunPosition.value.clone().normalize();
-  const cosZen = THREE.MathUtils.clamp(sunDir.y, -1, 1);
-  const sunE = 1000 * Math.max(0, 1 - Math.exp(-((1.6110731556870734 - Math.acos(cosZen)) / 1.5)));
-  const sunfade = 1 - THREE.MathUtils.clamp(1 - Math.exp(u.sunPosition.value.y / 450000), 0, 1);
-  const rayleighC = u.rayleigh.value - (1 - sunfade);
-  const betaR = [5.804542996261093e-6, 1.3562911419845635e-5, 3.0265902468824876e-5].map(x => x * rayleighC);
-  const mieC = 0.2 * u.turbidity.value * 10e-18;
-  const betaM = [1.8399918514433978e14, 2.7798023919660528e14, 4.0790479543861094e14].map(x => 0.434 * mieC * x * u.mieCoefficient.value);
-  const g = u.mieDirectionalG.value, g2 = g * g;
-  const acc = [0, 0, 0];
-  const dirs = [new THREE.Vector3(1, 0.03, 0), new THREE.Vector3(-1, 0.03, 0), new THREE.Vector3(0, 0.03, 1), new THREE.Vector3(0, 0.03, -1)];
-  for (const d of dirs) {
-    d.normalize();
-    const zen = Math.acos(Math.max(0, d.y));
-    const inv = 1 / (Math.cos(zen) + 0.15 * Math.pow(93.885 - zen * 180 / Math.PI, -1.253));
-    const sR = 8.4e3 * inv, sM = 1.25e3 * inv;
-    const cosT = d.dot(sunDir);
-    const rPhase = 0.05968310365946075 * (1 + Math.pow(cosT * 0.5 + 0.5, 2));
-    const mPhase = 0.07957747154594767 * ((1 - g2) / Math.pow(1 - 2 * g * cosT + g2, 1.5));
-    const k = THREE.MathUtils.clamp(Math.pow(1 - sunDir.y, 5), 0, 1);
-    for (let i = 0; i < 3; i++) {
-      const fex = Math.exp(-(betaR[i] * sR + betaM[i] * sM));
-      const ratio = (betaR[i] * rPhase + betaM[i] * mPhase) / (betaR[i] + betaM[i]);
-      let lin = Math.pow(Math.max(0, sunE * ratio * (1 - fex)), 1.5);
-      lin *= (1 - k) + k * Math.sqrt(Math.max(0, sunE * ratio * fex));
-      const tex = (lin + 0.1 * fex) * 0.04 + [0, 0.0003, 0.00075][i];
-      acc[i] += Math.min(tex * SKY_SCALE, 40) / dirs.length;
-    }
-  }
-  return new THREE.Color(acc[0], acc[1], acc[2]);
 }
 
 function setupComposer() {
@@ -357,7 +321,7 @@ function configureRenderQuality(name, forExport = false) {
 // ---------- model ----------
 function rebuildModel() {
   if (modelGroup) { scene.remove(modelGroup); disposeBuilt(modelGroup); }
-  modelGroup = buildPropertyGroup(prop, { xray, hiddenLevels: hiddenLevels() });
+  modelGroup = buildPropertyGroup(prop, { xray, xrayOpacity: prop.env.xrayOpacity, hiddenLevels: hiddenLevels() });
   modelGroup.visible = !prop.modelSourceId;
   scene.add(modelGroup);
   rebuildNightLights();
@@ -399,11 +363,17 @@ function rebuildNightLights() {
 
 function fitShadow() {
   const b = modelBounds(prop);
-  const cx = (b.minX + b.maxX) / 2, cz = (b.minY + b.maxY) / 2;
-  const H = modelTop();
+  let H = modelTop();
+  const bounds = new THREE.Box3(new THREE.Vector3(b.minX, lowestElevation(), b.minY), new THREE.Vector3(b.maxX, H, b.maxY));
+  for (const scan of prop.scans) {
+    if (scan.visible === false || scan.kind !== 'mesh' || !scanObjs[scan.id]) continue;
+    bounds.union(new THREE.Box3().setFromObject(scanObjs[scan.id]));
+  }
+  H = bounds.max.y - bounds.min.y;
+  const center = bounds.getCenter(new THREE.Vector3());
   // Hug the model's bounding sphere: every unit of slack here is wasted shadow texels.
-  const R = Math.max(Math.hypot(b.maxX - b.minX, b.maxY - b.minY, H) / 2 * 1.05, 4);
-  sun.target.position.set(cx, H / 2, cz);
+  const R = Math.max(Math.hypot(bounds.max.x - bounds.min.x, bounds.max.z - bounds.min.z, H) / 2 * 1.05, 4);
+  sun.target.position.copy(center);
   const c = sun.shadow.camera;
   c.left = -R; c.right = R; c.top = R; c.bottom = -R;
   c.near = R * 0.5; c.far = R * 5.5;
@@ -413,12 +383,9 @@ function fitShadow() {
 }
 
 // ---------- environment: sun, sky, IBL, night ----------
-// Solar elevation in degrees: sunrise 06:00, sunset 20:00, and a continuous descent to -18
-// (astronomical night) after that, so dragging TIME through dusk never jumps.
-function sunElevation(t) {
-  if (t < 6) return Math.max(-18, -(6 - t) * 6);
-  if (t > 20) return Math.max(-18, -(t - 20) * 6);
-  return t < 12 ? 65 * Math.sin(Math.PI / 2 * (t - 6) / 6) : 65 * Math.sin(Math.PI / 2 * (20 - t) / 8);
+function currentSun() {
+  try { return environmentSun(prop.env); }
+  catch { return environmentSun({ ...prop.env, sunMode: 'manual' }); }
 }
 const smooth = (x, a, b) => THREE.MathUtils.smoothstep(x, a, b);
 function northVector() {
@@ -435,19 +402,19 @@ function sunDirection(elDeg, azDeg) {
   return N.multiplyScalar(Math.cos(az) * Math.cos(el)).add(E.multiplyScalar(Math.sin(az) * Math.cos(el))).add(new THREE.Vector3(0, Math.sin(el), 0)).normalize();
 }
 // Civil twilight ends around -6 deg; the sky shader has gone dark by then.
-function isNight() { return sunElevation(prop.env.time) < -6; }
+function isNight() { return currentSun().elevation < -6; }
 // True once the chosen panorama has actually been decoded; until then the dynamic sky stands in.
 function panoReady() { return prop.env.sky === 'pano' && !!panoTex && panoId === prop.env.panoPhotoId; }
 
 function applyEnvironment() {
   const env = prop.env;
-  const el = sunElevation(env.time);
+  const { elevation: el, azimuth } = currentSun();
   // Continuous dusk: the sun fades out just below the horizon, night fades in through civil
   // twilight (-2 .. -6 deg), and everything keyed on "night" blends across that band.
   const sunUp = smooth(el, -1, 5);                            // direct sun present
   const nightMix = smooth(-el, 2, 6);                         // 0 by day, 1 after civil dusk
   const dusk = THREE.MathUtils.clamp(el / 18, 0, 1);          // 0 at horizon, 1 above 18 deg
-  const dir = sunDirection(Math.max(el, -8), env.azimuth);
+  const dir = sunDirection(Math.max(el, -8), azimuth);
   const usePano = panoReady();
 
   // Sky (also the stand-in while a panorama is missing or still decoding).
@@ -469,7 +436,7 @@ function applyEnvironment() {
     sun.intensity = sunUp * (0.6 + 2.6 * Math.pow(Math.sin(THREE.MathUtils.degToRad(Math.max(el, 0.5))), 0.6));
     sun.position.copy(sun.target.position).addScaledVector(dir, R * 3);
   } else {
-    const moon = sunDirection(38, env.azimuth + 160);
+    const moon = sunDirection(38, azimuth + 160);
     sun.color.setHex(0x9fb4d6);
     sun.intensity = 0.28 * nightMix;
     sun.position.copy(sun.target.position).addScaledVector(moon, R * 3);
@@ -490,12 +457,12 @@ function applyEnvironment() {
   // A camera would open up at dusk; lift the exposure as the sun drops, then settle for night.
   renderer.toneMappingExposure = (env.exposure || 1) * 0.85 * THREE.MathUtils.lerp(1 + 0.45 * (1 - dusk), 0.6, nightMix);
 
-  // Fog fades the ground into the horizon, in exactly the sky's horizon colour.
-  const fogColor = env.sky === 'studio' ? new THREE.Color(0x171d23) : skyHorizonColor();
+  // Distant neutral haze hides the ground edge without bleaching the model or blooming.
+  const fogColor = env.sky === 'studio' ? new THREE.Color(0x171d23) : new THREE.Color(0x9cabb4).lerp(new THREE.Color(0x101923), nightMix);
   const b = modelBounds(prop);
   const span = Math.max(b.maxX - b.minX, b.maxY - b.minY, 8);
   if (usePano) scene.fog = null;
-  else scene.fog = new THREE.Fog(fogColor, span * 4, Math.max(span * 9, 110));
+  else scene.fog = new THREE.Fog(fogColor, Math.max(span * 12, 150), Math.max(span * 40, 600));
 
   // Night lights (and a gentle daytime level while walking through rooms).
   const lampMix = env.nightLights !== false ? nightMix : 0;
@@ -1760,6 +1727,9 @@ async function addScanToScene(scan) {
   scanObjs[scan.id] = obj;
   applyScanTransform(scan, obj);
   scanRoot.add(obj);
+  setModelXray(obj, xray ? prop.env.xrayOpacity : null);
+  fitShadow();
+  applyEnvironment();
   applySection();
   updateOutlineTargets();
   setScanState(scan.id, 'ready');
@@ -1870,14 +1840,26 @@ function renderHud() {
     ${section.on ? `<input type="range" class="v-section-range" min="${lo.toFixed(2)}" max="${(H + 0.3).toFixed(2)}" step="0.05" value="${section.height}" title="Cut height (world elevation)">
       <span class="v-section-val">${escapeHtml(fmtLen(section.height))}</span>` : ''}
     <span class="v-pill-sep"></span>
-    <button class="v-pill ${xray ? 'active' : ''}" data-xray title="X-ray (X)">X-RAY</button>
+    <button class="v-pill ${xray ? 'active' : ''}" data-xray aria-pressed="${xray}" title="X-ray (X)">X-RAY</button>
+    ${xray ? `<label class="v-xray-control">TRANSPARENCY<input type="range" class="v-xray-range" min="0" max="100" step="1" value="${Math.round((1 - prop.env.xrayOpacity) * 100)}" aria-label="X-ray transparency"><output>${Math.round((1 - prop.env.xrayOpacity) * 100)}%</output></label>` : ''}
     <span class="v-pill-sep"></span>
+    <button class="v-pill" data-environment title="Sun and environment settings">SUN</button>
     <button class="v-pill ${markersShown('pins') ? 'active' : ''}" data-show="pins" aria-pressed="${markersShown('pins')}" title="${markersShown('pins') ? 'Hide' : 'Show'} photo pins (${prop.photos.filter(ph => ph.pin).length})">PHOTOS</button>
     <button class="v-pill ${markersShown('notes') ? 'active' : ''}" data-show="notes" aria-pressed="${markersShown('notes')}" title="${markersShown('notes') ? 'Hide' : 'Show'} notes (${prop.notePins.length}); right-click the model to pin one">NOTES</button>`;
   bar.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => setMode(b.dataset.mode));
   bar.querySelectorAll('[data-show]').forEach(b => b.onclick = () => toggleMarkers(b.dataset.show));
   bar.querySelector('[data-section]').onclick = toggleSection;
   bar.querySelector('[data-xray]').onclick = toggleXray;
+  bar.querySelector('[data-environment]').onclick = () => { hud.env.hidden = !hud.env.hidden; hud.env.classList.add('open'); renderEnvPanel(); };
+  const xr = bar.querySelector('.v-xray-range');
+  if (xr) {
+    xr.oninput = () => {
+      prop.env.xrayOpacity = 1 - Number(xr.value) / 100;
+      bar.querySelector('.v-xray-control output').textContent = xr.value + '%';
+      applyXray();
+    };
+    xr.onchange = () => touch();
+  }
   const range = bar.querySelector('.v-section-range');
   if (range) range.oninput = () => {
     section.height = parseFloat(range.value);
@@ -1912,22 +1894,40 @@ function toggleLevel(id) {
   renderToolCol();
   requestRender(3);
 }
-function toggleXray() { xray = !xray; rebuildModel(); renderHud(); renderToolCol(); }
+function applyXray() {
+  const opacity = xray ? prop.env.xrayOpacity : null;
+  setModelXray(modelGroup, opacity);
+  for (const obj of Object.values(scanObjs)) setModelXray(obj, opacity);
+  applySection();
+  requestRender(3);
+}
+function toggleXray() { xray = !xray; applyXray(); renderHud(); renderToolCol(); }
 
 // ---------- environment panel ----------
 function sunLabel(el) { return el >= 0 ? 'SUN ' + Math.round(el) + '&deg;' : (el > -6 ? 'TWILIGHT' : 'NIGHT'); }
 function renderEnvPanel(p = hud.env) {
   if (!p) return;
   const env = prop.env;
-  const el = sunElevation(env.time);
+  const { elevation: el } = currentSun();
   const panos = prop.photos.filter(ph => ph.kind === 'pano');
-  const hh = Math.floor(env.time), mm = Math.round((env.time - hh) * 60);
-  const timeLabel = String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+  const minutes = Math.round(env.time * 60);
+  const timeLabel = String(Math.floor(minutes / 60)).padStart(2, '0') + ':' + String(minutes % 60).padStart(2, '0');
+  const year = Number(env.date.slice(0, 4));
   p.innerHTML = `
     <button class="v-env-head" data-toggle><span>ENVIRONMENT</span><span class="v-env-sun">${sunLabel(el)} &middot; ${timeLabel}</span><span class="v-env-caret">${p.classList.contains('open') ? '&#9662;' : '&#9656;'}</span></button>
     <div class="v-env-body">
-      <label class="v-row"><span>TIME</span><input type="range" min="0" max="24" step="0.1" value="${finiteNum(env.time, 14.5)}" data-env="time"><b class="v-arc"><i style="left:${(finiteNum(env.time, 14.5) / 24 * 100).toFixed(1)}%"></i></b></label>
-      <label class="v-row"><span>SUN AZIMUTH</span><input type="range" min="0" max="360" step="1" value="${finiteNum(env.azimuth, 200)}" data-env="azimuth"><em>${Math.round(finiteNum(env.azimuth, 200))}&deg;</em></label>
+      <label class="v-row v-row-sel"><span>SUN PATH</span><select data-env="sunMode"><option value="manual" ${env.sunMode !== 'location' ? 'selected' : ''}>Manual lighting</option><option value="location" ${env.sunMode === 'location' ? 'selected' : ''}>Location + date</option></select></label>
+      ${env.sunMode === 'location' ? `
+        <label class="v-row v-row-sel"><span>LATITUDE</span><input type="number" min="-90" max="90" step="any" data-env="latitude" value="${env.latitude == null ? '' : finiteNum(env.latitude, 0)}" placeholder="Degrees, north +" required></label>
+        <label class="v-row v-row-sel"><span>LONGITUDE</span><input type="number" min="-180" max="180" step="any" data-env="longitude" value="${env.longitude == null ? '' : finiteNum(env.longitude, 0)}" placeholder="Degrees, east +" required></label>
+        <label class="v-row v-row-sel"><span>TIME ZONE</span><input data-env="timeZone" value="${escapeHtml(env.timeZone)}" placeholder="America/New_York" required></label>
+        <label class="v-row v-row-sel"><span>DATE</span><input type="date" data-env="date" value="${escapeHtml(env.date)}" min="1900-01-01" max="2100-12-31" required></label>
+        <label class="v-row"><span>DAY OF YEAR</span><input type="range" min="1" max="${daysInYear(year)}" step="1" value="${dayOfYear(env.date)}" data-env="dayOfYear"><em>${dayOfYear(env.date)}</em></label>
+        <p class="v-env-help">Site coordinates; time zone adjusts for daylight saving. Set NORTH to match the model.</p>
+      ` : ''}
+      <p class="v-env-help" data-sun-status role="status"></p>
+      <label class="v-row"><span>TIME</span><input type="range" min="0" max="24" step="0.1" value="${finiteNum(env.time, 14.5)}" data-env="time"><em data-time-readout>${timeLabel}</em></label>
+      ${env.sunMode !== 'location' ? `<label class="v-row"><span>SUN AZIMUTH</span><input type="range" min="0" max="360" step="1" value="${finiteNum(env.azimuth, 200)}" data-env="azimuth"><em>${Math.round(finiteNum(env.azimuth, 200))}&deg;</em></label>` : ''}
       <label class="v-row"><span>NORTH</span><input type="range" min="0" max="360" step="1" value="${finiteNum(env.north, 0)}" data-env="north"><em>${Math.round(finiteNum(env.north, 0))}&deg;</em></label>
       <label class="v-row"><span>EXPOSURE</span><input type="range" min="0.3" max="2.2" step="0.05" value="${finiteNum(env.exposure, 1)}" data-env="exposure"><em>${finiteNum(env.exposure, 1).toFixed(2)}</em></label>
       <div class="v-row v-row-sel"><span>SKY</span>
@@ -1947,18 +1947,37 @@ function renderEnvPanel(p = hud.env) {
   p.querySelector('[data-toggle]').onclick = () => { p.classList.toggle('open'); renderEnvPanel(p); };
   let touchTimer = 0;
   const commit = () => { clearTimeout(touchTimer); touchTimer = setTimeout(() => touch(), 400); };
+  const updateSun = () => {
+    const status = p.querySelector('[data-sun-status]');
+    try {
+      const sun = environmentSun(env);
+      const minutes = Math.round(env.time * 60);
+      const clock = String(Math.floor(minutes / 60)).padStart(2, '0') + ':' + String(minutes % 60).padStart(2, '0');
+      p.querySelector('[data-time-readout]').textContent = clock;
+      p.querySelector('.v-env-sun').innerHTML = sunLabel(sun.elevation) + ' &middot; ' + clock;
+      status.textContent = env.sunMode === 'location' ? 'Sun azimuth ' + Math.round(sun.azimuth) + '° · elevation ' + Math.round(sun.elevation) + '°' : '';
+    } catch (e) { status.textContent = e.message + ' Manual lighting shown.'; }
+  };
+  updateSun();
   p.querySelectorAll('input[type=range]').forEach(r => {
     r.oninput = () => {
-      env[r.dataset.env] = parseFloat(r.value);
+      const key = r.dataset.env;
+      if (key === 'dayOfYear') {
+        env.date = dateForDay(year, Number(r.value));
+        p.querySelector('[data-env=date]').value = env.date;
+      } else env[key] = Number(r.value);
       const em = r.parentElement.querySelector('em');
-      if (em) em.textContent = r.dataset.env === 'exposure' ? Number(r.value).toFixed(2) : Math.round(r.value) + '°';
-      if (r.dataset.env === 'time') {
-        const arc = r.parentElement.querySelector('.v-arc i'); if (arc) arc.style.left = (env.time / 24 * 100).toFixed(1) + '%';
-        const e2 = sunElevation(env.time); const h2 = Math.floor(env.time), m2 = Math.round((env.time - h2) * 60);
-        p.querySelector('.v-env-sun').innerHTML = sunLabel(e2) + ' &middot; ' + String(h2).padStart(2, '0') + ':' + String(m2).padStart(2, '0');
-      }
-      applyEnvironment();
-      commit();
+      if (em) em.textContent = key === 'exposure' ? Number(r.value).toFixed(2) : Math.round(r.value) + (key === 'dayOfYear' ? '' : '°');
+      updateSun(); applyEnvironment(); commit();
+    };
+  });
+  p.querySelectorAll('input:not([type=range]):not([type=checkbox])').forEach(input => {
+    input.onchange = () => {
+      input.setCustomValidity('');
+      if (input.dataset.env === 'timeZone' && !validTimeZone(input.value.trim())) input.setCustomValidity('Enter an IANA time zone, such as America/New_York.');
+      if (!input.reportValidity()) return;
+      env[input.dataset.env] = input.type === 'number' ? input.valueAsNumber : input.value.trim();
+      applyEnvironment(); touch(); renderEnvPanel(p);
     };
   });
   p.querySelectorAll('select').forEach(s => {
@@ -2366,7 +2385,7 @@ function renderInspector() {
       if(input.value) s.materialBindings[input.dataset.modelMaterial]=input.value; else delete s.materialBindings[input.dataset.modelMaterial];
       touch(); try { await addScanToScene(s); } catch(e) {toast(e.message,'error');}
     });
-    const upd = () => { applyScanTransform(s, obj); touch(); requestRender(3); };
+    const upd = () => { applyScanTransform(s, obj); fitShadow(); applyEnvironment(); touch(); requestRender(3); };
     inspEl.querySelectorAll('[data-p]').forEach(i => i.onchange = () => { s.pos[+i.dataset.p] = parseFloat(i.value) || 0; upd(); });
     inspEl.querySelectorAll('[data-r]').forEach(i => i.onchange = () => {
       s.rot = s.rot || [0, s.rotY || 0, 0];
@@ -2395,6 +2414,7 @@ function renderInspector() {
       if(prop.modelSourceId === s.id) { delete prop.modelSourceId; rebuildModel(); }
       if (obj) { scanRoot.remove(obj); disposeScanObject(obj); delete scanObjs[s.id]; }
       delete scanState[s.id];
+      fitShadow(); applyEnvironment();
       setSelection(null);
       touch();
       renderToolCol();
