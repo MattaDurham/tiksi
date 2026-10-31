@@ -89,7 +89,7 @@ export function spatialLevels(pos, idx, tri, o, maxY) {
     const ceilY = ceiling ? ceiling.y : Math.max(f.y + 0.6, Math.min(f.y + 2.7, maxY - 0.05));
     const coverage = ceiling ? overlap(f, ceiling) : 0;
     const enclosure = wallSupport(pos, idx, tri, f, ceilY);
-    return { f, ceiling, floorY: f.y, ceilY, floorArea: f.area, flatCeiling: !!ceiling,
+    return { f, ceiling, floorY: f.y, ceilY, floorArea: f.area, flatCeiling: !!ceiling && ceiling.maxY - ceiling.minY < 0.15,
       score: 2 * enclosure + coverage, coverage, enclosure };
   });
   const levels = [];

@@ -1,5 +1,5 @@
 // Entirely synthetic geometry, shared by Node and browser regressions.
-export function mixedScan({ yard = true, landing = true, porch = true, slope = false, reverse = false, unsigned = false, indoorCeiling = true, porchHeight = 3.0, noise = false } = {}) {
+export function mixedScan({ yard = true, landing = true, porch = true, slope = false, reverse = false, unsigned = false, indoorCeiling = true, porchHeight = 3.0, noise = false, ceilingSlope = 0 } = {}) {
   const positions = [], indices = [];
   let face = 0;
   function quad(a, b, c, d) {
@@ -25,7 +25,7 @@ export function mixedScan({ yard = true, landing = true, porch = true, slope = f
     }
   }
   slab(0, 0, 4, 5, 0, true);
-  if (indoorCeiling) slab(0, 0, 4, 5, 2.6, false);
+  if (indoorCeiling) slab(0, 0, 4, 5, 2.6, false, ceilingSlope);
   wall(0, 0, 4, 0); wall(4, 0, 4, 5); wall(4, 5, 0, 5); wall(0, 5, 0, 0);
   if (yard) slab(4, 0, 14, 8, 0.55, true, slope ? 0.012 : 0);
   // Larger overhead than the interior ceiling, but in a different region.

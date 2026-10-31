@@ -97,6 +97,7 @@ This is a bounded increment: editable levels still use one datum per storey
 `result.surfaces`, rather than becoming invented storeys or indoor takeoffs.
 `levels[].datum` records chosen floor/ceiling surface IDs, observed ceiling
 coverage, wall support and a qualitative `supported` or `review` assessment.
+A ceiling patch spanning 0.15 m or more is not treated as flat and requires review.
 These are heuristics, not survey confidence probabilities or an acceptance gate.
 The scan record's `floorDetection` report persists in project files; PLAN's scan
 card lists evidence and warns about mixed elevations or uncertain interpretation.

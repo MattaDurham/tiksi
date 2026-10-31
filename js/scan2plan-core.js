@@ -830,7 +830,7 @@ export function scanToPlan(posIn, idx, options, progress) {
       id: 'lvl-' + li, name: names[li], elevation: round(L.floorY - base), height: round(L.ceilY - L.floorY),
       flatCeiling: L.flatCeiling, floorArea: r.floorArea, walls, openings, rooms,
       datum: { surfaceId: L.f.id, ceilingSurfaceId: L.ceiling?.id || null,
-        confidence: detection.signed && L.coverage > 0.75 && L.enclosure > 0.5 && L.f.maxY - L.f.minY < 0.15 ? 'supported' : 'review',
+        confidence: detection.signed && L.flatCeiling && L.coverage > 0.75 && L.enclosure > 0.5 && L.f.maxY - L.f.minY < 0.15 ? 'supported' : 'review',
         ceilingCoverage: round(L.coverage), wallSupport: round(L.enclosure) },
       // A conservative storey envelope retains lower site evidence in the underlay.
       // It does not promote that evidence to indoor rooms or additional storeys.

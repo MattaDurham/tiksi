@@ -70,3 +70,16 @@ test('placing a proposal moves retained evidence and clipping along with the mes
   assert.deepEqual(scan.floorDetection, floorDetectionReport(placed));
   assert.match(floorReviewText(scan.floorDetection), /3.00 m/);
 });
+
+
+test('a broad sloping ceiling remains an estimate requiring review', () => {
+  const { pos, idx } = mixedScan({ yard: false, porch: false, landing: false, ceilingSlope: 0.08 });
+  const r = scanToPlan(pos, idx);
+  assert.ok(Math.abs(r.baseY) < 0.05);
+  assert.equal(r.levels.length, 1);
+  assert.equal(r.levels[0].flatCeiling, false);
+  assert.equal(r.levels[0].datum.confidence, 'review');
+  assert.ok(r.review.required);
+  const ceiling = r.surfaces.find(s => s.facing === 'down');
+  assert.ok(ceiling.maxElevation - ceiling.minElevation > 0.3);
+});
