@@ -24,6 +24,12 @@ try {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(url); await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
+  await page.evaluate(async () => {
+    const store = await import('/js/store.js');
+    const property = store.propertyTemplate('Synthetic guide project');
+    store.ws.data.properties.push(property); store.ws.data.settings.activePropertyId = property.id; store.touch();
+    await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
+  });
   const before = await page.evaluate(async () => JSON.stringify((await import('/js/store.js')).ws.data));
   await page.locator('.guide-entry').click();
   await page.getByRole('heading', { name: 'Your first renovation workflow', exact: true }).waitFor();
