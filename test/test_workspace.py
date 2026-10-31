@@ -103,6 +103,12 @@ class WorkspaceTests(unittest.TestCase):
         handler.headers.update({'X-Tiksi-Workspace': '1', 'X-Tiksi-Token': self.service.token, 'Origin': 'http://other.example'})
         self.service.dispatch(handler); self.assertEqual(handler.status, 403)
         handler.headers.pop('Origin'); handler.wfile = io.BytesIO()
-        self.service.dispatch(handler); self.assertEqual(handler.status, 200)
+        snapshot = self.service.snapshot
+        def checked_snapshot():
+            self.assertEqual(self.service.active_jobs(), 1)
+            return snapshot()
+        with patch.object(self.service, 'snapshot', side_effect=checked_snapshot): self.service.dispatch(handler)
+        self.assertEqual(handler.status, 200)
+        self.assertEqual(self.service.active_jobs(), 0)
         handler.client_address = ('192.168.1.2', 1234)
         self.service.dispatch(handler); self.assertEqual(handler.status, 403)

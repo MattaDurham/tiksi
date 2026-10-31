@@ -29,6 +29,7 @@ class WorkspaceService:
         (self.root / 'blobs').mkdir(exist_ok=True)
         (self.root / 'history').mkdir(exist_ok=True)
         self.lock = threading.RLock()
+        self.jobs = 0
         self.token = secrets.token_urlsafe(32)
         identity = self.root / 'identity'
         if not identity.exists(): identity.write_text(secrets.token_hex(16), encoding='utf-8')
@@ -44,6 +45,9 @@ class WorkspaceService:
         self.parts = {}
         self.part_assets = {}
         self.refresh()
+
+    def active_jobs(self):
+        return self.jobs
 
     def recover(self):
         journal = self.root / 'pending.json'
@@ -274,6 +278,7 @@ class WorkspaceService:
     def dispatch(self, h):
         path = urlsplit(h.path).path
         if path != '/api/workspace' and not path.startswith('/api/workspace/'): return False
+        with self.lock: self.jobs += 1
         try:
             if not self.trusted_peer(h.client_address[0]): raise WorkspaceError('Workspace access requires this Mac or Tailscale', 403)
             origin = h.headers.get('Origin')
@@ -366,6 +371,8 @@ class WorkspaceService:
         except (OSError, ValueError, TypeError, KeyError):
             h.close_connection = True
             self.reply(h, 500, {'error': 'Project files could not be updated. Existing copies and recovery data have been preserved.'})
+        finally:
+            with self.lock: self.jobs -= 1
         return True
 
     @staticmethod

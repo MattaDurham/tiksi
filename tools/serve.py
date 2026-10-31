@@ -65,7 +65,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         result = {key: metadata[key] for key in ('slug', 'branch', 'port', 'instanceId', 'head', 'live') if key in metadata}
         result.update({'pid': os.getpid(), 'port': self.server.server_port,
                        'live': metadata.get('live', self.server.server_port == 8642), 'activeJobs': 0})
-        for name in ('reconstruction', 'material_research', 'model_conversion'):
+        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion'):
             service = getattr(self.server, name, None)
             if service:
                 active = getattr(service, 'active_jobs', None)
