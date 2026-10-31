@@ -229,7 +229,9 @@ class WorkspaceService:
                 value['archived'] = {**self.state.get('archived', {}), **{i: name for i, name in self.paths.items() if i not in slices}}
                 for i in slices: value['archived'].pop(i, None)
                 journal = self.root / 'pending.json'
-                journal.write_text(json.dumps({'state': value, 'files': [[str(a), str(b)] for a, b, _ in staged]}), encoding='utf-8')
+                with journal.open('w', encoding='utf-8') as out:
+                    json.dump({'state': value, 'files': [[str(a), str(b)] for a, b, _ in staged]}, out)
+                    out.flush(); os.fsync(out.fileno())
                 for temp, dest, identifier in staged:
                     os.replace(temp, dest)
                     self.stamps[str(dest)] = (dest.stat().st_mtime_ns, dest.stat().st_size)
@@ -249,6 +251,7 @@ class WorkspaceService:
             archive.writestr('workspace.json', json.dumps(data, ensure_ascii=False))
             archive.writestr('manifest.json', json.dumps({'format': format, 'version': 1, 'app': 'tiksi', 'files': entries}))
             for entry in entries: archive.write(self.root / 'blobs' / entry['hash'], entry['path'])
+        with Path(destination).open('rb') as saved: os.fsync(saved.fileno())
 
     @staticmethod
     def referenced(data):

@@ -25,7 +25,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     else { probedIds = await storedFileIds(); hasLegacyDatabase = probedIds.length > 0; }
   } catch (ignored) {}
   const needsMigration = hadLocal || rawLegacy !== null || hasLegacyDatabase;
-  let applying = false, pending = false, running = null, timer, base, revision = 0, paths = {}, assets = {}, migration = needsMigration;
+  let applying = false, pending = false, running = null, timer, base, revision = 0, paths = {}, assets = {}, migration = needsMigration, cleanupNotice = false;
   const changedFiles = new Set(), inFlightFiles = new Map();
   async function request(path = '', options = {}) {
     const r = await fetch('/api/workspace' + path, { ...options, headers: { ...headers, ...(options.headers || {}) }, cache: 'no-store', signal: AbortSignal.timeout(120000) });
@@ -130,9 +130,9 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     if (migration) {
       // All originals must be on disk before removing their last browser copy.
       try { await finishBrowserMigration(); migration = false; migrationPack = null; }
-      catch (error) { status('SAVED TO DISK — CLOSE OLDER TIKSI TABS', true); console.warn(error); }
+      catch (error) { cleanupNotice = true; console.warn(error); }
     }
-    status(pending ? 'SAVING TO DISK' : 'SAVED TO DISK', pending);
+    status(cleanupNotice ? 'SAVED TO DISK — CLOSE OLDER TIKSI TABS' : pending ? 'SAVING TO DISK' : 'SAVED TO DISK', pending || cleanupNotice);
   }
   async function sync() {
     if (running) return running;

@@ -55,7 +55,12 @@ try {
   await desktop.waitForFunction(() => window.diskTestStore.ws.data.properties.some(p => p.id === 'prop-offline'));
   assert.equal(await phone.evaluate(async () => (await import('/js/store.js')).ws.data.properties[0].notes), 'Newer Mac edit');
   // A brand-new browser has no cache or migration state and still sees everything.
-  const clean = await (await browser.newContext()).newPage(); await clean.goto('http://127.0.0.1:' + port);
+  const cleanContext = await browser.newContext();
+  await cleanContext.addInitScript(() => {
+    for (const method of ['getItem', 'setItem', 'removeItem']) Storage.prototype[method] = () => { throw new Error('Browser storage unavailable'); };
+    indexedDB.open = () => { throw new Error('IndexedDB unavailable'); };
+  });
+  const clean = await cleanContext.newPage(); await clean.goto('http://127.0.0.1:' + port);
   await clean.waitForFunction(() => document.querySelector('#property-select')?.options.length === 3);
   const folders = await readdir(state + '/projects'); assert.equal(folders.length, 3);
   for (const folder of folders) assert((await readdir(state + '/projects/' + folder)).some(n => n.endsWith('.tiksi')));
