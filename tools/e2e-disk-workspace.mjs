@@ -37,6 +37,15 @@ try {
   });
   assert.deepEqual(evidence.names.sort(), ['Synthetic apartment', 'Synthetic garden']); assert.equal(evidence.bytes[0], 137);
   assert.equal(evidence.local, null); assert.equal(evidence.databases.filter(d => d.name === 'tiksi-files').length, 0);
+  const reread = await phone.evaluate(async () => {
+    const s = await import('/js/store.js'), file = await s.getFile('photo-shared');
+    new Uint8Array(file.buffer)[0] = 0;
+    structuredClone(file.buffer, { transfer: [file.buffer] });
+    const next = await s.getFile('photo-shared');
+    return { first: new Uint8Array(next.buffer)[0], size: next.buffer.byteLength };
+  });
+  assert.equal(reread.first, 137, 'a renderer or worker cannot mutate or detach the cached original');
+  assert.equal(reread.size, evidence.bytes.length);
   // Disable persistent browser writes: new edits and original uploads still save to disk.
   await phone.evaluate(async () => {
     Storage.prototype.setItem = () => { throw new Error('Browser persistence prohibited'); };

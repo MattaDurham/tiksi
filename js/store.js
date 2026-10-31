@@ -895,7 +895,11 @@ export async function cacheFile(id, buffer, meta) {
 
 export async function getFile(id) {
   const local = await getCachedFile(id);
-  return fileBackend ? fileBackend.read(id, local) : local;
+  if (!fileBackend) return local;
+  const file = await fileBackend.read(id, local);
+  // IndexedDB used to return an owned copy. Preserve that contract: renderers
+  // may mutate bytes or transfer them to a worker, detaching the supplied buffer.
+  return file?.buffer ? { ...file, buffer: file.buffer.slice(0) } : file;
 }
 
 export async function getCachedFile(id) {
