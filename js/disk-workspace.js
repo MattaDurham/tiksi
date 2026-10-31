@@ -7,6 +7,15 @@ import { syncMirror, mirrorCapabilities } from './sketchup-mirror.js';
 export let diskWorkspace = null;
 const copy = value => JSON.parse(JSON.stringify(value));
 
+export function prepareDiskProjects(data) {
+  const prepared = copy(data);
+  // Portable project files carry the photos needed by their custom materials,
+  // including a source sampled in another project. Make that evidence explicit
+  // in the shared records too, so disk reload and connected clients agree.
+  for (const prop of prepared.properties) prop.photos = projectSlice(prop.id, prepared).properties[0].photos;
+  return { data: prepared, projectData: Object.fromEntries(prepared.properties.map(p => [p.id, projectSlice(p.id, prepared)])) };
+}
+
 export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   if (document.querySelector('meta[name="tiksi-storage"]')?.content !== 'project-files') return null;
   const headers = { 'X-Tiksi-Workspace': '1' };
@@ -56,15 +65,16 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   async function read(id, local) {
     const remote = assets[id];
     if (!remote || changedFiles.has(id) || local?.sharedHash === remote.hash) return local;
-    if (!inFlightFiles.has(id)) inFlightFiles.set(id, (async () => {
+    const key = id + ':' + remote.hash;
+    if (!inFlightFiles.has(key)) inFlightFiles.set(key, (async () => {
       const r = await request('/blobs/' + remote.hash);
       const buffer = await r.arrayBuffer();
       if (buffer.byteLength !== remote.size) throw new Error('Project asset download was truncated');
       const value = { id, buffer, name: remote.name, format: remote.format, kind: remote.kind, mime: remote.mime, sharedHash: remote.hash };
-      await cacheFile(id, buffer, value);
+      if (assets[id]?.hash === remote.hash && !changedFiles.has(id)) await cacheFile(id, buffer, value);
       return value;
-    })().finally(() => inFlightFiles.delete(id)));
-    return inFlightFiles.get(id);
+    })().finally(() => inFlightFiles.delete(key)));
+    return inFlightFiles.get(key);
   }
   async function fileManifest(data, starting, identifiers = listAllFileIds(data)) {
     const out = {};
@@ -120,11 +130,13 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     if (migration && !migrationPack) migrationPack = { data: legacyRecovery, assets: await fileManifest(legacyRecovery, {}, legacyIds) };
     const local = { data: sentData, assets: sentAssets };
     const accepted = remote.data ? await resolveMerge(base, local, { data: remote.data, assets: remote.assets }) : local;
-    const projectData = Object.fromEntries(accepted.data.properties.map(p => [p.id, projectSlice(p.id, accepted.data)]));
+    const prepared = prepareDiskProjects(accepted.data);
+    accepted.data = prepared.data;
+    const projectData = prepared.projectData;
     const saved = await (await request('', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: remote.revision, ...accepted, projectData, migration: migrationPack }) })).json();
     revision = saved.revision; assets = accepted.assets; base = copy(accepted);
     const after = mergeShared(sentData, ws.data, accepted.data);
-    pending = JSON.stringify(after.value) !== JSON.stringify(accepted.data) || changedFiles.size > 0;
+    pending = JSON.stringify(after.value) !== JSON.stringify(accepted.data) || listAllFileIds(after.value).some(id => changedFiles.has(id));
     await apply(after.value);
     paths = (await (await request()).json()).paths || {};
     if (migration) {

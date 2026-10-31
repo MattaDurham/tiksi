@@ -10,7 +10,7 @@ const state = await mkdtemp(tmpdir() + '/tiksi-disk-test-');
 const socket = net.createServer(); await new Promise(r => socket.listen(0, '127.0.0.1', r));
 const port = socket.address().port; await new Promise(r => socket.close(r));
 const child = spawn('python3', ['tools/serve.py', '--host', '0.0.0.0', '--port', String(port), '--state-dir', state, '--projects-dir', state + '/projects'], { stdio: ['ignore', 'pipe', 'pipe'] });
-let browser;
+let browser, releaseDownload;
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch('http://127.0.0.1:' + port)).ok) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
   browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
@@ -54,6 +54,30 @@ try {
   await phone.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   await desktop.waitForFunction(() => window.diskTestStore.ws.data.properties.some(p => p.id === 'prop-offline'));
   assert.equal(await phone.evaluate(async () => (await import('/js/store.js')).ws.data.properties[0].notes), 'Newer Mac edit');
+  // An older in-flight asset must neither block the new version nor replace its cache.
+  const auth = { 'X-Tiksi-Workspace': '1' };
+  const capabilities = await (await fetch('http://127.0.0.1:' + port + '/api/workspace/capabilities', { headers: auth })).json();
+  auth['X-Tiksi-Token'] = capabilities.token;
+  const snapshot = await (await fetch('http://127.0.0.1:' + port + '/api/workspace', { headers: auth })).json();
+  const oldHash = snapshot.assets['photo-shared'].hash;
+  const slow = await (await browser.newContext()).newPage();
+  const delayed = new Promise(resolve => { releaseDownload = resolve; });
+  let requested; const requestStarted = new Promise(resolve => { requested = resolve; });
+  await slow.route('**/api/workspace/blobs/' + oldHash, async route => { requested(); await delayed; await route.continue(); });
+  await slow.goto('http://127.0.0.1:' + port + '/#/photos'); await slow.getByRole('button', { name: /Shared evidence/ }).waitFor();
+  await slow.evaluate(async () => { window.diskTestStore = await import('/js/store.js'); window.oldPhotoDownload = window.diskTestStore.getFile('photo-shared'); });
+  await requestStarted;
+  await desktop.evaluate(async () => {
+    const s = await import('/js/store.js'), original = await s.getFile('photo-shared');
+    const bytes = new Uint8Array(original.buffer.byteLength + 1); bytes.set(new Uint8Array(original.buffer)); bytes[bytes.length - 1] = 99;
+    await s.putFile('photo-shared', bytes.buffer, { kind: 'photo', mime: 'image/png', name: 'Synthetic.png' });
+    s.ws.data.properties.find(p => p.id === 'prop-apartment').photos[0].notes = 'Updated original bytes'; s.touch();
+    await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
+  });
+  await slow.waitForFunction(() => window.diskTestStore.ws.data.properties.find(p => p.id === 'prop-apartment')?.photos[0]?.notes === 'Updated original bytes');
+  assert.equal(await slow.evaluate(async () => new Uint8Array((await window.diskTestStore.getFile('photo-shared')).buffer).at(-1)), 99);
+  releaseDownload(); await slow.evaluate(() => window.oldPhotoDownload);
+  assert.equal(await slow.evaluate(async () => new Uint8Array((await window.diskTestStore.getCachedFile('photo-shared')).buffer).at(-1)), 99, 'late old response does not poison the current original');
   // A brand-new browser has no cache or migration state and still sees everything.
   const cleanContext = await browser.newContext();
   await cleanContext.addInitScript(() => {
@@ -108,4 +132,4 @@ try {
   await desktop.screenshot({ path: 'test-results/disk-workspace-desktop.png' }); await phone.screenshot({ path: 'test-results/disk-workspace-phone.png' });
   assert.deepEqual(errors, []);
   console.log('ok   two origins share project files and originals; no browser persistence; stale edits reviewed; clean browser recovers all projects');
-} finally { if (browser) await browser.close(); child.kill(); await new Promise(r => child.once('exit', r)); await rm(state, { recursive: true, force: true }); }
+} finally { releaseDownload?.(); if (browser) await browser.close(); child.kill(); await new Promise(r => child.once('exit', r)); await rm(state, { recursive: true, force: true }); }
