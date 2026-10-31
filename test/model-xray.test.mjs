@@ -1,0 +1,30 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import * as THREE from '../vendor/three.module.min.js';
+import { setModelXray } from '../js/model-xray.js';
+
+test('nested multi-material roofs and glass use reversible view-only X-ray materials', () => {
+  const root = new THREE.Group(), nested = new THREE.Group(); root.add(nested);
+  const texture = new THREE.Texture();
+  const roofMat = new THREE.MeshStandardMaterial({ map: texture, alphaTest: 0.5 });
+  const glass = new THREE.MeshPhysicalMaterial({ opacity: 0.5, transparent: true, transmission: 0.8 });
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(), [roofMat, glass]); roof.castShadow = true; nested.add(roof);
+  const shared = new THREE.Mesh(new THREE.BoxGeometry(), roofMat); nested.add(shared);
+  const pick = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial({ visible: false })); pick.userData.pickBox = true; root.add(pick);
+  const pickMat = pick.material;
+  setModelXray(root, 0.35);
+  assert.notEqual(roof.material[0], roofMat); assert.equal(roof.material[0], shared.material);
+  assert.equal(roof.material[0].opacity, 0.35); assert.equal(roof.material[0].alphaTest, 0);
+  assert.equal(roof.material[1].opacity, 0.175); assert.equal(roof.material[1].transmission, 0);
+  assert.equal(roof.material[0].depthWrite, false); assert.equal(roof.castShadow, false);
+  assert.equal(roof.material[0].map, texture); assert.equal(roofMat.opacity, 1); assert.equal(glass.transmission, 0.8);
+  assert.equal(pick.material, pickMat);
+  const copy = roof.material[0]; let disposed = 0; copy.addEventListener('dispose', () => disposed++);
+  setModelXray(root, 0.1); assert.equal(roof.material[0], copy); assert.equal(copy.opacity, 0.1);
+  setModelXray(root, 0); assert.equal(copy.opacity, 0);
+  setModelXray(root, 1); assert.equal(copy.opacity, 1);
+  setModelXray(root, null);
+  assert.equal(roof.material[0], roofMat); assert.equal(roof.material[1], glass); assert.equal(roof.castShadow, true);
+  assert.equal(disposed, 1); assert.equal(pick.material, pickMat);
+  setModelXray(root, null); assert.equal(disposed, 1);
+});
