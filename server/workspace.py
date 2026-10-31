@@ -12,6 +12,10 @@ import zipfile
 from urllib.parse import urlsplit
 
 MAX_JSON = 32 * 1024 * 1024
+# A save envelope includes shared metadata, portable project slices and, during
+# migration, the recovery copy. Each can be valid while their sum exceeds one
+# workspace's metadata budget. Keep that budget independent of HTTP transport.
+MAX_WORKSPACE_REQUEST = 4 * MAX_JSON
 MAX_BLOB = 600 * 1024 * 1024
 HASH = re.compile(r'^[a-f0-9]{64}$')
 
@@ -298,7 +302,8 @@ class WorkspaceService:
             elif path == '/api/workspace' and h.command == 'GET':
                 self.reply(h, 200, self.snapshot())
             elif path == '/api/workspace' and h.command == 'PUT':
-                try: request = json.loads(self.read(h, MAX_JSON))
+                payload = self.read(h, MAX_WORKSPACE_REQUEST)
+                try: request = json.loads(payload)
                 except (ValueError, UnicodeDecodeError): raise WorkspaceError('Workspace must be JSON')
                 self.reply(h, 200, {'revision': self.commit(request)})
             elif path == '/api/workspace/blobs' and h.command == 'POST':

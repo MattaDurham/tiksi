@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import zipfile
-from server.workspace import WorkspaceService, WorkspaceError
+from server.workspace import WorkspaceService, WorkspaceError, MAX_JSON
 
 
 def workspace(name='A'):
@@ -67,6 +67,31 @@ class WorkspaceTests(unittest.TestCase):
         with zipfile.ZipFile(archive_path) as archive:
             entry = json.loads(archive.read('manifest.json'))['files'][0]
             self.assertEqual(archive.read(entry['path']), b'orphan original')
+
+    def test_http_migration_accepts_recovery_and_project_copies_of_large_metadata(self):
+        data = workspace()
+        data['properties'][0]['notes'] = 'synthetic evidence ' + 'x' * (12 * 1024 * 1024)
+        body = json.dumps({'revision': 0, 'data': data, 'assets': {},
+                           'projectData': {'prop-a': data},
+                           'migration': {'data': data, 'assets': {}}}).encode()
+        self.assertGreater(len(body), MAX_JSON)
+        class Handler:
+            path = '/api/workspace'; command = 'PUT'; client_address = ('127.0.0.1', 1234)
+            connection = Mock()
+            headers = {'Host': 'localhost:8888', 'Content-Length': str(len(body)),
+                       'X-Tiksi-Workspace': '1', 'X-Tiksi-Token': self.service.token}
+            rfile = io.BytesIO(body); wfile = io.BytesIO()
+            def send_response(self, status): self.status = status
+            def send_header(self, *args): pass
+            def end_headers(self): pass
+        handler = Handler()
+        self.service.dispatch(handler)
+        self.assertEqual(handler.status, 200, handler.wfile.getvalue())
+        paths = [Path(self.service.paths['prop-a']),
+                 next((self.service.root / 'history').glob('browser-migration-*.tiksi'))]
+        for path in paths:
+            with zipfile.ZipFile(path) as archive:
+                self.assertEqual(json.loads(archive.read('workspace.json'))['properties'], data['properties'])
 
     def test_missing_assets_and_missing_project_file_fail_without_overwrite(self):
         self.commit(workspace())
