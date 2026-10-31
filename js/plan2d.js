@@ -1,3 +1,5 @@
+import { floorReviewText } from './scan-surfaces.js';
+
 // Floorplan editor: trace walls over an uploaded plan image, place doors/windows,
 // outline rooms, calibrate real-world scale. Canvas-based; all model coords in meters.
 // Rendering follows drafting conventions: hatched cut walls with a crisp outline, door
@@ -1779,6 +1781,12 @@ function sourceCardHtml() {
     ${src && src.url ? `<a href="${escapeHtml(src.url)}" target="_blank" rel="noopener" title="${escapeHtml(src.url)}">${escapeHtml(src.title || src.url.replace(/^https?:\/\//, ''))}</a>` : ''}
     ${scan ? `<button class="btn" data-src-plan title="Square the scan up and propose walls, rooms, doors, windows and the underlay again">${icon('scan')}PROPOSE PLAN FROM SCAN</button>` : ''}
     <div class="empty">Add captures in FILE → Import.</div>
+    ${scan?.floorDetection ? `<details data-floor-review><summary>${escapeHtml(floorReviewText(scan.floorDetection))}</summary>
+      <p>Horizontal evidence is retained separately from editable levels. Bounds use plan metres; elevations use the project datum.</p>
+      <table><thead><tr><th>Surface</th><th>Elevation / range (m)</th><th>Area (m²)</th><th>Facing</th><th>Plan bounds (m)</th></tr></thead><tbody>
+      ${scan.floorDetection.surfaces.map(s => `<tr><td>${escapeHtml(s.id)}${scan.floorDetection.levels.some(l => l.datum.surfaceId === s.id) ? ' · floor datum' : scan.floorDetection.levels.some(l => l.datum.ceilingSurfaceId === s.id) ? ' · ceiling' : ''}</td><td>${s.elevation.toFixed(2)} / ${s.minElevation.toFixed(2)}…${s.maxElevation.toFixed(2)}</td><td>${s.area.toFixed(1)}</td><td>${escapeHtml(s.facing)}</td><td>${[s.bounds.x0, s.bounds.z0, s.bounds.x1, s.bounds.z1].map(v => v.toFixed(1)).join(', ')}</td></tr>`).join('')}
+      </tbody></table><p>The underlay retains lower supported surfaces within each storey's elevation envelope. Site evidence is not an indoor area measurement.</p>
+      </details>` : ''}
     <div class="empty" data-src-status></div>
   </div>`;
 }
