@@ -202,12 +202,7 @@ class WorkspaceService:
                 raise WorkspaceError('Every project must have a complete project file')
             migration = request.get('migration')
             if migration:
-                if not isinstance(migration, dict) or not isinstance(migration.get('data'), dict) or not isinstance(migration.get('assets'), dict): raise WorkspaceError('Invalid browser migration')
-                for asset in migration['assets'].values():
-                    if not isinstance(asset, dict) or not HASH.fullmatch(str(asset.get('hash', ''))) or not (self.root / 'blobs' / asset['hash']).is_file(): raise WorkspaceError('Incomplete migration asset')
-                tag = hashlib.sha256(json.dumps(migration, sort_keys=True).encode()).hexdigest()
-                recovery = self.root / 'history' / ('browser-migration-' + tag + '.tiksi')
-                if not recovery.exists(): self.bundle(recovery, migration['data'], migration['assets'], 'tiksi-bundle')
+                self.archive_copy(migration, 'browser-migration')
             staged = []
             destinations = {}
             try:
@@ -252,6 +247,26 @@ class WorkspaceService:
                 for temp, _, _ in staged:
                     if temp.exists() and not (self.root / 'pending.json').exists(): temp.unlink()
             return value['revision']
+
+    def archive_copy(self, record, label='conflict'):
+        """Preserve a declined/uncommitted variant without changing canonical data."""
+        with self.lock:
+            if not isinstance(record, dict) or not isinstance(record.get('data'), dict) or not isinstance(record.get('assets'), dict): raise WorkspaceError('Invalid recovery copy')
+            if len(json.dumps(record['data'], ensure_ascii=False).encode()) > MAX_JSON: raise WorkspaceError('Recovery metadata exceeds 32 MB', 413)
+            for asset in record['assets'].values():
+                if not isinstance(asset, dict) or not HASH.fullmatch(str(asset.get('hash', ''))): raise WorkspaceError('Invalid recovery asset')
+                path = self.root / 'blobs' / asset['hash']
+                if not path.is_file() or path.stat().st_size != asset.get('size'): raise WorkspaceError('Incomplete recovery asset')
+            tag = hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+            destination = self.root / 'history' / (label + '-' + tag + '.tiksi')
+            if not destination.exists():
+                with tempfile.NamedTemporaryFile(dir=destination.parent, suffix='.tmp', delete=False) as out: temp = Path(out.name)
+                try:
+                    self.bundle(temp, record['data'], record['assets'], 'tiksi-bundle')
+                    os.replace(temp, destination)
+                finally:
+                    if temp.exists(): temp.unlink()
+            return destination.name
 
     def bundle(self, destination, data, assets, format='tiksi-project'):
         entries = [{**asset, 'id': i, 'path': 'files/' + hashlib.sha256(i.encode()).hexdigest() + '.bin'} for i, asset in assets.items()]
@@ -306,6 +321,11 @@ class WorkspaceService:
                 try: request = json.loads(payload)
                 except (ValueError, UnicodeDecodeError): raise WorkspaceError('Workspace must be JSON')
                 self.reply(h, 200, {'revision': self.commit(request)})
+            elif path == '/api/workspace/recovery' and h.command == 'POST':
+                payload = self.read(h, MAX_WORKSPACE_REQUEST)
+                try: record = json.loads(payload)
+                except (ValueError, UnicodeDecodeError): raise WorkspaceError('Recovery copy must be JSON')
+                self.reply(h, 200, {'recovery': self.archive_copy(record)})
             elif path == '/api/workspace/blobs' and h.command == 'POST':
                 length = self.length(h, MAX_BLOB)
                 class Upload:

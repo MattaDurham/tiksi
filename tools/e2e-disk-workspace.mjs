@@ -54,11 +54,33 @@ try {
   await phone.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   await desktop.waitForFunction(() => window.diskTestStore.ws.data.properties.some(p => p.id === 'prop-offline'));
   assert.equal(await phone.evaluate(async () => (await import('/js/store.js')).ws.data.properties[0].notes), 'Newer Mac edit');
+  const conflictNotes = JSON.parse(execFileSync('python3', ['-c', 'import sys,pathlib,zipfile,json;print(json.dumps([p.get("notes") for f in pathlib.Path(sys.argv[1]).glob("conflict-*.tiksi") for p in json.loads(zipfile.ZipFile(f).read("workspace.json"))["properties"]]))', state + '/workspace/history']).toString());
+  assert(conflictNotes.includes('Offline phone edit') && conflictNotes.includes('Newer Mac edit'), 'both reviewed metadata copies are preserved on disk');
+  // A revision rejection after uploading a replacement must retry with those
+  // exact new bytes still pending, rather than reverting to the old asset hash.
+  let rejectReplacement = true;
+  await desktop.route('**/api/workspace', route => {
+    if (rejectReplacement && route.request().method() === 'PUT') {
+      rejectReplacement = false;
+      return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'Synthetic concurrent revision' }) });
+    }
+    return route.continue();
+  });
+  await desktop.evaluate(async () => {
+    const s = await import('/js/store.js'), original = await s.getFile('photo-shared');
+    const bytes = new Uint8Array(original.buffer.byteLength + 1); bytes.set(new Uint8Array(original.buffer)); bytes[bytes.length - 1] = 88;
+    await s.putFile('photo-shared', bytes.buffer, { kind: 'photo', mime: 'image/png', name: 'Synthetic.png' });
+    s.ws.data.properties.find(p => p.id === 'prop-apartment').photos[0].notes = 'Replacement survived revision retry'; s.touch();
+    await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
+  });
+  assert.equal(rejectReplacement, false);
+  await desktop.unroute('**/api/workspace');
   // An older in-flight asset must neither block the new version nor replace its cache.
   const auth = { 'X-Tiksi-Workspace': '1' };
   const capabilities = await (await fetch('http://127.0.0.1:' + port + '/api/workspace/capabilities', { headers: auth })).json();
   auth['X-Tiksi-Token'] = capabilities.token;
   const snapshot = await (await fetch('http://127.0.0.1:' + port + '/api/workspace', { headers: auth })).json();
+  assert.equal(new Uint8Array(await (await fetch('http://127.0.0.1:' + port + '/api/workspace/blobs/' + snapshot.assets['photo-shared'].hash, { headers: auth })).arrayBuffer()).at(-1), 88);
   const oldHash = snapshot.assets['photo-shared'].hash;
   const slow = await (await browser.newContext()).newPage();
   const delayed = new Promise(resolve => { releaseDownload = resolve; });
@@ -113,6 +135,14 @@ try {
   const oldReader = await legacyContext.newPage();
   await oldReader.goto('http://127.0.0.1:' + port + '/app-icon.svg');
   await oldReader.evaluate(async () => { window.heldLegacyDatabase = await new Promise(resolve => { const request = indexedDB.open('tiksi-files'); request.onsuccess = () => resolve(request.result); }); });
+  let rejectMigration = true;
+  await legacy.route('**/api/workspace', route => {
+    if (rejectMigration && route.request().method() === 'PUT') {
+      rejectMigration = false;
+      return route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ error: 'Synthetic migration revision race' }) });
+    }
+    return route.continue();
+  });
   await legacy.goto('http://127.0.0.1:' + port);
   await legacy.getByRole('button', { name: 'USE MAC VALUES', exact: true }).click();
   await legacy.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK — CLOSE OLDER TIKSI TABS');

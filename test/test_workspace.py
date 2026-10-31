@@ -68,6 +68,23 @@ class WorkspaceTests(unittest.TestCase):
             entry = json.loads(archive.read('manifest.json'))['files'][0]
             self.assertEqual(archive.read(entry['path']), b'orphan original')
 
+    def test_declined_copy_is_complete_atomic_and_does_not_change_current_project(self):
+        self.commit(workspace('Canonical'))
+        digest, size = self.service.store_blob(io.BytesIO(b'declined original'))
+        record = {'data': workspace('Offline draft'), 'assets': {'photo-a': {'hash': digest, 'size': size, 'name': 'draft.jpg'}}}
+        before = self.service.snapshot()
+        name = self.service.archive_copy(record)
+        self.assertEqual(self.service.archive_copy(record), name)
+        self.assertEqual(self.service.snapshot(), before)
+        with zipfile.ZipFile(self.service.root / 'history' / name) as archive:
+            self.assertEqual(json.loads(archive.read('workspace.json')), record['data'])
+            entry = json.loads(archive.read('manifest.json'))['files'][0]
+            self.assertEqual(archive.read(entry['path']), b'declined original')
+        with patch.object(self.service, 'bundle', side_effect=OSError('Synthetic archive interruption')):
+            with self.assertRaises(OSError): self.service.archive_copy({'data': workspace('Interrupted'), 'assets': {}})
+        self.assertEqual(len(list((self.service.root / 'history').glob('conflict-*.tiksi'))), 1)
+        self.assertEqual(list((self.service.root / 'history').glob('*.tmp')), [])
+
     def test_http_migration_accepts_recovery_and_project_copies_of_large_metadata(self):
         data = workspace()
         data['properties'][0]['notes'] = 'synthetic evidence ' + 'x' * (12 * 1024 * 1024)

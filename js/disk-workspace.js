@@ -42,7 +42,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       const refreshed = await fetch('/api/workspace/capabilities', { headers: { 'X-Tiksi-Workspace': '1' }, cache: 'no-store', signal: AbortSignal.timeout(10000) });
       if (!refreshed.ok) throw new Error('Project-file server unavailable');
       cap = await refreshed.json(); headers['X-Tiksi-Token'] = cap.token;
-      throw new Error('Reconnected to project files; retrying');
+      const error = new Error('Reconnected to project files; retrying'); error.status = 403; throw error;
     }
     if (!r.ok) {
       let message = 'Project-file request failed (' + r.status + ')';
@@ -76,7 +76,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     })().finally(() => inFlightFiles.delete(key)));
     return inFlightFiles.get(key);
   }
-  async function fileManifest(data, starting, identifiers = listAllFileIds(data)) {
+  async function fileManifest(data, starting, identifiers = listAllFileIds(data), uploadedFiles = new Map()) {
     const out = {};
     for (const id of new Set(identifiers)) {
       const local = await getCachedFile(id);
@@ -87,7 +87,8 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       for (const k of ['name', 'format', 'kind', 'mime']) if (typeof local[k] === 'string') out[id][k] = local[k];
       // A later replacement must remain dirty while this upload is in progress.
       const now = await getCachedFile(id);
-      if (now?.buffer === local.buffer) { changedFiles.delete(id); await cacheFile(id, local.buffer, { ...local, sharedHash: uploaded.hash }); }
+      if (now?.buffer === local.buffer) await cacheFile(id, local.buffer, { ...local, sharedHash: uploaded.hash });
+      uploadedFiles.set(id, local.buffer);
     }
     return out;
   }
@@ -100,8 +101,17 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     let result = mergeShared(ancestor, local, remote);
     if (!result.conflicts.length) return result.value;
     status('PROJECT COPIES NEED REVIEW', true);
-    // No side is discarded: old browser bytes stay until migration succeeds,
-    // and each overwritten disk revision is retained by the server.
+    // Preserve both exact variants before a choice, including rejected offline
+    // edits that have never been a committed server revision.
+    for (const value of [local, remote]) {
+      let recovery = value;
+      if (!value.data || !value.assets) {
+        const data = copy(ws.data);
+        data.properties = data.properties.map(p => p.id === value.id ? copy(value) : p);
+        recovery = { data, assets: await fileManifest(data, assets) };
+      }
+      await request('/recovery', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(recovery) });
+    }
     const dialog = document.createElement('dialog'); dialog.className = 'file-dialog';
     dialog.innerHTML = '<h2>Project copies differ</h2><p>This device and the Mac contain different edits to the same records. Both copies are preserved until you choose which values to use. Changes to other records will be combined.</p><p data-count></p><div class="file-actions"><button class="btn primary" data-mac>USE MAC VALUES</button><button class="btn" data-local>USE THIS DEVICE’S VALUES</button></div>';
     dialog.querySelector('[data-count]').textContent = result.conflicts.length + ' conflicting values';
@@ -136,15 +146,32 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       await apply(remote.data); status('SAVED TO DISK'); return;
     }
     const sentData = copy(ws.data);
-    const sentAssets = await fileManifest(sentData, assets);
+    const uploadedFiles = new Map();
+    const sentAssets = await fileManifest(sentData, assets, listAllFileIds(sentData), uploadedFiles);
     if (migration && !migrationPack) migrationPack = { data: legacyRecovery, assets: await fileManifest(legacyRecovery, {}, legacyIds) };
     const local = { data: sentData, assets: sentAssets };
     const accepted = remote.data ? await resolveMerge(base, local, { data: remote.data, assets: remote.assets }) : local;
     const prepared = prepareDiskProjects(accepted.data);
     accepted.data = prepared.data;
     const projectData = prepared.projectData;
-    const saved = await (await request('', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: remote.revision, ...accepted, projectData, migration: migrationPack }) })).json();
+    let saved;
+    try {
+      saved = await (await request('', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: remote.revision, ...accepted, projectData, migration: migrationPack }) })).json();
+    } catch (error) {
+      if ([403, 409].includes(error.status)) {
+        // Carry the reviewed choice into the retry. Re-ask only if the remote
+        // value changed again, rather than replaying the same migration dialog.
+        base = copy({ data: remote.data, assets: remote.assets }); assets = accepted.assets;
+        for (const [id, buffer] of uploadedFiles) if (accepted.assets[id]?.hash !== sentAssets[id]?.hash && (await getCachedFile(id))?.buffer === buffer) changedFiles.delete(id);
+        await apply(mergeShared(sentData, ws.data, accepted.data).value);
+        status('SAVING TO DISK', true);
+      }
+      throw error;
+    }
     revision = saved.revision; assets = accepted.assets; base = copy(accepted);
+    // Blob upload alone is not a save acknowledgment. Keep replacements dirty
+    // across revision retries, while preserving any still-newer in-flight edit.
+    for (const [id, buffer] of uploadedFiles) if ((await getCachedFile(id))?.buffer === buffer) changedFiles.delete(id);
     const after = mergeShared(sentData, ws.data, accepted.data);
     pending = JSON.stringify(after.value) !== JSON.stringify(accepted.data) || listAllFileIds(after.value).some(id => changedFiles.has(id));
     await apply(after.value);
@@ -159,7 +186,11 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   async function sync() {
     if (running) return running;
     running = (async () => {
-      for (let round = 0; round < 4; round++) { await cycle(); if (!pending) return; }
+      for (let round = 0; round < 4; round++) {
+        try { await cycle(); }
+        catch (error) { if (![403, 409].includes(error.status) || round === 3) throw error; continue; }
+        if (!pending) return;
+      }
       throw new Error('More edits arrived during saving; the next sync will finish them.');
     })().finally(() => { running = null; });
     return running;

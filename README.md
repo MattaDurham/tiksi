@@ -153,6 +153,8 @@ browser store is removed. Subsequent working copies stay in memory. Changes
 appear on other clients within a few seconds; edits to the same field require
 review. Keep the Mac reachable until `SAVED TO DISK` appears. Offline edits are
 unsaved working changes, and closing the page warns before losing them.
+Conflict review saves both reviewed variants as complete `.tiksi` recovery bundles
+in `<state-dir>/workspace/history/`, including a draft declined in favor of the Mac.
 The static GitHub Pages edition retains its portable browser mode and is separate
 from the Mac's private files.
 
