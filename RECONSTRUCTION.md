@@ -76,3 +76,49 @@ triangles with 4096-pixel diffuse, normal, AO and roughness maps. The 21-image o
 produced a textured terrain model. These fixtures are not redistributed in Git. Outputs
 were decoded and rendered through Tiksi's actual GLB importer, not only checked for file
 existence. See tests for bounded uploads, lifecycle, cancellation, failures and API security.
+
+## Scan-to-plan floor evidence
+
+Scan-to-plan samples horizontal geometry into connected patches on a 0.25 m plan
+lattice, with 0.08 m height bins and a 0.16 m local join tolerance. Patches retain
+area, elevation range, plan bounds and observed winding; mild slopes/noise can
+remain connected without forcing their height to a histogram peak. Patches below
+0.35 m² are filtered as small evidence. Floor candidates require 5 m² by default.
+
+Floor candidates are ranked using nearby vertical support and a ceiling at least
+1.8 m above with at least 35% overlap of sampled plan cells. An unrelated porch
+roof cannot win merely through its total area. Winding is inferred from an
+opposing, spatially overlapping pair; inconsistent winding remains reviewable.
+Room rasterization is limited to the selected datum's spatial support, including
+disconnected patches at the same elevation and a small boundary band for walls.
+
+This is a bounded increment: editable levels still use one datum per storey
+(default separation 1.8 m). Competing close elevations and small landings stay in
+`result.surfaces`, rather than becoming invented storeys or indoor takeoffs.
+`levels[].datum` records chosen floor/ceiling surface IDs, observed ceiling
+coverage, wall support and a qualitative `supported` or `review` assessment.
+A ceiling patch spanning 0.15 m or more is not treated as flat and requires review.
+These are heuristics, not survey confidence probabilities or an acceptance gate.
+The scan record's `floorDetection` report persists in project files; PLAN's scan
+card lists evidence and warns about mixed elevations or uncertain interpretation.
+The report is private project data, like the scan itself.
+
+`levels[].underlayMin` retains lower supported horizontal evidence in that
+storey's elevation envelope, stopping above the preceding storey's ceiling.
+The renderer uses this conservative lower bound instead of always clipping at
+the chosen floor minus 0.08 m. Placement moves both the clipping bound and the
+report with the mesh. Older proposals without this field keep their former cut.
+Original mesh/file bytes are unchanged.
+
+The underlay still uses a global cut for each storey, so unrelated lower geometry
+can be visible. Regional cuts, explicit datum correction, reliable indoor/outdoor
+classification, split-level authoring and native stairs/site surfaces are future
+work. Occlusion, fragmented scans, very small patches, ramps with a broad height
+range and missing ceilings can need manual interpretation. Review room takeoffs;
+retained evidence is not a claim of complete or measured interior coverage.
+
+Regressions use wholly synthetic scenes: a smaller enclosed floor beside a larger
+raised yard, an unrelated overhead porch, a small depressed landing, slope/noise,
+reversed/inconsistent winding, missing ceilings and ordinary single/two-storey
+imports. Browser checks inspect actual underlay pixels, negative clipping controls,
+source preservation and the persisted review report.

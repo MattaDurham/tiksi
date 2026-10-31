@@ -1780,7 +1780,7 @@ async function proposePlanFromScan(s) {
     rebuildModel(); rebuildGround(); buildAllPins();
     presetView('frame');
     renderToolCol(); renderInspector();
-    toast('Proposed: ' + proposalSummary(result, applied) + '.', applied ? 'ok' : 'warn', 6000);
+    toast('Proposed: ' + proposalSummary(result, applied) + '.', applied && !result.review?.required ? 'ok' : 'warn', 6000);
   } catch (e) {
     console.error(e);
     if (token === mountId) toast('Could not propose a plan: ' + errMsg(e), 'error', 6000);

@@ -1,3 +1,5 @@
+import { spatialLevels, surfaceReport, SURFACE_CELL } from './scan-surfaces.js';
+
 // scan2plan: turn a lidar mesh (phone scan) into levels, walls, openings and rooms.
 //
 // Pure functions over typed arrays; no DOM, no three.js, so the same module runs
@@ -9,8 +11,8 @@
 //   1. Triangle normals and areas.
 //   2. Dominant wall orientation (area-weighted histogram of horizontal normals,
 //      mod 90 degrees); rotate the scan so walls become axis-aligned.
-//   3. Floor levels from the height histogram of up-facing area; ceilings from
-//      down-facing area between consecutive floors.
+//   3. Connected horizontal patches; floor/ceiling pairs by spatial overlap and
+//      wall support. Nearby site elevations remain evidence, separate from storeys.
 //   4. Per level, rasterize to a 2D grid: floor area, ceiling area, and a bitmask
 //      of 10 cm height slices with vertical geometry ("column coverage").
 //      A wall covers nearly every slice; furniture covers a few; a doorway none.
@@ -30,7 +32,7 @@ export const DEFAULTS = {
   sliceFrom: 0.25,        // first slice starts this far above the floor
   sliceBelowCeil: 0.15,   // last slice ends this far below the ceiling
   floorMinArea: 5,        // m2 of up-facing area to count as a floor level
-  levelMinSep: 1.8,       // minimum vertical distance between floors
+  levelMinSep: 1.8,       // storey separation; nearby surfaces remain separate evidence
   covDilate: 2,           // cells of lateral OR-dilation on the coverage bitmask (absorbs scan noise)
   wallCoverage: 0.55,     // fraction of slices present to call a cell "wall"
   wallMinLen: 0.6,        // shortest straight run treated as a wall
@@ -197,85 +199,9 @@ function rotateXZ(pos, deg) {
 
 export function findLevels(pos, idx, tri, o) {
   let minY = Infinity, maxY = -Infinity;
-  for (let i = 1; i < pos.length; i += 3) { if (pos[i] < minY) minY = pos[i]; if (pos[i] > maxY) maxY = pos[i]; }
-  const bin = 0.02, nb = Math.ceil((maxY - minY) / bin) + 1;
-  const all = new Float64Array(nb), up = new Float64Array(nb), down = new Float64Array(nb);
-  for (let t = 0; t < tri.nT; t++) {
-    if (Math.abs(tri.ny[t]) < 0.85) continue;
-    const a = idx[3 * t] * 3 + 1, b = idx[3 * t + 1] * 3 + 1, c = idx[3 * t + 2] * 3 + 1;
-    const k = Math.floor(((pos[a] + pos[b] + pos[c]) / 3 - minY) / bin);
-    all[k] += tri.area[t];
-    if (tri.ny[t] > 0) up[k] += tri.area[t]; else down[k] += tri.area[t];
-  }
-  const runs = (arr, thr) => {
-    const out = []; let r = null;
-    for (let k = 0; k < nb; k++) {
-      if (arr[k] > thr) { if (!r) r = { k0: k, k1: k, area: 0, peak: 0, pk: k }; r.k1 = k; r.area += arr[k]; if (arr[k] > r.peak) { r.peak = arr[k]; r.pk = k; } }
-      else if (r) { out.push(r); r = null; }
-    }
-    if (r) out.push(r);
-    return out.map(r => ({ y: minY + (r.pk + 0.5) * bin, area: r.area, k0: r.k0, k1: r.k1 }));
-  };
-  const share = (r, arr) => { let s = 0; for (let k = r.k0; k <= r.k1; k++) s += arr[k]; return r.area ? s / r.area : 0; };
-  const mergeClose = list => {
-    const out = [];
-    for (const f of list) {
-      const last = out[out.length - 1];
-      if (last && f.y - last.y < o.levelMinSep) { if (f.area > last.area) out[out.length - 1] = f; }
-      else out.push(f);
-    }
-    return out;
-  };
-
-  // Is the mesh consistently oriented? The lowest large horizontal surface is a floor; the
-  // first surface at least 1.8 m above it is that floor's ceiling and must face the other
-  // way. Scans are; some exporters and synthetic meshes are not, and some are inside out.
-  const surfaces = runs(all, 0.8).filter(r => r.area >= 3).sort((x, y) => x.y - y.y);
-  const largest = Math.max(...surfaces.map(r => r.area), 0);
-  const bigEnough = r => r.area >= Math.max(o.floorMinArea, 0.12 * largest);
-  const lowest = surfaces.find(bigEnough);
-  let signed = false;
-  if (lowest) {
-    const upShare = share(lowest, up);
-    const polarity = upShare >= 0.75 ? 1 : (upShare <= 0.25 ? -1 : 0);
-    const above = surfaces.find(r => r.y >= lowest.y + 1.8);
-    const aboveShare = above ? share(above, polarity === 1 ? down : up) : 1;
-    signed = polarity !== 0 && aboveShare >= 0.75;
-    if (signed && polarity === -1) {
-      // Inside out: flip every normal so floors face up, and swap the histograms to match.
-      for (let t = 0; t < tri.nT; t++) tri.ny[t] = -tri.ny[t];
-      for (let k = 0; k < nb; k++) { const u = up[k]; up[k] = down[k]; down[k] = u; }
-    }
-  }
-
-  let levels;
-  if (signed) {
-    // Floors are up-facing peaks; each level's ceiling is the largest down-facing peak
-    // between its floor and the next.
-    const floors = mergeClose(runs(up, 0.8).filter(bigEnough).sort((x, y) => x.y - y.y));
-    const ceils = runs(down, 0.8).filter(c => c.area >= 3);
-    levels = floors.map((f, i) => {
-      const next = floors[i + 1] ? floors[i + 1].y : maxY + 1;
-      const cands = ceils.filter(c => c.y > f.y + 1.8 && c.y < next - 0.05);
-      let ceil, flat = true;
-      if (cands.length) ceil = cands.reduce((x, y) => (y.area > x.area ? y : x)).y;
-      else { flat = false; ceil = Math.min(f.y + 2.7, floors[i + 1] ? next - 0.25 : maxY - 0.05); }
-      return { floorY: f.y, ceilY: ceil, floorArea: f.area, flatCeiling: flat };
-    });
-  } else {
-    // Pair surfaces by height alone: a floor, then the first surface at least 1.8 m above
-    // it is its ceiling, and a surface within 0.7 m above that ceiling is the next floor.
-    levels = [];
-    const floorsOnly = mergeClose(surfaces.filter(bigEnough));
-    let f = floorsOnly[0] || null;
-    while (f) {
-      const c = surfaces.find(r => r.y >= f.y + 1.8);
-      if (!c) { levels.push({ floorY: f.y, ceilY: Math.min(f.y + 2.7, maxY - 0.05), floorArea: f.area, flatCeiling: false }); break; }
-      levels.push({ floorY: f.y, ceilY: c.y, floorArea: f.area, flatCeiling: true });
-      f = floorsOnly.find(r => r.y > c.y + 0.05 && r.y <= c.y + 0.7) || null;
-    }
-  }
-  return { levels, minY, maxY, signed };
+  for (let i = 1; i < pos.length; i += 3) { minY = Math.min(minY, pos[i]); maxY = Math.max(maxY, pos[i]); }
+  const detection = spatialLevels(pos, idx, tri, o, maxY);
+  return { ...detection, minY, maxY };
 }
 
 // ---------- 4: rasterize ----------
@@ -291,6 +217,13 @@ function rasterize(pos, idx, tri, levels, o) {
   const W = Math.ceil((maxX - minX + 2 * pad) / cell), H = Math.ceil((maxZ - minZ + 2 * pad) / cell);
   const grid = { W, H, ox, oz, cell };
   for (const L of levels) {
+    // Cache coarse spatial support in the fine raster; avoid Map/string work for
+    // every barycentric sample of a dense scan.
+    L.region = new Uint8Array(W * H);
+    for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+      const x = Math.floor((ox + (i + 0.5) * cell) / SURFACE_CELL), z = Math.floor((oz + (j + 0.5) * cell) / SURFACE_CELL);
+      L.region[j * W + i] = L.support.has(`${x},${z}`) ? 1 : 0;
+    }
     L.floor = new Float32Array(W * H); L.ceil = new Float32Array(W * H); L.cov = new Uint32Array(W * H);
     L.nSlices = Math.max(4, Math.min(30, Math.floor((L.ceilY - o.sliceBelowCeil - L.floorY - o.sliceFrom) / o.slice)));
   }
@@ -320,6 +253,9 @@ function rasterize(pos, idx, tri, levels, o) {
       if (lk < 0 || lk >= lutN) continue;
       const li = lut[lk]; if (li < 0) continue;
       const L = levels[li], k = cj * W + ci;
+      // Ceiling area outside the selected floor region (for example a porch roof)
+      // must not grow this storey's room footprint. Allow an edge band for walls.
+      if (!L.region[k]) continue;
       if (horizontal) {
         // Floor or ceiling by height alone, so winding never matters here.
         if (y > L.floorY - 0.15 && y < L.floorY + 0.12) L.floor[k] += w;
@@ -859,7 +795,8 @@ export function scanToPlan(posIn, idx, options, progress) {
   const tri = triangleData(pos, idx); // angles change, normals' y and areas do not; recompute cheaply
 
   say('levels', 0.1);
-  const { levels, minY, maxY } = findLevels(pos, idx, tri, o);
+  const detection = findLevels(pos, idx, tri, o);
+  const { levels, minY, maxY } = detection;
   if (!levels.length) throw new Error('No floor level found in the scan (no large horizontal surface).');
 
   say('rasterize', 0.15);
@@ -868,6 +805,7 @@ export function scanToPlan(posIn, idx, options, progress) {
   const names = nameLevels(levels);
   const outLevels = [];
   const base = levels[0].floorY;
+  const surfaces = surfaceReport(detection, base);
   levels.forEach((L, li) => {
     say('level ' + names[li], 0.3 + 0.6 * (li / levels.length));
     const r = analyzeLevel(L, grid, o, debug);
@@ -891,6 +829,14 @@ export function scanToPlan(posIn, idx, options, progress) {
     outLevels.push({
       id: 'lvl-' + li, name: names[li], elevation: round(L.floorY - base), height: round(L.ceilY - L.floorY),
       flatCeiling: L.flatCeiling, floorArea: r.floorArea, walls, openings, rooms,
+      datum: { surfaceId: L.f.id, ceilingSurfaceId: L.ceiling?.id || null,
+        confidence: detection.signed && L.flatCeiling && L.coverage > 0.75 && L.enclosure > 0.5 && L.f.maxY - L.f.minY < 0.15 ? 'supported' : 'review',
+        ceilingCoverage: round(L.coverage), wallSupport: round(L.enclosure) },
+      // A conservative storey envelope retains lower site evidence in the underlay.
+      // It does not promote that evidence to indoor rooms or additional storeys.
+      underlayMin: Math.min(L.floorY - base, ...surfaces.filter(p => p.facing !== 'down' &&
+        p.minElevation <= L.floorY - base && (li === 0 || p.minElevation > levels[li - 1].ceilY - base + 0.15))
+        .map(p => p.minElevation)),
       debug: r.debug ? Object.assign({ floor: L.floor, ceil: L.ceil, cov: L.cov, nSlices: L.nSlices }, r.debug) : undefined,
     });
   });
@@ -899,6 +845,10 @@ export function scanToPlan(posIn, idx, options, progress) {
     rotationDeg: deg, manhattanShare, baseY: base, minY, maxY,
     grid: { W: grid.W, H: grid.H, ox: grid.ox, oz: grid.oz, cell: grid.cell },
     levels: outLevels,
+    surfaces,
+    review: { required: !detection.signed || outLevels.some(l => l.datum.confidence === 'review') ||
+      surfaces.some(p => p.facing !== 'down' && !levels.some(l => Math.abs(p.elevation - (l.floorY - base)) < 0.15)),
+      message: 'Floor datums are scan estimates. Review mixed elevations and ceiling coverage before using room takeoffs.' },
   };
 }
 

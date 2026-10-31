@@ -358,7 +358,7 @@ async function proposePlan(prop, scan, signal) {
   const { result, applied, mode } = await placeScanBytes(prop, scan, rec.buffer, hooks, fit => chooseScanPlacement(fit, scan.name));
   if (signal && signal.aborted) throw signal.reason || new Error('Cancelled');
   if (mode === 'reference') { step.ok('kept as reference; the plan is unchanged'); finish(prop, null, null); return; }
-  if (applied) step.ok(proposalSummary(result, applied));
+  if (applied && !result.review?.required) step.ok(proposalSummary(result, applied));
   else step.warn(proposalSummary(result, applied));
   let project = null;
   if (applied) {
