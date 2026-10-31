@@ -94,6 +94,7 @@ try {
   // browser database. The Mac's newer records and unrelated local project survive.
   const legacyContext = await browser.newContext();
   const legacy = await legacyContext.newPage();
+  legacy.on('console', message => { if (message.type() === 'error') console.error('Migration browser:', message.text()); });
   await legacy.goto('http://127.0.0.1:' + port + '/app-icon.svg');
   await legacy.evaluate(async () => {
     const s = await import('/js/store.js');
@@ -146,6 +147,6 @@ try {
   assert.deepEqual(errors, []);
   console.log('ok   two origins share project files and originals; no browser persistence; stale edits reviewed; clean browser recovers all projects');
 } catch (error) {
-  if (browser) console.error('Disk client state:', await Promise.all(browser.contexts().flatMap(context => context.pages()).map(page => page.evaluate(() => ({ url: location.href, status: document.querySelector('#save-status')?.textContent, review: !!document.querySelector('dialog[open]') })).catch(() => null))));
+  if (browser) console.error('Disk client state:', await Promise.all(browser.contexts().flatMap(context => context.pages()).map(page => page.evaluate(() => ({ url: location.href, status: document.querySelector('#save-status')?.textContent, review: !!document.querySelector('dialog[open]'), error: document.querySelector('#save-status')?.textContent === 'PROJECT FILES UNAVAILABLE' ? document.querySelector('#view')?.textContent : null })).catch(() => null))));
   throw error;
 } finally { releaseDownload?.(); if (browser) await browser.close(); child.kill(); await new Promise(r => child.once('exit', r)); await rm(state, { recursive: true, force: true }); }
