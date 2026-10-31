@@ -153,6 +153,18 @@ async function workspace() {
     return data;
   });
 }
+// This fixture tests import/proposals; High/Ultra pixels and 4K output are
+// verified by e2e-fidelity. Use Low before every MODEL visit, including captures,
+// so Linux software-renderer shader warmup cannot stall the screenshot compositor.
+async function useFunctionalViewerQuality() {
+  await page.evaluate(async captureId => {
+    const { ws, touch } = await import('./js/store.js');
+    const property = ws.data.properties.find(p => p.source?.captureId === captureId);
+    if (!property?.scans.length) throw new Error('The imported scan fixture is missing.');
+    property.env = { ...property.env, quality: 'low' };
+    touch();
+  }, CAPTURE_ID);
+}
 function findProp(ws) { return ws.properties.find(p => p.source && p.source.captureId === CAPTURE_ID); }
 function assertPlan(prop, tag) {
   check(!!prop, tag + ': property with the Polycam source exists');
@@ -218,8 +230,12 @@ try {
   await sleep(1500);
   mkdirSync(outDir, { recursive: true });
   await page.screenshot({ path: resolve(outDir, 'e2e-plan.png') });
+  await useFunctionalViewerQuality();
   await page.goto(APP + '#/model');
-  await sleep(9000);
+  await page.waitForSelector('.v-scan-row', { timeout: 60000 });
+  check(await page.inputValue('[data-env="quality"]') === 'low', 'open: model capture uses Low render quality');
+  await page.waitForFunction(() => document.querySelector('.v-scan-row .key')?.textContent.trim() === 'MESH', null, { timeout: 60000 });
+  await sleep(300);
   await page.screenshot({ path: resolve(outDir, 'e2e-model.png') });
   await page.goto(APP + '#/projects');
   await sleep(800);
@@ -285,13 +301,7 @@ try {
   // software-rendered viewer at Low so High-quality shader warmup cannot delay
   // the scan controls beyond the interaction budget on a shared CI runner.
   // e2e-fidelity independently checks High/Ultra pixels and real 4K output.
-  await page.evaluate(async captureId => {
-    const { ws, touch } = await import('./js/store.js');
-    const property = ws.data.properties.find(p => p.source?.captureId === captureId);
-    if (!property?.scans.length) throw new Error('The imported scan fixture is missing.');
-    property.env = { ...property.env, quality: 'low' };
-    touch();
-  }, CAPTURE_ID);
+  await useFunctionalViewerQuality();
   await page.click('#np-dialog [data-np-cancel]');
   page.once('dialog', d => d.accept());
   await page.goto(APP + '#/model');
