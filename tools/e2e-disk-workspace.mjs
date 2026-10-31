@@ -95,6 +95,10 @@ try {
   const backups = (await readdir(state + '/workspace/history')).filter(n => n.startsWith('browser-migration-'));
   const raw = execFileSync('python3', ['-c', 'import sys,zipfile,json,pathlib;ds=[json.loads(zipfile.ZipFile(p).read("workspace.json")) for p in pathlib.Path(sys.argv[1]).glob("browser-migration-*.tiksi")];print(next(d["unreadableLegacyWorkspace"] for d in ds if "unreadableLegacyWorkspace" in d))', state + '/workspace/history']).toString().trim();
   assert(backups.length >= 2); assert.equal(raw, '{unreadable old workspace');
+  await phone.locator('#btn-file').click(); await phone.getByRole('button', { name: 'Settings', exact: true }).click();
+  await phone.locator('[data-own-folder-label]').waitFor();
+  assert(await phone.locator('.file-dialog').evaluate(el => el.scrollWidth <= el.clientWidth), 'long canonical paths fit the phone settings dialog');
+  await phone.getByRole('button', { name: 'Close files and settings' }).click();
   await mkdir('test-results', { recursive: true });
   await desktop.screenshot({ path: 'test-results/disk-workspace-desktop.png' }); await phone.screenshot({ path: 'test-results/disk-workspace-phone.png' });
   assert.deepEqual(errors, []);

@@ -981,6 +981,7 @@ kbd {
 .file-dialog .v-export-check { justify-content:start; }
 .file-dialog hr { border:0; border-top:1px solid var(--line); margin:24px 0; }
 .file-dialog [role=status] { overflow-wrap:anywhere; }
+.file-dialog [data-own-folder-label] { overflow-wrap:anywhere; }
 @media (max-width:600px) { .file-dialog { padding:16px; } .file-tabs .btn { flex:1 0 40%; } .file-dialog label:not(.v-export-check) { align-items:start; flex-direction:column; } .file-dialog select { width:100%; } }
 .file-dialog .file-env { position:static; width:auto; background:transparent; border:0; box-shadow:none; margin:0; }
 .file-dialog .file-env .v-env-head { display:none; }
