@@ -102,7 +102,7 @@ Open FILE, look at Project, switch to Import, inspect 3D exchange, then open Set
 
 **File copy vs design fork.** SAVE AS preserves the property IDs. Reopening that copy updates the same property; it does not create a second independent design in this workspace.
 
-**Newer file protection.** If a linked folder contains a newer project copy, open that copy before saving over it.
+**Conflicting copies.** The local server combines unrelated edits and asks which values to use when the Mac and this device changed the same records. Recovery copies are kept. In the static edition, open a newer linked-folder copy before saving over it.
 
 **Whole-workspace backup.** FILE → Settings → Workspace backup & maintenance → SAVE WORKSPACE BACKUP includes every property.
 
@@ -574,21 +574,21 @@ Choose a scope item or product from the list, review its sheet, then PRINT.
 
 Display units, model environment, project folders and workspace maintenance live in the same File panel. Most everyday work needs only project saves.
 
-![Settings groups display, model environment, project-folder controls and the separate workspace-maintenance section.](js/guide-assets/settings.png)
+![Settings groups display, model environment and workspace maintenance. This synthetic screenshot shows the static edition’s folder controls; the local server displays the canonical Mac file path instead.](js/guide-assets/settings.png)
 
-Settings groups display, model environment, project-folder controls and the separate workspace-maintenance section.
+Settings groups display, model environment and workspace maintenance. This synthetic screenshot shows the static edition’s folder controls; the local server displays the canonical Mac file path instead.
 
 ### Try it
 
 1. Open FILE → Settings to choose feet/square feet or metres/square metres.
 2. For rendering, open MODEL first, then FILE → Settings → Model environment. Adjust quality, lighting and the offered view settings.
-3. Under Where this project is kept, CHOOSE FOLDER keeps the open project in its own folder, OPEN FROM FOLDER reopens a project file and STOP KEEPING IT IN A FOLDER leaves the files where they are. If the folder already holds the project's file, Tiksi offers to open it instead of writing over it.
-4. Under Workspace backup & maintenance, KEEP THEM IN ONE FOLDER keeps every project without a folder of its own in one folder, for example a synced one.
-5. Open Workspace backup & maintenance when you want a whole-workspace backup or need to inspect unused browser storage.
+3. With the local server, Where this project is kept shows its canonical .tiksi path on the Mac. Desktop and Tailscale clients share those files and originals.
+4. In the static edition, CHOOSE FOLDER links the open project to a folder. OPEN FROM FOLDER reopens a saved copy, and KEEP THEM IN ONE FOLDER links projects without a folder of their own. These controls depend on browser folder permission.
+5. Open Workspace backup & maintenance and choose SAVE WORKSPACE BACKUP to export every property together. Browser-storage maintenance applies to the static edition.
 
 ### Other features here
 
-**Keep a SketchUp mirror.** With a linked folder and SketchUp installed on this Mac, each project also gets a .skp beside its .tiksi. Walls, openings and rooms you move, resize, copy, delete or rename in SketchUp come back into the plan when you save there. The status line under the switch shows the last sync and any conflicts. EDIT IN SKETCHUP in MODEL or PLAN opens that .skp in SketchUp.
+**Keep a SketchUp mirror.** With the local server and SketchUp on this Mac, each project gets a .skp beside its canonical .tiksi. Keep Tiksi open on the Mac while authoring so saved native edits return to the shared project; phone clients see the synced results. The static edition instead needs a linked folder. EDIT IN SKETCHUP in MODEL or PLAN opens the native file on the Mac.
 
 **Save workspace backup.** Exports every property together. Keep a .tiksi per property for ordinary project handoffs.
 
@@ -598,7 +598,7 @@ Settings groups display, model environment, project-folder controls and the sepa
 
 **Replace from backup.** A separate explicit restoration action that replaces the workspace. Use ordinary OPEN / IMPORT to merge a project instead.
 
-> **Good to know:** Browser storage, linked folders and local-server job files are separate. Removing a converter or reconstruction job removes its server copies; it is not a substitute for managing saved project files.
+> **Good to know:** Local-server project files are authoritative. Migration preserves a recovery bundle before removing old browser data. SAVED TO DISK — CLOSE OLDER TIKSI TABS means the files are saved; close older app tabs to finish browser cleanup. Converter and reconstruction jobs are separate copies, so removing a job does not manage the saved project files.
 
 <a id="shortcuts"></a>
 
@@ -622,7 +622,7 @@ Use the visible tooltips and inspector labels when you forget a control. These a
 
 **Where is save/import?.** Open FILE at the top. Project handles .tiksi files; Import handles captures and photos; 3D exchange handles editing in other applications.
 
-**Why is my phone empty?.** Use the same Mac and server port through Tailscale. The local server shares every saved project and its assets. Check the connection and SAVED TO DISK status. The static hosted edition and branch previews are separate workspaces.
+**Why is my phone empty?.** Use the same Mac and server port through Tailscale. Reload the phone web app after an upgrade, then check the connection and SAVED TO DISK status. The local server shares every saved project and its assets. The static hosted edition and branch previews are separate workspaces.
 
 **Why is a model untextured?.** Import the complete texture package or a self-contained GLB. An OBJ or glTF that points to missing files cannot supply those images.
 
