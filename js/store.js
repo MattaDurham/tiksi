@@ -879,7 +879,9 @@ function ioError(err, fallback) {
 }
 
 export async function putFile(id, buffer, meta) {
-  await cacheFile(id, buffer, meta);
+  // Callers retain ownership of their input, just as with IndexedDB writes.
+  const owned = diskPersistence && buffer ? buffer.slice(0) : buffer;
+  await cacheFile(id, owned, { ...(meta || {}), id, buffer: owned });
   if (buffer && fileBackend) fileBackend.changed(id);
 }
 

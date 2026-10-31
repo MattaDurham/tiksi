@@ -79,6 +79,7 @@ try {
     const s = await import('/js/store.js'), original = await s.getFile('photo-shared');
     const bytes = new Uint8Array(original.buffer.byteLength + 1); bytes.set(new Uint8Array(original.buffer)); bytes[bytes.length - 1] = 88;
     await s.putFile('photo-shared', bytes.buffer, { kind: 'photo', mime: 'image/png', name: 'Synthetic.png' });
+    bytes[0] = 0; structuredClone(bytes.buffer, { transfer: [bytes.buffer] });
     s.ws.data.properties.find(p => p.id === 'prop-apartment').photos[0].notes = 'Replacement survived revision retry'; s.touch();
     await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
   });
@@ -89,7 +90,9 @@ try {
   const capabilities = await (await fetch('http://127.0.0.1:' + port + '/api/workspace/capabilities', { headers: auth })).json();
   auth['X-Tiksi-Token'] = capabilities.token;
   const snapshot = await (await fetch('http://127.0.0.1:' + port + '/api/workspace', { headers: auth })).json();
-  assert.equal(new Uint8Array(await (await fetch('http://127.0.0.1:' + port + '/api/workspace/blobs/' + snapshot.assets['photo-shared'].hash, { headers: auth })).arrayBuffer()).at(-1), 88);
+  const replacement = new Uint8Array(await (await fetch('http://127.0.0.1:' + port + '/api/workspace/blobs/' + snapshot.assets['photo-shared'].hash, { headers: auth })).arrayBuffer());
+  assert.equal(replacement[0], 137, 'mutating an import buffer cannot change the saved original');
+  assert.equal(replacement.at(-1), 88);
   const oldHash = snapshot.assets['photo-shared'].hash;
   const slow = await (await browser.newContext()).newPage();
   const delayed = new Promise(resolve => { releaseDownload = resolve; });
