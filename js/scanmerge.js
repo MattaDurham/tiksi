@@ -1,3 +1,5 @@
+import { floorDetectionReport } from './scan-surfaces.js';
+
 // Adding a scan to a property that already has a plan. A second capture lives in its own
 // frame, so before it can join the plan it has to be placed: turned to the same axes, slid
 // onto the building and lifted to the right floor. This module scores where a new scan's
@@ -120,6 +122,7 @@ export function placeResult(result, place) {
   const mv = ([x, y]) => { const [u, v] = rotatePlan(x, y, rot); return [r3(u + dx), r3(v + dz)]; };
   const levels = result.levels.map(L => Object.assign({}, L, {
     elevation: L.elevation + dElev,
+    underlayMin: L.underlayMin == null ? undefined : L.underlayMin + dElev,
     walls: L.walls.map(w => { const [ax, ay] = mv([w.ax, w.ay]), [bx, by] = mv([w.bx, w.by]); return Object.assign({}, w, { ax, ay, bx, by }); }),
     rooms: L.rooms.map(r => Object.assign({}, r, { pts: r.pts.map(mv) })),
     openings: L.openings.map(o => Object.assign({}, o)),
@@ -134,7 +137,13 @@ export function placeResult(result, place) {
     const z0 = Math.min(...pts.map(p => p[1])), z1 = Math.max(...pts.map(p => p[1]));
     grid = Object.assign({}, grid, { ox: x0, oz: z0, W: Math.ceil((x1 - x0) / cell), H: Math.ceil((z1 - z0) / cell) });
   }
-  return Object.assign({}, result, { levels, transform, grid, wallHeight: result.wallHeight });
+  const surfaces = result.surfaces?.map(s => {
+    const b = s.bounds, corners = [[b.x0, b.z0], [b.x1, b.z0], [b.x0, b.z1], [b.x1, b.z1]].map(mv);
+    return { ...s, elevation: s.elevation + dElev, minElevation: s.minElevation + dElev, maxElevation: s.maxElevation + dElev,
+      bounds: { x0: Math.min(...corners.map(p => p[0])), x1: Math.max(...corners.map(p => p[0])),
+        z0: Math.min(...corners.map(p => p[1])), z1: Math.max(...corners.map(p => p[1])) } };
+  });
+  return Object.assign({}, result, { levels, surfaces, transform, grid, wallHeight: result.wallHeight });
 }
 
 // Write a placed proposal into the property. `replace` rebuilds the floors it lands on
@@ -206,6 +215,7 @@ export function mergeProposal(prop, scan, result, underlays, mode, uid) {
     scan.scale = 1;
     scan.flip = false;
     scan.planned = new Date().toISOString();
+    scan.floorDetection = floorDetectionReport(result);
   }
   const touched = new Set(walls.map(w => w.level).concat(rooms.map(r => r.level)));
   return { levels: prop.levels.filter(l => touched.has(l.id)), walls, openings, rooms, superseded, mode };

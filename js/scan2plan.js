@@ -13,6 +13,7 @@ import { uid, touch, levelOfWall } from './store.js';
 import { loadMesh } from './scans.js';
 import { fitScan, placeResult, mergeProposal, existingPlan } from './scanmerge.js';
 import { scanToPlan } from './scan2plan-core.js';
+import { floorDetectionReport, floorReviewText } from './scan-surfaces.js';
 import { underlayResolution } from './underlay-resolution.js';
 
 const UNDERLAY_CUT = 1.3;   // each level is rendered cut this far above its floor
@@ -170,7 +171,7 @@ export function underlaysFor(object, result) {
         const cut = L.elevation + Math.min(UNDERLAY_CUT, Math.max(0.6, L.height - 0.3));
         renderer.clippingPlanes = [
           new THREE.Plane(new THREE.Vector3(0, -1, 0), cut),                  // keep y <= cut
-          new THREE.Plane(new THREE.Vector3(0, 1, 0), -(L.elevation - 0.08)),  // keep y >= floor - 0.08
+          new THREE.Plane(new THREE.Vector3(0, 1, 0), -((L.underlayMin ?? L.elevation) - 0.08)),  // retain supported lower surfaces, including landings
         ];
         cam.position.set(0, cut + 60, 0);
         cam.lookAt(0, L.elevation, 0);
@@ -233,6 +234,7 @@ export function applyProposal(prop, scan, result, underlays) {
     scan.scale = 1;
     scan.flip = false;
     scan.planned = new Date().toISOString();
+    scan.floorDetection = floorDetectionReport(result);
   }
   touch();
   return { levels, walls, openings, rooms };
@@ -258,6 +260,7 @@ export async function planFromScanBytes(prop, scan, buffer, hooks, opts) {
     if (result.roomLike && opts.geometry !== false) applied = applyProposal(prop, scan, result, underlays);
     else {
       // Not a room (an object, a facade, a garden): keep any traced plan, place the scan.
+      scan.floorDetection = floorDetectionReport(result);
       scan.pos = result.transform.pos.slice(); scan.rot = result.transform.rot.slice(); scan.rotY = scan.rot[1]; scan.flip = false;
       if (!prop.levels || !prop.levels.length) prop.levels = [{ id: 'lvl-0', name: 'Main level', elevation: 0, height: prop.wallHeight || 2.44, plan: null }];
       const u = underlays && underlays[result.mainLevelIndex];
@@ -314,6 +317,12 @@ export async function placeScanBytes(prop, scan, buffer, hooks, choose) {
 
 // One-line summary for toasts and logs.
 export function proposalSummary(result, applied) {
+  const summary = geometrySummary(result, applied);
+  const report = floorDetectionReport(result);
+  return summary + (report?.required ? '. ' + floorReviewText(report) : '');
+}
+
+function geometrySummary(result, applied) {
   if (!applied) return 'the scan is placed on the floor; it does not read as a room, so no walls were proposed';
   if (applied.mode === 'level' || applied.mode === 'beside') {
     const where = applied.mode === 'level' ? 'as ' + applied.levels.map(l => l.name).join(', ') : 'beside the building';

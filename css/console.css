@@ -986,3 +986,8 @@ kbd {
 .file-dialog .file-env .v-env-head { display:none; }
 .file-dialog .file-env .v-env-body { display:block; padding:0; }
 .file-dialog { margin:auto; }
+
+.src-card [data-floor-review] { font-size: 11px; color: var(--dim); }
+.src-card [data-floor-review] summary { cursor: pointer; color: var(--accent); }
+.src-card [data-floor-review] table { display: block; max-width: 100%; overflow-x: auto; font: 10px var(--mono); border-collapse: collapse; }
+.src-card [data-floor-review] th, .src-card [data-floor-review] td { padding: 5px; text-align: left; border-bottom: 1px solid var(--line-2); }
