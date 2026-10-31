@@ -115,10 +115,20 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     if (choice === 'mac') result = mergeShared(ancestor, remote, local);
     return result.value;
   }
+  async function cleanupMigration() {
+    try { await finishBrowserMigration(); cleanupNotice = false; }
+    catch (error) { cleanupNotice = true; console.warn(error); }
+  }
   async function cycle() {
     await whenHydrated();
     const head = await (await request('/head')).json();
-    if (!pending && head.revision === revision) return;
+    if (!pending && head.revision === revision) {
+      if (cleanupNotice) {
+        await cleanupMigration();
+        status(cleanupNotice ? 'SAVED TO DISK — CLOSE OLDER TIKSI TABS' : 'SAVED TO DISK', cleanupNotice);
+      }
+      return;
+    }
     const remote = await (await request()).json();
     paths = remote.paths || {};
     if (!pending && remote.data) {
@@ -141,8 +151,8 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     paths = (await (await request()).json()).paths || {};
     if (migration) {
       // All originals must be on disk before removing their last browser copy.
-      try { await finishBrowserMigration(); migration = false; migrationPack = null; }
-      catch (error) { cleanupNotice = true; console.warn(error); }
+      migration = false; migrationPack = null;
+      await cleanupMigration();
     }
     status(cleanupNotice ? 'SAVED TO DISK — CLOSE OLDER TIKSI TABS' : pending ? 'SAVING TO DISK' : 'SAVED TO DISK', pending || cleanupNotice);
   }

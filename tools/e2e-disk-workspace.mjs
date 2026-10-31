@@ -92,7 +92,8 @@ try {
   assert.equal(catalog.data.properties.length, 3);
   // Migrate an older device, including an orphan original, before clearing its
   // browser database. The Mac's newer records and unrelated local project survive.
-  const legacy = await (await browser.newContext()).newPage();
+  const legacyContext = await browser.newContext();
+  const legacy = await legacyContext.newPage();
   await legacy.goto('http://127.0.0.1:' + port + '/app-icon.svg');
   await legacy.evaluate(async () => {
     const s = await import('/js/store.js');
@@ -101,8 +102,20 @@ try {
     await s.putFile('orphan-original', new Uint8Array([3, 1, 4, 1, 5]).buffer, { name: 'Unreferenced.bin', format: 'bin' });
     await s.whenHydrated(); s.save();
   });
+  // A retained document (including a back/forward-cache entry) can keep an IDB
+  // connection open. It must release that connection when migration deletes it.
+  const legacyReader = await legacyContext.newPage();
+  await legacyReader.goto('http://127.0.0.1:' + port + '/app-icon.svg');
+  await legacyReader.evaluate(async () => { await (await import('/js/store.js')).storedFileIds(); });
+  // A genuinely old build has no versionchange handler. Saving still completes,
+  // and cleanup must recover after that older document is closed.
+  const oldReader = await legacyContext.newPage();
+  await oldReader.goto('http://127.0.0.1:' + port + '/app-icon.svg');
+  await oldReader.evaluate(async () => { window.heldLegacyDatabase = await new Promise(resolve => { const request = indexedDB.open('tiksi-files'); request.onsuccess = () => resolve(request.result); }); });
   await legacy.goto('http://127.0.0.1:' + port);
   await legacy.getByRole('button', { name: 'USE MAC VALUES', exact: true }).click();
+  await legacy.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK — CLOSE OLDER TIKSI TABS');
+  await oldReader.close();
   await legacy.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   assert.equal(await legacy.evaluate(() => localStorage.getItem('tiksi.workspace.v1')), null);
   assert.equal(await legacy.evaluate(async () => (await indexedDB.databases()).some(d => d.name === 'tiksi-files')), false);
@@ -132,4 +145,7 @@ try {
   await desktop.screenshot({ path: 'test-results/disk-workspace-desktop.png' }); await phone.screenshot({ path: 'test-results/disk-workspace-phone.png' });
   assert.deepEqual(errors, []);
   console.log('ok   two origins share project files and originals; no browser persistence; stale edits reviewed; clean browser recovers all projects');
+} catch (error) {
+  if (browser) console.error('Disk client state:', await Promise.all(browser.contexts().flatMap(context => context.pages()).map(page => page.evaluate(() => ({ url: location.href, status: document.querySelector('#save-status')?.textContent, review: !!document.querySelector('dialog[open]') })).catch(() => null))));
+  throw error;
 } finally { releaseDownload?.(); if (browser) await browser.close(); child.kill(); await new Promise(r => child.once('exit', r)); await rm(state, { recursive: true, force: true }); }

@@ -15,6 +15,7 @@ let saveTimer = null;
 let diskPersistence = null;
 const memoryFiles = new Map();
 let legacyFiles = true;
+let legacyDeletion = null;
 export function useDiskPersistence(backend) { diskPersistence = backend; }
 export async function finishBrowserMigration({ clearFiles = true } = {}) {
   // Only called after an acknowledged, complete save to the Mac's project files.
@@ -27,12 +28,18 @@ export async function finishBrowserMigration({ clearFiles = true } = {}) {
     existing.close();
     dbPromise = null;
   }
-  await new Promise((resolve, reject) => {
-    const request = indexedDB.deleteDatabase('tiksi-files');
-    request.onsuccess = resolve;
-    request.onerror = () => reject(request.error);
-    request.onblocked = () => reject(new Error('Close older Tiksi tabs to finish removing browser storage.'));
-  });
+  if (!legacyDeletion) {
+    const deletion = legacyDeletion = { done: false, promise: null };
+    deletion.promise = new Promise((resolve, reject) => {
+      const request = indexedDB.deleteDatabase('tiksi-files');
+      request.onsuccess = () => { deletion.done = true; resolve(); };
+      request.onerror = () => { legacyDeletion = null; reject(request.error); };
+      request.onblocked = () => reject(new Error('Close older Tiksi tabs to finish removing browser storage.'));
+    });
+  }
+  // A blocked deletion continues in IndexedDB. Reissuing it would queue behind
+  // that same blocked request and could leave the next disk save waiting forever.
+  if (!legacyDeletion.done) await legacyDeletion.promise;
 }
 export function touch() {
   // Notify + debounced autosave.
@@ -838,7 +845,13 @@ function db() {
     dbPromise = new Promise((resolve, reject) => {
       const req = indexedDB.open('tiksi-files', 1);
       req.onupgradeneeded = () => req.result.createObjectStore('files', { keyPath: 'id' });
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        const database = req.result;
+        // Migration deletes this legacy store after saving its complete recovery
+        // copy. Retained tabs/documents must not hold that deletion open.
+        database.onversionchange = () => { database.close(); dbPromise = null; };
+        resolve(database);
+      };
       req.onerror = () => reject(req.error);
     });
   }
