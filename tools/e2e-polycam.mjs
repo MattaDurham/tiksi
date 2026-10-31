@@ -324,8 +324,17 @@ try {
   }, CAPTURE_ID);
   await page.click('#btn-file');await page.click('[data-file-tab=capture]');
   await page.setInputFiles('[data-any-file]',glbPath);
-  await page.waitForSelector('[data-file-dialog]',{state:'detached'});
-  await page.locator('.v-scan-row').last().click();await page.click('.inspector [data-plan]');
+  // File parsing and viewer attachment are separate async transitions. Match
+  // the import budget above, then wait for the new mesh instead of clicking a
+  // loading row that attachScans replaces. Import normally selects it already.
+  await page.waitForSelector('[data-file-dialog]', { state: 'detached', timeout: 120000 });
+  await page.waitForFunction(n => {
+    const rows = document.querySelectorAll('.v-scan-row');
+    return rows.length === n && rows[n - 1].querySelector('.key')?.textContent.trim() === 'MESH';
+  }, before2.scans + 1, { timeout: 60000 });
+  const addedScanRow = page.locator('.v-scan-row').last();
+  if (!(await addedScanRow.getAttribute('class') || '').split(/\s+/).includes('active')) await addedScanRow.click();
+  await page.click('.inspector [data-plan]');
   await page.waitForSelector('.sp [data-mode]', { timeout: 120000 });
   const suggested = await page.evaluate(() => document.querySelector('.sp-choice.suggested').dataset.mode);
   check(suggested === 'replace', 'additive: the same layout is suggested as a rescan (' + suggested + ')');
