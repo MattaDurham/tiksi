@@ -13,7 +13,8 @@
 //   OPEN             A picker, a drop on the window, a folder entry, or #/open?url=<file> for a
 //                    project hosted anywhere that allows cross-origin reads.
 //
-// Browser autosave (localStorage + IndexedDB) stays as it was; this is the durable copy.
+// With the local server, disk-workspace owns canonical saves and this module supplies
+// import/export controls. Static hosting retains browser persistence and file pickers.
 // With the local server and SketchUp available, the folder also keeps <name>.skp beside each
 // project and the two stay connected both ways (sketchup-mirror.js).
 
@@ -22,6 +23,7 @@ import {
   putFile, getFile, deleteFile, handleKey, setSaveStatus, mergeWorkspace, replaceWorkspace, touch,
 } from './store.js';
 import { syncMirror, mirrorCapabilities, mirrorChangedOnDisk, MirrorBusy, openInSketchUp } from './sketchup-mirror.js';
+import { diskWorkspace } from './disk-workspace.js';
 
 export const FSA = typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function';
 export const FSA_DIR = typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
@@ -70,10 +72,15 @@ export function signatureOf(propId) {
   return (h >>> 0).toString(36) + ':' + s.length;
 }
 export function isDirty(propId) {
+  if (diskWorkspace) return diskWorkspace.pending;
   const sig = state.savedSig.get(propId) || (state.folderMap[propId] && state.folderMap[propId].sig);
   return !sig || sig !== signatureOf(propId);
 }
 export function saveTarget(propId) {
+  if (diskWorkspace) {
+    const path = diskWorkspace.paths[propId];
+    return { kind: 'folder', name: path ? path.split('/').pop() : projectFileName(ws.data.properties.find(p => p.id === propId) || {}), folder: path || diskWorkspace.folder };
+  }
   if (state.fileHandles.has(propId)) return { kind: 'file', name: state.fileHandles.get(propId).name };
   const folder = folderOf(propId), entry = state.folderMap[propId];
   if (folder && entry && entry.file) return { kind: 'folder', name: entry.file, folder: folderLabel(propId) || folder.name };
@@ -125,6 +132,10 @@ export async function saveProject(prop, opts) {
   opts = opts || {};
   prop = prop || activeProperty();
   if (!prop) return null;
+  if (diskWorkspace && !opts.as) {
+    diskWorkspace.changed(); await diskWorkspace.sync();
+    return { via: 'folder', name: saveTarget(prop.id).name };
+  }
   let savedSig;
   const pack = async () => {
     savedSig = signatureOf(prop.id);
@@ -292,6 +303,7 @@ function ownEntries() {
 // On boot: find the remembered folders. Without a user gesture permissions can only be
 // queried; when one is not granted, FILE > Settings offers to reconnect it (interactive).
 export async function reconnectFolder(interactive) {
+  if (diskWorkspace) return false;
   loadFolderMap();
   const shared = await reconnectSharedFolder(interactive);
   const own = await reconnectProjectFolders(interactive);
@@ -449,6 +461,7 @@ export async function openFromFolder(entry, folder) {
 
 // Called on every workspace change; writes changed properties a few seconds later.
 export function scheduleFolderSync(delay) {
+  if (diskWorkspace) return;
   if (!anyFolder()) return;
   clearTimeout(state.syncTimer);
   state.syncTimer = setTimeout(() => { syncFolder().catch(e => { setSaveStatus('FOLDER SAVE FAILED', true); console.error('folder sync failed', e); }); }, delay == null ? SYNC_DELAY_MS : delay);
@@ -558,6 +571,7 @@ function startMirrorPoll() {
 export class NeedsFolder extends Error {}
 
 export async function editInSketchUp(prop) {
+  if (diskWorkspace) return diskWorkspace.openSketchUp(prop);
   if (!prop) throw new Error('Open a property first.');
   const cap = await mirrorCapabilities(true);
   state.mirror.available = !!cap.mirror;
@@ -595,6 +609,7 @@ export async function editInSketchUp(prop) {
 }
 
 export function mirrorStatus(propId) {
+  if (diskWorkspace) return 'SketchUp authoring runs on the Mac; model updates return through the same project file.';
   if (ws.data.settings.sketchupMirror === false) return 'SketchUp mirror is off.';
   const own = state.projectFolders.get(propId);
   if (own && !own.permitted) return 'SketchUp mirror waits for this project\'s folder (' + folderLabel(propId) + ') to be reconnected.';

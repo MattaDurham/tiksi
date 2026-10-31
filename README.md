@@ -124,11 +124,11 @@ has something to show; replace it with your own property whenever you like.
 
 ### Local Mac app and Tailscale
 
-For the local app, run `python3 tools/serve.py --host 0.0.0.0 --port 8642` and
+For the local app, run `python3 tools/serve.py --host 0.0.0.0 --port 8642 --projects-dir "$HOME/Documents/Tiksi Projects"` and
 open `http://localhost:8642/` in Chrome. Install Tiksi using the install button
 in the address bar to give it its own app window and Dock launcher. This server
-serves only the app assets; repository files, saved data, and directory listings
-are excluded. Binding to `0.0.0.0` makes the app reachable on the local network
+serves app assets and a private project-file API; repository files and directory listings
+are excluded. The project API accepts this Mac and Tailscale peers, requires same-origin requests, and does not enable CORS. Binding to `0.0.0.0` makes the app reachable on the local network
 and through the Mac's Tailscale address.
 
 For automatic startup, use your operating system's service manager. Keep the
@@ -139,11 +139,22 @@ With Tailscale connected on both devices and the Mac awake, open
 `http://<Mac-Tailscale-IP>:8642/` on your phone. Tailscale Serve can optionally
 provide an HTTPS URL once Serve/HTTPS is enabled for the tailnet. The shell and
 forms adapt to narrow screens; detailed model editing still benefits from a
-desktop. Browser storage and selected project
-folders belong to each device: serving the app from the Mac does not sync its
-workspace or expose its saved projects. Shared project storage would require a
-server API. The hosted GitHub Pages copy and the local copy also have separate
-browser storage; use project files or workspace bundles to transfer data.
+desktop. Both devices read and edit the same `.tiksi` files on the Mac. Each
+project gets its own folder, with original scans and photos embedded in its bundle;
+existing project files in the configured root, its immediate project folders,
+or their `Tiksi` subfolders are discovered automatically. FILE → Settings shows
+the canonical path. `SAVE AS` exports another copy. Without `--projects-dir`,
+the server uses its private state directory's `workspace/projects` folder.
+
+The first connection migrates legacy browser projects and originals to disk.
+Differing edits require a choice; unrelated records combine. A recovery bundle
+retains the old browser data, including unreferenced original files, before the
+browser store is removed. Subsequent working copies stay in memory. Changes
+appear on other clients within a few seconds; edits to the same field require
+review. Keep the Mac reachable until `SAVED TO DISK` appears. Offline edits are
+unsaved working changes, and closing the page warns before losing them.
+The static GitHub Pages edition retains its portable browser mode and is separate
+from the Mac's private files.
 
 ### Live material and fixture sourcing
 
@@ -284,10 +295,14 @@ original photos and model files.
 
 ## Where your data lives
 
-The workspace lives in your browser, plus the files you save. It autosaves to
-localStorage; scan files, full-resolution photos, photo thumbnails and plan
-underlays go to IndexedDB, so the localStorage copy stays small. Nothing is
-uploaded by ordinary editing. Native conversion sends a selected source copy to
+With the local server, project folders and `.tiksi` files on the Mac are the source
+of truth. Ordinary edits and originals go to that Mac, including over Tailscale;
+they are not saved in browser storage or sent to a cloud service. The private
+server runtime keeps a rebuildable asset cache, catalog, recovery bundles and
+previous file revisions. Back up the project folders and runtime together for
+complete recovery history. A lost runtime can rebuild current projects from their
+bundles. Static hosting retains localStorage/IndexedDB persistence and portable
+file exports. Native conversion sends a selected source copy to
 the local server; source/log/interpretation handoffs can be saved separately.
 Photo reconstruction explicitly sends selected
 original photos to this Mac's local server and keeps private job files in ignored

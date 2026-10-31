@@ -12,6 +12,7 @@ import { ensureBuiltinMaterials } from './materials.js';
 import { disposeMaterials } from './textures.js';
 import { revokePhotoUrls } from './photos-store.js';
 import { demoWorkspace } from './demo.js';
+import { connectDiskWorkspace, diskWorkspace } from './disk-workspace.js';
 import * as plan2d from './plan2d.js';
 import * as viewer3d from './viewer3d.js';
 import * as materialsview from './materialsview.js';
@@ -53,10 +54,13 @@ let currentName = '';
 
 async function boot() {
   const had = load();
-  if (!had || ws.data.properties.length === 0 && ws.data.projects.length === 0) {
+  await whenHydrated();
+  await connectDiskWorkspace({ hadLocal: had, onRemote: () => { if (currentView) { refreshTopbar(); afterWorkspaceReplaced(); } } });
+  if (!diskWorkspace && (!had || ws.data.properties.length === 0 && ws.data.projects.length === 0)) {
     replaceWorkspace(demoWorkspace());
   }
   ensureBuiltinMaterials();
+  if (diskWorkspace) diskWorkspace.changed();
   save();
   // Photo thumbnails come back from IndexedDB asynchronously; the first render waits for them.
   await whenHydrated();
@@ -267,6 +271,11 @@ function openFileMenu(initialTab = 'project', selected) {
     const sharedLink=dialog.querySelector('[data-folder-link]');sharedLink.textContent=st.folderNeedsPermission?'RECONNECT':'KEEP THEM IN ONE FOLDER';
     dialog.querySelector('[data-folder-link]').disabled=!FSA_DIR;dialog.querySelector('[data-folder-open]').disabled=!st.folder&&!(own&&own.permitted);dialog.querySelector('[data-folder-unlink]').disabled=!st.folder && !st.folderNeedsPermission;
     dialog.querySelector('[data-mirror-on]').checked=ws.data.settings.sketchupMirror!==false;dialog.querySelector('[data-mirror-label]').textContent=prop?mirrorStatus(prop.id):'';
+    if (diskWorkspace) {
+      dialog.querySelector('[data-own-folder-label]').textContent = prop ? (diskWorkspace.paths[prop.id] || 'A project folder is created on its first save.') : diskWorkspace.folder;
+      dialog.querySelector('[data-folder-label]').textContent = 'All projects are files on this Mac. Desktop and Tailscale clients use the same project folders. Browser storage is not used.';
+      for (const selector of ['[data-own-folder-link]', '[data-own-folder-unlink]', '[data-folder-open]', '[data-folder-link]', '[data-folder-unlink]', '[data-storage]']) dialog.querySelector(selector).hidden = true;
+    }
   };
   const stopWatching=onFilesChange(refresh);dialog.addEventListener('close',stopWatching);
   let busy=false;
@@ -439,4 +448,9 @@ function refreshTopbar() {
   refreshSaveButton();
 }
 
-boot();
+boot().catch(error => {
+  setSaveStatus('PROJECT FILES UNAVAILABLE', true);
+  const host = document.getElementById('view');
+  host.textContent = 'Could not open the Mac’s project files. Reconnect to the Mac and reload. Existing files and browser migration data have been preserved. ' + error.message;
+  console.error(error);
+});

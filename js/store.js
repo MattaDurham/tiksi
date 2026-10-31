@@ -12,6 +12,28 @@ const listeners = new Set();
 export function onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 
 let saveTimer = null;
+let diskPersistence = null;
+const memoryFiles = new Map();
+let legacyFiles = true;
+export function useDiskPersistence(backend) { diskPersistence = backend; }
+export async function finishBrowserMigration({ clearFiles = true } = {}) {
+  // Only called after an acknowledged, complete save to the Mac's project files.
+  try { localStorage.removeItem(LS_KEY); localStorage.removeItem('tiksi.folder.v1'); } catch (ignored) {}
+  try { sessionStorage.removeItem('tiksi.research.session.v1'); } catch (ignored) {}
+  legacyFiles = false;
+  if (!clearFiles) return;
+  if (dbPromise) {
+    const existing = await dbPromise;
+    existing.close();
+    dbPromise = null;
+  }
+  await new Promise((resolve, reject) => {
+    const request = indexedDB.deleteDatabase('tiksi-files');
+    request.onsuccess = resolve;
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => reject(new Error('Close older Tiksi tabs to finish removing browser storage.'));
+  });
+}
 export function touch() {
   // Notify + debounced autosave.
   for (const fn of listeners) { try { fn(); } catch (e) { console.error(e); } }
@@ -38,6 +60,7 @@ export function setSaveStatus(text, busy) {
 let saveFailed = false;
 let savePending = false;
 export function save(skipPlanQueue = false) {
+  if (diskPersistence) return; // disk-workspace observes edits and owns save acknowledgments
   // Never write a copy with inline thumbnails while hydrateThumbs() is still moving them into
   // IndexedDB: a freshly imported gallery would not fit and would raise the quota alert for nothing.
   if (hydration) {
@@ -806,6 +829,10 @@ export function selectedTotals() {
 // ---------- IndexedDB for large binaries (lidar scans, photos) ----------
 
 let dbPromise = null;
+let fileBackend = null;
+// Server-backed originals remain lazy: opening a project on a phone need not copy
+// its entire scan/photo library into that browser before rendering the first view.
+export function setFileBackend(backend) { fileBackend = backend; }
 function db() {
   if (!dbPromise) {
     dbPromise = new Promise((resolve, reject) => {
@@ -839,6 +866,12 @@ function ioError(err, fallback) {
 }
 
 export async function putFile(id, buffer, meta) {
+  await cacheFile(id, buffer, meta);
+  if (buffer && fileBackend) fileBackend.changed(id);
+}
+
+export async function cacheFile(id, buffer, meta) {
+  if (diskPersistence) { memoryFiles.set(id, Object.assign({ id, buffer }, meta || {})); return; }
   const d = await db();
   return new Promise((resolve, reject) => {
     const tx = d.transaction('files', 'readwrite');
@@ -848,6 +881,15 @@ export async function putFile(id, buffer, meta) {
 }
 
 export async function getFile(id) {
+  const local = await getCachedFile(id);
+  return fileBackend ? fileBackend.read(id, local) : local;
+}
+
+export async function getCachedFile(id) {
+  if (diskPersistence) {
+    if (memoryFiles.has(id)) return memoryFiles.get(id);
+    if (!legacyFiles) return null;
+  }
   const d = await db();
   return new Promise((resolve, reject) => {
     const req = d.transaction('files').objectStore('files').get(id);
@@ -857,6 +899,7 @@ export async function getFile(id) {
 }
 
 export async function deleteFiles(ids) {
+  if (diskPersistence) { for (const id of ids) memoryFiles.delete(id); return; }
   if (!ids.length) return;
   const d = await db();
   return new Promise((resolve, reject) => {
@@ -871,6 +914,7 @@ export function deleteFile(id) { return deleteFiles([id]); }
 
 // Every key in the store: scans, photos and thumbnails, referenced or not.
 export async function storedFileIds() {
+  if (diskPersistence) return [...memoryFiles.keys()];
   const d = await db();
   return new Promise((resolve, reject) => {
     const req = d.transaction('files').objectStore('files').getAllKeys();
@@ -882,6 +926,7 @@ export async function storedFileIds() {
 // photo id -> thumbnail data URL for every stored thumbnail. Keys share a prefix, so one
 // ranged getAll fetches them without touching the (large) scan and photo records.
 async function getAllThumbs() {
+  if (diskPersistence) return new Map([...memoryFiles.values()].filter(r => r.kind === 'thumb').map(r => [String(r.id).slice(THUMB_PREFIX.length), r.thumb]));
   const d = await db();
   return new Promise((resolve, reject) => {
     const req = d.transaction('files').objectStore('files').getAll(IDBKeyRange.bound(THUMB_PREFIX, THUMB_PREFIX + '\uffff'));
@@ -896,6 +941,7 @@ async function getAllThumbs() {
 
 // level id -> underlay image data URL for every stored underlay.
 async function getAllPlans() {
+  if (diskPersistence) return new Map([...memoryFiles.values()].filter(r => r.kind === 'plan').map(r => [r.id, r.img]));
   const d = await db();
   return new Promise((resolve, reject) => {
     const req = d.transaction('files').objectStore('files').getAll(IDBKeyRange.bound(PLAN_PREFIX, PLAN_PREFIX + '\uffff'));

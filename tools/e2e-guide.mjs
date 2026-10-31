@@ -23,7 +23,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto(url); await page.locator('[data-prop-name]').waitFor();
+  await page.goto(url); await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   const before = await page.evaluate(async () => JSON.stringify((await import('/js/store.js')).ws.data));
   await page.locator('.guide-entry').click();
   await page.getByRole('heading', { name: 'Your first renovation workflow', exact: true }).waitFor();

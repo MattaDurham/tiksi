@@ -78,11 +78,11 @@ FILE → Project is the home for SAVE PROJECT, SAVE AS, OPEN / IMPORT and NEW PR
 
 ### Try it
 
-1. Open FILE → Project and choose SAVE PROJECT. On the first save, choose a filename and destination when your browser offers a picker.
-2. Use SAVE AS when you want another file destination. Later SAVE PROJECT actions update the remembered file in browsers that support it, or download a file in other browsers.
+1. With the local server, edits save into the project’s .tiksi file on the Mac. Wait for SAVED TO DISK. FILE → Project → SAVE PROJECT also flushes pending edits.
+2. Use SAVE AS to export another copy. In the static hosted edition, choose a filename and destination on first save when your browser offers a picker; later saves update that file or download it.
 3. To reopen work, choose OPEN / IMPORT and select its .tiksi file, or drop the file on Tiksi.
 4. Opening updates the property with the same ID and leaves unrelated properties in place. Choose the property at the top of the app to switch between them.
-5. To keep a project as files beside its other documents, open it and use FILE → Settings → Where this project is kept → CHOOSE FOLDER, then pick the project's folder. Tiksi keeps its files in a Tiksi folder inside it. Use OPEN FROM FOLDER to reopen a project file kept there.
+5. FILE → Settings → Where this project is kept shows the canonical file path on the Mac. Existing bundles in the server’s configured project folders are discovered automatically. The static edition instead offers CHOOSE FOLDER and OPEN FROM FOLDER.
 
 <details><summary>Find saving, importing and settings in one place</summary>
 
@@ -98,7 +98,7 @@ Open FILE, look at Project, switch to Import, inspect 3D exchange, then open Set
 
 **Keyboard saving.** Cmd/Ctrl+S saves; Cmd/Ctrl+Shift+S saves a new copy; Cmd/Ctrl+O opens a project file.
 
-**Synced folders.** A linked folder can live in your normal cloud drive. Browser folder permission and storage are separate on every device.
+**Shared project folders.** Desktop and Tailscale clients of the same local server see the same project files and original assets. A different server or the static edition is a separate workspace.
 
 **File copy vs design fork.** SAVE AS preserves the property IDs. Reopening that copy updates the same property; it does not create a second independent design in this workspace.
 
@@ -106,7 +106,7 @@ Open FILE, look at Project, switch to Import, inspect 3D exchange, then open Set
 
 **Whole-workspace backup.** FILE → Settings → Workspace backup & maintenance → SAVE WORKSPACE BACKUP includes every property.
 
-> **Good to know:** Browser autosave protects the current browser copy. A .tiksi file or a workspace backup is the portable copy you can keep, share and move to another browser. The local server does not synchronize browser workspaces.
+> **Good to know:** The local server saves project bundles on the Mac and keeps browser working data in memory. First connection migrates old browser data to disk with a recovery bundle. Keep the Mac reachable until SAVED TO DISK appears; closing unsaved offline work warns. The static edition retains browser autosave and portable exports.
 
 <a id="capture"></a>
 
@@ -622,7 +622,7 @@ Use the visible tooltips and inspector labels when you forget a control. These a
 
 **Where is save/import?.** Open FILE at the top. Project handles .tiksi files; Import handles captures and photos; 3D exchange handles editing in other applications.
 
-**Why is my phone empty?.** Each browser/device has its own workspace. Open a saved .tiksi file there; connecting to the same Mac does not synchronize the browser data.
+**Why is my phone empty?.** Use the same Mac and server port through Tailscale. The local server shares every saved project and its assets. Check the connection and SAVED TO DISK status. The static hosted edition and branch previews are separate workspaces.
 
 **Why is a model untextured?.** Import the complete texture package or a self-contained GLB. An OBJ or glTF that points to missing files cannot supply those images.
 

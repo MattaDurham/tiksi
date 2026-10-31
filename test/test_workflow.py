@@ -25,9 +25,11 @@ class WorkflowTests(unittest.TestCase):
         self.git('init', '-b', 'main')
         self.git('config', 'user.name', 'Synthetic Test')
         self.git('config', 'user.email', 'test@example.com')
-        for name in ['tools', 'scripts']:
+        for name in ['tools', 'scripts', 'server']:
             (self.root / name).mkdir()
         shutil.copy(ROOT / 'tools/serve.py', self.root / 'tools/serve.py')
+        shutil.copy(ROOT / 'server/workspace.py', self.root / 'server/workspace.py')
+        (self.root / 'server/__init__.py').write_text('', encoding='utf-8')
         (self.root / 'scripts/preflight.sh').write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
         (self.root / 'index.html').write_text('<html><body>fixture</body></html>', encoding='utf-8')
         (self.root / 'AGENTS.local.example.md').write_text('Synthetic instructions\n', encoding='utf-8')
@@ -188,7 +190,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_service_dispatch_aggregates_busy_guard_and_closes_both_services(self):
         target = self.start()
-        (target / 'server').mkdir()
+        (target / 'server').mkdir(exist_ok=True)
         template = """from pathlib import Path
 class SERVICE:
     def __init__(self, state_dir):
