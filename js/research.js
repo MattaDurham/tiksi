@@ -1,6 +1,7 @@
 // Contextual sourcing. Research stays on the local server; saved selections travel
 // with the workspace, including the evidence used to choose them.
-import { ws, uid, touch, escapeHtml, allScopeItems } from './store.js';
+import { ws, uid, touch, escapeHtml, allScopeItems, activeProperty } from './store.js';
+import { diskWorkspace } from './disk-workspace.js';
 
 const API = '/api/material-research';
 const SESSION = 'tiksi.research.session.v1';
@@ -41,13 +42,20 @@ export function openResearch(value = {}) {
 }
 
 function persist() {
+  if (diskWorkspace) {
+    const property = activeProperty();
+    if (!property) return;
+    const value = { draft, context, jobId: job?.id, jobContext, jobItemIds };
+    if (JSON.stringify(property.researchSession) !== JSON.stringify(value)) { property.researchSession = JSON.parse(JSON.stringify(value)); touch(); }
+    return;
+  }
   try { sessionStorage.setItem(SESSION, JSON.stringify({ draft, context, jobId: job?.id, jobContext, jobItemIds })); } catch { /* Navigation still works if storage is full. */ }
 }
 
 function restore() {
-  if (job || draft.query || Object.keys(context).length) return;
+  if (!diskWorkspace && (job || draft.query || Object.keys(context).length)) return;
   try {
-    const rec = JSON.parse(sessionStorage.getItem(SESSION) || 'null');
+    const rec = diskWorkspace ? activeProperty()?.researchSession : JSON.parse(sessionStorage.getItem(SESSION) || 'null');
     if (!rec) return;
     context = cleanContext(rec.context);
     jobContext = cleanContext(rec.jobContext);
@@ -64,7 +72,8 @@ export function mount(el) {
 }
 
 export function unmount() {
-  persist(); root = null; generation++; clearTimeout(timer); timer = null;
+  if (!diskWorkspace) persist();
+  root = null; generation++; clearTimeout(timer); timer = null;
   // The job runs independently of this view. Returning resumes status polling.
 }
 

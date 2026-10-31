@@ -30,10 +30,10 @@ try {
     browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } }), errors = [];
     page.on('pageerror', e => errors.push(e.message));
-    await page.goto(url); await page.locator('[data-prop-name]').waitFor();
+    await page.goto(url); await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
 
     const first = await page.evaluate(async () => {
-      const store = await import('/js/store.js'), files = await import('/js/files.js');
+      const store = await import('/js/store.js'); window.diskTestStore = store;
       store.ws.data = store.emptyWorkspace();
       const p = store.propertyTemplate('Mirror check'); p.id = 'prop-mirror-check'; const L = p.levels[0].id;
       const wall = (id, ax, ay, bx, by) => ({ id, level: L, ax, ay, bx, by, thickness: 0.114, height: null, material: 'mat-drywall' });
@@ -45,44 +45,20 @@ try {
       const g = c.getContext('2d'); g.fillStyle = '#7a5236'; g.fillRect(0, 0, 64, 48); g.fillStyle = '#e8e2d4'; g.fillRect(8, 8, 48, 32);
       p.levels[0].plan = { img: c.toDataURL('image/webp'), imgW: 64, imgH: 48, mPerPx: 0.1, offsetX: -0.5, offsetY: -0.5, opacity: 0.6, calibrated: true, source: 'scan' };
       store.ws.data.properties.push(p); store.ws.data.settings.activePropertyId = p.id;
-      // In-memory folder with the FileSystemDirectoryHandle calls files.js uses.
-      const entries = new Map(); let clock = Date.now();
-      window.__mirrorFolder = entries;
-      const fileHandle = name => ({
-        kind: 'file', name,
-        async getFile() { const f = entries.get(name); return new File([f.bytes], name, { lastModified: f.mtime }); },
-        async createWritable() {
-          const parts = [];
-          return { async write(b) { parts.push(new Uint8Array(await new Response(b).arrayBuffer())); },
-            async close() { const out = new Uint8Array(parts.reduce((n, x) => n + x.length, 0)); let o = 0; for (const x of parts) { out.set(x, o); o += x.length; } entries.set(name, { bytes: out, mtime: ++clock }); } };
-        },
-      });
-      const folder = {
-        kind: 'directory', name: 'Synthetic projects',
-        async getFileHandle(name, opts) {
-          if (!entries.has(name)) { if (!(opts && opts.create)) { const e = new Error('missing'); e.name = 'NotFoundError'; throw e; } entries.set(name, { bytes: new Uint8Array(0), mtime: ++clock }); }
-          return fileHandle(name);
-        },
-        async removeEntry(name) { entries.delete(name); },
-        async *entries() { for (const name of entries.keys()) yield [name, fileHandle(name)]; },
-      };
-      const st = files.filesState(); st.folder = folder; st.folderName = folder.name; st.folderMap = {};
-      await files.syncFolder();
-      const skp = entries.get('Mirror check.skp');
-      return { names: [...entries.keys()].sort(), mirror: st.mirror.available, status: files.mirrorStatus(p.id),
-        skp: skp ? btoa(String.fromCharCode(...skp.bytes)) : null };
+      store.touch();
+      const disk = (await import('/js/disk-workspace.js')).diskWorkspace;
+      await disk.sync(); await disk.syncSketchUp(p);
+      return { path: disk.paths[p.id] };
+
     });
 
-    if (!first.mirror) {
-      assert.deepEqual(first.names, ['Mirror check.tiksi']);
-      assert.match(first.status, /needs the local Tiksi server on a Mac with SketchUp/);
-      console.log('SKIP SketchUp mirror round trip: SketchUp is not installed here (status reported correctly)');
-    } else {
-      assert.deepEqual(first.names, ['Mirror check.skp', 'Mirror check.tiksi'], 'project folder holds the project and its mirror');
-      assert.match(first.status, /SketchUp mirror: Mirror check\.skp, written/);
+    {
+      const modelPath = first.path.replace(/\.tiksi$/i, '.skp');
+      assert((await readFile(first.path)).length > 0, 'the canonical project file exists');
+      const modelBytes = await readFile(modelPath);
       // Edit like SketchUp: move the east wall 0.5 m east with the SDK, then save.
       const work = await mkdtemp(tmpdir() + '/tiksi-mirror-edit-');
-      await writeFile(join(work, 'in.skp'), Buffer.from(first.skp, 'base64'));
+      await writeFile(join(work, 'in.skp'), modelBytes);
       const images = execFileSync('python3', ['-c', `
 import sys, ctypes as C
 sys.path.insert(0, ${JSON.stringify(root)})
@@ -99,23 +75,18 @@ for g in api.collection(api.ref('SUModelGetEntities', m), 'Groups'):
 api.call('SUModelSaveToFile', m, sys.argv[2].encode()); api.call('SUModelRelease', C.byref(m)); api.lib.SUTerminate()
 `, join(work, 'in.skp'), join(work, 'out.skp')]).toString().trim();
       assert.equal(images, '1', 'the WebP underlay reached the .skp as an image');
-      const edited = (await readFile(join(work, 'out.skp'))).toString('base64');
+      await writeFile(modelPath, await readFile(join(work, 'out.skp')));
       await rm(work, { recursive: true, force: true });
-      const second = await page.evaluate(async b64 => {
-        const store = await import('/js/store.js'), files = await import('/js/files.js');
-        const bin = atob(b64), bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        const before = window.__mirrorFolder.get('Mirror check.tiksi').mtime;
-        window.__mirrorFolder.set('Mirror check.skp', { bytes, mtime: Date.now() + 60000 });   // saved in SketchUp
-        // The poll notices within a few seconds, the merge touches the property, the folder sync rewrites the .tiksi.
-        const p = () => store.ws.data.properties.find(x => x.id === 'prop-mirror-check');
-        for (let i = 0; i < 200 && !(p().walls.find(w => w.id === 'w-e').ax === 5.5 && window.__mirrorFolder.get('Mirror check.tiksi').mtime !== before); i++) await new Promise(r => setTimeout(r, 100));
-        const east = p().walls.find(w => w.id === 'w-e');
-        const saved = await store.readBundle(new File([window.__mirrorFolder.get('Mirror check.tiksi').bytes], 'x.tiksi'));
-        return { east: [east.ax, east.bx], tiksiEast: saved.data.properties[0].walls.find(w => w.id === 'w-e').ax, status: files.mirrorStatus('prop-mirror-check') };
-      }, edited);
-      assert.deepEqual(second.east, [5.5, 5.5], 'SketchUp move reached the Tiksi plan');
-      assert.equal(second.tiksiEast, 5.5, 'the .tiksi in the folder was rewritten with the SketchUp change');
-      assert.match(second.status, /Last SketchUp save \(\d\d:\d\d\): 1 changed, 0 added, 0 deleted\./);
+      await page.waitForFunction(() => window.diskTestStore.ws.data.properties.find(p => p.id === 'prop-mirror-check')?.walls.find(w => w.id === 'w-e')?.ax === 5.5, null, { timeout: 40000 });
+      const second = await page.evaluate(async () => {
+        const store = await import('/js/store.js');
+        await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
+        const east = store.ws.data.properties.find(p => p.id === 'prop-mirror-check').walls.find(w => w.id === 'w-e');
+        return [east.ax, east.bx];
+      });
+      assert.deepEqual(second, [5.5, 5.5], 'SketchUp move reached the shared Tiksi plan');
+      const saved = execFileSync('python3', ['-c', 'import json,zipfile,sys;z=zipfile.ZipFile(sys.argv[1]);d=json.loads(z.read("workspace.json"));print(next(w["ax"] for w in d["properties"][0]["walls"] if w["id"]=="w-e"))', first.path]).toString().trim();
+      assert.equal(saved, '5.5', 'canonical project contains the SketchUp move');
       console.log('ok   SketchUp mirror written beside the project, SketchUp edit merged into Tiksi and saved');
     }
     assert.deepEqual(errors, []);

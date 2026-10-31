@@ -38,7 +38,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         if not self.valid_host():
             self.send_error(403, 'Host is not allowed')
             return True
-        for name in ('reconstruction', 'material_research', 'model_conversion'):
+        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion'):
             service = getattr(self.server, name, None)
             if service and service.dispatch(self): return True
         return False
@@ -65,7 +65,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         result = {key: metadata[key] for key in ('slug', 'branch', 'port', 'instanceId', 'head', 'live') if key in metadata}
         result.update({'pid': os.getpid(), 'port': self.server.server_port,
                        'live': metadata.get('live', self.server.server_port == 8642), 'activeJobs': 0})
-        for name in ('reconstruction', 'material_research', 'model_conversion'):
+        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion'):
             service = getattr(self.server, name, None)
             if service:
                 active = getattr(service, 'active_jobs', None)
@@ -89,10 +89,13 @@ class AppHandler(SimpleHTTPRequestHandler):
         if not target.is_relative_to(ROOT):
             self.send_error(404); return None
         if target == ROOT: target = ROOT / 'index.html'
-        if target == ROOT / 'index.html' and getattr(self.server, 'instance_file', None):
+        if target == ROOT / 'index.html':
+            document = target.read_text(encoding='utf-8').replace('name="tiksi-storage" content="portable"', 'name="tiksi-storage" content="project-files"')
+            if not getattr(self.server, 'instance_file', None):
+                return self.bytes_response(document.encode('utf-8'), 'text/html; charset=utf-8')
             metadata = self.instance()
             badge = '<div style="position:fixed;bottom:8px;right:8px;z-index:2147483647;padding:6px 10px;background:#f3c467;color:#1b1b1b;font:12px monospace;border-radius:4px;pointer-events:none" aria-label="Branch preview">PREVIEW ' + html.escape(metadata.get('branch', 'unknown')) + ' / ' + html.escape(metadata.get('head', '')[:8]) + '</div>'
-            document = target.read_text(encoding='utf-8').replace('</body>', badge + '\n</body>')
+            document = document.replace('</body>', badge + '\n</body>')
             return self.bytes_response(document.encode('utf-8'), 'text/html; charset=utf-8')
         return super().send_head()
 
@@ -122,6 +125,7 @@ def main():
     parser.add_argument('--port', type=int, default=8642)
     parser.add_argument('--instance-file', type=Path)
     parser.add_argument('--state-dir', type=Path, default=ROOT / '.tiksi-state')
+    parser.add_argument('--projects-dir', type=Path, help='private project folders served to this Mac and its Tailscale clients')
     parser.add_argument('--allowed-host', action='append', default=[], help='explicit trusted proxy hostname, e.g. a Tailscale Serve name')
     args = parser.parse_args()
     with AppServer((args.host, args.port), AppHandler) as server:
@@ -129,6 +133,9 @@ def main():
         server.allowed_hostname = args.host
         server.allowed_hosts = args.allowed_host
         server.remote_access = args.host not in {'127.0.0.1', 'localhost', '::1'}
+        sys.path.insert(0, str(ROOT))
+        from server.workspace import WorkspaceService
+        server.workspace = WorkspaceService(args.state_dir / 'workspace', args.projects_dir)
         server.reconstruction = None
         server.material_research = None
         if (ROOT / 'server/reconstruction.py').exists():
