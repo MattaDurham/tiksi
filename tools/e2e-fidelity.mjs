@@ -27,7 +27,7 @@ async function bounded(promise, label, timeout = 90000) {
   try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(label + ' timed out after ' + timeout + 'ms')), timeout); })]); }
   finally { clearTimeout(timer); }
 }
-async function captureFrame(page, name) {
+async function captureFrame(page, name, timeout = 90000) {
   // Read the actual viewer canvas during an animation frame, after the viewer has
   // drawn and before Chromium clears its non-preserved WebGL drawing buffer. This
   // uses the same synchronous canvas snapshot as PNG export, without waiting for
@@ -57,7 +57,7 @@ async function captureFrame(page, name) {
           height: canvas.height, samples, opaque, min, max, colors: colors.size });
       } catch (error) { reject(error); }
     }));
-  })), 'Capturing ' + name);
+  })), 'Capturing ' + name, timeout);
   assert.ok(capture.opaque > capture.samples * 0.95, name + ' has a completed opaque frame');
   assert.ok(capture.max - capture.min > 50 && capture.colors > 32, name + ' contains rendered surface detail');
   const { data, ...metrics } = capture;
@@ -97,7 +97,10 @@ try {
   assert.ok(ultra.width > initial.width, 'Ultra increases drawing-buffer resolution at DPR 1');
   const stats = await page.evaluate(async () => (await import('/js/textures.js')).textureStats());
   assert.ok(stats.some(s => s.res === 2048 && s.status === 'ready'), 'Ultra produces 2K surface maps');
-  await captureFrame(page, 'ultra.png');
+  // The larger Ultra canvas and 32-sample AO exceed the ordinary frame budget
+  // on shared Linux software renderers. Keep every pixel assertion and bound
+  // this expensive capture separately; High/Low retain their existing budget.
+  await captureFrame(page, 'ultra.png', 180000);
   await page.click('#btn-file');await page.click('[data-file-tab=exchange]');await page.click('[data-save-view]');
   await page.selectOption('[data-export-size]', '3840');
   const displayed = await page.locator('[data-export-dimensions]').innerText();
