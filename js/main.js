@@ -13,6 +13,8 @@ import { disposeMaterials } from './textures.js';
 import { revokePhotoUrls } from './photos-store.js';
 import { demoWorkspace } from './demo.js';
 import { connectDiskWorkspace, diskWorkspace } from './disk-workspace.js';
+import { editHistoryState, onEditHistoryChange } from './edit-history.js';
+import { icon } from './icons.js';
 import * as plan2d from './plan2d.js';
 import * as viewer3d from './viewer3d.js';
 import * as materialsview from './materialsview.js';
@@ -66,6 +68,7 @@ async function boot() {
   await whenHydrated();
 
   bindTopbar();
+  bindHistoryControls();
   refreshTopbar();
   onChange(refreshTopbar);
   // Projects are files: SAVE, the FILE menu, drops, Cmd+S/Cmd+O, and the linked folder.
@@ -158,6 +161,7 @@ function route() {
   const root = document.getElementById('view');
   root.innerHTML = '';
   view.mount(root);
+  refreshHistoryControls();
 }
 
 function remountView() {
@@ -165,6 +169,7 @@ function remountView() {
   const root = document.getElementById('view');
   root.innerHTML = '';
   currentView.mount(root);
+  refreshHistoryControls();
 }
 
 // Called after the whole workspace was swapped out: drop GPU/material caches and object URLs
@@ -202,6 +207,36 @@ async function offerStorageCleanup(afterReplace) {
 }
 
 // ---------- topbar ----------
+function refreshHistoryControls() {
+  const group = document.getElementById('edit-history');
+  if (!group) return;
+  group.hidden = !['plan', 'model'].includes(currentName);
+  const state = editHistoryState(activeProperty());
+  for (const direction of ['undo', 'redo']) {
+    const button = document.getElementById('btn-' + direction), item = state[direction];
+    button.disabled = !item.available;
+    const name = direction === 'undo' ? 'Undo' : 'Redo';
+    button.title = item.blocked ? name + ' unavailable: this geometry changed elsewhere.'
+      : item.available ? name + ' ' + item.label + (direction === 'undo' ? ' (Cmd/Ctrl+Z)' : ' (Cmd/Ctrl+Shift+Z or Ctrl+Y)')
+      : 'Nothing to ' + direction;
+  }
+}
+function bindHistoryControls() {
+  for (const direction of ['undo', 'redo']) {
+    const button = document.getElementById('btn-' + direction);
+    button.innerHTML = icon(direction) + '<span>' + direction.toUpperCase() + '</span>';
+    button.onclick = () => { currentView?.[direction]?.(); refreshHistoryControls(); };
+  }
+  onEditHistoryChange(refreshHistoryControls);
+  window.addEventListener('keydown', e => {
+    if (!['plan', 'model'].includes(currentName) || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+    if (e.target?.matches('input, textarea, select') || e.target?.isContentEditable || document.querySelector('dialog[open]')) return;
+    const key = e.key.toLowerCase();
+    if (key !== 'z' && !(e.ctrlKey && key === 'y')) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    currentView?.[key === 'y' || e.shiftKey ? 'redo' : 'undo']?.();
+  });
+}
 function bindTopbar() {
   const sel = document.getElementById('property-select');
   sel.onchange = () => {
@@ -446,6 +481,7 @@ function refreshTopbar() {
   document.querySelectorAll('#units-seg .seg-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.units === d.settings.units));
   refreshSaveButton();
+  refreshHistoryControls();
 }
 
 boot().catch(error => {

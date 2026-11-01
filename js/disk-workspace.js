@@ -94,7 +94,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   }
   async function apply(data) {
     applying = true;
-    try { replaceWorkspace(data); await whenHydrated(); onRemote?.(); }
+    try { replaceWorkspace(data, { source: 'shared' }); await whenHydrated(); onRemote?.(); }
     finally { applying = false; }
   }
   async function resolveMerge(ancestor, local, remote) {

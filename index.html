@@ -46,6 +46,10 @@
     <div class="topbar-group">
       <button id="btn-file" class="tb-btn" title="Open, import, save, 3D exchange and settings">FILE</button>
       <a href="#/guide" class="tb-btn guide-entry" title="User guide, screenshots and feature walkthroughs">GUIDE</a>
+      <div id="edit-history" class="history-actions" role="group" aria-label="Undo and redo" hidden>
+        <button id="btn-undo" class="tb-btn" data-act="undo" aria-label="Undo" disabled>UNDO</button>
+        <button id="btn-redo" class="tb-btn" data-act="redo" aria-label="Redo" disabled>REDO</button>
+      </div>
       <span id="save-status" class="save-status">SAVED</span>
     </div>
   </header>
