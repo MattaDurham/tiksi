@@ -10,6 +10,8 @@ export const ws = { data: null };
 
 const listeners = new Set();
 export function onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+const replaceListeners = new Set();
+export function onWorkspaceReplace(fn) { replaceListeners.add(fn); return () => replaceListeners.delete(fn); }
 
 let saveTimer = null;
 let diskPersistence = null;
@@ -126,8 +128,10 @@ export function load() {
   return false;
 }
 
-export function replaceWorkspace(data) {
+export function replaceWorkspace(data, { source = 'import' } = {}) {
+  const before = ws.data;
   ws.data = migrate(data);
+  for (const fn of replaceListeners) fn(before, ws.data, source);
   // Thumbnails arrive inline (JSON/bundle); hydrateThumbs() copies them into IndexedDB and
   // save() waits for it, so the first localStorage copy is already the slim one.
   thumbsStored.clear();
@@ -163,6 +167,7 @@ export function mergeWorkspace(data, opts) {
   if (projectFile && typeof fileStart === 'string' && ISO_DATE_RE.test(fileStart)) d.settings.programStart = fileStart;
   if (incoming.properties.length) d.settings.activePropertyId = incoming.properties[0].id;
   ws.data = migrate(d);
+  for (const fn of replaceListeners) fn(d, ws.data, 'import');
   // Incoming records carry thumbnails and underlays inline; move them into IndexedDB.
   hydrateThumbs();
   touch();

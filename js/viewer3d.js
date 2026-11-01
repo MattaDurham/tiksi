@@ -8,6 +8,7 @@ import { environmentSun, dayOfYear, dateForDay, daysInYear, validTimeZone } from
 import { setModelXray } from './model-xray.js';
 import * as THREE from 'three';
 import { modelTakeoff, createModelEstimate } from './model-takeoff.js';
+import { beginGeometryEdit, restoreGeometryEdit } from './edit-history.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
@@ -1105,12 +1106,20 @@ function commitGizmoMove() {
   if (!w) return;
   const r = v => Math.round(v * 200) / 200;
   const mv = wallMovePlan(w);
+  beginGeometryEdit(prop, 'move wall');
   if (mv && mv.connected) applyWallMove(mv, r(normalOffset(mv, dx, dz)));
   else { w.ax = r(w.ax + dx); w.ay = r(w.ay + dz); w.bx = r(w.bx + dx); w.by = r(w.by + dz); }
   touch();
   rebuildModel();
   renderInspector();
 }
+
+function restoreHistory(direction) {
+  if (!prop || !restoreGeometryEdit(prop, direction)) return;
+  setSelection(null); rebuildModel(); renderInspector();
+}
+export function undo() { restoreHistory('undo'); }
+export function redo() { restoreHistory('redo'); }
 
 // ---------- measure ----------
 function addMeasurePoint(e) {
@@ -2216,19 +2225,21 @@ function renderInspector() {
       <button class="btn danger" data-del>DELETE WALL</button>`;
     inspEl.querySelector('[data-th]').onchange = e => {
       const v = parseLen(e.target.value);
-      if (!isNaN(v) && v > 0.02 && v < 1) { w.thickness = v; touch(); rebuildModel(); }
+      if (!isNaN(v) && v > 0.02 && v < 1) { beginGeometryEdit(prop, 'change wall thickness'); w.thickness = v; touch(); rebuildModel(); }
       renderInspector();
     };
     inspEl.querySelector('[data-h]').onchange = e => {
+      beginGeometryEdit(prop, 'change wall height');
       if (!e.target.value.trim()) w.height = null;
       else { const v = parseLen(e.target.value); if (!isNaN(v) && v > 0.3) w.height = v; }
       touch(); rebuildModel(); renderInspector();
     };
-    inspEl.querySelector('[data-mat]').onchange = e => { w.material = e.target.value || null; touch(); rebuildModel(); };
+    inspEl.querySelector('[data-mat]').onchange = e => { beginGeometryEdit(prop, 'change wall material'); w.material = e.target.value || null; touch(); rebuildModel(); };
     // Room-facing faces only; blank = automatic (drywall on exterior walls, the wall material otherwise).
-    inspEl.querySelector('[data-matin]').onchange = e => { w.materialIn = e.target.value || null; touch(); rebuildModel(); };
+    inspEl.querySelector('[data-matin]').onchange = e => { beginGeometryEdit(prop, 'change interior finish'); w.materialIn = e.target.value || null; touch(); rebuildModel(); };
     inspEl.querySelector('[data-walk]').onclick = () => setMode('walk');
     inspEl.querySelector('[data-del]').onclick = () => {
+      beginGeometryEdit(prop, 'delete wall');
       prop.walls = prop.walls.filter(x => x.id !== w.id);
       prop.openings = prop.openings.filter(o => o.wallId !== w.id);
       setSelection(null);
@@ -2253,19 +2264,21 @@ function renderInspector() {
       ${linkedProductsHtml(o.id)}
       <button class="btn" data-wall>SELECT WALL</button>
       <button class="btn danger" data-del>DELETE OPENING</button>`;
-    const num = (sel, fn, min) => { inspEl.querySelector(sel).onchange = e => { const v = parseLen(e.target.value); if (!isNaN(v) && v > (min || 0.05)) { fn(v); touch(); rebuildModel(); } renderInspector(); }; };
+    const num = (sel, fn, min) => { inspEl.querySelector(sel).onchange = e => { const v = parseLen(e.target.value); if (!isNaN(v) && v > (min || 0.05)) { beginGeometryEdit(prop, 'edit opening'); fn(v); touch(); rebuildModel(); } renderInspector(); }; };
     num('[data-w]', v => o.width = v, 0.2);
     num('[data-hh]', v => o.height = v, 0.3);
     if (o.type === 'window') num('[data-s]', v => o.sill = v, -0.001);
     inspEl.querySelector('[data-type]').onchange = e => {
+      beginGeometryEdit(prop, 'change opening type');
       o.type = e.target.value;
       if (o.type === 'window' && o.sill == null) o.sill = 0.762;
       touch(); rebuildModel(); renderInspector();
     };
-    inspEl.querySelector('[data-t]').oninput = e => { o.t = parseFloat(e.target.value); rebuildModel(); };
-    inspEl.querySelector('[data-t]').onchange = () => touch();
+    let slidingOpening = false;
+    inspEl.querySelector('[data-t]').oninput = e => { if (!slidingOpening) { beginGeometryEdit(prop, 'move opening'); slidingOpening = true; } o.t = parseFloat(e.target.value); rebuildModel(); };
+    inspEl.querySelector('[data-t]').onchange = () => { slidingOpening = false; touch(); };
     inspEl.querySelector('[data-wall]').onclick = () => setSelection({ kind: 'wall', id: o.wallId });
-    inspEl.querySelector('[data-del]').onclick = () => { prop.openings = prop.openings.filter(x => x.id !== o.id); setSelection(null); touch(); rebuildModel(); };
+    inspEl.querySelector('[data-del]').onclick = () => { beginGeometryEdit(prop, 'delete opening'); prop.openings = prop.openings.filter(x => x.id !== o.id); setSelection(null); touch(); rebuildModel(); };
     bindResearchActions(inspEl);
     return;
   }
@@ -2284,9 +2297,9 @@ function renderInspector() {
       ${linkedProductsHtml(r.id)}
       ${photoLinksHtml(r.id)}
       <button class="btn" data-walk>WALK INTO ROOM</button>`;
-    inspEl.querySelector('[data-name]').onchange = e => { r.name = e.target.value; touch(); };
-    inspEl.querySelector('[data-mat]').onchange = e => { r.material = e.target.value || null; touch(); rebuildModel(); };
-    inspEl.querySelector('[data-cmat]').onchange = e => { r.ceilingMaterial = e.target.value || null; touch(); rebuildModel(); };
+    inspEl.querySelector('[data-name]').onchange = e => { beginGeometryEdit(prop, 'rename room'); r.name = e.target.value; touch(); };
+    inspEl.querySelector('[data-mat]').onchange = e => { beginGeometryEdit(prop, 'change floor material'); r.material = e.target.value || null; touch(); rebuildModel(); };
+    inspEl.querySelector('[data-cmat]').onchange = e => { beginGeometryEdit(prop, 'change ceiling material'); r.ceilingMaterial = e.target.value || null; touch(); rebuildModel(); };
     inspEl.querySelector('[data-walk]').onclick = () => setMode('walk');
     bindAssign(inspEl); bindPhotoLinks(inspEl); bindResearchActions(inspEl);
     return;

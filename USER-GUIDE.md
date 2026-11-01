@@ -183,7 +183,7 @@ In PLAN, use SELECT and click a wall. Edit the wall height in the inspector to e
 
 **Underlay editing.** Click the image to select it and change opacity; drag it only while selected to align it. Remove it without deleting the traced walls.
 
-**Navigation and undo.** Drag empty canvas or a floor to pan. Scroll also pans. Pinch or Cmd/Ctrl+scroll zooms. Space-drag or middle-drag pans anywhere; F fits the view. Cmd/Ctrl+Z undoes plan edits.
+**Navigation and undo.** Drag empty canvas or a floor to pan. Scroll also pans. Pinch or Cmd/Ctrl+scroll zooms. Space-drag or middle-drag pans anywhere; F fits the view. UNDO and REDO are in the top bar in PLAN and MODEL. One wall gesture includes its joined walls, openings and floor corners.
 
 > **Good to know:** Calibrate the underlay before tracing: calibration changes the image scale, not walls you already drew. Rooms need their own ROOM floors to create floor surfaces and floor-area takeoffs. Recheck scan-generated geometry against measurements on site.
 
@@ -208,6 +208,8 @@ Use the tool column for camera and inspection actions. The inspector follows the
 5. For lighting and render quality, open FILE → Settings → Model environment. For an image export, use FILE → 3D exchange → SAVE VIEW IMAGE while MODEL is open.
 
 ### Other features here
+
+**Undo and redo.** Use the top-bar buttons or Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (Ctrl+Y also redoes). PLAN and MODEL share up to 80 geometry edits per project during this session, including moves and geometry inspector changes. Disk saves and view switches retain history; a reload or file import starts fresh. Unrelated shared edits are kept; a conflicting geometry change disables restoration rather than overwriting it. Photos, notes, imported references and underlay placement are outside geometry undo.
 
 **Walk mode.** Choose WALK, then use W/A/S/D or the arrow keys to move and Shift to move faster. Drag to look or click the canvas to capture the mouse. Escape releases it or exits walk mode.
 
@@ -616,7 +618,7 @@ Use the visible tooltips and inspector labels when you forget a control. These a
 
 **Model navigation.** F: frame. O: orbit. W: walk. T: top. C: section. X: X-ray. M: move walls. D: measure. P: pin photo. N: note. Right-click: note menu.
 
-**Plan undo.** Cmd/Ctrl+Z: undo. Cmd/Ctrl+Shift+Z: redo. Escape ends an active tool action.
+**Geometry undo.** Top-bar UNDO / REDO work in PLAN and MODEL. Cmd/Ctrl+Z: undo. Cmd/Ctrl+Shift+Z or Ctrl+Y: redo. History is per project for the current session. Escape ends an active tool action.
 
 **Move one wall.** Alt/Option while dragging isolates that wall from the normal connected-wall behavior; floors stay where they are.
 

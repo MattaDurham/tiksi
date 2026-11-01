@@ -110,6 +110,15 @@ svg.ic { flex: none; vertical-align: -3px; }
 @media (max-width: 1140px) { .brand-sub { display: none; } }
 .topbar-group { display: flex; align-items: center; gap: 8px; }
 .topbar-spacer { flex: 1; }
+.history-actions { display: flex; gap: 4px; }
+.history-actions[hidden] { display: none; }
+.history-actions .tb-btn { display: inline-flex; align-items: center; gap: 5px; min-height: 36px; }
+.history-actions .tb-btn:disabled { opacity: .4; cursor: default; }
+@media (min-width: 761px) and (max-width: 1040px) {
+  #topbar .tb-label { display: none; }
+  #property-select { max-width: 150px; }
+  #topbar .topbar-group { gap: 6px; }
+}
 .tb-label {
   font-family: var(--mono);
   font-size: 9.5px;
@@ -929,9 +938,12 @@ kbd {
   .brand { margin-right: 0; }
   .brand-sub, .tb-label, .topbar-spacer { display: none; }
   #topbar .topbar-group { min-width: 0; }
-  #topbar .topbar-group:last-child { width: 100%; }
+  #topbar .topbar-group:last-child { width: 100%; flex-wrap: wrap; }
+  .history-actions { margin-left: auto; }
+  .history-actions .tb-btn { min-height: 44px; padding: 8px; }
   #property-select { width: min(205px, 49vw); max-width: 100%; }
   .save-status { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #topbar .save-status { flex-basis: 100%; }
   #rail { flex-direction: row; overflow-x: auto; padding: 5px 8px; border-right: 0; border-bottom: 1px solid var(--line); }
   #rail a { flex: none; padding: 10px; }
   #rail a::before, .rail-foot { display: none; }

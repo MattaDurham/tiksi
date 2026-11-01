@@ -13,6 +13,7 @@ import {
 } from './store.js';
 import { materialSelectHtml } from './materials.js';
 import { icon } from './icons.js';
+import { beginGeometryEdit, cancelGeometryEdit, restoreGeometryEdit } from './edit-history.js';
 import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import {
   planWallMove, applyWallMove, normalOffset, planCornerMove, applyCornerMove,
@@ -30,7 +31,6 @@ const WINDOW_DEFAULT = { width: 0.914, height: 1.219, sill: 0.762 }; // 36 x 48,
 const RULER = 22;                 // px; rulers sit along the top and left canvas edges
 const DRAG_START = 4;             // px the pointer travels before a press becomes a drag
 const FONT = 'ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
-const MOD = /Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘' : '^';
 // Palette for the drawing surface (kept in sync with css/console.css tokens by hand:
 // canvas cannot read CSS variables cheaply every frame).
 const C = {
@@ -74,11 +74,6 @@ let drag = null;             // active drag descriptor
 let spaceDown = false;
 let altDown = false;         // Alt/Option: the ROOM tool outlines instead of filling
 let facesCache = null;       // {key, faces}: the areas the current level's walls enclose
-// Undo history is kept per workspace object and per property: a snapshot taken while editing
-// one property must never replay into another, nor into a re-imported workspace that reuses
-// the same property ids (import/demo swap ws.data, so the WeakMap starts over for them).
-const historyByWs = new WeakMap();
-let hist = null;             // {undo: [], redo: []} of the mounted property
 const hatchCache = new Map(); // material colour -> CanvasPattern (per device pixel ratio)
 const HATCH = 8;             // hatch tile size in CSS px
 let frameNo = 0, hatchMatrix = null;   // the pattern phase is identical for every wall in a frame
@@ -172,43 +167,15 @@ function resolveLevelView() {
 }
 
 // ---------- undo ----------
-function historyFor(p) {
-  let byProp = historyByWs.get(ws.data);
-  if (!byProp) historyByWs.set(ws.data, byProp = {});
-  return byProp[p.id] || (byProp[p.id] = { undo: [], redo: [] });
-}
-// A snapshot carries the whole geometry plus the level list and the active level, so undoing
-// a scan proposal that replaced the levels brings the previous ones back. Underlay images are
-// too large to copy 80 times over: each level's `plan` object is kept by reference beside the
-// JSON and reattached on restore (the underlay was never part of undo; this keeps it that way).
-function snapshot() {
-  const plans = {};
-  for (const l of prop.levels) plans[l.id] = l.plan || null;
-  const levels = prop.levels.map(l => Object.assign({}, l, { plan: null }));
-  return { s: JSON.stringify({ propId: prop.id, walls: prop.walls, openings: prop.openings, rooms: prop.rooms, levels, activeLevelId: prop.activeLevelId }), plans };
-}
-function pushUndo() { hist.undo.push(snapshot()); if (hist.undo.length > 80) hist.undo.shift(); hist.redo.length = 0; }
-function applySnap(snap) {
-  const d = JSON.parse(snap.s);
-  if (d.propId !== prop.id) return false;   // belt and braces: never write another property's geometry
-  prop.walls = d.walls; prop.openings = d.openings; prop.rooms = d.rooms;
-  if (Array.isArray(d.levels) && d.levels.length) {
-    // A level that survived keeps its live plan object (it may have been dragged or
-    // calibrated since); one that was deleted comes back with the plan it had.
-    const live = {};
-    for (const l of prop.levels) live[l.id] = l.plan || null;
-    for (const l of d.levels) l.plan = (l.id in live ? live[l.id] : snap.plans[l.id]) || null;
-    prop.levels = d.levels;
-    prop.activeLevelId = d.activeLevelId;
-    ensureLevels(prop);
-  }
+function pushUndo(label = 'plan edit') { beginGeometryEdit(prop, label); }
+function afterHistoryRestore() {
+  ensureLevels(prop);
   selection = null; hover = null; drawing = null; roomDraft = null; calib = null;
   resolveLevelView();
-  touch(); renderToolCol(); renderInspector(); updateLevelBadge(); updateHint(); invalidate();
-  return true;
+  renderToolCol(); renderInspector(); updateLevelBadge(); updateHint(); invalidate();
 }
-function undo() { if (!hist || !hist.undo.length) return; const cur = snapshot(); if (applySnap(hist.undo.pop())) hist.redo.push(cur); }
-function redo() { if (!hist || !hist.redo.length) return; const cur = snapshot(); if (applySnap(hist.redo.pop())) hist.undo.push(cur); }
+export function undo() { if (restoreGeometryEdit(prop, 'undo')) afterHistoryRestore(); }
+export function redo() { if (restoreGeometryEdit(prop, 'redo')) afterHistoryRestore(); }
 
 // ---------- snapping ----------
 // Returns the snapped point; snapInfo (module state) records what it snapped to so the
@@ -1585,11 +1552,6 @@ function onKeyDown(e) {
   invalidate();
   if (e.key === ' ') { spaceDown = true; e.preventDefault(); updateCursor(); return; }
   if (e.key === 'Alt') { altDown = true; return; }
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
-    e.preventDefault();
-    e.shiftKey ? redo() : undo();
-    return;
-  }
   const keys = { v: 'select', w: 'wall', d: 'door', n: 'window', r: 'room', c: 'calibrate' };
   if (keys[e.key.toLowerCase()] && !e.metaKey && !e.ctrlKey) { setTool(keys[e.key.toLowerCase()]); return; }
   if (e.key === 'f') { fitView(); return; }
@@ -1708,8 +1670,6 @@ function renderToolCol() {
     <label class="tool-check" title="Show a dimension string on every wall">${icon('dims')}<span>DIMS</span><input type="checkbox" ${dimsOn ? 'checked' : ''} data-chk="dims"></label>
     <div class="tool-sep"></div>
     ${toolBtn('data-act="fit"', 'fit', 'FIT VIEW', 'F', false)}
-    ${toolBtn('data-act="undo"', 'undo', 'UNDO', MOD + 'Z', false)}
-    ${toolBtn('data-act="redo"', 'redo', 'REDO', '⇧' + MOD + 'Z', false)}
   `;
   tc.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => setTool(b.dataset.tool));
   tc.querySelectorAll('[data-level]').forEach(b => b.onclick = () => switchLevel(b.dataset.level));
@@ -1719,8 +1679,6 @@ function renderToolCol() {
   tc.querySelector('[data-act=upload]').onclick = () => file.click();
   file.onchange = () => { uploadUnderlay(file.files[0]); file.value = ''; };
   tc.querySelector('[data-act=fit]').onclick = fitView;
-  tc.querySelector('[data-act=undo]').onclick = undo;
-  tc.querySelector('[data-act=redo]').onclick = redo;
   const su = tc.querySelector('[data-act=sketchup]');
   su.classList.add('tb-wrap');
   su.title = 'Open this project\'s SketchUp model (the .skp kept beside the project file) in SketchUp. Saves there come back to the plan.';
@@ -1900,6 +1858,7 @@ function renderInspector() {
         <span class="kbd-hint"><kbd>W</kbd> wall</span> <span class="kbd-hint"><kbd>D</kbd> door</span> <span class="kbd-hint"><kbd>N</kbd> window</span> <span class="kbd-hint"><kbd>R</kbd> room</span> <span class="kbd-hint"><kbd>[</kbd> <kbd>]</kbd> level</span></div>`;
     insp.querySelector('[data-prop-name]').onchange = e => { prop.name = e.target.value; touch(); };
     insp.querySelector('[data-lvl-name]').onchange = e => {
+      pushUndo('rename level');
       L.name = e.target.value.trim() || L.name;
       e.target.value = L.name;
       touch(); renderToolCol(); updateLevelBadge();
@@ -1907,12 +1866,12 @@ function renderInspector() {
     insp.querySelector('[data-len=elev]').onchange = e => {
       const v = parseLen(e.target.value);
       // Any finite elevation is fair (a basement sits below zero); the stack re-sorts around it.
-      if (!isNaN(v)) { L.elevation = Math.round(v * 1000) / 1000; sortLevels(prop); touch(); renderToolCol(); }
+      if (!isNaN(v)) { pushUndo('change level elevation'); L.elevation = Math.round(v * 1000) / 1000; sortLevels(prop); touch(); renderToolCol(); }
       renderInspector();
     };
     insp.querySelector('[data-len=lvlHeight]').onchange = e => {
       const v = parseLen(e.target.value);
-      if (!isNaN(v) && v > 0.5) { L.height = v; touch(); }
+      if (!isNaN(v) && v > 0.5) { pushUndo('change level height'); L.height = v; touch(); }
       renderInspector();
     };
     insp.querySelector('[data-del-level]').onclick = () => {
@@ -1965,14 +1924,14 @@ function renderInspector() {
       renderInspector();
     };
     insp.querySelector('[data-len=h]').onchange = e => {
-      if (!e.target.value.trim()) { w.height = null; touch(); renderInspector(); return; }
+      if (!e.target.value.trim()) { pushUndo('change wall height'); w.height = null; touch(); renderInspector(); return; }
       const v = parseLen(e.target.value);
-      if (!isNaN(v) && v > 0.3) { w.height = v; touch(); }
+      if (!isNaN(v) && v > 0.3) { pushUndo('change wall height'); w.height = v; touch(); }
       renderInspector();
     };
-    insp.querySelector('[data-mat]').onchange = e => { w.material = e.target.value || null; touch(); };
+    insp.querySelector('[data-mat]').onchange = e => { pushUndo('change wall material'); w.material = e.target.value || null; touch(); };
     // Room-facing faces in 3D; blank = automatic (drywall on exterior walls, the wall material otherwise).
-    insp.querySelector('[data-matin]').onchange = e => { w.materialIn = e.target.value || null; touch(); };
+    insp.querySelector('[data-matin]').onchange = e => { pushUndo('change interior finish'); w.materialIn = e.target.value || null; touch(); };
     insp.querySelector('[data-del]').onclick = deleteSelection;
     bindAssign(insp);
     return;
@@ -2010,7 +1969,9 @@ function renderInspector() {
     num('w', v => o.width = v);
     num('h', v => o.height = v);
     num('s', v => o.sill = v);
-    insp.querySelector('[data-t]').oninput = e => { o.t = parseFloat(e.target.value); touch(); };
+    let slidingOpening = false;
+    insp.querySelector('[data-t]').oninput = e => { if (!slidingOpening) { pushUndo('move opening'); slidingOpening = true; } o.t = parseFloat(e.target.value); invalidate(); };
+    insp.querySelector('[data-t]').onchange = () => { slidingOpening = false; touch(); };
     insp.querySelector('[data-del]').onclick = deleteSelection;
     return;
   }
@@ -2032,14 +1993,14 @@ function renderInspector() {
       <button class="btn danger" data-del>${icon('trash')}DELETE ROOM</button>`;
     const snapBtn = insp.querySelector('[data-snap-floor]');
     if (snapBtn) snapBtn.onclick = () => {
-      const before = snapshot();
+      pushUndo('snap floor corners');
       const moved = snapFloorToWalls(r, curWalls());
-      if (moved) { hist.undo.push(before); if (hist.undo.length > 80) hist.undo.shift(); hist.redo.length = 0; touch(); }
+      if (moved) touch(); else cancelGeometryEdit(prop);
       renderInspector(); invalidate();
       if (!moved) setHint('No loose corner is within 30 cm of a wall. Drag it onto one instead.');
     };
-    insp.querySelector('[data-name]').onchange = e => { r.name = e.target.value; touch(); };
-    insp.querySelector('[data-mat]').onchange = e => { r.material = e.target.value || null; touch(); };
+    insp.querySelector('[data-name]').onchange = e => { pushUndo('rename room'); r.name = e.target.value; touch(); };
+    insp.querySelector('[data-mat]').onchange = e => { pushUndo('change floor material'); r.material = e.target.value || null; touch(); };
     insp.querySelector('[data-del]').onclick = deleteSelection;
     bindAssign(insp);
     return;
@@ -2093,7 +2054,6 @@ export function mount(root) {
   badgeEl = root.querySelector('.canvas-badge');
   levelEl = root.querySelector('.canvas-level');
   hatchCache.clear(); textWidthCache.clear(); vignetteKey = '';
-  hist = historyFor(prop);
   dirty = true;
 
   vs = viewByProp[levelKey()];
@@ -2137,6 +2097,6 @@ export function unmount() {
   window.removeEventListener('resize', invalidate);
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
   if (offChange) { offChange(); offChange = null; }
-  drawing = null; roomDraft = null; drag = null; hover = null; hoverPt = null; hist = null; facesCache = null;
+  drawing = null; roomDraft = null; drag = null; hover = null; hoverPt = null; facesCache = null;
   el = null; canvas = null; ctx = null; wrapEl = null; inspEl = null; hintEl = null; badgeEl = null; levelEl = null;
 }
