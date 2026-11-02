@@ -27,11 +27,12 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 import {
   ws, activeProperty, defaultEnv, uid, touch, fmtLen, parseLen, fmtArea, polyArea,
-  escapeHtml, deleteFile, getFile, itemById, materialById, isoToday, projectLabel,
+  escapeHtml, deleteFile, getFile, itemById, materialById, isoToday, projectLabel, propertyProjects,
   ensureLevels, wallsOn, roomsOn, wallHeightOf, levelOfWall, levelOfRoom, levelHeight, topOfLevels,
 } from './store.js';
 import { placeScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import { chooseScanPlacement } from './scanplace.js';
+import { proposeFixtures, openFixtureReview, fixtureInspectorHtml, bindFixtureInspector, addFixtureHtml, addFixture } from './fixtures-ui.js';
 import { openNewPropertyDialog } from './newproperty.js';
 import { materialSelectHtml } from './materials.js';
 import { pendingTextureJobs, setTextureQuality } from './textures.js';
@@ -1921,12 +1922,39 @@ async function proposePlanFromScan(s) {
     rebuildModel(); rebuildGround(); buildAllPins();
     presetView('frame');
     renderToolCol(); renderInspector();
-    toast('Proposed: ' + proposalSummary(result, applied) + '.', applied && !result.review?.required ? 'ok' : 'warn', 6000);
+    // The rooms are drawn; what stands in them is the next, optional step (never a modal
+    // in the way of the plan the person is about to check).
+    toast('Proposed: ' + proposalSummary(result, applied) + '.' + (applied && obj ? ' Next, optional: PROPOSE FIXTURES FROM SCAN in this scan\'s inspector.' : ''), applied && !result.review?.required ? 'ok' : 'warn', 8000);
   } catch (e) {
     console.error(e);
     if (token === mountId) toast('Could not propose a plan: ' + errMsg(e), 'error', 6000);
   } finally {
     planning = false;
+    if (token === mountId) showProgress(null);
+  }
+}
+
+// Counter runs, cabinets, appliances and furniture read from a mesh scan already in the
+// scene, reviewed one by one before any is added.
+let readingFixtures = false;
+async function proposeFixturesFromScan(s) {
+  const obj = scanObjs[s.id];
+  if (readingFixtures || !obj) return;
+  const token = mountId;
+  readingFixtures = true;
+  try {
+    const proposals = await proposeFixtures(prop, s, hooks, obj);
+    if (token !== mountId) return;
+    showProgress(null);
+    const added = await openFixtureReview(prop, proposals, { scanName: s.name });
+    if (token !== mountId) return;
+    rebuildModel(); renderInspector();
+    if (added.length) toast('Added ' + added.length + ' fixture' + (added.length === 1 ? '' : 's') + ' from ' + s.name + '. Click one to edit it.', 'ok', 5000);
+  } catch (e) {
+    console.error(e);
+    if (token === mountId) toast('Could not read fixtures: ' + errMsg(e), 'error', 6000);
+  } finally {
+    readingFixtures = false;
     if (token === mountId) showProgress(null);
   }
 }
@@ -2153,8 +2181,8 @@ export function mountEnvironmentSettings(host) {
 function finiteNum(v, fallback) { const n = Number(v); return Number.isFinite(n) ? n : fallback; }
 function scopeAssignHtml(elementId) {
   let current = '';
-  for (const pr of ws.data.projects) for (const it of pr.items) if ((it.elementIds || []).includes(elementId)) current = it.id;
-  const groups = ws.data.projects.map(pr => {
+  for (const pr of propertyProjects()) for (const it of pr.items) if ((it.elementIds || []).includes(elementId)) current = it.id;
+  const groups = propertyProjects().map(pr => {
     const opts = pr.items.map(it => `<option value="${escapeHtml(it.id)}" ${it.id === current ? 'selected' : ''}>${escapeHtml(it.name)}</option>`).join('');
     return opts ? `<optgroup label="${escapeHtml(projectLabel(pr))}">${opts}</optgroup>` : '';
   }).join('');
@@ -2163,7 +2191,7 @@ function scopeAssignHtml(elementId) {
 }
 function linkedProductsHtml(elementId) {
   const linked = [];
-  for (const pr of ws.data.projects) for (const it of pr.items) {
+  for (const pr of propertyProjects()) for (const it of pr.items) {
     if ((it.elementIds || []).includes(elementId)) {
       for (const prod of ws.data.products) if ((prod.itemIds || []).includes(it.id)) linked.push(prod);
     }
@@ -2323,15 +2351,31 @@ function renderInspector() {
       <div class="stat-line"><span>Walls</span><b>${prop.walls.length}</b></div>
       <div class="stat-line"><span>Openings</span><b>${prop.openings.length}</b></div>
       <div class="stat-line"><span>Rooms</span><b>${prop.rooms.length}</b></div>
+      <div class="stat-line"><span>Fixtures</span><b>${(prop.fixtures || []).length}</b></div>
       <div class="stat-line"><span>Scans</span><b>${prop.scans.length}</b></div>
       <div class="stat-line"><span>Photos</span><b>${prop.photos.length}</b></div>
       <div class="stat-line"><span>Notes</span><b>${prop.notePins.length}</b></div>
       <div class="empty" style="margin-top:12px">
         Click a wall, door, window or floor to inspect and edit it. The model regenerates from the plan; edits here write back to the same data. Right-click anywhere on the model to pin a note.</div>
+      ${addFixtureHtml()}
       ${pinsListHtml()}
       ${notesListHtml()}`;
     bindPinsList(inspEl);
     bindNotesList(inspEl);
+    inspEl.querySelector('[data-fx-add]').onclick = () => {
+      const [kind, subtype] = inspEl.querySelector('[data-fx-kind]').value.split(':');
+      const t = controls.target, lvl = levelAtHeight(t.y);
+      const f = addFixture(prop, kind, subtype, { level: lvl.id, x: Math.round(t.x * 100) / 100, y: Math.round(t.z * 100) / 100 });
+      rebuildModel();
+      setSelection({ kind: 'fixture', id: f.id });
+    };
+    return;
+  }
+  if (selection.kind === 'fixture') {
+    const f = (prop.fixtures || []).find(x => x.id === selection.id);
+    if (!f) { selection = null; return renderInspector(); }
+    inspEl.innerHTML = fixtureInspectorHtml(prop, f);
+    bindFixtureInspector(inspEl, prop, f, { changed: () => { rebuildModel(); renderInspector(); }, deleted: () => { setSelection(null); rebuildModel(); } });
     return;
   }
   if (selection.kind === 'wall') {
@@ -2523,7 +2567,8 @@ function renderInspector() {
       <button class="btn" data-frame ${dis}>FRAME SCAN</button>
       <button class="btn" data-floor ${dis}>DROP TO FLOOR</button>
       <button class="btn" data-center ${dis}>CENTER ON MODEL</button>
-      ${s.kind === 'mesh' ? `<button class="btn" data-plan ${dis} title="Find the floor and ceiling, square the scan up, propose walls, rooms, doors and windows, and render the plan underlay from the scan">${icon('plan')}PROPOSE PLAN FROM SCAN</button>` : ''}
+      ${s.kind === 'mesh' ? `<button class="btn" data-plan ${dis} title="Find the floor and ceiling, square the scan up, propose walls, rooms, doors and windows, and render the plan underlay from the scan">${icon('plan')}PROPOSE PLAN FROM SCAN</button>
+      <button class="btn" data-fixtures ${dis} title="Read counter runs, wall cabinets, tall appliances and furniture from the scan, for review">${icon('scan')}PROPOSE FIXTURES FROM SCAN</button>` : ''}
       ${s.source && s.source.url ? `<a class="btn" href="${escapeHtml(s.source.url)}" target="_blank" rel="noopener" style="display:flex; text-decoration:none; justify-content:center">${icon('link')}OPEN ON POLYCAM</a>` : ''}
       ${s.importWarnings?.length ? `<p class="empty">${s.importWarnings.map(escapeHtml).join('<br>')}</p>` : ''}
       ${s.kind === 'mesh' ? `<button class="btn" data-exchange ${dis}>EDIT / BRING BACK</button>
@@ -2561,6 +2606,8 @@ function renderInspector() {
     inspEl.querySelector('[data-center]').onclick = () => { if (obj) { centerScanOnModel(s, obj, modelBounds(prop)); upd(); renderInspector(); } };
     const planBtn = inspEl.querySelector('[data-plan]');
     if (planBtn) planBtn.onclick = () => proposePlanFromScan(s);
+    const fxBtn = inspEl.querySelector('[data-fixtures]');
+    if (fxBtn) fxBtn.onclick = () => proposeFixturesFromScan(s);
     inspEl.querySelector('[data-del]').onclick = async () => {
       if (scanState[s.id] === 'loading' && !obj) return;
       prop.scans = prop.scans.filter(x => x.id !== s.id);

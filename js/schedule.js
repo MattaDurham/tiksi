@@ -2,7 +2,7 @@
 // rendered as an SVG Gantt. Forward/backward pass, slack, dependency arrows.
 
 import {
-  ws, touch, escapeHtml, fmtDate, addDays, dayDiff, isoToday, projectLabel,
+  ws, touch, escapeHtml, fmtDate, addDays, dayDiff, isoToday, projectLabel, propertyProjects,
 } from './store.js';
 import { icon } from './icons.js';
 
@@ -61,7 +61,8 @@ function render() {
   if (!el) return;
   const d = ws.data;
   const start = d.settings.programStart || isoToday();
-  const projects = d.projects.filter(p => p.selected && p.items.some(i => (i.durationDays || 0) > 0));
+  const mine = propertyProjects();
+  const projects = mine.filter(p => p.selected && p.items.some(i => (i.durationDays || 0) > 0));
 
   // Compute per-project schedules and program span.
   const plans = projects.map(p => {
@@ -92,7 +93,7 @@ function render() {
         <div class="kpi">
           <div class="k-label">Projects scheduled</div>
           <div class="k-value">${plans.length}</div>
-          <div class="k-sub">of ${d.projects.filter(p => p.selected).length} selected</div>
+          <div class="k-sub">of ${mine.filter(p => p.selected).length} selected</div>
         </div>
         <div class="kpi">
           <div class="k-label">Critical items</div>

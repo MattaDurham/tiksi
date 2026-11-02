@@ -536,7 +536,7 @@ async function mirrorProperty(prop, folder) {
   const entry = state.folderMap[prop.id];
   if (!entry) return false;
   try {
-    const { changed } = await syncMirror(folder, prop, entry, writeHandle);
+    const { changed } = await syncMirror(folder, prop, entry, writeHandle, ws.data.materials);
     state.mirror.errors.delete(prop.id);
     if (changed) touch();
     return changed;
@@ -627,6 +627,7 @@ export function mirrorStatus(propId) {
     text += '.';
     if (r.untagged && (r.untagged.faces || r.untagged.groups || r.untagged.instances)) text += ' Geometry drawn outside Tiksi groups stays in SketchUp only.';
   }
+  if (ms.warnings && ms.warnings.length) text += ' Default colours in SketchUp: ' + ms.warnings.join('; ') + '.';
   return text;
 }
 

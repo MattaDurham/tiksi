@@ -1035,3 +1035,12 @@ kbd {
 .src-card [data-floor-review] summary { cursor: pointer; color: var(--accent); }
 .src-card [data-floor-review] table { display: block; max-width: 100%; overflow-x: auto; font: 10px var(--mono); border-collapse: collapse; }
 .src-card [data-floor-review] th, .src-card [data-floor-review] td { padding: 5px; text-align: left; border-bottom: 1px solid var(--line-2); }
+
+/* Fixture proposals from a scan (fixtures-ui.js) */
+.fx-review .fx-list { list-style: none; margin: 0 0 12px; padding: 0; border-top: 1px solid var(--line); }
+.fx-review .fx-list li { border-bottom: 1px solid var(--line); }
+.fx-review .fx-list label { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px; margin: 0; padding: 10px 0; cursor: pointer; }
+.fx-review .fx-list span { font-size: 13px; line-height: 1.45; color: var(--ink); overflow-wrap: anywhere; }
+.fx-review .fx-list small { display: block; color: var(--dim); font-size: 11.5px; }
+.fx-review .fx-list em { font: 11px var(--mono); font-style: normal; color: var(--accent); }
+.fx-review .fx-list input { margin-top: 3px; }

@@ -7,7 +7,7 @@ import { floorReviewText } from './scan-surfaces.js';
 
 import {
   ws, activeProperty, uid, touch, onChange, fmtLen, parseLen, fmtArea, polyArea,
-  escapeHtml, itemById, getFile, projectLabel,
+  escapeHtml, itemById, getFile, projectLabel, propertyProjects,
   ensureLevels, activeLevel, setActiveLevel, sortLevels, wallsOn, roomsOn, openingsOn,
   addLevel, deleteLevel, levelHeight, wallHeightOf, levelOfWall, fmtDate, isoToday,
 } from './store.js';
@@ -21,6 +21,8 @@ import {
   floorCornerAttached, floorCornersOf, snapFloorToWalls,
 } from './wallmove.js';
 import { wallFaces, roomFromWalls, sameFloor } from './roomfill.js';
+import { fixturesOn, fixtureOutline } from './fixtures.js';
+import { proposeFixtures, openFixtureReview } from './fixtures-ui.js';
 
 const PRESETS = {
   interior: { thickness: 0.114, material: 'mat-drywall' },   // 4.5 in stud wall
@@ -592,6 +594,7 @@ function paint(w, h, exporting) {
   drawGrid(w, h);
   drawUnderlay();
   drawRooms();
+  drawFixtures();
   drawWalls();
   for (const o of curOpenings()) drawOpening(o);
   drawRoomLabels();
@@ -723,6 +726,23 @@ function drawRooms() {
     ctx.lineWidth = sel ? 1.6 : 1;
     ctx.strokeStyle = sel ? C.accent : hov ? C.hover : hexA(col, 0.45);
     ctx.setLineDash(sel ? [] : [5, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+// Fixtures (fixtures.js) as plan outlines: wall cabinets dashed, as drawn above the cut.
+function drawFixtures() {
+  for (const f of fixturesOn(prop, lvl().id)) {
+    const ring = fixtureOutline(f);
+    if (ring.length < 3) continue;
+    tracePoly(ring.map(w2s));
+    const upper = f.kind === 'wall-run';
+    ctx.fillStyle = upper ? 'rgba(0,0,0,0)' : 'rgba(217,180,124,0.10)';
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = upper ? 'rgba(217,180,124,0.55)' : 'rgba(217,180,124,0.8)';
+    ctx.setLineDash(upper ? [4, 3] : []);
     ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -1896,8 +1916,8 @@ function renderToolCol() {
 function scopeAssignHtml(elementId) {
   // Which scope item currently references this element?
   let current = '';
-  for (const pr of ws.data.projects) for (const it of pr.items) if ((it.elementIds || []).includes(elementId)) current = it.id;
-  const groups = ws.data.projects.map(pr => {
+  for (const pr of propertyProjects()) for (const it of pr.items) if ((it.elementIds || []).includes(elementId)) current = it.id;
+  const groups = propertyProjects().map(pr => {
     const opts = pr.items.map(it => `<option value="${it.id}" ${it.id === current ? 'selected' : ''}>${escapeHtml(it.name)}</option>`).join('');
     return opts ? `<optgroup label="${escapeHtml(projectLabel(pr))}">${opts}</optgroup>` : '';
   }).join('');
@@ -1939,7 +1959,8 @@ function sourceCardHtml() {
   return `<div class="src-card">
     <span class="np-kicker">${label}</span>
     ${src && src.url ? `<a href="${escapeHtml(src.url)}" target="_blank" rel="noopener" title="${escapeHtml(src.url)}">${escapeHtml(src.title || src.url.replace(/^https?:\/\//, ''))}</a>` : ''}
-    ${scan ? `<button class="btn" data-src-plan title="Square the scan up and propose walls, rooms, doors, windows and the underlay again">${icon('scan')}PROPOSE PLAN FROM SCAN</button>` : ''}
+    ${scan ? `<button class="btn" data-src-plan title="Square the scan up and propose walls, rooms, doors, windows and the underlay again">${icon('scan')}PROPOSE PLAN FROM SCAN</button>
+    <button class="btn" data-src-fixtures title="Read counter runs, wall cabinets, tall appliances and furniture from the scan, for review">${icon('scan')}PROPOSE FIXTURES FROM SCAN</button>` : ''}
     <div class="empty">Add captures in FILE → Import.</div>
     ${scan?.floorDetection ? `<details data-floor-review><summary>${escapeHtml(floorReviewText(scan.floorDetection))}</summary>
       <p>Horizontal evidence is retained separately from editable levels. Bounds use plan metres; elevations use the project datum.</p>
@@ -1986,6 +2007,20 @@ function bindSourceCard(insp) {
       }
       afterPlan(result, applied);
     } catch (e) { console.error(e); say('Could not propose a plan: ' + String(e && e.message || e), false); }
+    finally { sourceBusy = false; }
+  };
+  const fxBtn = insp.querySelector('[data-src-fixtures]');
+  if (fxBtn) fxBtn.onclick = async () => {
+    if (sourceBusy) return;
+    const scan = meshScan();
+    if (!scan) return;
+    sourceBusy = true;
+    try {
+      const added = await openFixtureReview(prop, await proposeFixtures(prop, scan, viewHooks), { scanName: scan.name });
+      invalidate(); renderInspector();
+      const st = inspEl && inspEl.querySelector('[data-src-status]');
+      if (st) st.textContent = added.length ? 'Added ' + added.length + ' fixture' + (added.length === 1 ? '' : 's') + '; edit them in MODEL.' : 'No fixtures added.';
+    } catch (e) { console.error(e); say('Could not read fixtures: ' + String(e && e.message || e), false); }
     finally { sourceBusy = false; }
   };
 

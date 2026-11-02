@@ -109,6 +109,35 @@ try {
   d = await data();
   check(d.map(p => p.name).sort().join() === 'Door does not latch,Kitchen', 'only Kitchen and its subproject remain (' + d.map(p => p.name).join() + ')');
 
+  console.log('\n[property] PROJECTS, BUDGET and SCHEDULE follow the PROPERTY picker');
+  const second = await page.evaluate(async () => {
+    const s = await import('/js/store.js');
+    // Kitchen stays on Test House and gets schedulable work, so leaving it out of SCHEDULE means something.
+    s.projectById('proj-other').items.push({ id: 'it-cab', name: 'Cabinets', qty: 1, unit: 'ls', low: 0, likely: 0, high: 0, durationDays: 2, deps: [], elementIds: [], notes: '' });
+    const q = s.propertyTemplate('Lake Cabin');
+    s.ws.data.properties.push(q);
+    s.ws.data.projects.push({ id: 'proj-cabin', name: 'Cabin porch', propertyId: q.id, category: 'exterior', status: 'idea', selected: true, startDate: '', notes: '',
+      items: [{ id: 'it-porch', name: 'Porch boards', qty: 1, unit: 'ls', low: 900, likely: 1000, high: 1100, durationDays: 3, deps: [], elementIds: [], notes: '' }] });
+    s.touch();
+    return q.id;
+  });
+  await page.goto(url + '/#/projects');
+  await page.waitForSelector('#proj-list .proj-card');
+  const cards = () => page.locator('#proj-list .proj-card b').allTextContents();
+  check((await cards()).join() === 'Kitchen', 'Test House lists only its own project (' + (await cards()).join() + ')');
+  await page.selectOption('#property-select', second);
+  await page.waitForSelector('#proj-list .proj-card[data-id="proj-cabin"]');
+  check((await cards()).join() === 'Cabin porch', 'Lake Cabin lists only its own project (' + (await cards()).join() + ')');
+  await page.goto(url + '/#/budget');
+  await page.waitForSelector('.view-title');
+  const budget = await page.textContent('body');
+  check(budget.includes('Cabin porch') && !budget.includes('Kitchen'), 'BUDGET shows the Lake Cabin project only');
+  await page.goto(url + '/#/schedule');
+  await page.waitForSelector('.view-title');
+  const gantt = (await page.textContent('#gantt')).toLowerCase();   // the chart draws names in capitals
+  check(gantt.includes('cabin porch') && !gantt.includes('kitchen'), 'SCHEDULE shows the Lake Cabin project only');
+  check((await data()).length === 3, 'switching property keeps every project in the workspace');
+
   check(errors.length === 0, 'no page errors (' + errors.join('; ') + ')');
   console.log('\nsubprojects e2e passed');
 } finally {

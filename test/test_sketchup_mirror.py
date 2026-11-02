@@ -1,5 +1,6 @@
 """SketchUp mirror: wall elevation loops always; real SKP write/edit/read with the SDK."""
 import ctypes as C
+import copy
 import json
 import math
 from pathlib import Path
@@ -32,6 +33,29 @@ SPEC = {
     'rooms': [{'id': 'r-1', 'level': 'lvl-0', 'name': 'Studio', 'elevation': 0, 'pts': [[0, 0], [4, 0], [4, 3], [0, 3]]}],
     'underlays': [],
 }
+
+# The same room with finishes, as mirrorSpec resolves them: sage inside the south wall,
+# brick outside, drywall elsewhere, an oak floor, trim doors and glass windows.
+SAGE = {'id': 'mat-sage', 'name': 'Sage paint', 'color': '#8fa58a'}
+BRICK = {'id': 'mat-brick', 'name': 'Brick, red', 'color': '#9c4a3a'}
+DRYWALL = {'id': 'mat-drywall', 'name': 'Drywall, painted', 'color': '#d8d4cc'}
+OAK = {'id': 'mat-oak', 'name': 'White oak flooring', 'color': '#c9a06a'}
+TRIM = {'id': 'mat-trim', 'name': 'Trim, painted semi-gloss', 'color': '#f4f2ec'}
+GLASS = {'id': 'mat-glass', 'name': 'Glass, clear', 'color': '#d2e7ee'}
+
+
+def finished(sage=SAGE):
+    spec = copy.deepcopy(SPEC)
+    for w in spec['walls']:
+        w['materials'] = {'pos': dict(sage if w['id'] == 'w-s' else DRYWALL), 'neg': dict(BRICK), 'other': dict(BRICK)}
+        for h in w['holes']:
+            h['material'] = dict(GLASS if h['type'] == 'window' else TRIM)
+    spec['rooms'][0]['material'] = dict(OAK)
+    return spec
+
+
+def rgb(hex_color):
+    return tuple(int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
 
 
 class WallLoopTests(unittest.TestCase):
@@ -124,7 +148,7 @@ class NativeMirrorTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('node'), 'Node not installed')
     def test_browser_spec_and_merge_agree_with_native_files(self):
-        """Tiksi's own spec through real SKP files: no false changes, and a SketchUp move lands."""
+        """Tiksi's own spec through real SKP files: finishes painted, no false changes, and a SketchUp move lands."""
         repo = Path(__file__).resolve().parent.parent
         script = """
 globalThis.indexedDB = { open() { throw new Error('none'); } };
@@ -138,8 +162,10 @@ p.openings.push({ id: 'o-d', wallId: 'w-s', type: 'door', t: 0.2, width: 0.914, 
   { id: 'o-w', wallId: 'w-e', type: 'window', t: 0.5, width: 1.2, height: 1.2, sill: 0.8 },
   { id: 'o-edge', wallId: 'w-n', type: 'door', t: 0.01, width: 0.9, height: 2.0 });
 p.rooms.push({ id: 'r-1', level: L, name: 'Living', pts: [[0, 0], [5, 0], [5, 3.5], [0, 3.5]], material: 'mat-oak', ceilingMaterial: null });
+const mats = [{ id: 'mat-drywall', name: 'Drywall, painted', color: '#d8d4cc' }, { id: 'mat-oak', name: 'White oak flooring', color: '#c9a06a' },
+  { id: 'mat-trim', name: 'Trim, painted semi-gloss', color: '#f4f2ec' }, { id: 'mat-glass', name: 'Glass, clear', color: '#d2e7ee' }];
 const [op, a, b] = process.argv.slice(2);
-if (op === 'spec') fs.writeFileSync(a, JSON.stringify(m.mirrorSpec(p)));
+if (op === 'spec') fs.writeFileSync(a, JSON.stringify(m.mirrorSpec(p, mats)));
 else {
   const r = m.mergeMirror(p, JSON.parse(fs.readFileSync(a, 'utf8')), m.syncedState(p));
   const e = p.walls.find(w => w.id === 'w-e');
@@ -153,6 +179,8 @@ else {
         job = self.root / 'contract'; job.mkdir()
         node('spec', str(job / 'mirror.json'))
         self.run_worker('write', job)
+        floor, = [f for f in painted_faces(job / 'model.skp') if f['id'] == 'r-1']
+        self.assertEqual(floor['seen from'](0, 0, 1), ('Tiksi: White oak flooring', rgb('#c9a06a')))
         unedited = self.root / 'unedited.json'
         (unedited).write_text(json.dumps(self.read(job / 'model.skp')))
         self.assertEqual(json.loads(node('merge', str(unedited))), {'applied': [], 'added': [], 'deleted': [], 'conflicts': 0, 'east': [5, 5]})
@@ -161,6 +189,149 @@ else {
         edited = self.root / 'edited.json'
         edited.write_text(json.dumps(self.read(moved)))
         self.assertEqual(json.loads(node('merge', str(edited))), {'applied': ['w-e'], 'added': [], 'deleted': [], 'conflicts': 0, 'east': [5.5, 5.5]})
+
+    def test_written_faces_wear_their_finishes(self):
+        faces = painted_faces(self.write(finished()))
+        south = [f for f in faces if f['id'] == 'w-s']
+        sage, = [f for f in south if 'Tiksi: Sage paint' in (f['front'][0], f['back'][0])]
+        self.assertAlmostEqual(sage['plan'][1], 0.05, places=3, msg='the pos face is the one inside the room')
+        self.assertEqual(sage['seen from'](0, 1), ('Tiksi: Sage paint', rgb(SAGE['color'])), 'painted on the side that faces the room')
+        brick, = [f for f in south if abs(f['plan'][1] + 0.05) < 1e-3]
+        self.assertEqual(brick['seen from'](0, -1), ('Tiksi: Brick, red', rgb(BRICK['color'])))
+        ends = [f for f in south if abs(abs(f['plan'][1]) - 0.05) > 1e-3]
+        self.assertTrue(ends and all(f['front'][0] == f['back'][0] == 'Tiksi: Brick, red' for f in ends), 'ends, top and reveals')
+        north_inside, = [f for f in faces if f['id'] == 'w-n' and abs(f['plan'][1] - 2.95) < 1e-3]
+        self.assertEqual(north_inside['seen from'](0, -1)[0], 'Tiksi: Drywall, painted')
+        floor, = [f for f in faces if f['id'] == 'r-1']
+        self.assertEqual(floor['seen from'](0, 0, 1), ('Tiksi: White oak flooring', rgb(OAK['color'])), 'the floor seen from above')
+        door, = [f for f in faces if f['id'] == 'o-door']
+        window, = [f for f in faces if f['id'] == 'o-win']
+        self.assertEqual((door['front'][0], door['back'][0]), ('Tiksi: Trim, painted semi-gloss',) * 2)
+        self.assertEqual((window['front'], window['back']), (('Tiksi: Glass, clear', rgb(GLASS['color'])),) * 2)
+        self.assertEqual(sorted(model_materials(self.root / 'write-0' / 'model.skp')),
+                         sorted('Tiksi: ' + m['name'] for m in (SAGE, BRICK, DRYWALL, OAK, TRIM, GLASS)))
+
+    def test_rewrite_repaints_by_name_and_keeps_sketchup_work(self):
+        skp = self.write(finished())
+        edited = self.root / 'painted.skp'
+        draw_painted_face(skp, edited, 'Sage paint', (10, 20, 30))      # the user's own material, same name minus the prefix
+        again = self.write(finished(dict(SAGE, color='#334455')), existing=edited)
+        mats = model_materials(again)
+        self.assertEqual(len(mats), 7, 'six Tiksi materials reused by name, plus the user\'s own')
+        self.assertEqual(mats['Tiksi: Sage paint'], (0x33, 0x44, 0x55), 'the new Tiksi colour')
+        self.assertEqual(mats['Sage paint'], (10, 20, 30), 'a material Tiksi does not own is untouched')
+        faces = painted_faces(again)
+        sage, = [f for f in faces if f['id'] == 'w-s' and abs(f['plan'][1] - 0.05) < 1e-3]
+        self.assertEqual(sage['seen from'](0, 1), ('Tiksi: Sage paint', (0x33, 0x44, 0x55)))
+        loose, = [f for f in faces if f['id'] is None]
+        self.assertEqual(loose['front'], ('Sage paint', (10, 20, 30)), 'geometry drawn in SketchUp survives with its paint')
+        self.assertEqual(len(model_materials(self.write(finished(dict(SAGE, color='#334455')), existing=again))), 7, 'repeat writes add nothing')
+        # A Tiksi material someone gave a texture in SketchUp keeps it, untinted, through a rewrite.
+        textured = self.root / 'textured.skp'
+        add_texture(again, textured, 'Tiksi: White oak flooring', self.root / 'grain.png')
+        kept = self.write(finished(), existing=textured)
+        self.assertEqual(material_type(kept, 'Tiksi: White oak flooring'), 1, 'still SUMaterialType_Textured, not colorized')
+        self.assertEqual(model_materials(kept)['Tiksi: Sage paint'], rgb(SAGE['color']), 'colour-only materials follow Tiksi')
+        got = self.read(again)
+        self.assertEqual(sorted(w['id'] for w in got['walls']), ['w-e', 'w-n', 'w-s', 'w-w'])
+        self.assertEqual(got['untagged']['faces'], 1)
+
+    def test_bad_or_missing_finishes_still_write(self):
+        spec = finished()
+        spec['rooms'][0]['material'] = {'id': 'mat-oak', 'name': 'White oak flooring', 'color': 'oak'}
+        del spec['walls'][1]['materials']
+        job = self.root / 'bad'; job.mkdir()
+        (job / 'mirror.json').write_text(json.dumps(spec))
+        result = self.run_worker('write', job)
+        self.assertEqual(result['warnings'], ["Tiksi: White oak flooring has no usable colour (oak); left at the SketchUp default"])
+        faces = painted_faces(job / 'model.skp')
+        floor, = [f for f in faces if f['id'] == 'r-1']
+        self.assertEqual(floor['seen from'](0, 0, 1)[0], 'Tiksi: White oak flooring')
+        self.assertTrue(all(f['front'][0] is None and f['back'][0] is None for f in faces if f['id'] == 'w-e'), 'a wall without finishes is left unpainted')
+        self.assertEqual(model_materials(self.write(SPEC)), {}, 'a spec from before finishes paints nothing')
+
+    def test_fixtures_are_groups_that_read_back_moved_turned_and_deleted(self):
+        spec = with_fixtures()
+        skp = self.write(spec)
+        got = self.read(skp)
+        self.assertEqual(sorted(f['id'] for f in got['fixtures']), ['fx-bed', 'fx-counter'])
+        for f in got['fixtures']:
+            for k, v in f['base'].items():
+                if k in ('elevation', 'kind', 'subtype', 'shape'):
+                    continue
+                if k == 'pts':
+                    for a, b in zip(f['now'][k], v):
+                        self.assertAlmostEqual(a[0], b[0], places=4); self.assertAlmostEqual(a[1], b[1], places=4)
+                else:
+                    self.assertAlmostEqual(f['now'][k], v, places=4, msg=f['id'] + ' ' + k)
+        faces = painted_faces(skp)
+        top = [f for f in faces if f['id'] == 'fx-counter' and abs(f['plan'][2] - 0.91) < 1e-3]
+        self.assertTrue(top and all(f['front'][0] == 'Tiksi: Quartz countertop' for f in top), 'the counter top wears its finish')
+        self.assertTrue(any(f['front'][0] == 'Tiksi: Default toe kick' for f in faces if f['id'] == 'fx-counter'))
+        # In SketchUp: turn the bed 90 degrees about its centre and widen it, raise the counter
+        # run 0.1 m and move it 0.2 m east, delete nothing yet, draw a loose face.
+        edited = self.root / 'fx-edited.skp'
+        edit_fixtures(skp, edited)
+        again = {f['id']: f['now'] for f in self.read(edited)['fixtures']}
+        self.assertAlmostEqual(again['fx-bed']['rot'], 90, places=3)
+        self.assertAlmostEqual(again['fx-bed']['x'], 2.0, places=4); self.assertAlmostEqual(again['fx-bed']['y'], 1.5, places=4)
+        self.assertAlmostEqual(again['fx-bed']['w'], 2.4, places=4)
+        self.assertAlmostEqual(again['fx-counter']['pts'][0][0], 0.2, places=4)
+        self.assertAlmostEqual(again['fx-counter']['pts'][1][0], 3.2, places=4)
+        self.assertAlmostEqual(again['fx-counter']['y0'], 0.1, places=4)
+        self.assertAlmostEqual(again['fx-counter']['depth'], 0.6, places=4)
+        # Tiksi rewrites: its groups are replaced, the loose face stays; then deleting the
+        # bed group in SketchUp reads back without it.
+        rewritten = self.write(spec, existing=edited)
+        self.assertEqual(self.read(rewritten)['untagged']['faces'], 1, 'geometry drawn in SketchUp survives a rewrite')
+        deleted = self.root / 'fx-deleted.skp'
+        erase_group(rewritten, deleted, 'fx-bed')
+        after = self.read(deleted)
+        self.assertEqual([f['id'] for f in after['fixtures']], ['fx-counter'])
+        self.assertEqual(after['untagged']['faces'], 1)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node not installed')
+    def test_browser_fixture_spec_and_merge_agree_with_native_files(self):
+        """Tiksi's fixtures through real SKP files: no false changes, a SketchUp move lands, a delete removes."""
+        repo = Path(__file__).resolve().parent.parent
+        script = """
+globalThis.indexedDB = { open() { throw new Error('none'); } };
+const store = await import(process.argv[1] + '/js/store.js');
+const m = await import(process.argv[1] + '/js/sketchup-mirror.js');
+const fx = await import(process.argv[1] + '/js/fixtures.js');
+const fs = await import('node:fs');
+const p = store.propertyTemplate('Fixtures'); p.id = 'prop-fx'; const L = p.levels[0].id;
+const wall = (id, ax, ay, bx, by) => ({ id, level: L, ax, ay, bx, by, thickness: 0.1, height: null, material: 'mat-drywall' });
+p.walls.push(wall('w-s', 0, 0, 5, 0), wall('w-w', 0, 0, 0, 4));
+p.fixtures.push(Object.assign(fx.fixtureTemplate('base-run', null, { level: L }), { id: 'fx-run', pts: [[3, 0.05], [0.05, 0.05], [0.05, 2.5]], side: -1, corners: [null, 1.1, null] }));
+p.fixtures.push(Object.assign(fx.fixtureTemplate('furniture', 'sofa', { level: L, x: 2.5, y: 3.0, rot: 30 }), { id: 'fx-sofa' }));
+p.fixtures.push(Object.assign(fx.fixtureTemplate('appliance', 'fridge', { level: L, x: 3.5, y: 0.45 }), { id: 'fx-fridge' }));
+const mats = [{ id: 'mat-quartz', name: 'Quartz countertop', color: '#ede9e1' }, { id: 'mat-trim', name: 'Trim, painted semi-gloss', color: '#f4f2ec' }, { id: 'mat-stainless', name: 'Stainless steel', color: '#c9cbcd' }];
+const [op, a] = process.argv.slice(2);
+if (op === 'spec') fs.writeFileSync(a, JSON.stringify(m.mirrorSpec(p, mats)));
+else {
+  const r = m.mergeMirror(p, JSON.parse(fs.readFileSync(a, 'utf8')), m.syncedState(p));
+  const sofa = p.fixtures.find(f => f.id === 'fx-sofa');
+  console.log(JSON.stringify({ applied: r.applied, added: r.added, deleted: r.deleted, conflicts: r.conflicts.length, sofa: sofa && [sofa.x, sofa.y, sofa.rot], ids: p.fixtures.map(f => f.id).sort() }));
+}
+"""
+        def node(*args):
+            r = subprocess.run(['node', '--input-type=module', '-e', script, str(repo), *args], capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else None
+        job = self.root / 'fx-contract'; job.mkdir()
+        node('spec', str(job / 'mirror.json'))
+        self.run_worker('write', job)
+        unedited = self.root / 'fx-unedited.json'
+        unedited.write_text(json.dumps(self.read(job / 'model.skp')))
+        self.assertEqual(node('merge', str(unedited)), {'applied': [], 'added': [], 'deleted': [], 'conflicts': 0, 'sofa': [2.5, 3.0, 30], 'ids': ['fx-fridge', 'fx-run', 'fx-sofa']})
+        moved = self.root / 'fx-moved.skp'
+        move_group(job / 'model.skp', moved, 'fx-sofa', 0.5)
+        erased = self.root / 'fx-erased.skp'
+        erase_group(moved, erased, 'fx-fridge')
+        edited = self.root / 'fx-edited.json'
+        edited.write_text(json.dumps(self.read(erased)))
+        self.assertEqual(node('merge', str(edited)), {'applied': ['fx-sofa'], 'added': [], 'deleted': ['fx-fridge'], 'conflicts': 0, 'sofa': [3.0, 3.0, 30], 'ids': ['fx-run', 'fx-sofa']})
 
     def test_mirror_of_another_property_is_refused(self):
         skp = self.write(SPEC)
@@ -220,6 +391,74 @@ class MirrorServiceBoundsTests(unittest.TestCase):
             self.service.lock.release()
 
 
+QUARTZ = {'id': 'mat-quartz', 'name': 'Quartz countertop', 'color': '#ede9e1'}
+KICK = {'id': None, 'name': 'Default toe kick', 'color': '#3a3c3f'}
+
+
+def with_fixtures():
+    """The synthetic room with a bed (a box) and a straight counter run, as mirrorSpec frames them."""
+    spec = copy.deepcopy(SPEC)
+    spec['fixtures'] = [
+        {'id': 'fx-bed', 'level': 'lvl-0', 'elevation': 0, 'name': 'Bed', 'kind': 'furniture', 'subtype': 'bed', 'shape': 'box',
+         'origin': [2.0, 1.5], 'angle': 0, 'local': None,
+         'parts': [{'pts': [[-1, -0.75], [1, -0.75], [1, 0.75], [-1, 0.75]], 'z0': 0, 'z1': 0.35, 'material': None},
+                   {'pts': [[-0.98, -0.73], [0.98, -0.73], [0.98, 0.73], [-0.98, 0.73]], 'z0': 0.35, 'z1': 0.59, 'material': None}],
+         'base': {'kind': 'furniture', 'subtype': 'bed', 'shape': 'box', 'x': 2.0, 'y': 1.5, 'rot': 0, 'w': 2.0, 'd': 1.5, 'y0': 0, 'h': 0.59}},
+        {'id': 'fx-counter', 'level': 'lvl-0', 'elevation': 0, 'name': 'Base cabinets', 'kind': 'base-run', 'subtype': None, 'shape': 'run',
+         'origin': [0.0, 0.0], 'angle': 0, 'local': {'pts': [[0, 0], [3, 0]]},
+         'parts': [{'pts': [[0, 0], [3, 0], [3, 0.52], [0, 0.52]], 'z0': 0, 'z1': 0.1, 'material': dict(KICK)},
+                   {'pts': [[0, 0], [3, 0], [3, 0.58], [0, 0.58]], 'z0': 0.1, 'z1': 0.88, 'material': dict(TRIM)},
+                   {'pts': [[0, 0], [3, 0], [3, 0.6], [0, 0.6]], 'z0': 0.88, 'z1': 0.91, 'material': dict(QUARTZ)}],
+         'base': {'kind': 'base-run', 'subtype': None, 'shape': 'run', 'pts': [[0, 0], [3, 0]], 'depth': 0.6, 'y0': 0, 'h': 0.91}},
+    ]
+    return spec
+
+
+def edit_fixtures(source, output):
+    """Turn the bed 90 degrees about its centre and widen it by 1.2x along its length; move the
+    counter 0.2 m east and 0.1 m up; draw a loose face. Public SDK calls on a copy."""
+    from server.sketchup_convert import API, Ref, Transform
+    from server.sketchup_mirror import get_data, to_ref, fill, matrix
+    api = API(); model = Ref()
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
+        entities = api.ref('SUModelGetEntities', model)
+        for g in api.collection(entities, 'Groups'):
+            data = get_data(api, to_ref(api, 'SUGroupToEntity', g))
+            if not data:
+                continue
+            t = Transform(); api.call('SUGroupGetTransform', g, C.byref(t)); m = matrix(t)
+            if data['id'] == 'fx-bed':
+                # x axis -> plan +y is SketchUp -y; scale it 1.2; y axis follows a right-handed turn.
+                m[0:3] = [0, -1.2, 0]; m[4:7] = [1, 0, 0]
+            elif data['id'] == 'fx-counter':
+                m[12] += 0.2 / 0.0254; m[14] += 0.1 / 0.0254
+            t.values[:] = m; api.call('SUGroupSetTransform', g, C.byref(t))
+        fill(api, entities, [[0, 0, 200], [40, 0, 200], [40, 40, 200], [0, 40, 200]], [([0, 1, 2, 3], [])])
+        api.call('SUModelSaveToFile', model, str(output).encode())
+    finally:
+        if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
+
+
+def erase_group(source, output, element_id):
+    from server.sketchup_convert import API, Ref
+    from server.sketchup_mirror import get_data, to_ref
+    api = API(); model = Ref()
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
+        entities = api.ref('SUModelGetEntities', model)
+        for g in api.collection(entities, 'Groups'):
+            entity = to_ref(api, 'SUGroupToEntity', g)
+            data = get_data(api, entity)
+            if data and data.get('id') == element_id:
+                api.call('SUEntitiesErase', entities, C.c_size_t(1), (Ref * 1)(entity))
+        api.call('SUModelSaveToFile', model, str(output).encode())
+    finally:
+        if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
+
+
 def io_zip(entries):
     import io
     stream = io.BytesIO()
@@ -227,6 +466,127 @@ def io_zip(entries):
         for name, data in entries.items():
             z.writestr(name, data)
     return stream.getvalue()
+
+
+def painted_faces(source):
+    """Every face in the model: the Tiksi id of its group (None for loose geometry), its centre
+    in plan metres [x, y, z], each side's (material name, rgb), and 'seen from'(x, y[, z]): the
+    side visible from that plan direction."""
+    from server.sketchup_convert import API, Ref, Point, Color
+    from server.sketchup_mirror import get_data, to_ref, group_transform, face_ring, apply, multiply, skp_to_plan
+    api = API(); model = Ref(); out = []
+
+    def side(face, name):
+        mat = Ref()
+        if api.call(name, face, C.byref(mat), optional=True) or not mat.ptr:
+            return (None, None)
+        color = Color(); api.call('SUMaterialGetColor', mat, C.byref(color))
+        return (api.text('SUMaterialGetName', mat), (color.red, color.green, color.blue))
+
+    def walk(entities, m, owner):
+        for face in api.collection(entities, 'Faces'):
+            ring = [apply(m, p) for p in face_ring(api, face)]
+            centre = [sum(p[i] for p in ring) / len(ring) for i in range(3)]
+            n = Point(); api.call('SUFaceGetNormal', face, C.byref(n))
+            o, tip = apply(m, [0, 0, 0]), apply(m, [n.x, n.y, n.z])
+            normal = [tip[i] - o[i] for i in range(3)]
+            front, back = side(face, 'SUFaceGetFrontMaterial'), side(face, 'SUFaceGetBackMaterial')
+            # Plan (x, y, z) is SketchUp (x, -y, z).
+            seen = lambda x, y, z=0, normal=normal, front=front, back=back: front if normal[0] * x - normal[1] * y + normal[2] * z > 0 else back
+            out.append({'id': owner, 'plan': skp_to_plan(centre) + [centre[2] * 0.0254], 'front': front, 'back': back, 'seen from': seen})
+        for g in api.collection(entities, 'Groups'):
+            data = get_data(api, to_ref(api, 'SUGroupToEntity', g))
+            walk(api.ref('SUGroupGetEntities', g), multiply(m, group_transform(api, g)), (data or {}).get('id', owner))
+
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
+        walk(api.ref('SUModelGetEntities', model), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], None)
+        return out
+    finally:
+        if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
+
+
+def model_materials(source):
+    """{name: rgb} of every material in the model."""
+    from server.sketchup_convert import API, Ref, Color
+    api = API(); model = Ref()
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
+        count = C.c_size_t(); api.call('SUModelGetNumMaterials', model, C.byref(count))
+        refs = (Ref * max(1, count.value))()
+        if count.value: api.call('SUModelGetMaterials', model, count, refs, C.byref(count))
+        out = {}
+        for ref in refs[:count.value]:
+            color = Color(); api.call('SUMaterialGetColor', ref, C.byref(color))
+            out[api.text('SUMaterialGetName', ref)] = (color.red, color.green, color.blue)
+        return out
+    finally:
+        if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
+
+
+def draw_painted_face(source, output, name, color):
+    """A loose face drawn in SketchUp and painted with a material of the user's own."""
+    from server.sketchup_convert import API, Ref, Color
+    from server.sketchup_mirror import fill
+    api = API(); model = Ref()
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
+        entities = api.ref('SUModelGetEntities', model)
+        fill(api, entities, [[0, 0, 200], [40, 0, 200], [40, 40, 200], [0, 40, 200]], [([0, 1, 2, 3], [])])
+        mat = Ref(); api.call('SUMaterialCreate', C.byref(mat)); api.call('SUMaterialSetName', mat, name.encode())
+        api.call('SUMaterialSetColor', mat, C.byref(Color(*color, 255)))
+        api.call('SUModelAddMaterials', model, C.c_size_t(1), (Ref * 1)(mat))
+        for face in api.collection(entities, 'Faces'):
+            api.call('SUFaceSetFrontMaterial', face, mat)
+        api.call('SUModelSaveToFile', model, str(output).encode())
+    finally:
+        if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
+
+
+def tiny_png(path):
+    import struct, zlib
+    def chunk(kind, data):
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
+    raw = b''.join(b'\x00' + bytes([120, 80, 40] * 2) for _ in range(2))
+    path.write_bytes(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 2, 2, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))
+
+
+def add_texture(source, output, name, png):
+    from server.sketchup_convert import API, Ref
+    tiny_png(png)
+    api = API(); model = Ref()
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
+        mat = find_material(api, model, name)
+        tex = Ref(); api.call('SUTextureCreateFromFile', C.byref(tex), str(png).encode(), C.c_double(1), C.c_double(1))
+        api.call('SUMaterialSetTexture', mat, tex)
+        api.call('SUModelSaveToFile', model, str(output).encode())
+    finally:
+        if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
+
+
+def material_type(source, name):
+    from server.sketchup_convert import API, Ref
+    api = API(); model = Ref()
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
+        kind = C.c_int(); api.call('SUMaterialGetType', find_material(api, model, name), C.byref(kind))
+        return kind.value
+    finally:
+        if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
+
+
+def find_material(api, model, name):
+    from server.sketchup_convert import Ref
+    count = C.c_size_t(); api.call('SUModelGetNumMaterials', model, C.byref(count))
+    refs = (Ref * max(1, count.value))()
+    if count.value: api.call('SUModelGetMaterials', model, count, refs, C.byref(count))
+    return next(r for r in refs[:count.value] if api.text('SUMaterialGetName', r) == name)
 
 
 def move_group(source, output, element_id, dx_metres):
