@@ -1044,3 +1044,14 @@ kbd {
 .fx-review .fx-list small { display: block; color: var(--dim); font-size: 11.5px; }
 .fx-review .fx-list em { font: 11px var(--mono); font-style: normal; color: var(--accent); }
 .fx-review .fx-list input { margin-top: 3px; }
+/* Fixture inspector: the real product, its evidence, documents and drawing numbers. */
+.fx-evidence { list-style: none; margin: 4px 0 0; padding: 0; border-top: 1px solid var(--line); }
+.fx-evidence li { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 12px; line-height: 1.4; color: var(--ink); overflow-wrap: anywhere; }
+.fx-evidence li b { font-weight: 600; margin-right: 4px; }
+.fx-evidence li small { display: block; margin-top: 2px; color: var(--dim); font-size: 11px; }
+.fx-evidence a { color: var(--accent); }
+.fx-actions { display: grid; gap: 6px; margin: 8px 0; }
+.fx-detail { margin: 8px 0; }
+.fx-detail summary { cursor: pointer; font: 11px var(--mono); letter-spacing: .06em; color: var(--dim); padding: 6px 0; }
+.fx-detail[open] summary { color: var(--ink); }
+.fx-detail textarea { width: 100%; box-sizing: border-box; font: 12px var(--mono); }

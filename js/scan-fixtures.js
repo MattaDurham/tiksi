@@ -562,7 +562,7 @@ function detectLevel(G, L, o) {
   };
   const box = (kind, subtype, b, h, extra, confidence, evidence) => out.push(Object.assign({
     kind, subtype, name: '', x: round(b.x), y: round(b.y), rot: round(((b.a * 180 / Math.PI) % 360 + 360) % 360, 10), w: cm(b.w), d: cm(b.d), y0: 0, h: cm(h),
-    material: kind === 'appliance' ? 'mat-stainless' : null, provenance: { source: 'scan', confidence: conf(confidence) }, evidence }, extra || {}));
+    material: kind === 'appliance' && subtype !== 'washer-dryer' ? 'mat-stainless' : null, provenance: { source: 'scan', confidence: conf(confidence) }, evidence }, extra || {}));
 
   // Tall appliances: a closed top at fridge or stacked-laundry height with sides below it.
   const tallBlock = new Uint8Array(N);

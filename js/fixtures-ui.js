@@ -192,11 +192,11 @@ function recordHtml(f) {
   if (!r) return f.product && f.product.brand ? '<p class="empty">Enter the model too, and Tiksi files the product in PRODUCTS and looks for its spec sheet, installation drawing and manual.</p>' : '';
   normaliseProductRecord(r);
   const dims = r.dims || {};
-  const docs = r.documents.map(d => `<li><b>${escapeHtml(DOC_LABEL[d.kind])}</b> ${escapeHtml(d.title)}<small>${escapeHtml(d.path ? 'In the project folder: ' + d.path : d.fileId ? 'Kept in the project file' : 'Not saved')}${d.url ? ' · <a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener noreferrer">source</a>' : ''}</small></li>`).join('');
+  const docs = r.documents.map(d => `<li><b>${escapeHtml(DOC_LABEL[d.kind])}</b>${escapeHtml(d.title)}<small>${escapeHtml(d.path ? 'In the project folder: ' + d.path : d.fileId ? 'Kept in the project file' : 'Not saved')}${d.url ? ' · <a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener noreferrer">source</a>' : ''}</small></li>`).join('');
   const dl = (label, key) => `<div class="field"><label>${label}</label><input type="text" data-fx-dim="${key}" value="${dims[key] ? escapeHtml(fmtLen(dims[key])) : ''}" placeholder="from the drawing"></div>`;
   return `<div class="stat-line"><span>In PRODUCTS as</span><b>${escapeHtml(r.name || [r.brand, r.model].join(' '))}</b></div>
     <div class="field"><label>Documents</label>${docs ? `<ul class="fx-evidence">${docs}</ul>` : `<p class="empty">${r.documentsSearchedAt ? 'None found yet.' : 'None saved yet.'}</p>`}</div>
-    <div class="field-row"><button class="btn" data-fx-finddocs title="Search the manufacturer, then retailers, for the spec sheet, installation guide and manual, and save them in the project folder">FIND DOCUMENTS</button><button class="btn" data-fx-adddoc title="Save a document from its web address">ADD BY ADDRESS</button></div>
+    <div class="fx-actions"><button class="btn" data-fx-finddocs title="Search the manufacturer, then retailers, for the spec sheet, installation guide and manual, and save them in the project folder">FIND DOCUMENTS</button><button class="btn" data-fx-adddoc title="Save a document from its web address">ADD DOCUMENT BY ADDRESS</button></div>
     <div class="field-row">${dl('Drawing width', 'w')}${dl('Drawing depth', 'd')}${dl('Drawing height', 'h')}</div>
     ${f.product.dimsFrom ? `<p class="empty">Sized from ${escapeHtml(f.product.dimsFrom)}; the wall side stays where it was measured.</p>` : ''}`;
 }
@@ -245,7 +245,7 @@ export function productHtml(f) {
       ${a.origin ? `<p class="empty"><a href="${escapeHtml(a.origin)}" target="_blank" rel="noopener noreferrer">${escapeHtml(a.originName || 'Source of the model')}</a>${a.license ? ' · ' + escapeHtml(a.license) : ''}</p>` : ''}
       <div class="stat-line" ${stretched ? 'data-fx-stretch' : ''}><span>Fit to the measured box</span><b>${fit.scale.map(pctOf).join(' × ')}</b></div>
       ${stretched ? `<p class="empty">The model is ${pctOf(fit.off)} off the measured size on one side. Check the measurement, or use the model's own size if the model is right.</p>` : ''}
-      <div class="field-row"><button class="btn" data-fx-turn title="Turn the model a quarter turn so its front faces the room">TURN 90°</button><button class="btn" data-fx-usesize title="Make the box the model's real size: ${escapeHtml(fit.size.map(v => fmtLen(v)).join(' × '))}">USE MODEL SIZE</button></div>
+      <div class="fx-actions"><button class="btn" data-fx-turn title="Turn the model a quarter turn so its front faces the room">TURN 90°</button><button class="btn" data-fx-usesize title="Make the box the model's real size: ${escapeHtml(fit.size.map(v => fmtLen(v)).join(' × '))}">USE MODEL SIZE</button></div>
       <button class="btn" data-fx-unmodel>REMOVE 3D MODEL</button>`
     : `<p class="empty">${escapeHtml(p.assetNote || 'Stand-in shape: no 3D model of the real product is attached.')}</p>`;
   return `<div class="tool-sep"></div><h3>PRODUCT</h3>

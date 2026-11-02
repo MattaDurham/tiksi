@@ -62,6 +62,8 @@ const MATERIAL_DEFAULTS = {
   'base-run': { material: 'mat-quartz', bodyMaterial: 'mat-trim' }, 'wall-run': { material: null, bodyMaterial: 'mat-trim' },
   appliance: { material: 'mat-stainless' }, furniture: { material: null }, bath: { material: null }, fitting: { material: null },
 };
+// Usually enamelled white rather than stainless: no finish, so their parts draw white.
+export const WHITE_GOODS = new Set(['washer-dryer', 'mini-split', 'water-heater']);
 // Colours when a part has no material (also the SketchUp mirror's fallback finish).
 export const FIXTURE_FALLBACK = { top: '#e9e5dc', body: '#efece6', kick: '#3a3c3f', appliance: '#c9cbcd', fabric: '#b9ae9d', wood: '#a98a63', bath: '#f4f3ef', fitting: '#b9bdc1',
   white: '#e8e7e2', black: '#18191b', glass: '#20282b', chrome: '#c3c6c8', panel: '#2b2d30', copper: '#b06f45' };
@@ -93,7 +95,8 @@ export function fixtureTemplate(kind, subtype, at) {
   }
   const sub = k.subtypes.includes(subtype) ? subtype : k.subtypes[0];
   const dims = BOX_DEFAULTS[sub];
-  return Object.assign(base, { subtype: sub, x, y, rot: fin(at.rot, 0), y0: 0 }, dims, sub === 'vanity' ? { material: 'mat-quartz', bodyMaterial: 'mat-trim' } : {});
+  return Object.assign(base, { subtype: sub, x, y, rot: fin(at.rot, 0), y0: 0 }, dims, sub === 'vanity' ? { material: 'mat-quartz', bodyMaterial: 'mat-trim' } : {},
+    WHITE_GOODS.has(sub) ? { material: null } : {});
 }
 
 // Bring a record from a file or another device into shape; null when it cannot be one.
