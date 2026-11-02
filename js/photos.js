@@ -10,6 +10,7 @@ import {
 } from './store.js';
 import { addPhotoFromFile, photoUrl, photoBytes, photoById, deletePhoto, isPanoramaAspect, revokePhotoUrls } from './photos-store.js';
 import { addCustomMaterial } from './materials.js';
+import { isVideoFile, importVideos } from './videos.js';
 
 const PLAN_MAX_PX = 4096;   // detailed tracing without unbounded canvas memory
 const MATERIAL_KINDS = ['wall', 'floor', 'ceiling', 'trim', 'any'];
@@ -92,8 +93,15 @@ async function averageColor(src) {
 // while the view is mounted, so navigating away or switching property mid-upload neither
 // aborts the batch nor throws.
 async function addFiles(list) {
+  // Videos are tape-measure evidence: they are kept as originals and reviewed in MEASURE.
+  const clips = Array.from(list || []).filter(isVideoFile);
+  if (clips.length) {
+    const { added, failed } = await importVideos(prop, clips);
+    if (failed.length) alert('Not added:\n' + failed.join('\n'));
+    if (added.length && confirm(added.length + ' video' + (added.length === 1 ? '' : 's') + ' added. Open MEASURE to review the frames?')) { location.hash = '#/measure?video=' + encodeURIComponent(added[0].id); return; }
+  }
   const files = Array.from(list || []).filter(f => f && (f.type.startsWith('image/') || /\.(jpe?g|png|webp|gif|avif|bmp|heic|heif)$/i.test(f.name)));
-  if (!files.length) { if (list && list.length) alert('Only image files can be added as photos.'); return; }
+  if (!files.length) { if (list && list.length && !clips.length) alert('Only image files can be added as photos.'); return; }
   const entries = files.map(file => ({ file, prop }));
   if (importing) {
     importing.queue.push(...entries);

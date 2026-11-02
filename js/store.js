@@ -351,7 +351,7 @@ export function propertyTemplate(name) {
   return {
     id: uid('prop'), name: name || 'New property', notes: '', wallHeight: 2.44,
     levels: [levelTemplate('lvl-0', 'Main level', 0, 2.44)], activeLevelId: 'lvl-0',
-    walls: [], openings: [], rooms: [], scans: [], photos: [], notePins: [], env: defaultEnv(), source: null,
+    walls: [], openings: [], rooms: [], scans: [], photos: [], notePins: [], videos: [], measurements: [], env: defaultEnv(), source: null,
   };
 }
 
@@ -513,6 +513,8 @@ function sanitiseIds(d) {
     for (const s of p.scans) fix(s, 'scan');
     for (const ph of p.photos) fix(ph, 'ph');
     for (const n of p.notePins) fix(n, 'note');
+    for (const v of p.videos) fix(v, 'vid');
+    for (const m of p.measurements) fix(m, 'ms');
   }
   for (const m of d.materials) fix(m, 'mat');
   for (const pr of d.products) fix(pr, 'prod');
@@ -543,7 +545,7 @@ function validateWorkspace(d) {
     if (d[key] != null && !Array.isArray(d[key])) throw new Error(key + ' must be a list');
     for (const rec of d[key] || []) if (!rec || typeof rec !== 'object' || Array.isArray(rec)) throw new Error(key + ' contains an invalid record');
   }
-  for (const p of d.properties || []) for (const key of ['levels','walls','openings','rooms','scans','photos','notePins']) {
+  for (const p of d.properties || []) for (const key of ['levels','walls','openings','rooms','scans','photos','notePins','videos','measurements']) {
     if (p[key] != null && !Array.isArray(p[key])) throw new Error('property ' + key + ' must be a list');
     for (const rec of p[key] || []) if (!rec || typeof rec !== 'object' || Array.isArray(rec)) throw new Error('property ' + key + ' contains an invalid record');
   }
@@ -605,6 +607,30 @@ function migrate(d) {
       if (!ph.createdAt) ph.createdAt = new Date(0).toISOString();
       // '' is the slim localStorage form (thumbnail lives in IndexedDB, see persistable).
       if (typeof ph.thumb !== 'string' || (ph.thumb && !THUMB_RE.test(ph.thumb))) ph.thumb = '';
+    }
+    // Walk-through videos and the tape readings taken from their frames (MEASURE). Values are
+    // metres or null; element is { kind: 'opening'|'wall', id, dim } or null (unassigned / note).
+    p.videos = p.videos || [];
+    for (const v of p.videos) {
+      if (typeof v.name !== 'string') v.name = 'Video';
+      if (typeof v.notes !== 'string') v.notes = '';
+      if (!v.createdAt) v.createdAt = new Date(0).toISOString();
+      if (typeof v.thumb !== 'string' || (v.thumb && !THUMB_RE.test(v.thumb))) v.thumb = '';
+      if (v.analysis !== null && (typeof v.analysis !== 'object' || Array.isArray(v.analysis))) v.analysis = null;
+      if (v.analysis && !Array.isArray(v.analysis.candidates)) v.analysis.candidates = [];
+    }
+    p.measurements = p.measurements || [];
+    for (const m of p.measurements) {
+      if (!Number.isFinite(m.seconds)) m.seconds = 0;
+      if (m.value != null && !Number.isFinite(m.value)) m.value = null;
+      for (const k of ['text', 'input', 'note']) if (typeof m[k] !== 'string') m[k] = '';
+      if (!['width', 'height', 'depth', ''].includes(m.direction)) m.direction = '';
+      if (!['clear', 'probable', 'unreadable'].includes(m.confidence)) m.confidence = 'probable';
+      if (!m.element || typeof m.element !== 'object' || !['opening', 'wall'].includes(m.element.kind) || typeof m.element.id !== 'string') m.element = null;
+      if (!['unassigned', 'assigned', 'applied'].includes(m.status)) m.status = m.element ? 'assigned' : 'unassigned';
+      if (typeof m.frameAssetId !== 'string') m.frameAssetId = null;
+      if (!m.crop || !Array.isArray(m.crop) || m.crop.length !== 4 || !m.crop.every(Number.isFinite)) m.crop = null;
+      if (!m.createdAt) m.createdAt = new Date(0).toISOString();
     }
     // Notes pinned to a point in the model (MODEL, right-click). `notes` on the property is
     // its own free text; these are separate.
@@ -748,21 +774,34 @@ export function fmtArea(m2) {
   return Math.round(m2 / M2_PER_SF).toLocaleString() + ' sf';
 }
 
+// Tape readings carry fractions: 33 1/2", 33-1/2", 2'-9 1/2", 9½", 1/4".
+const UNICODE_FRACTIONS = { '¼': ' 1/4', '½': ' 1/2', '¾': ' 3/4', '⅛': ' 1/8', '⅜': ' 3/8', '⅝': ' 5/8', '⅞': ' 7/8', '⅓': ' 1/3', '⅔': ' 2/3', '⅙': ' 1/6', '⅚': ' 5/6', '⅕': ' 1/5' };
+function inchPart(s) {
+  s = s.trim();
+  if (/^\d+(?:\.\d+)?$/.test(s)) return parseFloat(s);
+  const m = s.match(/^(?:(\d+)(?:\s+|\s*-\s*))?(\d+)\s*\/\s*(\d+)$/);
+  return m && +m[3] ? (m[1] ? +m[1] : 0) + m[2] / m[3] : NaN;
+}
+
 export function parseLen(str) {
-  // Accepts: 12'6", 12'-6", 12.5', 30", 3.8m, 3.8 m, plain number (ft if imperial, m if metric).
+  // Accepts: 12'6", 12'-6", 12.5', 30", 33 1/2", 2'-9 1/2", 3.8m, 85 cm, 850 mm, plain number
+  // (ft if imperial, m if metric).
   if (typeof str === 'number') return units() === 'imperial' ? str * M_PER_FT : str;
-  str = String(str).trim().toLowerCase();
+  str = String(str).trim().toLowerCase().replace(/[¼½¾⅛⅜⅝⅞⅓⅔⅙⅚⅕]/g, c => UNICODE_FRACTIONS[c]).replace(/[″”]/g, '"').replace(/[′’]/g, "'").trim();
   if (!str) return NaN;
-  const mMatch = str.match(/^(-?\d+(?:\.\d+)?)\s*m$/);
-  if (mMatch) return parseFloat(mMatch[1]);
-  const ftIn = str.match(/^(-?\d+(?:\.\d+)?)\s*'\s*(?:-?\s*(\d+(?:\.\d+)?)\s*"?)?$/);
+  const mMatch = str.match(/^(-?\d+(?:\.\d+)?)\s*(m|cm|mm)$/);
+  if (mMatch) return parseFloat(mMatch[1]) / { m: 1, cm: 100, mm: 1000 }[mMatch[2]];
+  const ftIn = str.match(/^(-?\d+(?:\.\d+)?)\s*'\s*(?:-?\s*([\d\s./-]*?)\s*(?:"|in)?)?$/);
   if (ftIn) {
     // -7'-7" is seven feet seven inches below the datum: the inches take the sign of the feet.
-    const ft = parseFloat(ftIn[1]), inch = ftIn[2] ? parseFloat(ftIn[2]) / 12 : 0;
+    const ft = parseFloat(ftIn[1]), inch = ftIn[2] ? inchPart(ftIn[2]) / 12 : 0;
+    if (Number.isNaN(inch)) return NaN;
     return (ftIn[1].startsWith('-') ? ft - inch : ft + inch) * M_PER_FT;
   }
-  const inOnly = str.match(/^(-?\d+(?:\.\d+)?)\s*"$/);
-  if (inOnly) return parseFloat(inOnly[1]) / 12 * M_PER_FT;
+  const inOnly = str.match(/^(-?)\s*(\d[\d\s./-]*?)\s*(?:"|in|inch|inches)$/);
+  if (inOnly) { const inch = inchPart(inOnly[2]); return (inOnly[1] ? -inch : inch) / 12 * M_PER_FT; }
+  const fraction = inchPart(str.replace(/^-/, ''));
+  if (/\//.test(str)) return Number.isNaN(fraction) ? NaN : (str.startsWith('-') ? -fraction : fraction) * (units() === 'imperial' ? M_PER_FT : 1);
   const plain = parseFloat(str);
   if (!isNaN(plain)) return units() === 'imperial' ? plain * M_PER_FT : plain;
   return NaN;
@@ -986,6 +1025,8 @@ export function listAllFileIds(data) {
   for (const p of d.properties || []) {
     for (const s of p.scans || []) { ids.push(s.id); if (s.originalFileId && s.originalFileId !== s.id) ids.push(s.originalFileId); }
     for (const ph of p.photos || []) ids.push(ph.id);
+    for (const v of p.videos || []) ids.push(v.id);
+    for (const m of p.measurements || []) if (m.frameAssetId) ids.push(m.frameAssetId);
   }
   return ids;
 }
@@ -1040,7 +1081,9 @@ export function exportWorkspace() {
 const IMAGE_EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/bmp': 'bmp', 'image/heic': 'heic', 'image/heif': 'heif', 'image/tiff': 'tiff' };
 const MIME_BY_EXT = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif', bmp: 'image/bmp', heic: 'image/heic', heif: 'image/heif', tif: 'image/tiff', tiff: 'image/tiff' };
 // Formats that are already compressed: store them in the zip instead of deflating.
-const STORED_EXT = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'glb', 'spz', 'laz', 'ksplat']);
+const STORED_EXT = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'glb', 'spz', 'laz', 'ksplat', 'mp4', 'mov', 'm4v']);
+const VIDEO_EXT_BY_MIME = { 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/x-m4v': 'm4v' };
+const VIDEO_MIME_BY_EXT = { mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/x-m4v' };
 
 function fflate() { return import('three/addons/libs/fflate.module.js'); }
 
@@ -1066,6 +1109,18 @@ async function collectBundleFiles(properties) {
       if (!rec || !rec.buffer) continue;
       const mime = ph.mime || rec.mime || 'image/jpeg';
       out.push({ id: ph.id, kind: 'photo', name: ph.name || rec.name || ph.id, mime, ext: IMAGE_EXT_BY_MIME[mime] || 'jpg', buffer: rec.buffer });
+    }
+    // Walk-through videos and the frames saved with tape readings (MEASURE) are originals too.
+    for (const v of p.videos || []) {
+      const rec = await getFile(v.id);
+      if (!rec || !rec.buffer) continue;
+      const mime = v.mime || rec.mime || 'video/mp4';
+      out.push({ id: v.id, kind: 'video', name: v.name || rec.name || v.id, mime, ext: VIDEO_EXT_BY_MIME[mime] || 'mp4', buffer: rec.buffer });
+    }
+    for (const m of p.measurements || []) {
+      const rec = m.frameAssetId && await getFile(m.frameAssetId);
+      if (!rec || !rec.buffer) continue;
+      out.push({ id: m.frameAssetId, kind: 'frame', name: rec.name || m.frameAssetId, mime: 'image/jpeg', ext: 'jpg', buffer: rec.buffer });
     }
   }
   return out;
@@ -1156,6 +1211,7 @@ export async function readBundle(file) {
     const id = dot > 0 ? base.slice(0, dot) : base;
     const ext = dot > 0 ? base.slice(dot + 1).toLowerCase() : 'bin';
     const mime = MIME_BY_EXT[ext];
+    if (VIDEO_MIME_BY_EXT[ext]) return { id, kind: 'video', path, name: base, mime: VIDEO_MIME_BY_EXT[ext] };
     return mime ? { id, kind: 'photo', path, name: base, mime } : { id, kind: 'scan', path, name: base, format: ext };
   });
   // Only files the workspace actually references get stored: anything else in the archive
@@ -1166,9 +1222,11 @@ export async function readBundle(file) {
     if (!m || typeof m.id !== 'string' || typeof m.path !== 'string' || !referenced.has(m.id)) continue;
     const u8 = zipped[m.path];
     if (!u8) { missing.push(m.id); continue; }
-    const meta = m.kind === 'photo'
-      ? { name: m.name || m.id, mime: m.mime || MIME_BY_EXT[m.path.split('.').pop().toLowerCase()] || 'image/jpeg', kind: 'photo' }
-      : { name: m.name || m.id, format: m.format || m.path.split('.').pop().toLowerCase() };
+    const ext = m.path.split('.').pop().toLowerCase();
+    const meta = m.kind === 'photo' || m.kind === 'frame'
+      ? { name: m.name || m.id, mime: m.mime || MIME_BY_EXT[ext] || 'image/jpeg', kind: m.kind }
+      : m.kind === 'video' ? { name: m.name || m.id, mime: m.mime || VIDEO_MIME_BY_EXT[ext] || 'video/mp4', kind: 'video' }
+      : { name: m.name || m.id, format: m.format || ext };
     files.push({ id: m.id, buffer: u8Buffer(u8), meta });
   }
   return { data, files, manifest, missing };
