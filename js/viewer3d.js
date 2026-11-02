@@ -1790,9 +1790,9 @@ async function proposePlanFromScan(s) {
     rebuildModel(); rebuildGround(); buildAllPins();
     presetView('frame');
     renderToolCol(); renderInspector();
-    toast('Proposed: ' + proposalSummary(result, applied) + '.', applied && !result.review?.required ? 'ok' : 'warn', 6000);
-    // The rooms are drawn; what stands in them is the next, optional step.
-    if (applied && obj) { planning = false; await proposeFixturesFromScan(s); }
+    // The rooms are drawn; what stands in them is the next, optional step (never a modal
+    // in the way of the plan the person is about to check).
+    toast('Proposed: ' + proposalSummary(result, applied) + '.' + (applied && obj ? ' Next, optional: PROPOSE FIXTURES FROM SCAN in this scan\'s inspector.' : ''), applied && !result.review?.required ? 'ok' : 'warn', 8000);
   } catch (e) {
     console.error(e);
     if (token === mountId) toast('Could not propose a plan: ' + errMsg(e), 'error', 6000);

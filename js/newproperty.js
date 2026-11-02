@@ -366,18 +366,19 @@ async function proposePlan(prop, scan, signal) {
     const added = mode === 'level' || mode === 'beside';
     project = seedProject(prop, applied, (added ? prop.name + ': ' + scan.name : (prop.source && prop.source.title ? prop.source.title : prop.name)) + ': scope from scan');
     if (project) { ws.data.projects.push(project); touch(); log('Seeded a starter project with the takeoffs', 'ok', project.items.length + ' scope items linked to the model'); }
-    // What stands in the rooms, proposed for review (skipping it keeps the plan as it is).
+    // What stands in the rooms, read now and offered for review when the run is done.
     const fx = log('Reading counters, cabinets and furniture from the scan', 'run');
     try {
       const proposals = await proposeFixtures(prop, scan, hooks);
-      const added = await openFixtureReview(prop, proposals, { scanName: scan.name });
-      fx?.ok(proposals.length + ' proposed, ' + added.length + ' added');
+      fx?.ok(proposals.length ? proposals.length + ' proposed for review' : 'none found');
+      finish(prop, result, applied, proposals.length ? { proposals, scanName: scan.name } : null);
+      return;
     } catch (e) { console.error(e); fx?.warn('skipped: ' + String(e && e.message || e)); }
   }
   finish(prop, result, applied);
 }
 
-function finish(prop, result, applied) {
+function finish(prop, result, applied, fixtures) {
   run = null;
   dlg.dataset.state = 'done';
   app.refresh();
@@ -396,10 +397,18 @@ function finish(prop, result, applied) {
         : `<div class="kpi"><span class="k-label">CEILING</span><span class="k-value small">${escapeHtml(fmtLen(levels[0] ? levels[0].height : prop.wallHeight))}</span></div>`}
     </div>
     <div class="np-actions">
+      ${fixtures ? `<button class="btn" data-np-fixtures>${icon('scan')}REVIEW ${fixtures.proposals.length} FIXTURE${fixtures.proposals.length === 1 ? '' : 'S'}</button>` : ''}
       <button class="btn primary" data-np-go="plan">${icon('plan')}OPEN PLAN</button>
       <button class="btn" data-np-go="model">${icon('model')}OPEN MODEL</button>
     </div>`;
   box.querySelectorAll('[data-np-go]').forEach(b => b.onclick = () => { closeDialog(); location.hash = '#/' + b.dataset.npGo; app.remount(); });
+  const fxBtn = box.querySelector('[data-np-fixtures]');
+  if (fxBtn) fxBtn.onclick = async () => {
+    const added = await openFixtureReview(prop, fixtures.proposals, { scanName: fixtures.scanName });
+    fxBtn.disabled = true;
+    fxBtn.textContent = added.length ? 'ADDED ' + added.length + ' FIXTURE' + (added.length === 1 ? '' : 'S') : 'NO FIXTURES ADDED';
+    app.refresh();
+  };
   showCloseOnly();
   setStatus(applied ? 'Done. Every proposed element is editable; the underlay of every level is the scan itself.' : 'Done.', 'ok');
 }
