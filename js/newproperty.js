@@ -11,6 +11,7 @@ import { ws, touch, propertyTemplate, escapeHtml, fmtBytes, fmtLen, fmtArea, pol
 import { parseCaptureUrl, resolveCapture, downloadAsset, fetchCover, fetchCaptureDirect, fetchCoverDirect, relaysFor, DEFAULT_RELAYS } from './polycam.js';
 import { importScanBytes, SCAN_ACCEPT } from './scans.js';
 import { placeScanBytes, seedProject, proposalSummary } from './scan2plan.js';
+import { proposeFixtures, openFixtureReview } from './fixtures-ui.js';
 import { chooseScanPlacement } from './scanplace.js';
 import { addPhotoFromFile } from './photos-store.js';
 import { icon } from './icons.js';
@@ -365,6 +366,13 @@ async function proposePlan(prop, scan, signal) {
     const added = mode === 'level' || mode === 'beside';
     project = seedProject(prop, applied, (added ? prop.name + ': ' + scan.name : (prop.source && prop.source.title ? prop.source.title : prop.name)) + ': scope from scan');
     if (project) { ws.data.projects.push(project); touch(); log('Seeded a starter project with the takeoffs', 'ok', project.items.length + ' scope items linked to the model'); }
+    // What stands in the rooms, proposed for review (skipping it keeps the plan as it is).
+    const fx = log('Reading counters, cabinets and furniture from the scan', 'run');
+    try {
+      const proposals = await proposeFixtures(prop, scan, hooks);
+      const added = await openFixtureReview(prop, proposals, { scanName: scan.name });
+      fx?.ok(proposals.length + ' proposed, ' + added.length + ' added');
+    } catch (e) { console.error(e); fx?.warn('skipped: ' + String(e && e.message || e)); }
   }
   finish(prop, result, applied);
 }

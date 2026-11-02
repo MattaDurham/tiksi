@@ -250,6 +250,89 @@ else {
         self.assertTrue(all(f['front'][0] is None and f['back'][0] is None for f in faces if f['id'] == 'w-e'), 'a wall without finishes is left unpainted')
         self.assertEqual(model_materials(self.write(SPEC)), {}, 'a spec from before finishes paints nothing')
 
+    def test_fixtures_are_groups_that_read_back_moved_turned_and_deleted(self):
+        spec = with_fixtures()
+        skp = self.write(spec)
+        got = self.read(skp)
+        self.assertEqual(sorted(f['id'] for f in got['fixtures']), ['fx-bed', 'fx-counter'])
+        for f in got['fixtures']:
+            for k, v in f['base'].items():
+                if k in ('elevation', 'kind', 'subtype', 'shape'):
+                    continue
+                if k == 'pts':
+                    for a, b in zip(f['now'][k], v):
+                        self.assertAlmostEqual(a[0], b[0], places=4); self.assertAlmostEqual(a[1], b[1], places=4)
+                else:
+                    self.assertAlmostEqual(f['now'][k], v, places=4, msg=f['id'] + ' ' + k)
+        faces = painted_faces(skp)
+        top = [f for f in faces if f['id'] == 'fx-counter' and abs(f['plan'][2] - 0.91) < 1e-3]
+        self.assertTrue(top and all(f['front'][0] == 'Tiksi: Quartz countertop' for f in top), 'the counter top wears its finish')
+        self.assertTrue(any(f['front'][0] == 'Tiksi: Default toe kick' for f in faces if f['id'] == 'fx-counter'))
+        # In SketchUp: turn the bed 90 degrees about its centre and widen it, raise the counter
+        # run 0.1 m and move it 0.2 m east, delete nothing yet, draw a loose face.
+        edited = self.root / 'fx-edited.skp'
+        edit_fixtures(skp, edited)
+        again = {f['id']: f['now'] for f in self.read(edited)['fixtures']}
+        self.assertAlmostEqual(again['fx-bed']['rot'], 90, places=3)
+        self.assertAlmostEqual(again['fx-bed']['x'], 2.0, places=4); self.assertAlmostEqual(again['fx-bed']['y'], 1.5, places=4)
+        self.assertAlmostEqual(again['fx-bed']['w'], 2.4, places=4)
+        self.assertAlmostEqual(again['fx-counter']['pts'][0][0], 0.2, places=4)
+        self.assertAlmostEqual(again['fx-counter']['pts'][1][0], 3.2, places=4)
+        self.assertAlmostEqual(again['fx-counter']['y0'], 0.1, places=4)
+        self.assertAlmostEqual(again['fx-counter']['depth'], 0.6, places=4)
+        # Tiksi rewrites: its groups are replaced, the loose face stays; then deleting the
+        # bed group in SketchUp reads back without it.
+        rewritten = self.write(spec, existing=edited)
+        self.assertEqual(self.read(rewritten)['untagged']['faces'], 1, 'geometry drawn in SketchUp survives a rewrite')
+        deleted = self.root / 'fx-deleted.skp'
+        erase_group(rewritten, deleted, 'fx-bed')
+        after = self.read(deleted)
+        self.assertEqual([f['id'] for f in after['fixtures']], ['fx-counter'])
+        self.assertEqual(after['untagged']['faces'], 1)
+
+    @unittest.skipUnless(shutil.which('node'), 'Node not installed')
+    def test_browser_fixture_spec_and_merge_agree_with_native_files(self):
+        """Tiksi's fixtures through real SKP files: no false changes, a SketchUp move lands, a delete removes."""
+        repo = Path(__file__).resolve().parent.parent
+        script = """
+globalThis.indexedDB = { open() { throw new Error('none'); } };
+const store = await import(process.argv[1] + '/js/store.js');
+const m = await import(process.argv[1] + '/js/sketchup-mirror.js');
+const fx = await import(process.argv[1] + '/js/fixtures.js');
+const fs = await import('node:fs');
+const p = store.propertyTemplate('Fixtures'); p.id = 'prop-fx'; const L = p.levels[0].id;
+const wall = (id, ax, ay, bx, by) => ({ id, level: L, ax, ay, bx, by, thickness: 0.1, height: null, material: 'mat-drywall' });
+p.walls.push(wall('w-s', 0, 0, 5, 0), wall('w-w', 0, 0, 0, 4));
+p.fixtures.push(Object.assign(fx.fixtureTemplate('base-run', null, { level: L }), { id: 'fx-run', pts: [[3, 0.05], [0.05, 0.05], [0.05, 2.5]], side: -1, corners: [null, 1.1, null] }));
+p.fixtures.push(Object.assign(fx.fixtureTemplate('furniture', 'sofa', { level: L, x: 2.5, y: 3.0, rot: 30 }), { id: 'fx-sofa' }));
+p.fixtures.push(Object.assign(fx.fixtureTemplate('appliance', 'fridge', { level: L, x: 3.5, y: 0.45 }), { id: 'fx-fridge' }));
+const mats = [{ id: 'mat-quartz', name: 'Quartz countertop', color: '#ede9e1' }, { id: 'mat-trim', name: 'Trim, painted semi-gloss', color: '#f4f2ec' }, { id: 'mat-stainless', name: 'Stainless steel', color: '#c9cbcd' }];
+const [op, a] = process.argv.slice(2);
+if (op === 'spec') fs.writeFileSync(a, JSON.stringify(m.mirrorSpec(p, mats)));
+else {
+  const r = m.mergeMirror(p, JSON.parse(fs.readFileSync(a, 'utf8')), m.syncedState(p));
+  const sofa = p.fixtures.find(f => f.id === 'fx-sofa');
+  console.log(JSON.stringify({ applied: r.applied, added: r.added, deleted: r.deleted, conflicts: r.conflicts.length, sofa: sofa && [sofa.x, sofa.y, sofa.rot], ids: p.fixtures.map(f => f.id).sort() }));
+}
+"""
+        def node(*args):
+            r = subprocess.run(['node', '--input-type=module', '-e', script, str(repo), *args], capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else None
+        job = self.root / 'fx-contract'; job.mkdir()
+        node('spec', str(job / 'mirror.json'))
+        self.run_worker('write', job)
+        unedited = self.root / 'fx-unedited.json'
+        unedited.write_text(json.dumps(self.read(job / 'model.skp')))
+        self.assertEqual(node('merge', str(unedited)), {'applied': [], 'added': [], 'deleted': [], 'conflicts': 0, 'sofa': [2.5, 3.0, 30], 'ids': ['fx-fridge', 'fx-run', 'fx-sofa']})
+        moved = self.root / 'fx-moved.skp'
+        move_group(job / 'model.skp', moved, 'fx-sofa', 0.5)
+        erased = self.root / 'fx-erased.skp'
+        erase_group(moved, erased, 'fx-fridge')
+        edited = self.root / 'fx-edited.json'
+        edited.write_text(json.dumps(self.read(erased)))
+        self.assertEqual(node('merge', str(edited)), {'applied': ['fx-sofa'], 'added': [], 'deleted': ['fx-fridge'], 'conflicts': 0, 'sofa': [3.0, 3.0, 30], 'ids': ['fx-run', 'fx-sofa']})
+
     def test_mirror_of_another_property_is_refused(self):
         skp = self.write(SPEC)
         other = dict(SPEC, property={'id': 'prop-other', 'name': 'Other'})
@@ -306,6 +389,74 @@ class MirrorServiceBoundsTests(unittest.TestCase):
             self.assertEqual(caught.exception.status, 409)
         finally:
             self.service.lock.release()
+
+
+QUARTZ = {'id': 'mat-quartz', 'name': 'Quartz countertop', 'color': '#ede9e1'}
+KICK = {'id': None, 'name': 'Default toe kick', 'color': '#3a3c3f'}
+
+
+def with_fixtures():
+    """The synthetic room with a bed (a box) and a straight counter run, as mirrorSpec frames them."""
+    spec = copy.deepcopy(SPEC)
+    spec['fixtures'] = [
+        {'id': 'fx-bed', 'level': 'lvl-0', 'elevation': 0, 'name': 'Bed', 'kind': 'furniture', 'subtype': 'bed', 'shape': 'box',
+         'origin': [2.0, 1.5], 'angle': 0, 'local': None,
+         'parts': [{'pts': [[-1, -0.75], [1, -0.75], [1, 0.75], [-1, 0.75]], 'z0': 0, 'z1': 0.35, 'material': None},
+                   {'pts': [[-0.98, -0.73], [0.98, -0.73], [0.98, 0.73], [-0.98, 0.73]], 'z0': 0.35, 'z1': 0.59, 'material': None}],
+         'base': {'kind': 'furniture', 'subtype': 'bed', 'shape': 'box', 'x': 2.0, 'y': 1.5, 'rot': 0, 'w': 2.0, 'd': 1.5, 'y0': 0, 'h': 0.59}},
+        {'id': 'fx-counter', 'level': 'lvl-0', 'elevation': 0, 'name': 'Base cabinets', 'kind': 'base-run', 'subtype': None, 'shape': 'run',
+         'origin': [0.0, 0.0], 'angle': 0, 'local': {'pts': [[0, 0], [3, 0]]},
+         'parts': [{'pts': [[0, 0], [3, 0], [3, 0.52], [0, 0.52]], 'z0': 0, 'z1': 0.1, 'material': dict(KICK)},
+                   {'pts': [[0, 0], [3, 0], [3, 0.58], [0, 0.58]], 'z0': 0.1, 'z1': 0.88, 'material': dict(TRIM)},
+                   {'pts': [[0, 0], [3, 0], [3, 0.6], [0, 0.6]], 'z0': 0.88, 'z1': 0.91, 'material': dict(QUARTZ)}],
+         'base': {'kind': 'base-run', 'subtype': None, 'shape': 'run', 'pts': [[0, 0], [3, 0]], 'depth': 0.6, 'y0': 0, 'h': 0.91}},
+    ]
+    return spec
+
+
+def edit_fixtures(source, output):
+    """Turn the bed 90 degrees about its centre and widen it by 1.2x along its length; move the
+    counter 0.2 m east and 0.1 m up; draw a loose face. Public SDK calls on a copy."""
+    from server.sketchup_convert import API, Ref, Transform
+    from server.sketchup_mirror import get_data, to_ref, fill, matrix
+    api = API(); model = Ref()
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
+        entities = api.ref('SUModelGetEntities', model)
+        for g in api.collection(entities, 'Groups'):
+            data = get_data(api, to_ref(api, 'SUGroupToEntity', g))
+            if not data:
+                continue
+            t = Transform(); api.call('SUGroupGetTransform', g, C.byref(t)); m = matrix(t)
+            if data['id'] == 'fx-bed':
+                # x axis -> plan +y is SketchUp -y; scale it 1.2; y axis follows a right-handed turn.
+                m[0:3] = [0, -1.2, 0]; m[4:7] = [1, 0, 0]
+            elif data['id'] == 'fx-counter':
+                m[12] += 0.2 / 0.0254; m[14] += 0.1 / 0.0254
+            t.values[:] = m; api.call('SUGroupSetTransform', g, C.byref(t))
+        fill(api, entities, [[0, 0, 200], [40, 0, 200], [40, 40, 200], [0, 40, 200]], [([0, 1, 2, 3], [])])
+        api.call('SUModelSaveToFile', model, str(output).encode())
+    finally:
+        if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
+
+
+def erase_group(source, output, element_id):
+    from server.sketchup_convert import API, Ref
+    from server.sketchup_mirror import get_data, to_ref
+    api = API(); model = Ref()
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
+        entities = api.ref('SUModelGetEntities', model)
+        for g in api.collection(entities, 'Groups'):
+            entity = to_ref(api, 'SUGroupToEntity', g)
+            data = get_data(api, entity)
+            if data and data.get('id') == element_id:
+                api.call('SUEntitiesErase', entities, C.c_size_t(1), (Ref * 1)(entity))
+        api.call('SUModelSaveToFile', model, str(output).encode())
+    finally:
+        if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
 
 
 def io_zip(entries):

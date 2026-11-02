@@ -2,7 +2,8 @@
 
 `write` turns the browser's mirror spec into tagged SketchUp groups: one group per wall
 (an extruded face with its openings cut), one nested group per opening, one group per room
-floor, one tag per level and the level's plan underlay as an image. Every Tiksi entity
+floor, one group per fixture (a nested group per prism), one tag per level and the level's
+plan underlay as an image. Every Tiksi entity
 carries a "tiksi" attribute dictionary with its id and the values it was written from.
 Faces wear the spec's finishes as SketchUp materials named "Tiksi: <name>", created once and
 reused by name, so rewrites repaint them instead of piling up copies. Writing over an
@@ -431,6 +432,48 @@ def write_room(api, entities, room, layer, materials):
     return group
 
 
+def prism(ring, z0, z1):
+    """Points and faces (inches) of a vertical prism over a convex ring of local (x, y)."""
+    n = len(ring)
+    points = [[x, y, z0] for x, y in ring] + [[x, y, z1] for x, y in ring]
+    faces = [(list(range(n)), []), (list(range(n, 2 * n)), [])]
+    faces += [([k, (k + 1) % n, n + (k + 1) % n, n + k], []) for k in range(n)]
+    return points, faces
+
+
+def write_fixture(api, entities, fixture, layer, materials):
+    """One group per fixture, framed at its origin along its angle; a nested group per part
+    keeps touching prisms (a toe kick under a cabinet) from merging into one another."""
+    parts = [p for p in fixture.get('parts', []) if len(p.get('pts') or []) >= 3 and p['z1'] - p['z0'] > 1e-4]
+    if not parts:
+        return None
+    ox, oy = fixture['origin']
+    a, elev = fixture.get('angle') or 0.0, fixture['elevation']
+    group = new_group(api, entities, fixture.get('name') or 'Fixture', frame(plan_to_skp(ox, oy, elev), (math.cos(a), -math.sin(a))))
+    set_layer(api, group, layer)
+    inner = api.ref('SUGroupGetEntities', group)
+    for part in parts:
+        pg = new_group(api, inner, 'Part', translation(0, 0, 0))
+        set_layer(api, pg, layer)
+        # Local plan (u, v) is SketchUp (u, -v) in this frame (see frame()).
+        ring = [(u * IN, -v * IN) for u, v in part['pts']]
+        area = sum(ring[i][0] * ring[(i + 1) % len(ring)][1] - ring[(i + 1) % len(ring)][0] * ring[i][1] for i in range(len(ring)))
+        if area < 0:
+            ring.reverse()
+        points, faces = prism(ring, part['z0'] * IN, part['z1'] * IN)
+        body = api.ref('SUGroupGetEntities', pg)
+        fill(api, body, points, faces)
+        mat = materials.get(part.get('material'))
+        for face in api.collection(body, 'Faces'):
+            paint(api, face, mat)
+    data = {'kind': 'fixture', 'id': fixture['id'], 'level': fixture['level'], 'fixtureKind': fixture.get('kind'), 'subtype': fixture.get('subtype'),
+            'shape': fixture.get('shape'), 'base': dict(fixture.get('base') or {}, elevation=r6(elev))}
+    if fixture.get('local'):
+        data['local'] = fixture['local']
+    set_data(api, to_ref(api, 'SUGroupToEntity', group), data)
+    return group
+
+
 def write_underlay(api, entities, underlay, image_path, layer):
     image = Ref()
     api.call('SUImageCreateFromFile', C.byref(image), os.fsencode(image_path))
@@ -488,6 +531,8 @@ def write_mirror(folder):
             write_wall(api, entities, wall, layers.get(wall['level']), materials)
         for room in spec.get('rooms', []):
             write_room(api, entities, room, layers.get(room['level']), materials)
+        for fixture in spec.get('fixtures', []):
+            write_fixture(api, entities, fixture, layers.get(fixture['level']), materials)
         for level, underlay in underlays.items():
             if level in kept_underlays:
                 continue
@@ -520,6 +565,8 @@ def spec_elements(spec):
                 yield {'id': h['id'], 'kind': 'opening'}
     for r in spec.get('rooms', []):
         yield {'id': r['id'], 'kind': 'room'}
+    for f in spec.get('fixtures', []):
+        yield {'id': f['id'], 'kind': 'fixture'}
 
 
 # ---------- read ----------
@@ -621,6 +668,51 @@ def read_room(api, group, data, warnings):
     return {'id': data.get('id'), 'level': data.get('level'), 'base': base, 'now': now}
 
 
+def deep_face_bounds(api, entities, m=None):
+    """Bounds of every face under `entities`, nested groups included, in its own frame."""
+    m = m or [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+    lo, hi, any_point = [math.inf] * 3, [-math.inf] * 3, False
+    for face in api.collection(entities, 'Faces'):
+        for p in face_ring(api, face):
+            q = apply(m, p); any_point = True
+            for i in range(3):
+                lo[i] = min(lo[i], q[i]); hi[i] = max(hi[i], q[i])
+    for g in api.collection(entities, 'Groups'):
+        box = deep_face_bounds(api, api.ref('SUGroupGetEntities', g), multiply(m, group_transform(api, g)))
+        if box:
+            any_point = True
+            for i in range(3):
+                lo[i] = min(lo[i], box[0][i]); hi[i] = max(hi[i], box[1][i])
+    return (lo, hi) if any_point else None
+
+
+def read_fixture(api, group, data, warnings):
+    """A fixture as it stands: a box from its bounds in its own frame (moved, turned and
+    stretched), a run from its back line carried by the group's transform."""
+    m = group_transform(api, group)
+    box = deep_face_bounds(api, api.ref('SUGroupGetEntities', group))
+    if not box:
+        warnings.append('Fixture ' + str(data.get('id')) + ' has no faces left; treated as deleted')
+        return None
+    (x0, y0, z0), (x1, y1, z1) = box
+    base = data.get('base') or {}
+    elev = base.get('elevation') or 0
+    sx, sy, sz = axis_scale(m, 0), axis_scale(m, 1), axis_scale(m, 2)
+    now = {'kind': data.get('fixtureKind'), 'subtype': data.get('subtype'), 'shape': data.get('shape')}
+    bottom = apply(m, [(x0 + x1) / 2, (y0 + y1) / 2, z0])
+    now['y0'] = r6(bottom[2] / IN - elev)
+    now['h'] = r6((z1 - z0) * sz / IN)
+    if data.get('shape') == 'box':
+        cx, cy = skp_to_plan(apply(m, [(x0 + x1) / 2, (y0 + y1) / 2, z0]))
+        now.update({'x': r6(cx), 'y': r6(cy), 'rot': r6(math.degrees(math.atan2(-m[1], m[0])) % 360),
+                    'w': r6((x1 - x0) * sx / IN), 'd': r6((y1 - y0) * sy / IN)})
+    else:
+        pts = (data.get('local') or {}).get('pts') or []
+        now['pts'] = [[r6(c) for c in skp_to_plan(apply(m, [u * IN, -v * IN, 0]))] for u, v in pts]
+        now['depth'] = r6((base.get('depth') or 0) * sy)
+    return {'id': data.get('id'), 'level': data.get('level'), 'base': base, 'now': now}
+
+
 def polygon_area(pts):
     return sum(pts[i][0] * pts[(i + 1) % len(pts)][1] - pts[(i + 1) % len(pts)][0] * pts[i][1] for i in range(len(pts))) / 2
 
@@ -640,7 +732,7 @@ def read_mirror(folder):
         api.call('SUModelCreateFromFile', C.byref(model), os.fsencode(folder / 'source.skp'))
         info = get_model_data(api, model)
         entities = api.ref('SUModelGetEntities', model)
-        walls, rooms, untagged_groups, stray = [], [], 0, 0
+        walls, rooms, fixtures, untagged_groups, stray = [], [], [], 0, 0
         for group in api.collection(entities, 'Groups'):
             data = get_data(api, to_ref(api, 'SUGroupToEntity', group))
             if data is None:
@@ -653,6 +745,9 @@ def read_mirror(folder):
             elif kind == 'room':
                 item = read_room(api, group, data, warnings)
                 if item: rooms.append(item)
+            elif kind == 'fixture':
+                item = read_fixture(api, group, data, warnings)
+                if item: fixtures.append(item)
             elif kind == 'opening':
                 stray += 1
         underlays = []
@@ -666,7 +761,7 @@ def read_mirror(folder):
         api.call('SUEntitiesGetNumFaces', entities, C.byref(count))
         instances = C.c_size_t()
         api.call('SUEntitiesGetNumInstances', entities, C.byref(instances))
-        return {'format': FORMAT, 'version': VERSION, 'model': info, 'walls': walls, 'rooms': rooms, 'underlays': underlays,
+        return {'format': FORMAT, 'version': VERSION, 'model': info, 'walls': walls, 'rooms': rooms, 'fixtures': fixtures, 'underlays': underlays,
                 'untagged': {'faces': count.value, 'groups': untagged_groups, 'instances': instances.value}, 'warnings': warnings}
     finally:
         if model.ptr:

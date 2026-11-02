@@ -19,6 +19,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { materialById, ensureLevels, levelHeight, levelOfRoom, wallsOn, roomsOn, openingsOn } from './store.js';
 import { materialFor } from './textures.js';
 import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, pointInPoly } from './wall-solids.js';
+import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
 
 const FALLBACK_WALL = '#d8d4cc';
 const FALLBACK_FLOOR = '#97999b';
@@ -210,6 +211,29 @@ function mergedMesh(geos, material, userData) {
   m.castShadow = true; m.receiveShadow = true;
   m.userData = userData;
   return m;
+}
+
+// ---------- fixtures ----------
+// One group per fixture (fixtures.js parts): a prism per part, merged by finish.
+export function buildFixtureGroup(f, ctx) {
+  const group = new THREE.Group();
+  group.name = 'fixture:' + f.id;
+  group.userData = { kind: 'fixture', id: f.id };
+  const byFinish = new Map();
+  for (const part of fixtureParts(f)) {
+    if (part.pts.length < 3 || part.y1 - part.y0 < 1e-4) continue;
+    let s = 0;
+    for (let i = 0; i < part.pts.length; i++) { const [x1, z1] = part.pts[i], [x2, z2] = part.pts[(i + 1) % part.pts.length]; s += x1 * z2 - x2 * z1; }
+    const key = (part.material || '') + '|' + part.role;
+    if (!byFinish.has(key)) byFinish.set(key, { part, geos: [] });
+    byFinish.get(key).geos.push(metricPrism(s > 0 ? part.pts.slice().reverse() : part.pts, part.y0, part.y1));   // metricPrism faces out for a clockwise ring
+  }
+  for (const { part, geos } of byFinish.values()) {
+    const rough = part.role === 'top' ? 0.3 : part.role === 'appliance' ? 0.35 : 0.8;
+    const m = mergedMesh(geos, matFor(part.material ? materialById(part.material) : null, FIXTURE_FALLBACK[part.role] || FIXTURE_FALLBACK.body, rough, ctx && ctx.matOpts), { kind: 'fixture', id: f.id });
+    if (m) group.add(m);
+  }
+  return group;
 }
 
 // ---------- plan helpers ----------
@@ -710,6 +734,7 @@ export function buildPropertyGroup(property, opts) {
     view.walls.forEach((wall, index) => {
       lg.add(buildWallGroup(wall, openings, view, Object.assign({ index }, ctx)));
     });
+    for (const f of fixturesOn(property, lvl.id)) lg.add(buildFixtureGroup(f, ctx));
     const ceilings = new THREE.Group();
     ceilings.name = 'ceilings';
     ceilings.userData = { ceilings: true, level: lvl.id };
