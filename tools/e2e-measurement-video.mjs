@@ -27,6 +27,9 @@ async function kitchen(page) {
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   await page.evaluate(async () => {
     const s = await import('/js/store.js');
+    // Playwright does not await a waitForFunction predicate: a Promise is truthy at once.
+    // Synchronous predicates read the store through this handle instead.
+    window.tiksiStore = s;
     const p = s.propertyTemplate('Synthetic kitchen'), L = p.levels[0].id;
     const wall = (id, ax, ay, bx, by) => ({ id, level: L, ax, ay, bx, by, thickness: 0.114, height: null, material: null });
     p.walls.push(wall('w-s', 0, 0, 4, 0), wall('w-e', 4, 0, 4, 3), wall('w-n', 4, 3, 0, 3), wall('w-w', 0, 3, 0, 0));
@@ -47,7 +50,7 @@ async function record(page, { value, text = '', attach = null, confidence = 'cle
   if (attach) await page.selectOption('[data-f=attach]', await page.locator('[data-f=attach] option', { hasText: attach }).first().getAttribute('value'));
   const before = (await prop(page)).measurements.length;
   await page.click('[data-act=save]');
-  await page.waitForFunction(async n => (await import('/js/store.js')).activeProperty().measurements.length > n, before);
+  await page.waitForFunction(n => window.tiksiStore.activeProperty().measurements.length > n, before, { timeout: 20000 });
   await settle(page);
 }
 
@@ -102,7 +105,7 @@ try {
     await page.waitForFunction(() => /^Applied/.test(document.querySelector('[data-status]').textContent));
     assert.ok(Math.abs((await prop(page)).openings[0].width - 0.8509) < 1e-4);
     await page.click('#btn-undo');
-    await page.waitForFunction(async () => (await import('/js/store.js')).activeProperty().openings[0].width === 0.8);
+    await page.waitForFunction(() => window.tiksiStore.activeProperty().openings[0].width === 0.8);
     await page.locator('.ms-reading .chip', { hasText: 'NOT IN MODEL' }).waitFor();
 
     // An unexplained reading and an unreadable one go to ASK THE OWNER with their frames.
