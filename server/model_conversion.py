@@ -18,7 +18,7 @@ ROOT=Path(__file__).resolve().parent.parent
 MAX_BYTES=600*1024*1024
 CAD={'.ifc','.step','.stp','.iges','.igs','.dxf','.laz','.3dm','.e57'}
 BLENDER={'.blend','.usd','.usda','.usdc','.usdz'}
-MIRROR_ENTRY=re.compile(r'^(mirror\.json|existing\.skp|underlay/[\w.:-]{1,80}\.(png|jpg|jpeg|webp))$')
+MIRROR_ENTRY=re.compile(r'^(mirror\.json|existing\.skp|underlay/[\w.:-]{1,80}\.(png|jpg|jpeg|webp)|product/[\w-]{1,60}\.json)$')
 
 class ConversionError(ValueError):
     def __init__(self,message,status=400):super().__init__(message);self.status=status
@@ -130,7 +130,7 @@ class ModelConversionService:
                 except zipfile.BadZipFile:raise ConversionError('Mirror package must be a ZIP')
                 with archive:
                     items=archive.infolist();names=[i.filename for i in items]
-                    if len(items)>64 or len(set(names))!=len(names) or not all(MIRROR_ENTRY.match(n) for n in names):raise ConversionError('Invalid mirror package entry')
+                    if len(items)>512 or len(set(names))!=len(names) or not all(MIRROR_ENTRY.match(n) for n in names):raise ConversionError('Invalid mirror package entry')
                     if 'mirror.json' not in names:raise ConversionError('Mirror package has no mirror.json')
                     if sum(i.file_size for i in items)>MAX_BYTES:raise ConversionError('Mirror package expands beyond 600 MB',413)
                     for item in items:

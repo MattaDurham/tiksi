@@ -18,7 +18,7 @@
 
 import { wallHeightOf, levelOfWall, levelOfRoom, levelHeight, roomsOn, uid } from './store.js';
 import { openingSpans, wallFaceMaterialIds } from './wall-solids.js';
-import { fixtureShape, fixtureMirrorParams, fixtureLocalFrame, fixtureParts, fixtureLabel, fixturesOn, normaliseFixture, FIXTURE_FALLBACK } from './fixtures.js';
+import { fixtureShape, fixtureMirrorParams, fixtureLocalFrame, fixtureParts, fixtureLabel, fixturesOn, normaliseFixture, productLabel, productFit, FIXTURE_FALLBACK } from './fixtures.js';
 
 export const MIRROR_FORMAT = 'tiksi-sketchup-mirror';
 const mm = v => Math.round(Number(v || 0) * 1000);           // signatures compare to the millimetre
@@ -84,7 +84,10 @@ const FALLBACK = {
   'fx-top': { name: 'Default counter', color: FIXTURE_FALLBACK.top }, 'fx-body': { name: 'Default cabinet', color: FIXTURE_FALLBACK.body },
   'fx-kick': { name: 'Default toe kick', color: FIXTURE_FALLBACK.kick }, 'fx-appliance': { name: 'Default appliance', color: FIXTURE_FALLBACK.appliance },
   'fx-fabric': { name: 'Default upholstery', color: FIXTURE_FALLBACK.fabric }, 'fx-wood': { name: 'Default wood', color: FIXTURE_FALLBACK.wood },
-  'fx-bath': { name: 'Default porcelain', color: FIXTURE_FALLBACK.bath },
+  'fx-bath': { name: 'Default porcelain', color: FIXTURE_FALLBACK.bath }, 'fx-fitting': { name: 'Default fitting', color: FIXTURE_FALLBACK.fitting },
+  'fx-white': { name: 'Appliance white', color: FIXTURE_FALLBACK.white }, 'fx-black': { name: 'Black trim', color: FIXTURE_FALLBACK.black },
+  'fx-glass': { name: 'Dark glass', color: FIXTURE_FALLBACK.glass }, 'fx-chrome': { name: 'Chrome', color: FIXTURE_FALLBACK.chrome },
+  'fx-panel': { name: 'Control panel', color: FIXTURE_FALLBACK.panel }, 'fx-copper': { name: 'Copper', color: FIXTURE_FALLBACK.copper },
 };
 const OPENING_MATERIAL = { door: 'mat-trim', window: 'mat-glass' };
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -138,12 +141,14 @@ export function mirrorSpec(prop, materials) {
     if (!st) continue;
     const { origin, angle, toLocal } = fixtureLocalFrame(f);
     const r6 = v => Math.round(v * 1e6) / 1e6 || 0;
-    const parts = fixtureParts(f).filter(q => q.pts.length >= 3 && q.y1 - q.y0 > 1e-4).map(q => ({
-      pts: q.pts.map(pt => toLocal(pt).map(r6)), z0: r6(q.y0), z1: r6(q.y1),
-      material: finish(q.material, FALLBACK['fx-' + q.role] ? 'fx-' + q.role : 'fx-body', 'fixture ' + f.id),
-    }));
-    fixtures.push({ id: f.id, level: lvl.id, elevation: lvl.elevation, name: fixtureLabel(f), kind: f.kind, subtype: f.subtype || null, shape: fixtureShape(f),
-      origin: origin.map(r6), angle: r6(angle), parts, base: st.params, local: st.params.shape === 'run' ? { pts: f.pts.map(pt => toLocal(pt).map(r6)) } : null });
+    const paint = q => finish(q.material, FALLBACK['fx-' + q.role] ? 'fx-' + q.role : 'fx-body', 'fixture ' + f.id);
+    const parts = fixtureParts(f).filter(q => q.solid || (q.pts.length >= 3 && q.y1 - q.y0 > 1e-4)).map(q => q.solid
+      ? { solid: q.solid.map(([x, y, hh]) => [...toLocal([x, y]).map(r6), r6(hh)]), faces: q.faces, material: paint(q) }
+      : { pts: q.pts.map(pt => toLocal(pt).map(r6)), z0: r6(q.y0), z1: r6(q.y1), material: paint(q) });
+    const label = productLabel(f);
+    fixtures.push({ id: f.id, level: lvl.id, elevation: lvl.elevation, name: label ? fixtureLabel(f) + ': ' + label : fixtureLabel(f), kind: f.kind, subtype: f.subtype || null, shape: fixtureShape(f),
+      origin: origin.map(r6), angle: r6(angle), parts, base: st.params, local: st.params.shape === 'run' ? { pts: f.pts.map(pt => toLocal(pt).map(r6)) } : null,
+      product: productSpec(f) });
   }
   const elements = {};
   for (const [id, st] of state) elements[id] = { kind: st.kind, sig: st.sig };
@@ -155,6 +160,18 @@ export function mirrorSpec(prop, materials) {
     underlays: (prop.levels || []).map(l => underlayOf(l)).filter(Boolean),
     warnings,
   };
+}
+
+// What the .skp records about the real product (in the group's "tiksi" dictionary and its
+// name). `fileId` and `scale` tell syncMirror which model to send and change the spec's
+// signature when the model or its fit changes; the triangles travel as a separate file.
+function productSpec(f) {
+  const p = f.product;
+  if (!p) return null;
+  const fit = productFit(f), a = p.asset;
+  return { brand: p.brand, brandConfidence: p.brandConfidence, model: p.model, modelConfidence: p.modelConfidence,
+    sources: p.sources.map(s => s.url).slice(0, 6), fileId: fit ? a.fileId : null, modelName: a ? a.name : '', origin: a ? a.origin : '',
+    scale: fit ? fit.scale.map(v => Math.round(v * 1e4) / 1e4) : null };
 }
 
 // A level's tracing underlay, placed where the plan editor draws it.
@@ -436,6 +453,24 @@ async function encodeJpeg(bytes) {
   } finally { bitmap.close(); }
 }
 
+// Real product models go to SketchUp as triangles in each fixture's own frame (fitted to the
+// measured box), one file per fixture. A model that cannot be read keeps the prisms and warns.
+export async function attachProductMeshes(prop, spec, files, load) {
+  load = load || (await import('./fixture-products.js')).productMeshPayload;
+  for (const sf of spec.fixtures) {
+    if (!sf.product || !sf.product.fileId) continue;
+    const f = (prop.fixtures || []).find(x => x.id === sf.id);
+    try {
+      const payload = f && await load(f);
+      if (!payload) throw new Error('model file is not in this browser');
+      sf.mesh = 'product/' + sf.id.replace(/[^\w-]/g, '_').slice(0, 60) + '.json';
+      files[sf.mesh] = new TextEncoder().encode(JSON.stringify(payload));
+    } catch (e) {
+      spec.warnings.push('3D model of ' + sf.name + ' was not sent (' + (e && e.message || e) + '); its stand-in shape is drawn instead');
+    }
+  }
+}
+
 export function mirrorFileName(tiksiName) { return String(tiksiName).replace(/\.tiksi$/i, '') + '.skp'; }
 
 async function fileIn(folder, name) {
@@ -492,6 +527,7 @@ export async function syncMirror(folder, prop, entry, write, materials) {
       u.file = 'underlay/' + u.level + '.' + data.ext;
       files[u.file] = data.bytes;
     }
+    await attachProductMeshes(prop, spec, files);
     const bytes = await writeMirror(spec, got ? await got.file.arrayBuffer() : null, files);
     const handle = got ? got.handle : await folder.getFileHandle(name, { create: true });
     await write(handle, new Blob([bytes]));

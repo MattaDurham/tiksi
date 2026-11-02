@@ -21,6 +21,7 @@ import { materialFor } from './textures.js';
 import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, pointInPoly } from './wall-solids.js';
 import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
 import { fixtureShown } from './view-layers.js';
+import { productObjectFor } from './fixture-products.js';
 
 const FALLBACK_WALL = '#d8d4cc';
 const FALLBACK_FLOOR = '#97999b';
@@ -191,6 +192,7 @@ export function metricPrism(footprint, y0, y1, faces) {
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+  g.setIndex(Array.from({ length: P.length / 3 }, (_, i) => i));   // prisms are indexed; merging needs the same
   g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2));
   g.setIndex(I);
@@ -215,13 +217,47 @@ function mergedMesh(geos, material, userData) {
 }
 
 // ---------- fixtures ----------
+const ROUGH = { top: 0.3, appliance: 0.35, glass: 0.08, chrome: 0.12, black: 0.5, panel: 0.3, copper: 0.35, white: 0.4, bath: 0.2 };
+
+// A convex solid from plan-space vertices [x, y, height] and face loops, every face turned
+// to look away from the centre (the loops may come in either winding).
+function convexSolid(verts, faces) {
+  const W = verts.map(([x, y, h]) => [x, h, y]);
+  const c = W.reduce((a, p) => [a[0] + p[0] / W.length, a[1] + p[1] / W.length, a[2] + p[2] / W.length], [0, 0, 0]);
+  const P = [];
+  for (const loop of faces) {
+    const q = loop.map(i => W[i]);
+    if (q.length < 3) continue;
+    const e1 = [q[1][0] - q[0][0], q[1][1] - q[0][1], q[1][2] - q[0][2]], e2 = [q[2][0] - q[0][0], q[2][1] - q[0][1], q[2][2] - q[0][2]];
+    const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+    const out = n[0] * (q[0][0] - c[0]) + n[1] * (q[0][1] - c[1]) + n[2] * (q[0][2] - c[2]);
+    const ring = out < 0 ? q.slice().reverse() : q;
+    for (let i = 1; i + 1 < ring.length; i++) P.push(...ring[0], ...ring[i], ...ring[i + 1]);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+  g.setIndex(Array.from({ length: P.length / 3 }, (_, i) => i));   // prisms are indexed; merging needs the same
+  g.computeVertexNormals();
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(P.length / 3 * 2), 2));
+  return g;
+}
+
 // One group per fixture (fixtures.js parts): a prism per part, merged by finish.
 export function buildFixtureGroup(f, ctx) {
   const group = new THREE.Group();
   group.name = 'fixture:' + f.id;
   group.userData = { kind: 'fixture', id: f.id };
+  // The real product's model, once loaded, stands in the measured box instead of the prisms.
+  const product = productObjectFor(f);
+  if (product) { group.add(product); return group; }
   const byFinish = new Map();
   for (const part of fixtureParts(f)) {
+    if (part.solid) {
+      const key = (part.material || '') + '|' + part.role;
+      if (!byFinish.has(key)) byFinish.set(key, { part, geos: [] });
+      byFinish.get(key).geos.push(convexSolid(part.solid, part.faces));
+      continue;
+    }
     if (part.pts.length < 3 || part.y1 - part.y0 < 1e-4) continue;
     let s = 0;
     for (let i = 0; i < part.pts.length; i++) { const [x1, z1] = part.pts[i], [x2, z2] = part.pts[(i + 1) % part.pts.length]; s += x1 * z2 - x2 * z1; }
@@ -230,7 +266,7 @@ export function buildFixtureGroup(f, ctx) {
     byFinish.get(key).geos.push(metricPrism(s > 0 ? part.pts.slice().reverse() : part.pts, part.y0, part.y1));   // metricPrism faces out for a clockwise ring
   }
   for (const { part, geos } of byFinish.values()) {
-    const rough = part.role === 'top' ? 0.3 : part.role === 'appliance' ? 0.35 : 0.8;
+    const rough = ROUGH[part.role] ?? 0.8;
     const m = mergedMesh(geos, matFor(part.material ? materialById(part.material) : null, FIXTURE_FALLBACK[part.role] || FIXTURE_FALLBACK.body, rough, ctx && ctx.matOpts), { kind: 'fixture', id: f.id });
     if (m) group.add(m);
   }

@@ -350,6 +350,15 @@ export function projectFolder(propId) {
   return own ? { name: own.name, parentName: own.parentName || null, label: folderLabel(propId), permitted: own.permitted } : null;
 }
 
+// The folder handles of a property kept in a folder of its own, when this browser may write
+// there: `root` is the folder that was picked (the project's own folder, where its documents
+// live beside "Tiksi"). Paths saved for documents are relative to it. Null otherwise.
+export function projectFolderHandles(propId) {
+  const own = state.projectFolders.get(propId);
+  if (!own || !own.permitted || !(own.root || own.handle)) return null;
+  return { root: own.root || own.handle, prefix: '' };
+}
+
 // "68 Chatsworth › Tiksi" when Tiksi made its folder inside the one picked, else the folder's name.
 export function folderLabel(propId) {
   const own = state.projectFolders.get(propId);

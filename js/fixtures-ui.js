@@ -2,9 +2,11 @@
 // the proposals one by one, add one by hand, and edit a selected one in the inspector. Every
 // change goes through the shared geometry history, so Undo and Redo cover fixtures too.
 
-import { uid, touch, fmtLen, parseLen, escapeHtml, getFile, levelById, levelHeight, wallsOn } from './store.js';
+import { ws, uid, touch, fmtLen, parseLen, escapeHtml, getFile, levelById, levelHeight, wallsOn } from './store.js';
+import { productRecordFor, linkFixtureProduct, applyRecordToFixtures, normaliseProductRecord, DOC_LABEL } from './product-records.js';
+import { DETAIL_DEFAULTS } from './fixture-detail.js';
 import { beginGeometryEdit } from './edit-history.js';
-import { FIXTURE_KINDS, fixtureLabel, fixtureShape, fixtureTemplate, normaliseFixture, runLength, roomOfFixture } from './fixtures.js';
+import { FIXTURE_KINDS, fixtureLabel, fixtureShape, fixtureTemplate, normaliseFixture, runLength, roomOfFixture, productFit, productLabel, PRODUCT_CONFIDENCE } from './fixtures.js';
 import { detectFixtures } from './scan-fixtures.js';
 import { materialSelectHtml } from './materials.js';
 import { meshFromObject3D } from './scan2plan.js';
@@ -170,7 +172,94 @@ export function fixtureInspectorHtml(prop, f) {
     <div class="field"><label>Source</label><select data-fx-source>${[['scan', 'Read from the scan'], ['user', 'Drawn or edited'], ['tape', 'Tape measured']].map(([v, l]) => `<option value="${v}" ${pv.source === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     ${pv.source === 'scan' && Number.isFinite(pv.confidence) ? `<div class="stat-line"><span>Scan confidence</span><b>${pct(pv.confidence)}</b></div>` : ''}
     ${pv.evidence ? `<p class="empty">${escapeHtml(pv.evidence)}</p>` : ''}
+    ${productHtml(f)}
     <button class="btn danger" data-fx-del>DELETE FIXTURE</button>`;
+}
+
+const CONF_LABEL = { confirmed: 'Confirmed (read)', likely: 'Likely (visual match)', unidentified: 'Not identified' };
+const confSelect = (key, value, disabled) => `<select data-fx-pconf="${key}" ${disabled ? 'disabled' : ''}>${PRODUCT_CONFIDENCE.map(c => `<option value="${c}" ${c === value ? 'selected' : ''}>${CONF_LABEL[c]}</option>`).join('')}</select>`;
+const clock = t => Math.floor(t / 60) + ':' + String(Math.floor(t % 60)).padStart(2, '0');
+function evidenceLine(e) {
+  const where = [e.media, e.at != null ? 'at ' + clock(e.at) : '', e.keyframe ? 'keyframe ' + e.keyframe : ''].filter(Boolean).join(' ');
+  const reads = e.reads.length ? ' (reads the ' + e.reads.join(' and ') + ')' : '';
+  return `<li>${escapeHtml(where + reads)}${e.note ? '<small>' + escapeHtml(e.note) + '</small>' : ''}</li>`;
+}
+const pctOf = v => Math.round(v * 100) + '%';
+
+// The PRODUCTS record behind the fixture: its documents and the drawing's dimensions.
+function recordHtml(f) {
+  const r = productRecordFor(ws.data, f);
+  if (!r) return f.product && f.product.brand ? '<p class="empty">Enter the model too, and Tiksi files the product in PRODUCTS and looks for its spec sheet, installation drawing and manual.</p>' : '';
+  normaliseProductRecord(r);
+  const dims = r.dims || {};
+  const docs = r.documents.map(d => `<li><b>${escapeHtml(DOC_LABEL[d.kind])}</b> ${escapeHtml(d.title)}<small>${escapeHtml(d.path ? 'In the project folder: ' + d.path : d.fileId ? 'Kept in the project file' : 'Not saved')}${d.url ? ' · <a href="' + escapeHtml(d.url) + '" target="_blank" rel="noopener noreferrer">source</a>' : ''}</small></li>`).join('');
+  const dl = (label, key) => `<div class="field"><label>${label}</label><input type="text" data-fx-dim="${key}" value="${dims[key] ? escapeHtml(fmtLen(dims[key])) : ''}" placeholder="from the drawing"></div>`;
+  return `<div class="stat-line"><span>In PRODUCTS as</span><b>${escapeHtml(r.name || [r.brand, r.model].join(' '))}</b></div>
+    <div class="field"><label>Documents</label>${docs ? `<ul class="fx-evidence">${docs}</ul>` : `<p class="empty">${r.documentsSearchedAt ? 'None found yet.' : 'None saved yet.'}</p>`}</div>
+    <div class="field-row"><button class="btn" data-fx-finddocs title="Search the manufacturer, then retailers, for the spec sheet, installation guide and manual, and save them in the project folder">FIND DOCUMENTS</button><button class="btn" data-fx-adddoc title="Save a document from its web address">ADD BY ADDRESS</button></div>
+    <div class="field-row">${dl('Drawing width', 'w')}${dl('Drawing depth', 'd')}${dl('Drawing height', 'h')}</div>
+    ${f.product.dimsFrom ? `<p class="empty">Sized from ${escapeHtml(f.product.dimsFrom)}; the wall side stays where it was measured.</p>` : ''}`;
+}
+
+const LENGTH_KEYS = new Set(['backguard', 'kick', 'tank', 'counter']);
+const DETAIL_LABEL = { fuel: 'Fuel', burners: 'Burners', knobs: 'Knobs', backguard: 'Backguard height', drawer: 'Storage drawer', window: 'Oven window', kick: 'Toe kick height',
+  controls: 'Controls', handle: 'Handle', layout: 'Layout', split: 'Split (share of height below)', hinge: 'Hinges on', style: 'Style', display: 'Display', bowl: 'Bowl',
+  tank: 'Rim height', doors: 'Doors', sink: 'Sink', counter: 'Top thickness', apron: 'Apron front', head: 'Shower head', spout: 'Tub spout', door: 'Door', circuits: 'Circuits',
+  supply: 'Supply line', pipes: 'Pipes', shape: 'Shape', trap: 'P-trap' };
+const CHOICE_LIST = { fuel: ['gas', 'electric'], controls: ['front', 'top', 'right'], handle: ['bar', 'pocket'], hinge: ['right', 'left'], bowl: ['elongated', 'round'],
+  sink: ['undermount', 'vessel', 'none'], door: ['open', 'closed'], supply: ['braided', 'rigid'], shape: ['round', 'square'],
+  layout: { fridge: ['top-freezer', 'bottom-freezer', 'french', 'side-by-side', 'single'], 'washer-dryer': ['stacked', 'front-washer', 'front-dryer', 'top-washer'] },
+  style: { 'range-hood': ['under-cabinet', 'chimney'], faucet: ['single-lever', 'pull-down', 'two-handle'], light: ['flush', 'pendant'] } };
+
+// The numbers the detailed stand-in is built from (fixture-detail.js), as the drawing gives them.
+function detailHtml(f) {
+  const def = DETAIL_DEFAULTS[f.subtype];
+  if (!def || fixtureShape(f) !== 'box' || (f.product && f.product.asset)) return '';
+  const d = f.detail || def;
+  const fields = Object.keys(def).map(k => {
+    const v = d[k], label = escapeHtml(DETAIL_LABEL[k] || k);
+    if (typeof def[k] === 'boolean') return `<label class="v-export-check"><input type="checkbox" data-fx-detail="${k}" ${v ? 'checked' : ''}> ${label}</label>`;
+    if (Array.isArray(def[k])) return `<div class="field"><label>${label} (one per line: number, label, amps)</label><textarea data-fx-circuits rows="4" placeholder="1 Kitchen counter 20A">${escapeHtml((v || []).map(c => [c.n, c.label, c.amps ? c.amps + 'A' : ''].filter(Boolean).join(' ')).join('\n'))}</textarea></div>`;
+    if (LENGTH_KEYS.has(k)) return `<div class="field"><label>${label}</label><input type="text" data-fx-detail-len="${k}" value="${escapeHtml(fmtLen(v))}"></div>`;
+    if (typeof def[k] === 'number') return `<div class="field"><label>${label}</label><input type="number" step="${k === 'split' ? 0.01 : 1}" data-fx-detail-num="${k}" value="${v}"></div>`;
+    const list = Array.isArray(CHOICE_LIST[k]) ? CHOICE_LIST[k] : (CHOICE_LIST[k] || {})[f.subtype] || [v];
+    return `<div class="field"><label>${label}</label><select data-fx-detail="${k}">${list.map(o => `<option value="${o}" ${o === v ? 'selected' : ''}>${escapeHtml(o.replace(/-/g, ' '))}</option>`).join('')}</select></div>`;
+  });
+  return `<details class="fx-detail"><summary>BUILT FROM</summary>${fields.join('')}</details>`;
+}
+
+// "12 Bath GFCI 20A" -> { n: 12, label: 'Bath GFCI', amps: 20 }
+function parseCircuits(textValue) {
+  return String(textValue || '').split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+    const m = /^(\d+)?\s*(.*?)\s*(?:(\d+)\s*a(?:mps?)?)?$/i.exec(l);
+    return { n: m && m[1] ? +m[1] : null, label: m ? m[2] : l, amps: m && m[3] ? +m[3] : null, poles: /2[- ]?pole|double/i.test(l) ? 2 : 1 };
+  });
+}
+
+// What the real product is, how sure the reading is, what it rests on, and its 3D model.
+export function productHtml(f) {
+  const p = f.product || { brand: '', brandConfidence: 'unidentified', model: '', modelConfidence: 'unidentified', evidence: [], sources: [] };
+  const box = fixtureShape(f) === 'box', a = p.asset, fit = productFit(f);
+  const stretched = fit && fit.off > 0.1;
+  const model = !box ? '' : a ? `<div class="stat-line"><span>3D model</span><b title="${escapeHtml(a.name)}">${escapeHtml(a.name || 'Attached')}</b></div>
+      ${a.origin ? `<p class="empty"><a href="${escapeHtml(a.origin)}" target="_blank" rel="noopener noreferrer">${escapeHtml(a.originName || 'Source of the model')}</a>${a.license ? ' · ' + escapeHtml(a.license) : ''}</p>` : ''}
+      <div class="stat-line" ${stretched ? 'data-fx-stretch' : ''}><span>Fit to the measured box</span><b>${fit.scale.map(pctOf).join(' × ')}</b></div>
+      ${stretched ? `<p class="empty">The model is ${pctOf(fit.off)} off the measured size on one side. Check the measurement, or use the model's own size if the model is right.</p>` : ''}
+      <div class="field-row"><button class="btn" data-fx-turn title="Turn the model a quarter turn so its front faces the room">TURN 90°</button><button class="btn" data-fx-usesize title="Make the box the model's real size: ${escapeHtml(fit.size.map(v => fmtLen(v)).join(' × '))}">USE MODEL SIZE</button></div>
+      <button class="btn" data-fx-unmodel>REMOVE 3D MODEL</button>`
+    : `<p class="empty">${escapeHtml(p.assetNote || 'Stand-in shape: no 3D model of the real product is attached.')}</p>`;
+  return `<div class="tool-sep"></div><h3>PRODUCT</h3>
+    <div class="field"><label>Brand</label><input type="text" data-fx-ptext="brand" value="${escapeHtml(p.brand)}" placeholder="Not identified"></div>
+    <div class="field"><label>Brand is</label>${confSelect('brandConfidence', p.brandConfidence, !p.brand)}</div>
+    <div class="field"><label>Model</label><input type="text" data-fx-ptext="model" value="${escapeHtml(p.model)}" placeholder="Not read" ${p.brand ? '' : 'disabled'}></div>
+    <div class="field"><label>Model is</label>${confSelect('modelConfidence', p.modelConfidence, !p.model)}</div>
+    <p class="empty" data-fx-confnote>Confirmed means a logo or rating label was read in a photo, video or scan keyframe listed below; without one it stays Likely.</p>
+    ${p.evidence.length ? `<div class="field"><label>Evidence</label><ul class="fx-evidence">${p.evidence.map(evidenceLine).join('')}</ul></div>` : ''}
+    ${p.sources.length ? `<div class="field"><label>Sources</label><ul class="fx-evidence">${p.sources.map(x => `<li><a href="${escapeHtml(x.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(x.title || new URL(x.url).hostname)}</a></li>`).join('')}</ul></div>` : ''}
+    ${recordHtml(f)}
+    ${detailHtml(f)}
+    ${model}
+    ${box ? `<label class="btn" title="A GLB, SketchUp, OBJ, FBX, DAE or 3DS model of this product, scaled to the measured box">ATTACH 3D MODEL<input type="file" data-fx-model accept=".glb,.gltf,.zip,.skp,.obj,.fbx,.dae,.3ds,.stl,.ply,.blend,.usdz" hidden></label>` : ''}`;
 }
 
 // on: { changed(): rebuild the views, deleted(): clear the selection }
@@ -201,6 +290,77 @@ export function bindFixtureInspector(root, prop, f, on) {
   root.querySelectorAll('[data-fx-mat]').forEach(s => s.onchange = () => edit('change fixture finish', () => { f[s.dataset.fxMat] = s.value || null; }, true));
   const src = root.querySelector('[data-fx-source]');
   if (src) src.onchange = () => edit('mark fixture source', () => { f.provenance = Object.assign({}, f.provenance, { source: src.value }); }, true);
+  const product = () => f.product || (f.product = { brand: '', evidence: [], sources: [] });
+  // The one trigger: a brand and model file the product in PRODUCTS, size the fixture from the
+  // drawing's numbers when the record has them, and go looking for its documents once.
+  const identify = () => {
+    normaliseFixture(f, new Set(prop.levels.map(l => l.id)));
+    const link = linkFixtureProduct(ws.data, prop, f, uid);
+    if (link && !link.record.documents.length && !link.record.documentsSearchedAt) {
+      link.record.documentsSearchedAt = new Date().toISOString();
+      searchDocuments(link.record);
+    }
+  };
+  const searchDocuments = async record => {
+    const say = on.say || (() => {});
+    try {
+      const { findDocuments } = await import('./product-docs.js');
+      const r = await findDocuments(prop, record, m => say(m));
+      say(r.saved.length ? 'Saved ' + r.saved.length + ' document' + (r.saved.length === 1 ? '' : 's') + ' for ' + record.name + (r.failed.length ? '; ' + r.failed.length + ' could not be fetched' : '') : 'No documents could be fetched for ' + record.name + '. Add them by address.', r.saved.length ? 'ok' : 'warn');
+      on.changed();
+    } catch (e) { say(String(e && e.message || e), 'warn'); }
+  };
+  root.querySelectorAll('[data-fx-ptext]').forEach(input => input.onchange = () => edit('edit fixture product', () => {
+    product()[input.dataset.fxPtext] = input.value.trim().slice(0, 80);
+    identify();
+  }, true));
+  root.querySelectorAll('[data-fx-pconf]').forEach(sel => sel.onchange = () => edit('edit fixture product', () => { product()[sel.dataset.fxPconf] = sel.value; }, true));
+  const record = productRecordFor(ws.data, f);
+  const find = root.querySelector('[data-fx-finddocs]');
+  if (find && record) find.onclick = () => { record.documentsSearchedAt = new Date().toISOString(); searchDocuments(record); };
+  const adddoc = root.querySelector('[data-fx-adddoc]');
+  if (adddoc && record) adddoc.onclick = async () => {
+    const url = prompt('Web address of the spec sheet, installation guide or manual (PDF or image):');
+    if (!url) return;
+    try {
+      const { fetchDocument, saveDocument } = await import('./product-docs.js');
+      const { bytes, info } = await fetchDocument(url.trim());
+      await saveDocument(prop, record, bytes, info);
+      on.changed();
+    } catch (e) { alert('Could not save the document: ' + (e && e.message || e)); }
+  };
+  root.querySelectorAll('[data-fx-dim]').forEach(input => input.onchange = () => {
+    const v = input.value.trim() ? parseLen(input.value) : null;
+    if (v !== null && !(v > 0)) { on.changed(); return; }
+    edit('size from drawing', () => {
+      record.dims = Object.assign({}, record.dims, { [input.dataset.fxDim]: v, source: (record.dims && record.dims.source) || { title: 'Entered from the drawing' } });
+      normaliseProductRecord(record);
+      applyRecordToFixtures(ws.data, record);
+    }, true);
+  });
+  const setDetail = (k, v) => edit('edit fixture detail', () => { f.detail = Object.assign({}, f.detail, { [k]: v }); }, true);
+  root.querySelectorAll('[data-fx-detail]').forEach(el => el.onchange = () => setDetail(el.dataset.fxDetail, el.type === 'checkbox' ? el.checked : el.value));
+  root.querySelectorAll('[data-fx-detail-num]').forEach(el => el.onchange = () => { const v = parseFloat(el.value); if (Number.isFinite(v)) setDetail(el.dataset.fxDetailNum, v); });
+  root.querySelectorAll('[data-fx-detail-len]').forEach(el => el.onchange = () => { const v = parseLen(el.value); if (Number.isFinite(v)) setDetail(el.dataset.fxDetailLen, v); });
+  const circuits = root.querySelector('[data-fx-circuits]');
+  if (circuits) circuits.onchange = () => setDetail('circuits', parseCircuits(circuits.value));
+  const turn = root.querySelector('[data-fx-turn]');
+  if (turn) turn.onclick = () => edit('turn product model', () => { f.product.asset.turn = ((f.product.asset.turn || 0) + 90) % 360; }, true);
+  const unmodel = root.querySelector('[data-fx-unmodel]');
+  if (unmodel) unmodel.onclick = () => edit('remove product model', () => { f.product.asset = null; }, true);
+  const usesize = root.querySelector('[data-fx-usesize]');
+  if (usesize) usesize.onclick = () => edit('use product size', () => { [f.w, f.d, f.h] = productFit(f).size.map(v => Math.round(v * 1e4) / 1e4); });
+  const pick = root.querySelector('[data-fx-model]');
+  if (pick) pick.onchange = async () => {
+    const file = pick.files && pick.files[0];
+    if (!file) return;
+    try {
+      const { attachProductModel } = await import('./fixture-products.js');
+      await attachProductModel(prop, f, file);
+      f.roomId = roomOfFixture(prop.rooms, f);
+      on.changed();
+    } catch (e) { alert('Could not attach ' + file.name + ': ' + (e && e.message || e)); }
+  };
   root.querySelector('[data-fx-del]').onclick = () => {
     beginGeometryEdit(prop, 'delete fixture');
     prop.fixtures = prop.fixtures.filter(x => x.id !== f.id);

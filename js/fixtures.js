@@ -12,31 +12,61 @@
 //         (cos, sin)), width w along u, depth d along v; local +v is the back.
 // Heights are above the level's floor: y0 is the bottom, h the height (a base run's h is
 // its counter top). provenance: { source: 'scan' | 'user' | 'tape', confidence }.
+//
+// product (optional): which real product stands there, read during onboarding (ONBOARDING.md).
+//   brand, model          as read or matched; brandConfidence / modelConfidence are
+//                         'confirmed' (a logo or rating label was read), 'likely' (a visual
+//                         match against listings) or 'unidentified'. 'confirmed' needs an
+//                         evidence entry that reads it, or it is stored as 'likely'.
+//   evidence              [{ media, at (video seconds), keyframe, crop [x, y, w, h] 0-1, reads, note }]
+//   sources               [{ url, title }], public web pages only
+//   asset                 the product's own 3D model (a file in the project): { fileId, format,
+//                         name, sourceFileId / sourceName (the original it was converted
+//                         from, kept byte for byte), origin, originName, license, turn (degrees about up, so the
+//                         model's front faces the fixture's front), bounds (the GLB's own
+//                         bounds, metres) }. A box fixture with an asset draws the model,
+//                         stretched to the measured box (productFit), instead of its prisms.
+//   assetNote             why there is no model (searched where, found nothing)
+
+import { detailParts, normaliseDetail } from './fixture-detail.js';
 
 export const FIXTURE_KINDS = {
   'base-run': { label: 'Base cabinets', shape: 'run', subtypes: [] },
   'wall-run': { label: 'Wall cabinets', shape: 'run', subtypes: [] },
-  appliance: { label: 'Appliance', shape: 'box', subtypes: ['range', 'fridge', 'dishwasher', 'washer-dryer'] },
+  appliance: { label: 'Appliance', shape: 'box', subtypes: ['range', 'fridge', 'dishwasher', 'washer-dryer', 'microwave', 'range-hood', 'mini-split', 'water-heater'] },
   furniture: { label: 'Furniture', shape: 'box', subtypes: ['bed', 'table-round', 'table-rect', 'sofa', 'desk', 'storage'] },
   bath: { label: 'Bath', shape: 'box', subtypes: ['tub', 'vanity', 'toilet'] },
+  fitting: { label: 'Fitting', shape: 'box', subtypes: ['faucet', 'shower-trim', 'panel', 'thermostat', 'light', 'outdoor-unit', 'shutoff', 'line-set', 'vent', 'drain'] },
 };
 
 const SUBTYPE_LABEL = { range: 'Range', fridge: 'Fridge', dishwasher: 'Dishwasher', 'washer-dryer': 'Washer / dryer', bed: 'Bed',
-  'table-round': 'Round table', 'table-rect': 'Table', sofa: 'Sofa', desk: 'Desk', storage: 'Storage', tub: 'Tub', vanity: 'Vanity', toilet: 'Toilet' };
+  'table-round': 'Round table', 'table-rect': 'Table', sofa: 'Sofa', desk: 'Desk', storage: 'Storage', tub: 'Tub', vanity: 'Vanity', toilet: 'Toilet',
+  microwave: 'Microwave', 'range-hood': 'Range hood', 'mini-split': 'Mini-split head', 'water-heater': 'Water heater', faucet: 'Faucet',
+  'shower-trim': 'Shower trim', panel: 'Breaker panel', thermostat: 'Thermostat', light: 'Light fixture', 'outdoor-unit': 'Outdoor unit',
+  shutoff: 'Shutoff valve', 'line-set': 'Line set', vent: 'Vent', drain: 'Drain and trap' };
 
 // Typical sizes, used for a hand-added fixture and to fill fields a record lacks.
 const BOX_DEFAULTS = {
   range: { w: 0.76, d: 0.64, h: 0.91 }, fridge: { w: 0.76, d: 0.72, h: 1.75 }, dishwasher: { w: 0.6, d: 0.6, h: 0.86 },
   'washer-dryer': { w: 0.6, d: 0.65, h: 1.79 }, bed: { w: 2.0, d: 1.57, h: 0.59 }, 'table-round': { w: 0.8, d: 0.8, h: 0.71 },
   'table-rect': { w: 1.6, d: 0.9, h: 0.74 }, sofa: { w: 2.1, d: 0.92, h: 0.8, seat: 0.48 }, desk: { w: 1.4, d: 0.7, h: 0.76 },
-  storage: { w: 1.6, d: 0.45, h: 0.61 }, tub: { w: 1.6, d: 0.76, h: 0.56 }, vanity: { w: 0.9, d: 0.55, h: 0.83 }, toilet: { w: 0.4, d: 0.7, h: 0.78 },
+  storage: { w: 1.6, d: 0.45, h: 0.61 }, tub: { w: 1.6, d: 0.76, h: 0.56 }, vanity: { w: 0.9, d: 0.55, h: 0.83 }, toilet: { w: 0.5, d: 0.72, h: 0.78 },
+  // Wall- and ceiling-mounted pieces start at their usual mounting height (y0).
+  microwave: { w: 0.76, d: 0.4, h: 0.42, y0: 1.5 }, 'range-hood': { w: 0.76, d: 0.5, h: 0.15, y0: 1.6 }, 'mini-split': { w: 0.84, d: 0.2, h: 0.29, y0: 2.0 },
+  'water-heater': { w: 0.56, d: 0.56, h: 1.5 }, faucet: { w: 0.14, d: 0.2, h: 0.32, y0: 0.91 }, 'shower-trim': { w: 0.18, d: 0.3, h: 1.45, y0: 0.6 },
+  panel: { w: 0.36, d: 0.1, h: 0.6, y0: 1.2 }, thermostat: { w: 0.12, d: 0.03, h: 0.09, y0: 1.45 }, light: { w: 0.4, d: 0.4, h: 0.15, y0: 2.2 },
+  'outdoor-unit': { w: 0.8, d: 0.3, h: 0.55 }, shutoff: { w: 0.07, d: 0.09, h: 0.4, y0: 0.15 }, 'line-set': { w: 0.05, d: 0.03, h: 2.0 },
+  vent: { w: 0.11, d: 0.11, h: 0.3 }, drain: { w: 0.05, d: 0.35, h: 0.4, y0: 0.35 },
 };
 const MATERIAL_DEFAULTS = {
   'base-run': { material: 'mat-quartz', bodyMaterial: 'mat-trim' }, 'wall-run': { material: null, bodyMaterial: 'mat-trim' },
-  appliance: { material: 'mat-stainless' }, furniture: { material: null }, bath: { material: null },
+  appliance: { material: 'mat-stainless' }, furniture: { material: null }, bath: { material: null }, fitting: { material: null },
 };
 // Colours when a part has no material (also the SketchUp mirror's fallback finish).
-export const FIXTURE_FALLBACK = { top: '#e9e5dc', body: '#efece6', kick: '#3a3c3f', appliance: '#c9cbcd', fabric: '#b9ae9d', wood: '#a98a63', bath: '#f4f3ef' };
+export const FIXTURE_FALLBACK = { top: '#e9e5dc', body: '#efece6', kick: '#3a3c3f', appliance: '#c9cbcd', fabric: '#b9ae9d', wood: '#a98a63', bath: '#f4f3ef', fitting: '#b9bdc1',
+  white: '#e8e7e2', black: '#18191b', glass: '#20282b', chrome: '#c3c6c8', panel: '#2b2d30', copper: '#b06f45' };
+// Roles that wear the fixture's chosen finish; the rest are fixed (controls, glass, trim, pipes).
+const FINISHED = new Set(['appliance', 'white', 'bath', 'fitting', 'top', 'wood', 'fabric']);
 
 const fin = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -95,10 +125,155 @@ export function normaliseFixture(f, levelIds) {
     const d = BOX_DEFAULTS[f.subtype];
     for (const key of ['x', 'y']) f[key] = fin(f[key], 0);
     f.rot = fin(f.rot, 0);
-    for (const key of ['w', 'd', 'h']) f[key] = clamp(fin(f[key], d[key]), 0.05, 20);
+    for (const key of ['w', 'd', 'h']) f[key] = clamp(fin(f[key], d[key]), 0.01, 20);
     if (f.subtype === 'sofa') f.seat = clamp(fin(f.seat, d.seat), 0.1, f.h);
+    const detail = normaliseDetail(f.subtype, f.detail);
+    if (detail) f.detail = detail; else delete f.detail;
   }
+  if (f.product !== undefined) f.product = normaliseProduct(f.product, k.shape);
+  if (f.product === null) delete f.product;
   return f;
+}
+
+// ---------- product: the real thing standing there ----------
+
+export const PRODUCT_CONFIDENCE = ['confirmed', 'likely', 'unidentified'];
+const CONF = new Set(PRODUCT_CONFIDENCE);
+const text = (v, n) => typeof v === 'string' ? v.trim().slice(0, n) : '';
+const TURNS = [0, 90, 180, 270];
+const MODEL_FORMATS = new Set(['glb', 'obj', 'stl', 'ply']);   // what the 3D view loads directly
+
+// A public web page, or null (no local addresses, no credentials in the URL).
+export function publicUrl(v) {
+  let u;
+  try { u = new URL(String(v)); } catch (e) { return null; }
+  if (!/^https?:$/.test(u.protocol) || u.username || u.password || !u.hostname.includes('.')) return null;
+  if (/^(localhost|.*\.local|.*\.localhost|.*\.internal)$/i.test(u.hostname) || /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(u.hostname) || u.hostname.startsWith('[')) return null;
+  return u.href;
+}
+
+function normaliseEvidence(e) {
+  if (!e || typeof e !== 'object') return null;
+  const media = text(e.media, 240), keyframe = text(e.keyframe, 120);
+  if (!media && !keyframe) return null;
+  const at = Number.isFinite(e.at) && e.at >= 0 ? Math.round(e.at * 1000) / 1000 : null;
+  const crop = Array.isArray(e.crop) && e.crop.length === 4 && e.crop.every(Number.isFinite) && e.crop[2] > 0 && e.crop[3] > 0
+    ? e.crop.map(v => clamp(Math.round(v * 1e4) / 1e4, 0, 1)) : null;
+  const reads = (Array.isArray(e.reads) ? e.reads : []).filter(r => r === 'brand' || r === 'model');
+  return { media, at, keyframe: keyframe || null, crop, reads: [...new Set(reads)], note: text(e.note, 400) };
+}
+
+// The product record in shape; null when it says nothing. Never stores a guess as confirmed:
+// a confirmed brand or model without evidence that reads it becomes 'likely'.
+export function normaliseProduct(p, shape) {
+  if (!p || typeof p !== 'object') return null;
+  const evidence = (Array.isArray(p.evidence) ? p.evidence : []).map(normaliseEvidence).filter(Boolean).slice(0, 24);
+  const sources = [];
+  for (const s of Array.isArray(p.sources) ? p.sources : []) {
+    const url = publicUrl(s && typeof s === 'object' ? s.url : s);
+    if (url && !sources.some(x => x.url === url)) sources.push({ url, title: text(s && s.title, 200) });
+  }
+  const read = what => evidence.some(e => e.reads.includes(what));
+  const level = (name, conf, what) => {
+    if (!name) return 'unidentified';
+    const c = CONF.has(conf) && conf !== 'unidentified' ? conf : 'likely';
+    return c === 'confirmed' && !read(what) ? 'likely' : c;
+  };
+  const brand = text(p.brand, 80), model = brand ? text(p.model, 80) : '';
+  const out = { brand, brandConfidence: level(brand, p.brandConfidence, 'brand'), model, modelConfidence: level(model, p.modelConfidence, 'model'),
+    evidence, sources: sources.slice(0, 16), asset: null, assetNote: text(p.assetNote, 400), checkedAt: text(p.checkedAt, 40) };
+  if (typeof p.productId === 'string' && /^[\w.:-]{1,80}$/.test(p.productId) && brand) out.productId = p.productId;   // its PRODUCTS record
+  if (p.dimsFrom) out.dimsFrom = text(p.dimsFrom, 200);
+  const a = p.asset;
+  if (shape === 'box' && a && typeof a === 'object' && typeof a.fileId === 'string' && a.fileId && validBounds(a.bounds)) {
+    out.asset = { fileId: a.fileId.slice(0, 80), format: MODEL_FORMATS.has(a.format) ? a.format : 'glb', name: text(a.name, 200),
+      sourceFileId: typeof a.sourceFileId === 'string' && a.sourceFileId ? a.sourceFileId.slice(0, 80) : null, sourceName: text(a.sourceName, 200),
+      origin: publicUrl(a.origin) || '', originName: text(a.originName, 120), license: text(a.license, 200),
+      turn: TURNS.includes(a.turn) ? a.turn : 0, bounds: { min: a.bounds.min.map(Number), max: a.bounds.max.map(Number) } };
+  }
+  return out.brand || out.evidence.length || out.sources.length || out.asset || out.assetNote ? out : null;
+}
+
+function validBounds(b) {
+  return !!b && Array.isArray(b.min) && Array.isArray(b.max) && b.min.length === 3 && b.max.length === 3 &&
+    b.min.every(Number.isFinite) && b.max.every(Number.isFinite) && b.max.every((v, i) => v - b.min[i] > 1e-4);
+}
+
+// "Frigidaire FFBD2412SS" with how sure each half is, for lists and the SketchUp group name.
+export function productLabel(f) {
+  const p = f && f.product;
+  if (!p || !p.brand) return '';
+  return p.brand + (p.model ? ' ' + p.model : '');
+}
+export function productConfidenceText(p) {
+  if (!p || !p.brand) return 'Not identified';
+  const b = p.brandConfidence === 'confirmed' ? 'brand read' : 'brand likely';
+  return p.model ? b + ', model ' + (p.modelConfidence === 'confirmed' ? 'read' : 'likely') : b + ', model not read';
+}
+
+// The product model's own bounds in the fixture's local frame (u along the width, v toward
+// the back, h up), after `turn`. A glTF model faces +Z with +Y up, so +Z goes to the
+// fixture's front (-v) and +X to -u: a proper rotation, never a mirror image.
+function turnedLocal(X, Y, Z, turn) {
+  const t = (turn || 0) * Math.PI / 180, c = Math.cos(t), s = Math.sin(t);
+  return [-(c * X + s * Z), -(-s * X + c * Z), Y];
+}
+export function productBoundsLocal(asset) {
+  const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+  const { min, max } = asset.bounds;
+  for (const X of [min[0], max[0]]) for (const Y of [min[1], max[1]]) for (const Z of [min[2], max[2]]) {
+    const q = turnedLocal(X, Y, Z, asset.turn);
+    for (let i = 0; i < 3; i++) { lo[i] = Math.min(lo[i], q[i]); hi[i] = Math.max(hi[i], q[i]); }
+  }
+  return { min: lo, max: hi, size: hi.map((v, i) => v - lo[i]) };
+}
+
+// How the product model is stretched to stand in the measured box: per-axis scale (width,
+// depth, height) and the largest departure from 1. A real model in metres should need
+// almost none; a large one means the model, its units or the measurement is wrong.
+export function productFit(f) {
+  const a = f && f.product && f.product.asset;
+  if (!a || fixtureShape(f) !== 'box') return null;
+  const b = productBoundsLocal(a);
+  const scale = [f.w / b.size[0], f.d / b.size[1], f.h / b.size[2]];
+  return { scale, size: b.size, off: Math.max(...scale.map(s => Math.abs(s - 1))), local: b };
+}
+
+// Column-major 4x4 from the GLB's coordinates to the fixture's local frame (u, v, h metres
+// above the level floor): what the SketchUp mirror receives.
+export function productLocalMatrix(f) {
+  const fit = productFit(f);
+  if (!fit) return null;
+  const t = (f.product.asset.turn || 0) * Math.PI / 180, c = Math.cos(t), s = Math.sin(t);
+  const [su, sv, sh] = fit.scale, b = fit.local;
+  const uc = (b.min[0] + b.max[0]) / 2, vc = (b.min[1] + b.max[1]) / 2;
+  // u = -(cX + sZ), v = sX - cZ, h = Y, then centred, scaled and lifted to y0.
+  return [-su * c, sv * s, 0, 0, 0, 0, sh, 0, -su * s, -sv * c, 0, 0, -su * uc, -sv * vc, (f.y0 || 0) - sh * b.min[2], 1];
+}
+
+// The same, on to the 3D view's level coordinates (plan x, height, plan y).
+export function productLevelMatrix(f) {
+  const L = productLocalMatrix(f);
+  if (!L) return null;
+  const a = (f.rot || 0) * Math.PI / 180, C = Math.cos(a), S = Math.sin(a), out = new Array(16).fill(0);
+  for (let col = 0; col < 4; col++) {
+    const u = L[col * 4], v = L[col * 4 + 1], h = L[col * 4 + 2];
+    out[col * 4] = u * C - v * S; out[col * 4 + 1] = h; out[col * 4 + 2] = u * S + v * C; out[col * 4 + 3] = L[col * 4 + 3];
+  }
+  out[12] += f.x; out[14] += f.y;
+  return out;
+}
+
+// Apply a column-major 4x4 to flat xyz positions.
+export function transformPositions(m, positions) {
+  const out = new Float64Array(positions.length);
+  for (let i = 0; i + 2 < positions.length; i += 3) {
+    const x = positions[i], y = positions[i + 1], z = positions[i + 2];
+    out[i] = m[0] * x + m[4] * y + m[8] * z + m[12];
+    out[i + 1] = m[1] * x + m[5] * y + m[9] * z + m[13];
+    out[i + 2] = m[2] * x + m[6] * y + m[10] * z + m[14];
+  }
+  return out;
 }
 
 export function normaliseFixtures(list, prop) {
@@ -166,11 +341,17 @@ function runLayer(f, dist, inset) {
 const circle = (r, n = 24) => Array.from({ length: n }, (_, k) => [r * Math.cos(2 * Math.PI * k / n), r * Math.sin(2 * Math.PI * k / n)]);
 const rect = (u0, u1, v0, v1) => [[u0, v0], [u1, v0], [u1, v1], [u0, v1]];
 
-// Box fixtures in their local frame: [{ pts (u, v), y0, y1, role, material }].
+// Box fixtures in their local frame: [{ pts (u, v), y0, y1, role, material }], or for a
+// solid { solid: [[u, v, height]...], faces, role, material } (fixture-detail.js).
 function boxPartsLocal(f) {
   const w = f.w, d = f.d, h = f.h, y0 = f.y0 || 0, W = w / 2, D = d / 2;
   const whole = rect(-W, W, -D, D), m = f.material || null, body = f.bodyMaterial || null;
   const P = (pts, a, b, role, material) => ({ pts, y0: y0 + a, y1: y0 + b, role, material });
+  const detailed = detailParts(f);
+  if (detailed) return detailed.map(p => {
+    const material = p.role === 'body' ? body : p.role === 'top' ? m : FINISHED.has(p.role) ? m : null;
+    return p.solid ? { solid: p.solid.map(([u, v, y]) => [u, v, y0 + y]), faces: p.faces, role: p.role, material } : P(p.pts, p.a, p.b, p.role, material);
+  });
   switch (f.subtype) {
     case 'bed': { const base = Math.max(0.12, h - 0.24); return [P(whole, 0, base, 'wood', body), P(rect(-W + 0.02, W - 0.02, -D + 0.02, D - 0.02), base, h, 'fabric', m)]; }
     case 'table-round': { const t = Math.min(0.05, h / 3); return [P(circle(W), h - t, h, 'wood', m), P(circle(Math.min(0.07, W / 4), 12), 0, h - t, 'wood', m)]; }
@@ -184,7 +365,7 @@ function boxPartsLocal(f) {
     case 'vanity': { const t = Math.min(0.03, h / 4); return [P(rect(-W, W, -D + 0.02, D), 0, h - t, 'body', body), P(whole, h - t, h, 'top', m)]; }
     case 'toilet': { const tank = Math.min(0.22, d * 0.35); return [P(rect(-W, W, D - tank, D), 0, h, 'bath', m), P(rect(-W * 0.9, W * 0.9, -D, D - tank), 0, Math.min(h, 0.41), 'bath', m)]; }
     case 'tub': return [P(whole, 0, h, 'bath', m)];
-    default: return [P(whole, 0, h, f.kind === 'appliance' ? 'appliance' : f.kind === 'furniture' ? 'wood' : 'bath', m)];
+    default: return [P(whole, 0, h, f.kind === 'appliance' ? 'appliance' : f.kind === 'furniture' ? 'wood' : f.kind === 'fitting' ? 'fitting' : 'bath', m)];
   }
 }
 
@@ -194,11 +375,14 @@ export function boxFrame(f) {
   return { origin: [f.x, f.y], angle: a, toPlan: ([u, v]) => [f.x + u * c - v * s, f.y + u * s + v * c] };
 }
 
-// Every prism of a fixture in plan coordinates: [{ pts, y0, y1, role, material }].
+// Every prism of a fixture in plan coordinates: [{ pts, y0, y1, role, material }], and its
+// convex solids as { solid: [[x, y, height]...], faces, role, material }.
 export function fixtureParts(f) {
   if (fixtureShape(f) === 'box') {
     const { toPlan } = boxFrame(f);
-    return boxPartsLocal(f).map(p => Object.assign({}, p, { pts: p.pts.map(toPlan) }));
+    return boxPartsLocal(f).map(p => p.solid
+      ? Object.assign({}, p, { solid: p.solid.map(([u, v, y]) => [...toPlan([u, v]), y]) })
+      : Object.assign({}, p, { pts: p.pts.map(toPlan) }));
   }
   if (fixtureShape(f) !== 'run' || (f.pts || []).length < 2) return [];
   const y0 = f.y0 || 0, out = [];

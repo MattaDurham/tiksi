@@ -20,6 +20,8 @@ Instructions live in these AGENTS files; do not add model-specific rule files.
   owner's explicit instruction. Local/private instructions can narrow this.
 - Hand over a running preview, a PR, completed CI results, and a clear account
   of private state touched. Watch CI and fix failures yourself.
+- Onboarding a property includes identifying, documenting and modelling its real
+  appliances, fixtures and systems: follow `ONBOARDING.md`.
 - A SketchUp cloud model (`build_model`/`save_model`) changes only by re-running
   its code, so file every saved model's build beside it with
   `python3 scripts/sketchup-build.py archive --project <local-data folder>

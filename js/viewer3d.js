@@ -47,6 +47,7 @@ import {
   scanStats, dropScanToFloor, centerScanOnModel, releaseSplatRenderer, splatDrawables, splatBusy,
 } from './scans.js';
 import { attachSketchupNavigation } from './sketchup-nav.js';
+import { onProductModelReady } from './fixture-products.js';
 import { LAYERS, LAYER_LABELS, scanLayer, layerScans, layerShown, setLayerShown, layerHasMembers, layerFixtures } from './view-layers.js';
 
 // ---------- persistent GPU state (one context for the life of the page) ----------
@@ -333,6 +334,12 @@ function configureRenderQuality(name, forExport = false) {
 }
 
 // ---------- model ----------
+// A fixture's real product model finished loading: draw it instead of the stand-in.
+let productRebuild = 0;
+onProductModelReady(() => {
+  if (!scene || !prop || productRebuild) return;
+  productRebuild = requestAnimationFrame(() => { productRebuild = 0; if (scene && prop) { rebuildModel(); requestRender(); } });
+});
 function rebuildModel() {
   if (modelGroup) { scene.remove(modelGroup); disposeBuilt(modelGroup); }
   modelGroup = buildPropertyGroup(prop, { xray, xrayOpacity: prop.env.xrayOpacity, hiddenLevels: hiddenLevels() });
@@ -2397,7 +2404,7 @@ function renderInspector() {
     const f = (prop.fixtures || []).find(x => x.id === selection.id);
     if (!f) { selection = null; return renderInspector(); }
     inspEl.innerHTML = fixtureInspectorHtml(prop, f);
-    bindFixtureInspector(inspEl, prop, f, { changed: () => { rebuildModel(); renderInspector(); }, deleted: () => { setSelection(null); rebuildModel(); } });
+    bindFixtureInspector(inspEl, prop, f, { changed: () => { rebuildModel(); renderInspector(); }, deleted: () => { setSelection(null); rebuildModel(); }, say: (m, kind) => toast(m, kind) });
     return;
   }
   if (selection.kind === 'wall') {

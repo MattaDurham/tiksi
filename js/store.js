@@ -3,6 +3,7 @@
 
 import { normalizeView } from './photo-match.js';
 import { normaliseFixtures } from './fixtures.js';
+import { normaliseProductRecord } from './product-records.js';
 
 const LS_KEY = 'tiksi.workspace.v1';   // storage slot, not the schema version (see migrate)
 const SCHEMA_VERSION = 2;
@@ -198,7 +199,8 @@ export function projectSlice(propId, data) {
   for (const r of p.rooms || []) { matIds.add(r.material); matIds.add(r.ceilingMaterial); }
   for (const f of p.fixtures || []) { matIds.add(f.material); matIds.add(f.bodyMaterial); }
   for (const m of d.materials || []) if (m && m.custom && materialOwners(m).includes(propId)) matIds.add(m.id);
-  const products = (d.products || []).filter(pr => (pr.itemIds || []).some(id => itemIds.has(id)) || (pr.materialIds || []).some(id => matIds.has(id)));
+  const fixtureProducts = new Set((p.fixtures || []).map(f => f.product && f.product.productId).filter(Boolean));
+  const products = (d.products || []).filter(pr => fixtureProducts.has(pr.id) || (pr.itemIds || []).some(id => itemIds.has(id)) || (pr.materialIds || []).some(id => matIds.has(id)));
   const photoIds = new Set((p.photos || []).map(ph => ph.id));
   // The file's list is itself the record of what it keeps (mergeWorkspace), so the browser's
   // owner list stays out of it: other properties' ids neither leak nor mark this file unsaved.
@@ -570,6 +572,7 @@ function migrate(d) {
   d.properties = d.properties || [];
   d.materials = d.materials || [];   // material records are normalised by materials.js
   d.products = d.products || [];
+  d.products.forEach(normaliseProductRecord);   // documents and spec-sheet dimensions (product-records.js)
   d.projects = d.projects || [];
   for (const p of d.properties) {
     p.wallHeight = p.wallHeight || 2.44;   // legacy fallback only; levels carry the real heights
@@ -1042,6 +1045,18 @@ async function getAllPlans() {
   });
 }
 
+// A fixture's real product model (fixtures.js product.asset) and the original file it was
+// converted from, when it was not a GLB already.
+function productFileIds(p) {
+  const ids = [];
+  for (const f of p.fixtures || []) {
+    const a = f && f.product && f.product.asset;
+    if (a && typeof a.fileId === 'string') ids.push(a.fileId);
+    if (a && typeof a.sourceFileId === 'string' && a.sourceFileId !== a.fileId) ids.push(a.sourceFileId);
+  }
+  return ids;
+}
+
 // Ids of the files a workspace references (every scan and photo, all properties). Bytes may
 // or may not be present in IndexedDB: a JSON-only export imported elsewhere has records but no bytes.
 export function listAllFileIds(data) {
@@ -1052,7 +1067,9 @@ export function listAllFileIds(data) {
     for (const ph of p.photos || []) ids.push(ph.id);
     for (const v of p.videos || []) ids.push(v.id);
     for (const m of p.measurements || []) if (m.frameAssetId) ids.push(m.frameAssetId);
+    for (const id of productFileIds(p)) ids.push(id);
   }
+  for (const pr of d.products || []) for (const doc of pr.documents || []) if (doc && typeof doc.fileId === 'string') ids.push(doc.fileId);
   return ids;
 }
 
@@ -1106,7 +1123,7 @@ export function exportWorkspace() {
 const IMAGE_EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/bmp': 'bmp', 'image/heic': 'heic', 'image/heif': 'heif', 'image/tiff': 'tiff' };
 const MIME_BY_EXT = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif', bmp: 'image/bmp', heic: 'image/heic', heif: 'image/heif', tif: 'image/tiff', tiff: 'image/tiff' };
 // Formats that are already compressed: store them in the zip instead of deflating.
-const STORED_EXT = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'glb', 'spz', 'laz', 'ksplat', 'mp4', 'mov', 'm4v']);
+const STORED_EXT = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'glb', 'spz', 'laz', 'ksplat', 'mp4', 'mov', 'm4v', 'pdf']);
 const VIDEO_EXT_BY_MIME = { 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/x-m4v': 'm4v' };
 const VIDEO_MIME_BY_EXT = { mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/x-m4v' };
 
@@ -1114,8 +1131,15 @@ function fflate() { return import('three/addons/libs/fflate.module.js'); }
 
 // Collect every file record the given properties reference and that has bytes in IndexedDB.
 // Returns [{ id, kind: 'scan'|'photo', name, format?, mime?, ext, buffer }].
-async function collectBundleFiles(properties) {
+async function collectBundleFiles(properties, products) {
   const out = [];
+  // Product documents kept in the project file (no project folder to save them in).
+  for (const pr of products || []) for (const doc of pr.documents || []) {
+    const rec = doc && doc.fileId && await getFile(doc.fileId);
+    if (!rec || !rec.buffer) continue;
+    const ext = doc.mime === 'application/pdf' ? 'pdf' : IMAGE_EXT_BY_MIME[doc.mime] || 'bin';
+    out.push({ id: doc.fileId, kind: 'document', name: rec.name || doc.title || doc.fileId, mime: doc.mime || rec.mime || 'application/octet-stream', ext, buffer: rec.buffer });
+  }
   for (const p of properties || ws.data.properties) {
     for (const s of p.scans || []) {
       if (s.originalFileId && s.originalFileId !== s.id) {
@@ -1147,6 +1171,12 @@ async function collectBundleFiles(properties) {
       if (!rec || !rec.buffer) continue;
       out.push({ id: m.frameAssetId, kind: 'frame', name: rec.name || m.frameAssetId, mime: 'image/jpeg', ext: 'jpg', buffer: rec.buffer });
     }
+    for (const id of productFileIds(p)) {
+      const rec = await getFile(id);
+      if (!rec || !rec.buffer) continue;
+      const ext = String(rec.format || 'glb').toLowerCase().replace(/[^a-z0-9]/g, '') || 'bin';
+      out.push({ id, kind: 'product', name: rec.name || id, format: ext, ext, buffer: rec.buffer });
+    }
   }
   return out;
 }
@@ -1156,7 +1186,7 @@ async function collectBundleFiles(properties) {
 // has bytes. `format` is 'tiksi-bundle' for a whole workspace, 'tiksi-project' for one property.
 async function buildZip(data, format, extra) {
   const { zip, zipSync, strToU8 } = await fflate();
-  const files = await collectBundleFiles(data.properties);
+  const files = await collectBundleFiles(data.properties, data.products);
   const manifest = Object.assign({
     format, version: 1, app: 'tiksi', exportedAt: new Date().toISOString(),
     files: files.map(f => ({ id: f.id, kind: f.kind, path: 'files/' + f.id + '.' + f.ext, name: f.name, format: f.format, mime: f.mime, size: f.buffer.byteLength })),
@@ -1251,7 +1281,8 @@ export async function readBundle(file) {
     const meta = m.kind === 'photo' || m.kind === 'frame'
       ? { name: m.name || m.id, mime: m.mime || MIME_BY_EXT[ext] || 'image/jpeg', kind: m.kind }
       : m.kind === 'video' ? { name: m.name || m.id, mime: m.mime || VIDEO_MIME_BY_EXT[ext] || 'video/mp4', kind: 'video' }
-      : { name: m.name || m.id, format: m.format || ext };
+      : m.kind === 'document' ? { name: m.name || m.id, mime: m.mime || 'application/octet-stream', kind: 'document' }
+      : { name: m.name || m.id, format: m.format || ext, ...(m.kind === 'product' ? { kind: 'product' } : {}) };
     files.push({ id: m.id, buffer: u8Buffer(u8), meta });
   }
   return { data, files, manifest, missing };

@@ -16,6 +16,15 @@ else:
     if source.suffix.lower() in {'.usd', '.usda', '.usdc', '.usdz'}:
         bpy.ops.wm.usd_import(filepath=str(source), import_textures_mode='IMPORT', import_textures_dir=str(output.parent / 'textures'))
     elif source.suffix.lower() == '.fbx': bpy.ops.import_scene.fbx(filepath=str(source))
+    elif source.suffix.lower() == '.obj': bpy.ops.wm.obj_import(filepath=str(source))
+    elif source.suffix.lower() == '.stl': bpy.ops.wm.stl_import(filepath=str(source))
+    elif source.suffix.lower() == '.ply': bpy.ops.wm.ply_import(filepath=str(source))
+    elif source.suffix.lower() in {'.dae', '.3ds'}:
+        # Product models from manufacturers and model sites; these importers ship with some
+        # Blender versions only, so a missing one says so instead of failing obscurely.
+        op = getattr(bpy.ops.wm, 'collada_import', None) if source.suffix.lower() == '.dae' else getattr(bpy.ops.import_scene, 'max3ds', None)
+        try: op(filepath=str(source))
+        except (AttributeError, TypeError, RuntimeError): raise ValueError('This Blender has no ' + source.suffix + ' importer; export the model as FBX, OBJ or GLB')
     else: bpy.ops.import_scene.gltf(filepath=str(source))
 if output.suffix == '.blend':
     bpy.ops.file.pack_all(); bpy.ops.wm.save_as_mainfile(filepath=str(output))

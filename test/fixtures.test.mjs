@@ -49,8 +49,9 @@ test('every box fixture fills exactly its w x d x h, turned by rot about its cen
     const c = Math.cos(-30 * Math.PI / 180), s = Math.sin(-30 * Math.PI / 180);
     let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity, y0 = Infinity, y1 = -Infinity;
     for (const p of parts) {
-      y0 = Math.min(y0, p.y0); y1 = Math.max(y1, p.y1);
-      for (const [x, y] of p.pts) { const u = (x - 1) * c - (y - 2) * s, v = (x - 1) * s + (y - 2) * c; u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); }
+      // Prisms carry a plan ring and two heights; solids (knobs, portholes) carry [x, y, height] points.
+      const pts = p.solid ? p.solid : p.pts.map(([x, y]) => [x, y, p.y0]).concat(p.pts.map(([x, y]) => [x, y, p.y1]));
+      for (const [x, y, hh] of pts) { const u = (x - 1) * c - (y - 2) * s, v = (x - 1) * s + (y - 2) * c; u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); y0 = Math.min(y0, hh); y1 = Math.max(y1, hh); }
     }
     near(u1 - u0, f.w, 1e-6, subtype + ' width'); near(v1 - v0, f.d, 1e-6, subtype + ' depth');
     near((u0 + u1) / 2, 0, 1e-6, subtype + ' centred'); near(y1 - y0, f.h, 1e-6, subtype + ' height');

@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { zipSync, strToU8 } from 'three/addons/libs/fflate.module.js';
 import { buildPropertyGroup, disposeBuilt } from './geometry.js';
+import { preloadProductModels } from './fixture-products.js';
 import { getFile, materialById } from './store.js';
 import { loadMesh, applyScanTransform, disposeScanObject } from './scans.js';
 import { applyModelMaterials } from './model-materials.js';
@@ -86,6 +87,7 @@ export async function exportModel(prop, { format = 'glb', source = 'design', sca
       if (!scan) throw new Error('Select a model to export');
       const mesh = await meshForScan(scan); root.add(mesh); disposable.push(mesh);
     } else {
+      await preloadProductModels(prop);
       built = buildPropertyGroup(prop); root.add(built);
       if (includeModels) for (const scan of prop.scans || []) if (scan.visible !== false) {
         if (scan.kind !== 'mesh') throw new Error('Visible point clouds/splats cannot be included in this mesh export. Hide them or export their originals.');

@@ -287,6 +287,15 @@ class WorkspaceService:
             # Walk-through videos and the frames saved with tape readings are originals too.
             ids.update(v['id'] for v in prop.get('videos', []) if isinstance(v, dict) and isinstance(v.get('id'), str))
             ids.update(m['frameAssetId'] for m in prop.get('measurements', []) if isinstance(m, dict) and isinstance(m.get('frameAssetId'), str))
+            # A fixture's real product model and the original it was converted from.
+            for f in prop.get('fixtures', []):
+                asset = (f.get('product') or {}).get('asset') if isinstance(f, dict) and isinstance(f.get('product'), dict) else None
+                if isinstance(asset, dict):
+                    ids.update(asset[k] for k in ('fileId', 'sourceFileId') if isinstance(asset.get(k), str))
+        # Product documents kept in the project file rather than in its folder.
+        for product in data.get('products', []):
+            for doc in (product.get('documents') or []) if isinstance(product, dict) else []:
+                if isinstance(doc, dict) and isinstance(doc.get('fileId'), str): ids.add(doc['fileId'])
         return ids
 
     @staticmethod

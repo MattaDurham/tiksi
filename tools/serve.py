@@ -38,7 +38,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         if not self.valid_host():
             self.send_error(403, 'Host is not allowed')
             return True
-        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames'):
+        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames', 'product_docs'):
             service = getattr(self.server, name, None)
             if service and service.dispatch(self): return True
         return False
@@ -155,6 +155,11 @@ def main():
             # Frames from walk-through videos (MEASURE); reports honestly when ffmpeg is absent.
             from server.video_frames import VideoFrameService
             server.video_frames = VideoFrameService(args.state_dir / 'video-frames')
+        server.product_docs = None
+        if (ROOT / 'server/product_docs.py').exists():
+            # Spec sheets, installation drawings and manuals for identified fixtures.
+            from server.product_docs import ProductDocsService
+            server.product_docs = ProductDocsService()
         def shutdown(signum, frame):
             threading.Thread(target=server.shutdown, daemon=True).start()
         signal.signal(signal.SIGTERM, shutdown)

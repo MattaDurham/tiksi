@@ -2,7 +2,8 @@
 
 `write` turns the browser's mirror spec into tagged SketchUp groups: one group per wall
 (an extruded face with its openings cut), one nested group per opening, one group per room
-floor, one group per fixture (a nested group per prism), one tag per level and the level's
+floor, one group per fixture (a nested group per prism, or the real product's own model
+fitted to the measured box), one tag per level and the level's
 plan underlay as an image. Every Tiksi entity
 carries a "tiksi" attribute dictionary with its id and the values it was written from.
 Faces wear the spec's finishes as SketchUp materials named "Tiksi: <name>", created once and
@@ -441,20 +442,137 @@ def prism(ring, z0, z1):
     return points, faces
 
 
-def write_fixture(api, entities, fixture, layer, materials):
+class Vector(C.Structure): _fields_ = [('x', C.c_double), ('y', C.c_double), ('z', C.c_double)]
+
+
+SMOOTH_COS = math.cos(math.radians(30))     # edges between faces closer than this are softened
+
+
+def soften(api, entities):
+    """Soften and smooth the edges between nearly coplanar faces, as SketchUp does for an
+    imported mesh, so a product model reads as surfaces instead of a web of triangles."""
+    count = C.c_size_t()
+    api.call('SUEntitiesGetNumEdges', entities, C.c_bool(False), C.byref(count))
+    if not count.value:
+        return
+    edges = (Ref * count.value)()
+    api.call('SUEntitiesGetEdges', entities, C.c_bool(False), count, edges, C.byref(count))
+    normals = {}
+    def normal(face):
+        if face.ptr not in normals:
+            n = Vector()
+            api.call('SUFaceGetNormal', face, C.byref(n))
+            normals[face.ptr] = (n.x, n.y, n.z)
+        return normals[face.ptr]
+    for edge in edges[:count.value]:
+        n = C.c_size_t()
+        api.call('SUEdgeGetNumFaces', edge, C.byref(n))
+        if n.value != 2:
+            continue
+        faces = (Ref * 2)()
+        api.call('SUEdgeGetFaces', edge, C.c_size_t(2), faces, C.byref(n))
+        a, b = normal(faces[0]), normal(faces[1])
+        if abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) >= SMOOTH_COS:
+            api.call('SUEdgeSetSoft', edge, C.c_bool(True))
+            api.call('SUEdgeSetSmooth', edge, C.c_bool(True))
+
+
+def write_product(api, entities, mesh, layer, materials, label):
+    """The real product's model inside its fixture group: triangles already fitted to the
+    measured box in the fixture's frame (u, v, h metres), one nested group per finish."""
+    group = new_group(api, entities, label or 'Product', translation(0, 0, 0))
+    set_layer(api, group, layer)
+    inner = api.ref('SUGroupGetEntities', group)
+    drawn = 0
+    for part in mesh.get('meshes', []):
+        pos = part.get('positions') or []
+        if len(pos) % 9 or not all(isinstance(v, (int, float)) and math.isfinite(v) for v in pos):
+            raise ValueError('Product mesh positions must be whole, finite triangles')
+        points, faces, index = [], [], {}
+        def vertex(u, v, h):
+            key = (round(u, 5), round(v, 5), round(h, 5))
+            if key not in index:
+                index[key] = len(points)
+                points.append([u * IN, -v * IN, h * IN])     # local plan (u, v) is SketchUp (u, -v)
+            return index[key]
+        for i in range(0, len(pos), 9):
+            tri = [vertex(*pos[i + 3 * j:i + 3 * j + 3]) for j in range(3)]
+            if len(set(tri)) < 3:
+                continue
+            a, b, c = (points[k] for k in tri)
+            ab, ac = [b[k] - a[k] for k in range(3)], [c[k] - a[k] for k in range(3)]
+            cross = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]]
+            if math.sqrt(sum(v * v for v in cross)) < 1e-6:   # square inches: a sliver SketchUp refuses
+                continue
+            faces.append((tri, []))
+        if not faces:
+            continue
+        pg = new_group(api, inner, str(part.get('name') or 'Surface')[:120], translation(0, 0, 0))
+        set_layer(api, pg, layer)
+        body = api.ref('SUGroupGetEntities', pg)
+        fill(api, body, points, faces)
+        soften(api, body)
+        mat = materials.get({'name': (label or 'Product') + ' - ' + str(part.get('name') or 'Surface')[:80], 'color': part.get('color')})
+        for face in api.collection(body, 'Faces'):
+            paint(api, face, mat)
+        drawn += len(faces)
+    return drawn
+
+
+def solid(verts, loops):
+    """Points and faces (inches) of a convex solid given in local (u, v, h) metres, each face
+    wound to look away from the centre."""
+    points = [[u * IN, -v * IN, h * IN] for u, v, h in verts]
+    c = [sum(p[i] for p in points) / len(points) for i in range(3)]
+    faces = []
+    for loop in loops:
+        q = [points[i] for i in loop]
+        if len(q) < 3:
+            continue
+        e1, e2 = [q[1][i] - q[0][i] for i in range(3)], [q[2][i] - q[0][i] for i in range(3)]
+        n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]]
+        faces.append((list(loop) if sum(n[i] * (q[0][i] - c[i]) for i in range(3)) >= 0 else list(reversed(loop)), []))
+    return points, faces
+
+
+def write_fixture(api, entities, fixture, layer, materials, folder=None, warnings=None):
     """One group per fixture, framed at its origin along its angle; a nested group per part
-    keeps touching prisms (a toe kick under a cabinet) from merging into one another."""
-    parts = [p for p in fixture.get('parts', []) if len(p.get('pts') or []) >= 3 and p['z1'] - p['z0'] > 1e-4]
+    keeps touching prisms (a toe kick under a cabinet) from merging into one another. A
+    fixture with a real product model draws that model instead of its prisms."""
+    parts = [p for p in fixture.get('parts', []) if p.get('solid') or (len(p.get('pts') or []) >= 3 and p['z1'] - p['z0'] > 1e-4)]
     if not parts:
         return None
+    mesh = None
+    if fixture.get('mesh') and folder is not None:
+        path = (Path(folder) / fixture['mesh']).resolve()
+        if not path.is_relative_to(Path(folder).resolve()) or not path.is_file():
+            raise ValueError('Product mesh is missing from the mirror package')
+        mesh = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(mesh, dict) or mesh.get('format') != 'tiksi-product-mesh':
+            raise ValueError('Not a Tiksi product mesh')
     ox, oy = fixture['origin']
     a, elev = fixture.get('angle') or 0.0, fixture['elevation']
     group = new_group(api, entities, fixture.get('name') or 'Fixture', frame(plan_to_skp(ox, oy, elev), (math.cos(a), -math.sin(a))))
     set_layer(api, group, layer)
     inner = api.ref('SUGroupGetEntities', group)
+    product = fixture.get('product') or {}
+    label = ' '.join(v for v in (product.get('brand'), product.get('model')) if v) or 'Product'
+    if mesh and write_product(api, inner, mesh, layer, materials, label):
+        parts = []
+    elif mesh and warnings is not None:
+        warnings.append('3D model of ' + str(fixture.get('name')) + ' has no drawable faces; its stand-in shape is drawn instead')
     for part in parts:
         pg = new_group(api, inner, 'Part', translation(0, 0, 0))
         set_layer(api, pg, layer)
+        if part.get('solid'):
+            points, faces = solid(part['solid'], part.get('faces') or [])
+            body = api.ref('SUGroupGetEntities', pg)
+            fill(api, body, points, faces)
+            soften(api, body)
+            mat = materials.get(part.get('material'))
+            for face in api.collection(body, 'Faces'):
+                paint(api, face, mat)
+            continue
         # Local plan (u, v) is SketchUp (u, -v) in this frame (see frame()).
         ring = [(u * IN, -v * IN) for u, v in part['pts']]
         area = sum(ring[i][0] * ring[(i + 1) % len(ring)][1] - ring[(i + 1) % len(ring)][0] * ring[i][1] for i in range(len(ring)))
@@ -470,6 +588,8 @@ def write_fixture(api, entities, fixture, layer, materials):
             'shape': fixture.get('shape'), 'base': dict(fixture.get('base') or {}, elevation=r6(elev))}
     if fixture.get('local'):
         data['local'] = fixture['local']
+    if product:
+        data['product'] = {k: product.get(k) for k in ('brand', 'brandConfidence', 'model', 'modelConfidence', 'sources', 'modelName', 'origin')}
     set_data(api, to_ref(api, 'SUGroupToEntity', group), data)
     return group
 
@@ -532,7 +652,7 @@ def write_mirror(folder):
         for room in spec.get('rooms', []):
             write_room(api, entities, room, layers.get(room['level']), materials)
         for fixture in spec.get('fixtures', []):
-            write_fixture(api, entities, fixture, layers.get(fixture['level']), materials)
+            write_fixture(api, entities, fixture, layers.get(fixture['level']), materials, folder, warnings)
         for level, underlay in underlays.items():
             if level in kept_underlays:
                 continue
