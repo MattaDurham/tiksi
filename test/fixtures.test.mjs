@@ -9,6 +9,7 @@ const fx = await import('../js/fixtures.js');
 const { GeometryHistory } = await import('../js/geometry-history.js');
 const { mergeShared } = await import('../js/workspace-merge.js');
 const { mirrorSpec, mergeMirror, syncedState } = await import('../js/sketchup-mirror.js');
+const layers = await import('../js/view-layers.js');
 
 function kitchen() {
   const p = store.propertyTemplate('Synthetic kitchen');
@@ -169,4 +170,26 @@ test('mirror read-back: moves apply, copies are new, deletes remove, two-sided e
   zread.fixtures = zread.fixtures.filter(f => f.id !== 'fx-bed');
   assert.deepEqual(mergeMirror(z, zread, zs).deleted, ['fx-bed']);
   assert.deepEqual(z.fixtures.map(f => f.id), ['fx-run']);
+});
+
+test('FURNITURE hides loose furniture fixtures with furnishing models; built-ins stay', () => {
+  const p = kitchen();
+  const run = p.fixtures.find(f => f.id === 'fx-run'), bed = p.fixtures.find(f => f.id === 'fx-bed');
+  assert.ok(layers.layerHasMembers(p, 'furnishings'), 'a furniture fixture alone enables the toggle');
+  assert.equal(layers.layerShown(p, 'furnishings'), true);
+  assert.deepEqual(layers.setLayerShown(p, 'furnishings', false), [], 'no scan records to change');
+  assert.equal(p.env.hideFurniture, true);
+  assert.equal(layers.layerShown(p, 'furnishings'), false);
+  assert.equal(layers.fixtureShown(p, bed), false, 'the bed hides');
+  assert.equal(layers.fixtureShown(p, run), true, 'the counter run is part of the building');
+  // With a furnishing model too, one toggle drives both.
+  p.scans.push({ id: 'scan-sofa', name: 'Furniture.glb', kind: 'mesh', visible: false });
+  assert.equal(layers.layerShown(p, 'furnishings'), false);
+  assert.deepEqual(layers.setLayerShown(p, 'furnishings', true).map(s => s.id), ['scan-sofa']);
+  assert.equal(layers.fixtureShown(p, bed), true);
+  // Without furniture fixtures the flag is left alone and built-ins never count as members.
+  const q = kitchen(); q.fixtures = q.fixtures.filter(f => f.kind !== 'furniture');
+  assert.equal(layers.layerHasMembers(q, 'furnishings'), false);
+  layers.setLayerShown(q, 'furnishings', false);
+  assert.equal(q.env.hideFurniture, undefined);
 });

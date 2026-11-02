@@ -20,6 +20,7 @@ import { materialById, ensureLevels, levelHeight, levelOfRoom, wallsOn, roomsOn,
 import { materialFor } from './textures.js';
 import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, pointInPoly } from './wall-solids.js';
 import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
+import { fixtureShown } from './view-layers.js';
 
 const FALLBACK_WALL = '#d8d4cc';
 const FALLBACK_FLOOR = '#97999b';
@@ -734,7 +735,7 @@ export function buildPropertyGroup(property, opts) {
     view.walls.forEach((wall, index) => {
       lg.add(buildWallGroup(wall, openings, view, Object.assign({ index }, ctx)));
     });
-    for (const f of fixturesOn(property, lvl.id)) lg.add(buildFixtureGroup(f, ctx));
+    for (const f of fixturesOn(property, lvl.id)) if (fixtureShown(property, f)) lg.add(buildFixtureGroup(f, ctx));
     const ceilings = new THREE.Group();
     ceilings.name = 'ceilings';
     ceilings.userData = { ceilings: true, level: lvl.id };
