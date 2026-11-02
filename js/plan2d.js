@@ -20,6 +20,9 @@ import {
   floorCornerAttached, floorCornersOf, snapFloorToWalls,
 } from './wallmove.js';
 import { wallFaces, roomFromWalls, sameFloor } from './roomfill.js';
+import { loadScanObject, applyScanTransform, disposeScanObject } from './scans.js';
+import { layerScans, meshFootprints, footprintsOnLevel } from './view-layers.js';
+import { classifyWheel } from './sketchup-nav.js';
 
 const PRESETS = {
   interior: { thickness: 0.114, material: 'mat-drywall' },   // 4.5 in stud wall
@@ -59,6 +62,10 @@ let tool = 'select';
 let wallPreset = 'interior';
 let snapOn = true;
 let dimsOn = false;
+// SHOW toggles: the scan underlay image, and furniture / cabinet / fixture footprints.
+let showScan = true;
+let showFurniture = true;
+const wheelLatch = { at: 0, trackpad: false };
 
 let el = null, canvas = null, ctx = null, wrapEl = null, inspEl = null, hintEl = null, badgeEl = null, levelEl = null;
 let raf = 0;
@@ -340,7 +347,7 @@ function hitTest(wx, wy) {
   for (const r of curRooms()) if (pointInPoly(wx, wy, r.pts)) return { kind: 'room', id: r.id };
   // Underlay.
   const pl = curPlan();
-  if (pl && pl.img &&
+  if (showScan && pl && pl.img &&
       wx >= pl.offsetX && wx <= pl.offsetX + pl.imgW * pl.mPerPx &&
       wy >= pl.offsetY && wy <= pl.offsetY + pl.imgH * pl.mPerPx) return { kind: 'underlay' };
   return null;
@@ -575,8 +582,9 @@ function draw() {
   ctx.fillRect(0, 0, w, h);
 
   drawGrid(w, h);
-  drawUnderlay();
+  if (showScan) drawUnderlay();
   drawRooms();
+  if (showFurniture) drawFurniture();
   drawWalls();
   for (const o of curOpenings()) drawOpening(o);
   drawRoomLabels();
@@ -614,6 +622,45 @@ function drawGrid(w, h) {
   const ox = crisp(-vs.panX * vs.zoom), oy = crisp(-vs.panY * vs.zoom);
   ctx.moveTo(ox, 0); ctx.lineTo(ox, h); ctx.moveTo(0, oy); ctx.lineTo(w, oy);
   ctx.stroke();
+}
+
+// Furniture, cabinets and fixtures from the property's furnishing models, drawn as plan
+// footprints (one outline per part) on the storey they stand on. Each model is read once
+// per placement; the outlines are cached and the scene object is released straight away.
+const footprintCache = new Map();
+function furnitureFootprints() {
+  const out = [];
+  for (const s of layerScans(prop, 'furnishings')) {
+    if (s.kind && s.kind !== 'mesh') continue;
+    const sig = JSON.stringify([s.pos, s.rot, s.rotY, s.scale, s.flip]);
+    const c = footprintCache.get(s.id);
+    if (c && c.sig === sig) { out.push(...c.fps); continue; }
+    if (c && c.loading) continue;
+    footprintCache.set(s.id, { sig, fps: [], loading: true });
+    loadScanObject(s, {}).then(obj => {
+      if (!obj) { footprintCache.set(s.id, { sig, fps: [] }); return; }
+      try { applyScanTransform(s, obj); footprintCache.set(s.id, { sig, fps: meshFootprints(obj) }); }
+      finally { disposeScanObject(obj); }
+      invalidate();
+    }).catch(() => footprintCache.set(s.id, { sig, fps: [] }));
+  }
+  return out;
+}
+function drawFurniture() {
+  const L = lvl();
+  const fps = footprintsOnLevel(furnitureFootprints(), L.elevation, levelHeight(prop, L.id));
+  if (!fps.length) return;
+  ctx.save();
+  ctx.lineWidth = 1;
+  ctx.lineJoin = 'round';
+  ctx.fillStyle = 'rgba(214,190,150,0.10)';
+  ctx.strokeStyle = 'rgba(214,190,150,0.55)';
+  for (const f of fps) {
+    tracePoly(f.pts.map(w2s));
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawUnderlay() {
@@ -1535,8 +1582,11 @@ function onWheel(e) {
   e.preventDefault();
   invalidate();
   const [sx, sy] = canvasPos(e);
-  if (e.ctrlKey || e.metaKey) {
-    const factor = Math.exp(-e.deltaY * 0.01);
+  // As in SketchUp: a mouse wheel or a pinch zooms about the cursor, a trackpad swipe pans.
+  const kind = classifyWheel(e, wheelLatch, performance.now(), { canOrbit: false });
+  if (kind === 'zoom') {
+    const line = e.deltaMode === 1 ? 16 : 1;
+    const factor = Math.exp(-e.deltaY * line * (e.ctrlKey || e.metaKey ? 0.01 : 0.0015));
     const [wx, wy] = s2w(sx, sy);
     vs.zoom = Math.max(4, Math.min(400, vs.zoom * factor));
     vs.panX = wx - sx / vs.zoom;
@@ -1555,6 +1605,11 @@ function onKeyDown(e) {
   const keys = { v: 'select', w: 'wall', d: 'door', n: 'window', r: 'room', c: 'calibrate' };
   if (keys[e.key.toLowerCase()] && !e.metaKey && !e.ctrlKey) { setTool(keys[e.key.toLowerCase()]); return; }
   if (e.key === 'f') { fitView(); return; }
+  if ((e.key === 'g' || e.key === 'k') && !e.metaKey && !e.ctrlKey) {
+    if (e.key === 'g') showScan = !showScan; else showFurniture = !showFurniture;
+    renderToolCol();
+    return;
+  }
   if (e.key === '[' || e.key === ']') { stepLevel(e.key === ']' ? 1 : -1); return; }
   if (e.key === 'Escape') {
     if (drawing) drawing = null;
@@ -1591,7 +1646,7 @@ function updateHint() {
       ? 'Floors follow their walls. Drag a corner to reshape this floor; it snaps to walls. Dragging elsewhere pans.'
       : selection && selection.kind === 'underlay'
         ? 'Drag the image to align it with the walls. Esc deselects it; dragging then pans again.'
-        : 'Click to select. Drag a wall or a selected wall\'s corner; joined walls and floors follow (Alt detaches). Drag elsewhere to pan; pinch or cmd+scroll zooms. F fits view.',
+        : 'Click to select. Drag a wall or a selected wall\'s corner; joined walls and floors follow (Alt detaches). Drag elsewhere or swipe to pan; scroll or pinch zooms. F fits view.',
     wall: drawing ? 'Click to place the next corner. Double-click or Esc to end the chain.' : 'Click to start a wall chain. Walls snap to wall ends, along walls (diamond), axes and 15 degree angles.',
     door: 'Click on a wall to place a door.',
     window: 'Click on a wall to place a window.',
@@ -1666,6 +1721,10 @@ function renderToolCol() {
     ${toolBtn('data-act="upload"', 'upload', 'UPLOAD IMAGE', '', false)}
     <input type="file" class="hidden-file" accept="image/*,.pdf">
     <div class="tool-sep"></div>
+    <div class="tool-head">Show</div>
+    <label class="tool-check" title="Show the ${curPlan() && curPlan().source === 'scan' ? 'scan' : 'underlay'} image under the plan (G)">${icon('scan')}<span>${curPlan() && curPlan().source !== 'scan' && curPlan().img ? 'UNDERLAY' : 'SCAN'}</span><input type="checkbox" ${showScan ? 'checked' : ''} data-chk="scan"></label>
+    <label class="tool-check" title="${layerScans(prop, 'furnishings').length ? 'Show furniture, cabinet and fixture footprints on this level (K)' : 'No furniture or fixtures model in this property. Import one and set its LAYER in MODEL.'}">${icon('products')}<span>FURNITURE</span><input type="checkbox" ${showFurniture ? 'checked' : ''} data-chk="furniture"></label>
+    <div class="tool-sep"></div>
     <label class="tool-check" title="Snap to wall ends, wall centre lines, floor corners, axes and 15 degree angles">${icon('snap')}<span>SNAP</span><input type="checkbox" ${snapOn ? 'checked' : ''} data-chk="snap"></label>
     <label class="tool-check" title="Show a dimension string on every wall">${icon('dims')}<span>DIMS</span><input type="checkbox" ${dimsOn ? 'checked' : ''} data-chk="dims"></label>
     <div class="tool-sep"></div>
@@ -1686,6 +1745,8 @@ function renderToolCol() {
   tc.querySelectorAll('[data-chk]').forEach(c => c.onchange = () => {
     if (c.dataset.chk === 'snap') snapOn = c.checked;
     if (c.dataset.chk === 'dims') dimsOn = c.checked;
+    if (c.dataset.chk === 'scan') { showScan = c.checked; if (!showScan && selection && selection.kind === 'underlay') { selection = null; renderInspector(); } }
+    if (c.dataset.chk === 'furniture') showFurniture = c.checked;
     invalidate();
   });
 }
