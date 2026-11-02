@@ -17,13 +17,19 @@ const port = socket.address().port; await new Promise(r => socket.close(r));
 const child = spawn('python3', ['tools/serve.py', '--host', '127.0.0.1', '--port', String(port), '--state-dir', state, '--projects-dir', state + '/projects'], { stdio: 'ignore' });
 let browser, page;
 const IN = 0.0254, errors = [];
+// A disk save remounts the view; under software GL on a CI runner that can take a while.
+async function savedToDisk() {
+  try { await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK', null, { timeout: 120000 }); }
+  catch (e) { throw new Error('save status stayed "' + await page.locator('#save-status').textContent() + '"'); }
+}
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch('http://127.0.0.1:' + port)).ok) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
   browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   page = await browser.newPage({ viewport: { width: 1400, height: 900 }, acceptDownloads: true });
   page.on('pageerror', e => errors.push(e.message));
+  page.setDefaultTimeout(120000);   // MODEL under software GL on a CI runner is slow
   await page.goto('http://127.0.0.1:' + port + '/#/plan');
-  await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
+  await savedToDisk();
   await page.evaluate(async () => {
     const s = window.reviewStore = await import('/js/store.js');
     const p = s.propertyTemplate('Synthetic cottage'), L = p.levels[0].id;
@@ -50,7 +56,7 @@ try {
     await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
   });
   await page.reload();
-  await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
+  await savedToDisk();
   await page.evaluate(async () => { window.reviewStore = await import('/js/store.js'); });
   const prop = () => page.evaluate(() => window.reviewStore.activeProperty());
   const before = JSON.stringify((await prop()).openings);
@@ -132,7 +138,7 @@ try {
   assert.equal(saved.from, 'saved'); assert.equal(saved.fov, 70);
   saved.position.forEach((v, i) => assert.ok(Math.abs(v - [0.6, 1.5, 2.2][i]) < 0.02, 'the camera flew to the stored view: ' + saved.position));
   // Saving reaches the disk, which remounts MODEL; the match and its camera carry on.
-  await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
+  await savedToDisk();
   await page.waitForTimeout(600);
   assert.equal(await page.locator('.v-match').count(), 1, 'the match survives the save');
   await page.locator('[data-match-save]').click();
@@ -155,10 +161,10 @@ try {
   await page.locator('.ph-detail [data-act=match]').click();
   await page.locator('.v-match-frame').waitFor();
   assert.equal(await page.evaluate(() => location.hash), '#/model', 'the deep link is consumed');
-  await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
+  await savedToDisk();
   // The saved views reach the project on disk and come back after a reload.
   await page.reload();
-  await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
+  await savedToDisk();
   const reloaded = await page.evaluate(async () => (await import('/js/store.js')).activeProperty().photos.map(ph => ph.view && ph.view.fov));
   assert.deepEqual(reloaded, [70, 60]);
   assert.deepEqual(errors, []);
