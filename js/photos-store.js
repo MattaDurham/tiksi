@@ -5,7 +5,8 @@
 //
 // Photo record shape (see also store.js migrate):
 // { id, name, kind: 'photo' | 'pano', w, h, mime, thumb (dataURL <= 360px), createdAt,
-//   notes, roomId, elementIds: [], itemIds: [], pin: null | { x, y, z, nx, ny, nz, size } }
+//   notes, roomId, elementIds: [], itemIds: [], pin: null | { x, y, z, nx, ny, nz, size },
+//   view?: { position: [x,y,z], target: [x,y,z], fov (horizontal deg), from? } (photo-match.js) }
 
 import { uid, touch, putFile, getFile, deleteFile, storeThumb, deleteThumb } from './store.js';
 

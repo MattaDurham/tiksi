@@ -41,6 +41,7 @@ import { icon } from './icons.js';
 import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapRects, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
 import { planWallMove, applyWallMove, normalOffset } from './wallmove.js';
 import { addPhotoFromFile, photoUrl, photoById, revokePhotoUrls } from './photos-store.js';
+import { normalizeView, defaultHfov, hfovOf, viewFrame, viewForPin, FOV_MIN, FOV_MAX } from './photo-match.js';
 import {
   loadScanObject, applyScanTransform, disposeScanObject,
   scanStats, dropScanToFloor, centerScanOnModel, releaseSplatRenderer, splatDrawables, splatBusy,
@@ -68,6 +69,10 @@ const clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 1.2);
 let framesLeft = 0, lastT = 0, tween = null, resizeObs = null;
 let pinPhotoId = null;         // photo being placed by the PIN PHOTO tool
 let pinBatch = false;          // placing unpinned photos one after another
+let match = null;              // MATCH PHOTO: {id, aspect, hfov, el} while a photo is laid over the view
+let matchOpacity = 0.5, matchBeside = false;   // how the photo is shown; kept between matches
+let matchResume = null;        // a match in progress when a disk save remounts the view
+const ORBIT_POLAR = Math.PI * 0.495, MATCH_POLAR = Math.PI - 0.01, BASE_FOV = 50;
 let measureDraft = null;       // first measure point
 const measures = [];           // {a, b, line, label}
 const scanObjs = {};           // scanId -> Object3D
@@ -680,6 +685,7 @@ function stepTween() {
 
 // ---------- modes ----------
 function setMode(next) {
+  if (match && next !== 'orbit') endMatch();
   if (mode === 'walk' && next !== 'walk') {
     if (walkLocked) walk.unlock();
     walk.disconnect();
@@ -690,7 +696,8 @@ function setMode(next) {
   controls.enabled = next !== 'walk';
   controls.enableRotate = next !== 'top';
   nav.refresh();
-  controls.maxPolarAngle = Math.PI * 0.495;
+  // A photo can look up at a ceiling; ordinary orbiting stays above the horizon.
+  controls.maxPolarAngle = match ? MATCH_POLAR : ORBIT_POLAR;
   if (next === 'walk') startWalk();
   else if (next === 'top') presetView('top');
   else if (next === 'orbit' && camera.position.y < 0.3) camera.position.y = 0.3;
@@ -837,6 +844,7 @@ function resize() {
   composer.setSize(w, h);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
+  if (match) applyMatchFrame();
   for (const m of measures) m.line.material.resolution.set(w * pr, h * pr);
   requestRender(2);
 }
@@ -1299,6 +1307,7 @@ function pinHint() {
   return 'PIN PHOTO: click where "' + ph.name + '" was taken' + (pinBatch && left > 1 ? ' (' + left + ' to place; the next one follows)' : '') + '. Esc stops.';
 }
 function startPinMode(photoId) {
+  endMatch();
   showMarkers('pins');
   tool = 'pin';
   const first = nextUnpinned(null);
@@ -1351,6 +1360,8 @@ function placePin(e) {
   if (!ph) { pinPhotoId = null; renderInspector(); return; }
   const size = (ph.pin && ph.pin.size) || 0.6;
   ph.pin = { x: hit.point.x, y: hit.point.y, z: hit.point.z, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z, size };
+  // The camera at the moment of pinning is the photo's first view; MATCH PHOTO refines it.
+  if (!ph.view && ph.kind !== 'pano') ph.view = currentView(cameraHfov(), 'pin');
   linkPinToPlan(ph, hit);
   touch();
   buildPin(ph);
@@ -1381,6 +1392,126 @@ function flyToMarker(r) {
   const pos = r.anchor.clone().addScaledVector(dir, 3.2).add(new THREE.Vector3(0, 0.9, 0));
   if (mode === 'walk') setMode('orbit');
   flyTo(pos, r.anchor.clone(), 700);
+}
+
+// ---------- match photo ----------
+// Fly to the camera a photo was taken from and lay the photo over the render, so the model can
+// be checked (and corrected) against the site. The camera takes the photo's lens and the
+// photo sits in the part of the view that lens frames; orbiting keeps the overlay in place, so
+// the view can be lined up by eye and saved on the photo (photo-match.js has the record).
+function cameraHfov() { return hfovOf(camera.fov, camera.aspect || 1); }
+function currentView(fov, from) {
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir);
+  const target = mode === 'walk' || camera.position.distanceTo(controls.target) < 0.3
+    ? camera.position.clone().addScaledVector(dir, 2) : controls.target;
+  return normalizeView({ position: camera.position.toArray(), target: target.toArray(), fov, from });
+}
+function photoAspect(ph) { return ph.w > 0 && ph.h > 0 ? ph.w / ph.h : 4 / 3; }
+// `resume` (a remount's {hfov, position, target}) puts the camera straight back where it was.
+function startMatch(id, resume) {
+  const ph = photoById(prop, id);
+  if (!ph || !wrapEl) return;
+  if (ph.kind === 'pano') { toast('A 360 panorama has no single viewpoint to match. Use it as the sky instead.', 'warn'); return; }
+  endMatch();
+  if (tool !== 'select') setTool('select');
+  if (mode !== 'orbit') setMode('orbit');
+  const aspect = photoAspect(ph);
+  const view = (resume && normalizeView({ ...resume, fov: resume.hfov })) || normalizeView(ph.view) || (ph.pin && viewForPin(ph.pin, defaultHfov(aspect))) || currentView(defaultHfov(aspect));
+  const box = document.createElement('div');
+  box.className = 'v-match';
+  box.innerHTML = '<div class="v-match-frame"><img alt=""></div><div class="v-match-pip"><img alt=""><span></span></div>';
+  box.querySelector('.v-match-pip span').textContent = ph.name || '';
+  for (const img of box.querySelectorAll('img')) img.src = ph.thumb || '';
+  wrapEl.appendChild(box);
+  match = { id, aspect, hfov: view.fov, el: box };
+  const token = mountId;
+  photoUrl(id).then(url => { if (url && match && match.id === id && token === mountId) for (const img of box.querySelectorAll('img')) img.src = url; });
+  controls.maxPolarAngle = MATCH_POLAR;
+  applyMarkerVisibility();
+  applyMatchFrame();
+  flyTo(new THREE.Vector3(...view.position), new THREE.Vector3(...view.target), resume ? 0 : 700);
+  renderInspector();
+  setHint('MATCH PHOTO: orbit, pan and zoom until the model lines up with the photo, then SAVE VIEW. Esc ends.');
+}
+function applyMatchFrame() {
+  if (!match || !wrapEl || !camera) return;
+  const W = wrapEl.clientWidth, H = wrapEl.clientHeight;
+  if (!W || !H) return;
+  const f = viewFrame(W, H, match.aspect, match.hfov);
+  camera.fov = f.vfov; camera.updateProjectionMatrix();
+  const frame = match.el.querySelector('.v-match-frame'), pip = match.el.querySelector('.v-match-pip');
+  Object.assign(frame.style, { left: f.x + 'px', top: f.y + 'px', width: f.w + 'px', height: f.h + 'px' });
+  frame.querySelector('img').style.opacity = matchBeside ? 0 : matchOpacity;
+  match.el.classList.toggle('beside', matchBeside);
+  // Side by side: the photo in a card beside the frame it should match, at its own aspect.
+  const pw = Math.min(W * 0.42, H * 0.5 * match.aspect);
+  Object.assign(pip.style, { width: pw + 'px', height: pw / match.aspect + 'px' });
+  requestRender(2);
+}
+function endMatch() {
+  if (!match) return;
+  match.el.remove();
+  match = null;
+  if (camera) { camera.fov = BASE_FOV; camera.updateProjectionMatrix(); }
+  if (controls) { controls.maxPolarAngle = mode === 'walk' ? controls.maxPolarAngle : ORBIT_POLAR; controls.update(); }
+  applyMarkerVisibility();
+  setHint('');
+  renderInspector();
+}
+function saveMatchView() {
+  const ph = match && photoById(prop, match.id);
+  if (!ph) return endMatch();
+  ph.view = currentView(match.hfov, 'saved');
+  touch();
+  toast('View saved for "' + ph.name + '". MATCH PHOTO returns here.', 'ok');
+  renderInspector();
+}
+// SAVE VIEW FOR THIS PHOTO outside a match: the camera as it is, with its own lens.
+function saveCurrentViewFor(id) {
+  const ph = photoById(prop, id);
+  if (!ph) return;
+  ph.view = currentView(cameraHfov(), 'saved');
+  touch();
+  toast('Saved the current view for "' + ph.name + '".', 'ok');
+  renderInspector();
+}
+function viewLabel(ph) { return !ph.view ? 'none yet' : ph.view.from === 'pin' ? 'from pinning' : 'saved'; }
+function renderMatchPanel() {
+  const ph = photoById(prop, match.id);
+  if (!ph) { endMatch(); return; }
+  const pct = Math.round(matchOpacity * 100);
+  inspEl.innerHTML = `<h3>MATCH PHOTO</h3>
+    <div class="v-thumb big active"><img src="${escapeHtml(ph.thumb)}" alt=""></div>
+    <div class="stat-line"><span>${escapeHtml(ph.name)}</span><b>View: ${viewLabel(ph)}</b></div>
+    <div class="empty" style="margin:6px 0 12px">The photo sits in the frame its lens covers. Orbit, pan and zoom until walls, openings and fixtures line up, then save the view. Where they cannot line up, the model differs from the site.</div>
+    <div class="field"><label>Show the photo</label><div class="seg fill">
+      <button class="seg-btn ${matchBeside ? '' : 'active'}" data-match-layout="over">OVER</button>
+      <button class="seg-btn ${matchBeside ? 'active' : ''}" data-match-layout="beside">SIDE BY SIDE</button></div></div>
+    <div class="field" ${matchBeside ? 'hidden' : ''}><label>Photo opacity <b data-match-opv>${pct}%</b></label>
+      <input type="range" min="0" max="1" step="0.05" value="${matchOpacity}" data-match-op></div>
+    <div class="field"><label>Lens (horizontal field of view) <b data-match-fovv>${Math.round(match.hfov)}&deg;</b></label>
+      <input type="range" min="${FOV_MIN}" max="${FOV_MAX}" step="1" value="${Math.round(match.hfov)}" data-match-fov></div>
+    <button class="btn primary" data-match-save>SAVE VIEW FOR THIS PHOTO</button>
+    ${ph.view ? '<button class="btn" data-match-back>BACK TO SAVED VIEW</button>' : ''}
+    <button class="btn" data-match-open>OPEN FULL SIZE</button>
+    <button class="btn" data-match-done>DONE</button>`;
+  inspEl.querySelectorAll('[data-match-layout]').forEach(b => b.onclick = () => { matchBeside = b.dataset.matchLayout === 'beside'; applyMatchFrame(); renderMatchPanel(); });
+  const op = inspEl.querySelector('[data-match-op]');
+  op.oninput = () => { matchOpacity = parseFloat(op.value); inspEl.querySelector('[data-match-opv]').textContent = Math.round(matchOpacity * 100) + '%'; applyMatchFrame(); };
+  const fov = inspEl.querySelector('[data-match-fov]');
+  fov.oninput = () => { match.hfov = parseFloat(fov.value); inspEl.querySelector('[data-match-fovv]').innerHTML = Math.round(match.hfov) + '&deg;'; applyMatchFrame(); };
+  inspEl.querySelector('[data-match-save]').onclick = saveMatchView;
+  const back = inspEl.querySelector('[data-match-back]');
+  if (back) back.onclick = () => {
+    const v = normalizeView(ph.view);
+    if (!v) return;
+    match.hfov = v.fov; applyMatchFrame();
+    flyTo(new THREE.Vector3(...v.position), new THREE.Vector3(...v.target), 500);
+    renderMatchPanel();
+  };
+  inspEl.querySelector('[data-match-open]').onclick = () => openLightbox(ph.id);
+  inspEl.querySelector('[data-match-done]').onclick = endMatch;
 }
 
 // ---------- notes ----------
@@ -1681,7 +1812,8 @@ function closeContextMenu() {
 // Both are kept per property in the environment, so a property opens the way it was left.
 function markersShown(kind) { return prop.env[kind === 'notes' ? 'showNotes' : 'showPins'] !== false; }
 function applyMarkerVisibility() {
-  if (pinRoot) pinRoot.visible = markersShown('pins');
+  // The photo being matched must not be covered by its own pin card (or its neighbours').
+  if (pinRoot) pinRoot.visible = markersShown('pins') && !match;
   if (noteRoot) noteRoot.visible = markersShown('notes');
   const sel = selection && (selection.kind === 'pin' || selection.kind === 'note') ? selectedObject() : null;
   if (sel && !isVisibleChain(sel)) setSelection(null);
@@ -2152,12 +2284,14 @@ function pinsListHtml() {
       <img src="${escapeHtml(ph.thumb)}" alt="">
       <span class="v-pin-name">${escapeHtml(ph.name)}</span>
       <button class="btn small" data-locate="${escapeHtml(ph.id)}" title="Fly to pin">LOCATE</button>
+      ${ph.kind === 'pano' ? '' : `<button class="btn small" data-match="${escapeHtml(ph.id)}" title="View the model from where the photo was taken, with the photo over it">MATCH</button>`}
       <button class="btn small danger" data-unpin="${escapeHtml(ph.id)}" title="Remove pin">&times;</button>
     </div>`).join('');
 }
 function bindPinsList(root) {
   root.querySelectorAll('[data-locate]').forEach(b => b.onclick = () => { setSelection({ kind: 'pin', id: b.dataset.locate }); flyToPin(b.dataset.locate); });
   root.querySelectorAll('[data-unpin]').forEach(b => b.onclick = () => unpin(b.dataset.unpin));
+  root.querySelectorAll('[data-match]').forEach(b => b.onclick = () => startMatch(b.dataset.match));
 }
 function notesListHtml() {
   if (!prop.notePins.length) return '';
@@ -2224,6 +2358,7 @@ function renderPinPanel() {
 function renderInspector() {
   if (!inspEl) return;
   if (tool === 'pin') return renderPinPanel();
+  if (match) return renderMatchPanel();
   if (!selection) {
     const hidden = hiddenLevels();
     const levelRows = prop.levels.map(l => {
@@ -2377,7 +2512,10 @@ function renderInspector() {
       <div class="stat-line"><span>${escapeHtml(ph.name)}</span><b>${finiteNum(ph.w, '?')} x ${finiteNum(ph.h, '?')}</b></div>
       <div class="field"><label>Notes</label><textarea data-notes>${escapeHtml(ph.notes || '')}</textarea></div>
       <div class="field"><label>Card size</label><input type="range" min="0.25" max="2.5" step="0.05" value="${finiteNum(ph.pin.size, 0.6)}" data-size></div>
+      <div class="stat-line"><span>Camera view</span><b>${viewLabel(ph)}</b></div>
       <button class="btn" data-open2>OPEN FULL SIZE</button>
+      ${ph.kind === 'pano' ? '' : `<button class="btn primary" data-match title="View the model from where the photo was taken, with the photo over it">MATCH PHOTO</button>
+      <button class="btn" data-saveview title="Store the camera as it is now as the place this photo was taken from">SAVE VIEW FOR THIS PHOTO</button>`}
       <button class="btn" data-locate>LOCATE</button>
       <button class="btn" data-move>MOVE PIN</button>
       <button class="btn danger" data-unpin>REMOVE PIN</button>`;
@@ -2388,6 +2526,9 @@ function renderInspector() {
     inspEl.querySelector('[data-size]').onchange = () => touch();
     inspEl.querySelector('[data-locate]').onclick = () => flyToPin(ph.id);
     inspEl.querySelector('[data-move]').onclick = () => startPinMode(ph.id);
+    const mb = inspEl.querySelector('[data-match]'), sv = inspEl.querySelector('[data-saveview]');
+    if (mb) mb.onclick = () => startMatch(ph.id);
+    if (sv) sv.onclick = () => saveCurrentViewFor(ph.id);
     inspEl.querySelector('[data-unpin]').onclick = () => unpin(ph.id);
     return;
   }
@@ -2598,6 +2739,7 @@ function renderToolCol() {
   on('rebuild', () => { rebuildModel(); rebuildGround(); buildAllPins(); buildAllNotes(); });
 }
 function setTool(next) {
+  if (next !== 'select') endMatch();
   if (tool === 'measure' && next !== 'measure') { measureDraft = null; measureRoot.children.filter(c => c.userData.draft).forEach(c => { measureRoot.remove(c); c.geometry.dispose(); c.material.dispose(); }); }
   tool = next;
   if (next !== 'pin') pinBatch = false;
@@ -2635,7 +2777,8 @@ function onKeyDown(e) {
     case 'KeyG': toggleLayer('scan'); break;
     case 'KeyK': toggleLayer('furnishings'); break;
     case 'Escape':
-      if (tool !== 'select') setTool('select');
+      if (match) endMatch();
+      else if (tool !== 'select') setTool('select');
       else setSelection(null);
       break;
     case 'Delete': case 'Backspace':
@@ -2654,6 +2797,8 @@ function onContextMenu(e) { e.preventDefault(); }
 
 // ---------- mount / unmount ----------
 export function mount(root) {
+  const resumed = matchResume && performance.now() - matchResume.at < 1500 ? matchResume : null;
+  matchResume = null;
   prop = activeProperty();
   el = root;
   if (!prop) {
@@ -2682,7 +2827,7 @@ export function mount(root) {
     modes: wrapEl.querySelector('.v-modes'), compass: wrapEl.querySelector('.v-rose'), env: wrapEl.querySelector('.v-env'),
     progress: wrapEl.querySelector('.v-progress'), toast: wrapEl.querySelector('.v-toast'), hint: wrapEl.querySelector('.v-hint'),
   };
-  mode = 'orbit'; tool = 'select'; selection = null; hoverTarget = null; tween = null; measureDraft = null; pinPhotoId = null;
+  mode = 'orbit'; tool = 'select'; selection = null; hoverTarget = null; tween = null; measureDraft = null; pinPhotoId = null; match = null;
   movingNoteId = null; rightPress = null; ctxMenu = null; noteEditor = null;
   panoNagged = false; panoPending = null; panoMissing = null;
   for (const k of Object.keys(scanState)) delete scanState[k];
@@ -2725,13 +2870,21 @@ export function mount(root) {
   requestRender(4);
 
   const focus=pendingScanFocus || prop.modelSourceId,token=mountId,focusVersion=selectionVersion;pendingScanFocus=null;
-  loadAllScans().then(()=>{if(token===mountId && selectionVersion===focusVersion && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
+  loadAllScans().then(()=>{if(token===mountId && selectionVersion===focusVersion && !match && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
   // Deep link from the PHOTOS view: #/model?pin=<photoId> enters PIN PHOTO for that photo.
   const m = /[?&]pin=([^&]+)/.exec(location.hash);
   if (m) {
     if (photoById(prop, decodeURIComponent(m[1]))) startPinMode(decodeURIComponent(m[1]));
     // Consume the query so a reload, Back or a bookmark returns to the plain model view
     // (replaceState does not fire hashchange, so the router is not re-entered).
+    history.replaceState(null, '', '#/model');
+  }
+  // Only straight after a remount (checked on entry): leaving MODEL and coming back starts plain.
+  if (resumed && photoById(prop, resumed.id)) startMatch(resumed.id, resumed);
+  // #/model?match=<photoId> (PHOTOS > MATCH IN 3D) opens MATCH PHOTO for that photo.
+  const mm = /[?&]match=([^&]+)/.exec(location.hash);
+  if (mm) {
+    if (photoById(prop, decodeURIComponent(mm[1]))) startMatch(decodeURIComponent(mm[1]));
     history.replaceState(null, '', '#/model');
   }
 }
@@ -2779,6 +2932,10 @@ export function unmount() {
   }
   closeContextMenu();
   closeNoteEditor();
+  // Every disk save remounts the view (a saved view among them): the match carries on after it.
+  matchResume = match && camera && controls ? { at: performance.now(), id: match.id, hfov: match.hfov, position: camera.position.toArray(), target: (tween ? tween.t1 : controls.target).toArray() } : null;
+  if (tween && matchResume) matchResume.position = tween.p1.toArray();
+  if (match) { match.el.remove(); match = null; }
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
   clearTimeout(pmremTimer);
   if (mode === 'walk' && walk) { if (walkLocked) walk.unlock(); }
