@@ -151,6 +151,21 @@ export function placeResult(result, place) {
 // floor, the mesh scans it supersedes leave the property. `level` stacks the new levels on
 // top. `beside` adds walls and rooms to the level at the same height, or a new level.
 // Returns what was added, in applyProposal's shape, plus the ids of superseded scans.
+// Property records for a proposed opening and room. A door read without a scanned threshold
+// keeps its evidence and low confidence; an unscanned area keeps its kind (and so stays out
+// of floor area) and its review name.
+export function proposedOpening(o, id, wallId) {
+  const rec = { id, wallId, type: o.type, t: o.t, width: o.width, height: o.height };
+  if (o.type === 'window') rec.sill = o.sill;
+  if (o.confidence) Object.assign(rec, { confidence: o.confidence, evidence: o.evidence });
+  return rec;
+}
+export function proposedRoom(r, id, level, name) {
+  const rec = { id, level, name, material: null, ceilingMaterial: null, pts: r.pts };
+  if (r.kind === 'unscanned') Object.assign(rec, { kind: 'unscanned', name: r.name || 'Unscanned area · verify' });
+  return rec;
+}
+
 export function mergeProposal(prop, scan, result, underlays, mode, uid) {
   const levels = [], walls = [], openings = [], rooms = [];
   const kept = prop.levels.slice();
@@ -191,11 +206,9 @@ export function mergeProposal(prop, scan, result, underlays, mode, uid) {
     }
     for (const o of L.openings) {
       if (!ids[o.wallId]) continue;
-      const rec = { id: uid('o'), wallId: ids[o.wallId], type: o.type, t: o.t, width: o.width, height: o.height };
-      if (o.type === 'window') rec.sill = o.sill;
-      openings.push(rec);
+      openings.push(proposedOpening(o, uid('o'), ids[o.wallId]));
     }
-    for (const r of L.rooms) rooms.push({ id: uid('r'), level: lvl.id, name: 'Room ' + (++roomNo), material: null, ceilingMaterial: null, pts: r.pts });
+    for (const r of L.rooms) rooms.push(proposedRoom(r, uid('r'), lvl.id, 'Room ' + (r.kind === 'unscanned' ? roomNo : ++roomNo)));
   });
   let superseded = [];
   if (mode === 'replace' && [...before].every(id => cleared.has(id))) {

@@ -9,9 +9,9 @@
 // underlays and the proposed walls land on top of each other in PLAN and MODEL.
 
 import * as THREE from 'three';
-import { uid, touch, levelOfWall } from './store.js';
+import { uid, touch, levelOfWall, countsAsFloor } from './store.js';
 import { loadMesh } from './scans.js';
-import { fitScan, placeResult, mergeProposal, existingPlan } from './scanmerge.js';
+import { fitScan, placeResult, mergeProposal, existingPlan, proposedOpening, proposedRoom } from './scanmerge.js';
 import { scanToPlan } from './scan2plan-core.js';
 import { floorDetectionReport, floorReviewText } from './scan-surfaces.js';
 import { underlayResolution } from './underlay-resolution.js';
@@ -215,11 +215,9 @@ export function applyProposal(prop, scan, result, underlays) {
     }
     for (const o of L.openings) {
       if (!ids[o.wallId]) continue;
-      const rec = { id: uid('o'), wallId: ids[o.wallId], type: o.type, t: o.t, width: o.width, height: o.height };
-      if (o.type === 'window') rec.sill = o.sill;
-      openings.push(rec);
+      openings.push(proposedOpening(o, uid('o'), ids[o.wallId]));
     }
-    L.rooms.forEach((r, ri) => rooms.push({ id: uid('r'), level: lvl.id, name: 'Room ' + (ri + 1), material: null, ceilingMaterial: null, pts: r.pts }));
+    for (const r of L.rooms) rooms.push(proposedRoom(r, uid('r'), lvl.id, r.name));
   });
   prop.levels = levels;
   prop.activeLevelId = (levels[result.mainLevelIndex] || levels[0]).id;
@@ -324,15 +322,21 @@ export function proposalSummary(result, applied) {
 
 function geometrySummary(result, applied) {
   if (!applied) return 'the scan is placed on the floor; it does not read as a room, so no walls were proposed';
+  const plural = (k, w) => k + ' ' + w + (k === 1 ? '' : 's');
+  const rooms = applied.rooms.filter(countsAsFloor).length, unscanned = applied.rooms.length - rooms;
+  const doors = applied.openings.filter(o => o.type === 'door'), wins = applied.openings.length - doors.length;
+  const unsure = doors.filter(o => o.confidence === 'low').length;
+  // What the scan could not see, so the owner knows what to check on site.
+  const verify = [unscanned ? plural(unscanned, 'unscanned area') + ' (not in floor area)' : '',
+    unsure ? plural(unsure, 'door') + ' without a scanned threshold' : ''].filter(Boolean);
+  const tail = verify.length ? '; verify ' + verify.join(' and ') : '';
   if (applied.mode === 'level' || applied.mode === 'beside') {
     const where = applied.mode === 'level' ? 'as ' + applied.levels.map(l => l.name).join(', ') : 'beside the building';
-    return 'added ' + applied.walls.length + ' walls and ' + applied.rooms.length + ' room' + (applied.rooms.length === 1 ? '' : 's') + ' ' + where;
+    return 'added ' + applied.walls.length + ' walls and ' + plural(rooms, 'room') + ' ' + where + tail;
   }
-  const doors = applied.openings.filter(o => o.type === 'door').length, wins = applied.openings.length - doors;
   const n = applied.levels ? applied.levels.length : 1;
-  const plural = (k, w) => k + ' ' + w + (k === 1 ? '' : 's');
-  return (n > 1 ? plural(n, 'level') + ', ' : '') + applied.walls.length + ' walls, ' + plural(applied.rooms.length, 'room') + ', ' +
-    plural(doors, 'door') + ', ' + plural(wins, 'window') + (n > 1 ? '' : ', ceiling ' + result.wallHeight.toFixed(2) + ' m');
+  return (n > 1 ? plural(n, 'level') + ', ' : '') + applied.walls.length + ' walls, ' + plural(rooms, 'room') + ', ' +
+    plural(doors.length, 'door') + ', ' + plural(wins, 'window') + (n > 1 ? '' : ', ceiling ' + result.wallHeight.toFixed(2) + ' m') + tail;
 }
 
 // A starter project whose scope items carry the takeoffs from the proposal, each linked to
@@ -347,7 +351,7 @@ export function seedProject(prop, applied, label) {
   const levelName = id => { const l = levels.find(x => x.id === id); return l ? l.name : ''; };
   const heightOf = w => { const l = levels.find(x => x.id === w.level); return w.height || (l && l.height) || prop.wallHeight || 2.44; };
   const items = [];
-  for (const r of applied.rooms) {
+  for (const r of applied.rooms.filter(countsAsFloor)) {
     const a = area(r.pts);
     const where = multi ? levelName(r.level) + ', ' + r.name : r.name;
     items.push({ id: uid('it'), name: 'Flooring: ' + where, qty: sf(a), unit: 'sf', low: 0, likely: 0, high: 0, durationDays: 0, deps: [], elementIds: [r.id], notes: 'Takeoff from the scan: ' + a.toFixed(1) + ' m2 floor.' });

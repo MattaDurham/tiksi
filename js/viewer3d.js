@@ -26,7 +26,7 @@ import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 import {
-  ws, activeProperty, defaultEnv, uid, touch, fmtLen, parseLen, fmtArea, polyArea,
+  ws, activeProperty, defaultEnv, uid, touch, fmtLen, parseLen, fmtArea, polyArea, countsAsFloor,
   escapeHtml, deleteFile, getFile, itemById, materialById, isoToday, projectLabel, propertyProjects,
   ensureLevels, wallsOn, roomsOn, wallHeightOf, levelOfWall, levelOfRoom, levelHeight, topOfLevels,
 } from './store.js';
@@ -716,7 +716,8 @@ function startWalk() {
   const hidden = hiddenLevels();
   const rooms = (prop.rooms || []).filter(r => r.pts && r.pts.length > 2 && !hidden.has(levelOfRoom(prop, r).id));
   const selRoom = selection && selection.kind === 'room' && rooms.find(r => r.id === selection.id);
-  const r = selRoom || rooms.slice().sort((a, b) => polyArea(b.pts) - polyArea(a.pts))[0];
+  // Start in the largest measured room, never in an unscanned area.
+  const r = selRoom || rooms.filter(countsAsFloor).sort((a, b) => polyArea(b.pts) - polyArea(a.pts))[0];
   walkFloor = r ? levelOfRoom(prop, r).elevation : 0;
   look.y += walkFloor;
   if (r) {
