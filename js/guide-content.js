@@ -251,7 +251,7 @@ export const chapters = [
       ['Element links', 'A scope item can refer to the wall, room or model surface that generated the work.'],
       ['Selection vs deletion', 'Deselecting a project removes it from program calculations while retaining its scope for comparison.'],
       ['Subprojects', 'A subproject is a project inside a project, one level deep. Change its priority and status from the parent’s SUBPROJECTS table, move it with Part of, and record where it came from in Source. BUDGET and SCHEDULE show it as Project / Subproject. Deleting a project deletes its subprojects.'],
-      ['Across properties', 'PROJECTS lists workspace-wide work. A new project belongs to the active property, but selecting another property does not filter the project list, budget or schedule.'],
+      ['Across properties', 'PROJECTS, BUDGET, SCHEDULE and CUT SHEETS show the projects of the active property. A new project belongs to the active property; choose another property in PROPERTY to see its projects.'],
     ],
     note: 'Costs are per quantity unit: 120 square feet at $5 per square foot totals $600. Use one lump-sum quantity for a lump-sum quote. Set zero duration days for budget-only items; they stay out of the schedule.',
     related: ['budget', 'schedule', 'sheets'],
@@ -288,7 +288,7 @@ export const chapters = [
     ],
     features: [
       ['Cost ranges', 'The report preserves uncertainty as low/likely/high values instead of presenting one guessed price.'],
-      ['Program selection', 'Only selected projects contribute to the program totals, across every property in the workspace.'],
+      ['Program selection', 'Only the selected projects of the active property contribute to the program totals.'],
       ['Quantity changes', 'Updating a scope item quantity or cost updates the report. Products provide specification context; scope costs still need review.'],
     ],
     note: 'Budget totals are only as complete as the scope inputs. Include labor, waste, freight, tax and contingency where applicable to your estimate.',
