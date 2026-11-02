@@ -378,6 +378,36 @@ h3.kicker { font-weight: 700; }
 }
 .canvas-level:empty { display: none; }
 .plan-canvas .canvas-level { left: 30px; top: 30px; }
+/* NUMBER OPENINGS: the schedule floats on the canvas, clear of the badge and the scale bar */
+.plan-schedule {
+  position: absolute; right: 12px; top: 60px; width: 292px; max-height: calc(100% - 150px); display: flex; flex-direction: column;
+  background: var(--glass-bg); border: 1px solid var(--glass-line); backdrop-filter: blur(8px);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-2); font-size: 11.5px;
+}
+.plan-schedule[hidden] { display: none; }
+.plan-schedule .ps-head { padding: 9px 11px 4px; display: flex; flex-direction: column; gap: 2px; }
+.plan-schedule .ps-head b { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em; color: var(--accent); }
+.plan-schedule .ps-head span { font-family: var(--mono); font-size: 9.5px; color: var(--dim); }
+.plan-schedule .ps-acts { display: flex; gap: 6px; padding: 4px 11px 8px; border-bottom: 1px solid var(--line); }
+.plan-schedule .ps-rows { overflow-y: auto; padding: 4px; }
+.plan-schedule .empty { padding: 10px 11px 12px; }
+.ps-row { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--radius); cursor: pointer; border: 1px solid transparent; }
+.ps-row:hover { background: rgba(255, 255, 255, 0.04); }
+.ps-row.active { background: var(--accent-soft); border-color: rgba(232, 151, 58, 0.3); }
+.ps-num { font-family: var(--mono); font-weight: 700; font-size: 11px; text-align: center; border-radius: 999px; padding: 2px 0; border: 1px solid; }
+.ps-num.door { color: #d9b47c; border-color: rgba(217, 180, 124, 0.6); }
+.ps-num.window { color: var(--cyan); border-color: rgba(95, 179, 201, 0.6); }
+.ps-row.active .ps-num { color: var(--accent); border-color: var(--accent); }
+.ps-what { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.ps-what b { font-weight: 600; font-size: 11px; }
+.ps-what i { font-style: normal; color: var(--dim); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ps-size { display: flex; align-items: center; gap: 3px; }
+.ps-size em { font-style: normal; color: var(--faint); }
+.ps-size input {
+  width: 54px; padding: 3px 4px; font-family: var(--mono); font-size: 10.5px; text-align: right; color: var(--ink);
+  background: var(--panel-3); border: 1px solid var(--line-2); border-radius: 4px;
+}
+.ps-size input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus); }
 
 .inspector {
   background: var(--panel); border-left: 1px solid var(--line);
@@ -811,6 +841,7 @@ kbd {
   #print-root .sheet h2 { page-break-after: avoid; break-after: avoid; }
   #print-root .sheet a { color: #1c1c1c; text-decoration: none; }
   #print-root .sheet a[href^="http"]::after { content: ' (' attr(href) ')'; font-size: 9px; color: #666; }
+  #print-root .opening-sheet .s-plan { display: block; width: 100%; max-height: 150mm; object-fit: contain; margin: 4mm 0; }
 }
 
 /* ---------- modal dialogs (NEW PROPERTY) ---------- */
@@ -1004,3 +1035,12 @@ kbd {
 .src-card [data-floor-review] summary { cursor: pointer; color: var(--accent); }
 .src-card [data-floor-review] table { display: block; max-width: 100%; overflow-x: auto; font: 10px var(--mono); border-collapse: collapse; }
 .src-card [data-floor-review] th, .src-card [data-floor-review] td { padding: 5px; text-align: left; border-bottom: 1px solid var(--line-2); }
+
+/* Fixture proposals from a scan (fixtures-ui.js) */
+.fx-review .fx-list { list-style: none; margin: 0 0 12px; padding: 0; border-top: 1px solid var(--line); }
+.fx-review .fx-list li { border-bottom: 1px solid var(--line); }
+.fx-review .fx-list label { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px; margin: 0; padding: 10px 0; cursor: pointer; }
+.fx-review .fx-list span { font-size: 13px; line-height: 1.45; color: var(--ink); overflow-wrap: anywhere; }
+.fx-review .fx-list small { display: block; color: var(--dim); font-size: 11.5px; }
+.fx-review .fx-list em { font: 11px var(--mono); font-style: normal; color: var(--accent); }
+.fx-review .fx-list input { margin-top: 3px; }

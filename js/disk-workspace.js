@@ -228,7 +228,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
         }, async createWritable() { return { async write(blob) { await request(endpoint, { method: 'PUT', body: blob, headers: { 'X-File-Mtime': version } }); }, async close() {} }; } };
       },
     };
-    const result = await syncMirror(folder, working, entry, async (handle, blob) => { const writer = await handle.createWritable(); await writer.write(blob); await writer.close(); });
+    const result = await syncMirror(folder, working, entry, async (handle, blob) => { const writer = await handle.createWritable(); await writer.write(blob); await writer.close(); }, ws.data.materials);
     await request(endpoint + '/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(entry) });
     if (result.changed) {
       const index = ws.data.properties.findIndex(p => p.id === prop.id);

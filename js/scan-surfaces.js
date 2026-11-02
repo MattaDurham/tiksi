@@ -1,7 +1,7 @@
 // Coarse connected horizontal evidence, independent of the fine wall raster.
 // These patches are observations, not authored floors or a claim of indoor use.
 export const SURFACE_CELL = 0.25;
-const CELL = SURFACE_CELL, HEIGHT = 0.08, JOIN = 0.16, MIN_AREA = 0.35;
+const CELL = SURFACE_CELL, HEIGHT = 0.08, JOIN = 0.16, MIN_AREA = 0.35, SOLID = 0.2;
 const key = (x, z, y) => `${x},${z},${y}`;
 const xy = (x, z) => `${x},${z}`;
 
@@ -25,26 +25,42 @@ export function horizontalPatches(pos, idx, tri) {
       p.minY = Math.min(p.minY, y); p.maxY = Math.max(p.maxY, y);
     }
   }
+  // A patch grows only through voxels that hold a real share of a surface and face the same
+  // way. Slivers (a step nosing, a shelf edge, clutter, mesh fringe at a wall) can join the
+  // patch beside them but never carry it on: chained 16 cm at a time they would otherwise
+  // climb from a floor through a stair or a stack of furniture to the ceiling, and one
+  // "surface" averaging floor and ceiling lands mid-room.
+  const solid = p => p.area >= SOLID * CELL * CELL;
+  const facing = p => p.up > 0.75 * p.area ? 1 : p.up < 0.25 * p.area ? -1 : 0;
   const patches = [];
-  for (const seed of voxels.values()) {
+  // Solid voxels seed first, so a sliver is absorbed by the surface beside it rather than
+  // starting a patch of its own that reaches into two.
+  for (const seed of [...voxels.values()].sort((a, b) => solid(b) - solid(a))) {
     if (seed.seen) continue;
     const stack = [seed], cells = new Set(); seed.seen = true;
-    let area = 0, sumY = 0, up = 0, minY = Infinity, maxY = -Infinity;
+    let area = 0, up = 0, minY = Infinity, maxY = -Infinity;
+    const members = [];
     let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
     while (stack.length) {
       const p = stack.pop();
-      area += p.area; sumY += p.sumY; up += p.up;
+      area += p.area; up += p.up; members.push(p);
       minY = Math.min(minY, p.minY); maxY = Math.max(maxY, p.maxY);
       x0 = Math.min(x0, p.x * CELL); z0 = Math.min(z0, p.z * CELL);
       x1 = Math.max(x1, (p.x + 1) * CELL); z1 = Math.max(z1, (p.z + 1) * CELL);
       cells.add(xy(p.x, p.z));
+      if (!solid(p)) continue;
       for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) for (let dh = -2; dh <= 2; dh++) {
         const q = voxels.get(key(p.x + dx, p.z + dz, p.h + dh));
-        if (!q || q.seen || Math.abs(q.sumY / q.area - p.sumY / p.area) > JOIN) continue;
+        if (!q || q.seen || Math.abs(q.sumY / q.area - p.sumY / p.area) > JOIN || facing(p) * facing(q) < 0) continue;
         q.seen = true; stack.push(q);
       }
     }
-    if (area >= MIN_AREA) patches.push({ area, y: sumY / area, minY, maxY, upShare: up / area,
+    // The datum is the area-weighted median height and the spread runs between the 5th and
+    // 95th percentiles: a soffit, or slivers absorbed at a ceiling's edge, belong to the
+    // surface but must not pull the storey height down or make a flat ceiling read as sloped.
+    members.sort((a, b) => a.sumY / a.area - b.sumY / b.area);
+    const at = f => { let acc = 0; for (const m of members) if ((acc += m.area) >= area * f) return m.sumY / m.area; return maxY; };
+    if (area >= MIN_AREA) patches.push({ area, y: at(0.5), minY, maxY, spread: at(0.95) - at(0.05), upShare: up / area,
       cells, bounds: { x0, z0, x1, z1 } });
   }
   patches.sort((a, b) => a.y - b.y || a.bounds.x0 - b.bounds.x0 || a.bounds.z0 - b.bounds.z0);
@@ -89,7 +105,7 @@ export function spatialLevels(pos, idx, tri, o, maxY) {
     const ceilY = ceiling ? ceiling.y : Math.max(f.y + 0.6, Math.min(f.y + 2.7, maxY - 0.05));
     const coverage = ceiling ? overlap(f, ceiling) : 0;
     const enclosure = wallSupport(pos, idx, tri, f, ceilY);
-    return { f, ceiling, floorY: f.y, ceilY, floorArea: f.area, flatCeiling: !!ceiling && ceiling.maxY - ceiling.minY < 0.15,
+    return { f, ceiling, floorY: f.y, ceilY, floorArea: f.area, flatCeiling: !!ceiling && ceiling.spread < 0.15,
       score: 2 * enclosure + coverage, coverage, enclosure };
   });
   const levels = [];

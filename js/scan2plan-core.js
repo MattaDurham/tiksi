@@ -19,6 +19,9 @@ import { spatialLevels, surfaceReport, SURFACE_CELL } from './scan-surfaces.js';
 //   5. Wall mask = high coverage, filtered to thin straight runs (blobs are
 //      furniture). Runs group into axis-aligned bands; bands become wall segments;
 //      collinear segments merge across door-sized gaps; corners get snapped.
+//      Walls scanned from one side only keep their scanned face and grow outward.
+//      An unscanned zone enclosed inside the envelope (a common stair) keeps the
+//      exterior wall running straight across it and becomes an unscanned area.
 //   6. Openings from the coverage profile along each wall: empty from the floor
 //      up is a door, a sill with an empty band above it is a window.
 //   7. Rooms = footprint (floor or ceiling) minus walls, as connected components,
@@ -43,7 +46,10 @@ export const DEFAULTS = {
   roomMinArea: 1.0,       // m2
   roomMinEdge: 0.3,       // room outline edges shorter than this are absorbed
   doorMin: 0.5, doorMax: 2.6,
+  doorUnscannedMax: 1.3,  // widest door accepted without a threshold (header plus what lies beyond)
   windowMin: 0.4,
+  exteriorThick: 0.2,     // nominal thickness of a wall scanned from one side only
+  envelopeDepth: 4.0,     // deepest unscanned zone the envelope closes across
 };
 
 // ---------- small raster helpers ----------
@@ -225,6 +231,9 @@ function rasterize(pos, idx, tri, levels, o) {
       L.region[j * W + i] = L.support.has(`${x},${z}`) ? 1 : 0;
     }
     L.floor = new Float32Array(W * H); L.ceil = new Float32Array(W * H); L.cov = new Uint32Array(W * H);
+    // Vertical geometry outside the floor region: never walls or rooms, only evidence
+    // that a doorway opens onto something (a stair seen through it, an open leaf).
+    L.covOut = new Uint32Array(W * H);
     L.nSlices = Math.max(4, Math.min(30, Math.floor((L.ceilY - o.sliceBelowCeil - L.floorY - o.sliceFrom) / o.slice)));
   }
   // Level lookup by height: level i owns [floorY - 0.25, nextFloorY - 0.25).
@@ -255,7 +264,13 @@ function rasterize(pos, idx, tri, levels, o) {
       const L = levels[li], k = cj * W + ci;
       // Ceiling area outside the selected floor region (for example a porch roof)
       // must not grow this storey's room footprint. Allow an edge band for walls.
-      if (!L.region[k]) continue;
+      if (!L.region[k]) {
+        if (vertical) {
+          const h = y - L.floorY - o.sliceFrom;
+          if (h >= 0 && y < L.ceilY - o.sliceBelowCeil) { const sl = Math.floor(h / o.slice); if (sl < L.nSlices) L.covOut[k] |= (1 << sl); }
+        }
+        continue;
+      }
       if (horizontal) {
         // Floor or ceiling by height alone, so winding never matters here.
         if (y > L.floorY - 0.15 && y < L.floorY + 0.12) L.floor[k] += w;
@@ -465,7 +480,7 @@ function mergeExteriorAcrossWindows(segs, fp, grid, o) {
   return out;
 }
 
-function classifyExterior(segs, fp, grid) {
+function classifyExterior(segs, fp, grid, keepSide) {
   const { W, H, cell, ox, oz } = grid;
   for (const s of segs) {
     const q = Math.round((s.thick / 2 + 0.3) / cell);
@@ -482,7 +497,157 @@ function classifyExterior(segs, fp, grid) {
     };
     const a = side(-1), b = side(1);
     s.exterior = Math.min(a, b) < 0.3;
-    s.inSide = a >= b ? -1 : 1;
+    if (!keepSide || !s.inSide) s.inSide = a >= b ? -1 : 1;
+  }
+}
+
+// Move a wall line from `from` to `to` and carry the perpendicular wall ends that were
+// joined to it (snapCorners leaves joined ends exactly on the old line).
+function moveLine(segs, s, from, to) {
+  for (const p of segs) {
+    if (p.dir === s.dir || p.c < s.a0 - 0.45 || p.c > s.a1 + 0.45) continue;
+    for (const end of ['a0', 'a1']) if (Math.abs(p[end] - from) < 0.02) p[end] = to;
+  }
+  s.c = to;
+}
+
+// A party or exterior wall is scanned from inside only, so its coverage band is one face and
+// the band's middle is that face: drawn there, half the wall stands in the room. Find the
+// room-most full-height face in the raw coverage and keep it; the wall grows outward to a
+// nominal thickness, or to the measured one when the outer face was scanned too.
+function alignOneSidedWalls(segs, L, grid, o) {
+  const { W, H, cell, ox, oz } = grid;
+  const moves = [];
+  for (const s of segs) {
+    if (!s.exterior) continue;
+    const off = s.dir === 'h' ? oz : ox, aoff = s.dir === 'h' ? ox : oz;
+    const half = Math.round((s.thick / 2 + 0.12) / cell), q0 = Math.floor((s.c - off) / cell) - half, nq = 2 * half + 1;
+    const f = new Float64Array(nq);
+    let n = 0;
+    for (let a = s.a0 + 0.1; a < s.a1 - 0.1; a += cell) {
+      const ia = Math.floor((a - aoff) / cell);
+      n++;
+      for (let q = 0; q < nq; q++) {
+        const i = s.dir === 'h' ? ia : q0 + q, j = s.dir === 'h' ? q0 + q : ia;
+        if (i >= 0 && j >= 0 && i < W && j < H) f[q] += popcount(L.cov[j * W + i]) / L.nSlices;
+      }
+    }
+    if (!n) continue;
+    let max = 0;
+    for (let q = 0; q < nq; q++) { f[q] /= n; max = Math.max(max, f[q]); }
+    if (max < 0.25) continue;
+    // Runs of columns that read as a full-height face; furniture in front reads lower.
+    const faces = [];
+    let cur = null;
+    for (let q = 0; q < nq; q++) {
+      if (f[q] < 0.6 * max) { cur = null; continue; }
+      if (!cur) faces.push(cur = { w: 0, m: 0 });
+      cur.w += f[q]; cur.m += f[q] * (q0 + q + 0.5);
+    }
+    const at = faces.map(k => off + k.m / k.w * cell).sort((x, y) => (y - x) * s.inSide);
+    const face = at[0], sep = Math.abs(at[0] - at[at.length - 1]);
+    const both = sep >= 0.08 && sep <= o.wallMaxThick;
+    const T = both ? sep : o.exteriorThick;
+    moves.push([s, s.c, face - s.inSide * T / 2]);
+    Object.assign(s, { thick: T, face, oneSided: !both, aligned: true });
+  }
+  for (const [s, from, to] of moves) moveLine(segs, s, from, to);
+}
+
+// Cells covered by the walls as drawn (centre line +- half thickness, plus a margin).
+function wallRaster(segs, grid) {
+  const { W, H, cell } = grid;
+  const out = new Uint8Array(W * H);
+  for (const s of segs) {
+    const half = Math.max(s.thick / 2, 0.05) + 0.03;
+    const i0 = Math.floor(((s.dir === 'h' ? s.a0 : s.c - half) - grid.ox) / cell), i1 = Math.ceil(((s.dir === 'h' ? s.a1 : s.c + half) - grid.ox) / cell);
+    const j0 = Math.floor(((s.dir === 'h' ? s.c - half : s.a0) - grid.oz) / cell), j1 = Math.ceil(((s.dir === 'h' ? s.c + half : s.a1) - grid.oz) / cell);
+    for (let j = Math.max(0, j0); j < Math.min(H, j1); j++) for (let i = Math.max(0, i0); i < Math.min(W, i1); i++) out[j * W + i] = 1;
+  }
+  return out;
+}
+
+// The envelope: exterior walls on one line on both sides of a gap, where the gap opens onto
+// an unscanned zone that walls close off inside, as a common stair along a party wall does.
+// The wall runs straight across the gap and the zone is returned as a mask for an unscanned
+// area. A zone that leaks out (past the depth limit or round the ends of the gap) or that
+// mostly scanned floor bounds (a part of a room nobody walked into) is left as it is.
+function closeEnvelope(segs, scanned, grid, o) {
+  const { W, H, cell, ox, oz } = grid;
+  const zones = [];
+  for (const dir of ['h', 'v']) {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const ext = segs.filter(s => s.dir === dir && s.exterior).sort((a, b) => a.a0 - b.a0);
+      for (let x = 0; x < ext.length && !changed; x++) for (let y = 0; y < ext.length && !changed; y++) {
+        const A = ext[x], B = ext[y];
+        if (A === B || A.inSide !== B.inSide || Math.abs(A.c - B.c) > 0.15) continue;
+        const g0 = A.a1, g1 = B.a0;
+        if (g1 - g0 < 1.0) continue;
+        // B is the next piece of this line after A.
+        if (ext.some(s => s !== A && s !== B && s.inSide === A.inSide && Math.abs(s.c - A.c) < 0.15 && s.a1 > g0 + 0.05 && s.a0 < g1 - 0.05)) continue;
+        const zone = floodZone(A, B, g0, g1);
+        if (!zone) continue;
+        const la = A.a1 - A.a0, lb = B.a1 - B.a0;
+        const c = (A.c * la + B.c * lb) / (la + lb), thick = (A.thick * la + B.thick * lb) / (la + lb);
+        moveLine(segs, A, A.c, c); moveLine(segs, B, B.c, c);
+        Object.assign(A, { a1: B.a1, j1: B.j1, thick, gaps: A.gaps.concat([[g0, g1]], B.gaps),
+          unscanned: (A.unscanned || []).concat([[g0, g1]], B.unscanned || []) });
+        if (A.aligned) A.face = c + A.inSide * thick / 2;
+        segs.splice(segs.indexOf(B), 1);
+        zones.push(zone);
+        changed = true;
+      }
+    }
+  }
+  return zones;
+
+  function floodZone(A, B, g0, g1) {
+    const dir = A.dir, side = A.inSide;
+    const off = dir === 'h' ? oz : ox, aoff = dir === 'h' ? ox : oz;
+    const face = (A.aligned ? A.face : A.c) * 0.5 + (B.aligned ? B.face : B.c) * 0.5;
+    const drawn = wallRaster(segs, grid);
+    const lo = g0 - 0.8, hi = g1 + 0.8;
+    const idx = (a, c) => {
+      const ia = Math.floor((a - aoff) / cell), ic = Math.floor((c - off) / cell);
+      const i = dir === 'h' ? ia : ic, j = dir === 'h' ? ic : ia;
+      return i >= 0 && j >= 0 && i < W && j < H ? j * W + i : -1;
+    };
+    const coordOf = k => { const i = k % W, j = (k - i) / W; const ci = (i + 0.5) * cell + ox, cj = (j + 0.5) * cell + oz; return dir === 'h' ? [ci, cj] : [cj, ci]; };
+    const mask = new Uint8Array(W * H), stack = [];
+    for (let a = g0 + 0.1; a < g1 - 0.1; a += cell) {
+      const k = idx(a, face + side * 1.5 * cell);
+      if (k >= 0 && !scanned[k] && !drawn[k] && !mask[k]) { mask[k] = 1; stack.push(k); }
+    }
+    let n = 0, amin = Infinity, amax = -Infinity;
+    const limit = Math.ceil((hi - lo) * o.envelopeDepth / (cell * cell));
+    while (stack.length) {
+      const k = stack.pop();
+      n++;
+      const [a, c] = coordOf(k), d = (c - face) * side;
+      // Leaks past the depth limit or around the ends of the gap: not an enclosed zone.
+      if (d > o.envelopeDepth || a < lo || a > hi || n > limit) return null;
+      amin = Math.min(amin, a); amax = Math.max(amax, a);
+      const i = k % W;
+      for (const q of [i > 0 ? k - 1 : -1, i < W - 1 ? k + 1 : -1, k >= W ? k - W : -1, k + W < W * H ? k + W : -1]) {
+        if (q < 0 || mask[q] || drawn[q] || scanned[q]) continue;
+        if ((coordOf(q)[1] - face) * side < 0) continue; // the continued wall line closes it outside
+        mask[q] = 1; stack.push(q);
+      }
+    }
+    if (n * cell * cell < o.roomMinArea || amax - amin < 0.7 * (g1 - g0)) return null;
+    // Walls, not only the edge of scanned floor, close it inside: look in from the line across
+    // the gap and see what ends the zone.
+    let walled = 0, looks = 0;
+    for (let a = g0 + 0.05; a < g1; a += 0.05) {
+      let d = 1.5 * cell, k = idx(a, face + side * d);
+      if (k < 0 || !mask[k]) continue;
+      while (k >= 0 && mask[k]) { d += cell; k = idx(a, face + side * d); }
+      looks++;
+      if (k >= 0 && drawn[k]) walled++;
+    }
+    return looks && walled >= 0.5 * looks ? mask : null;
   }
 }
 
@@ -493,7 +658,9 @@ function profileOpenings(seg, L, grid, o) {
   const len = seg.a1 - seg.a0;
   const n = Math.round(len / cell);
   if (n < 4) return [];
-  const half = Math.round((seg.thick / 2 + 0.05) / cell);
+  // A one-sided wall is profiled across its scanned face, as before it grew outward.
+  const mid = seg.oneSided ? seg.face : seg.c;
+  const half = Math.round(((seg.oneSided ? 0.03 : seg.thick / 2) + 0.05) / cell);
   const S = L.nSlices, sl = o.slice, from = o.sliceFrom;
   const hAt = i => from + (i + 0.5) * sl; // height of slice center above floor
   // Slice index ranges.
@@ -506,9 +673,11 @@ function profileOpenings(seg, L, grid, o) {
   const bandAt = new Int16Array(n * 2); // per position: [first empty slice, last empty slice] of the window band
   for (let p = 0; p < n; p++) {
     const along = seg.a0 + (p + 0.5) * cell;
+    // Nothing was scanned along a stretch the envelope continued; it holds no openings.
+    if (seg.unscanned && seg.unscanned.some(([u0, u1]) => along > u0 && along < u1)) continue;
     let bits = 0, fl = 0;
     for (let q = -half; q <= half; q++) {
-      const x = seg.dir === 'h' ? along : seg.c + q * cell, z = seg.dir === 'h' ? seg.c + q * cell : along;
+      const x = seg.dir === 'h' ? along : mid + q * cell, z = seg.dir === 'h' ? mid + q * cell : along;
       const i = Math.floor((x - ox) / cell), j = Math.floor((z - oz) / cell);
       if (i < 0 || j < 0 || i >= W || j >= H) continue;
       bits |= L.cov[j * W + i];
@@ -553,8 +722,14 @@ function profileOpenings(seg, L, grid, o) {
       // wall hides the floor; on an exterior wall an empty band that only shows wall
       // again from 1.45 m up is a window over furniture (a wardrobe shows wall lower).
       let fl = 0; for (let q = p; q < e; q++) fl += floorAt[q];
+      // Without a threshold (the far side lies outside the scanned floor, a stair) a door
+      // still shows a door-height header and either an open leaf or geometry beyond it.
+      const beyond = !(fl >= (e - p) * 0.3) && header && header >= 1.8 && header <= 2.45 && w >= o.doorMin &&
+        w <= o.doorUnscannedMax ? doorBeyond(seg, s0, s1, L, grid, o) : null;
       if (fl >= (e - p) * 0.3 && w >= o.doorMin && w <= o.doorMax) {
-        out.push({ type: 'door', s0, s1, width: w, height: header ? Math.max(1.8, Math.min(2.4, header)) : 2.032 });
+        out.push({ type: 'door', s0, s1, width: w, height: header ? Math.max(1.8, Math.min(2.4, header)) : 2.032, evidence: 'threshold' });
+      } else if (beyond) {
+        out.push({ type: 'door', s0, s1, width: w, height: Math.max(1.8, Math.min(2.4, header)), evidence: beyond, confidence: 'low' });
       } else if (seg.exterior && header && header >= 1.45 && w >= o.windowMin && w <= 3.5) {
         const sill = 0.76;
         out.push({ type: 'window', s0, s1, width: w, sill, height: Math.max(0.4, header - sill) });
@@ -570,6 +745,51 @@ function profileOpenings(seg, L, grid, o) {
     p = e;
   }
   return out;
+}
+
+// Evidence that a gap without a threshold is a doorway: an open leaf (a thin full-height
+// panel about the gap's width hinged at one jamb, standing in the space beyond) or vertical
+// geometry seen through the gap close beyond the wall. Looks only outward from a wall scanned
+// from one side, either way from a wall with rooms on both sides. Returns 'leaf', 'beyond'
+// or null.
+function doorBeyond(seg, s0, s1, L, grid, o) {
+  const { W, H, cell, ox, oz } = grid;
+  const S = L.nSlices, lowN = Math.max(1, Math.min(S, Math.floor((2.0 - o.sliceFrom) / o.slice))), lowMask = (1 << lowN) - 1;
+  const bitsAt = (a, c, r) => {
+    let b = 0;
+    const x = seg.dir === 'h' ? a : c, z = seg.dir === 'h' ? c : a;
+    const i0 = Math.floor((x - ox) / cell), j0 = Math.floor((z - oz) / cell);
+    for (let j = j0 - r; j <= j0 + r; j++) for (let i = i0 - r; i <= i0 + r; i++) {
+      if (i >= 0 && j >= 0 && i < W && j < H) b |= L.cov[j * W + i] | L.covOut[j * W + i];
+    }
+    return b;
+  };
+  const panel = (a, c) => popcount(bitsAt(a, c, 1) & lowMask) >= 0.4 * lowN;
+  const w = s1 - s0;
+  const sides = seg.exterior || seg.oneSided ? [-seg.inSide] : [-1, 1];
+  for (const side of sides) {
+    const near = seg.oneSided ? seg.face : seg.c - side * seg.thick / 2, far = seg.c + side * seg.thick / 2;
+    // Leaf: hinge at either jamb, anywhere across the wall's depth, swung 15..160 degrees.
+    for (const [hinge, u] of [[s0, 1], [s1, -1]]) for (let hc = 0; hc <= 1.001; hc += 0.25) {
+      const hx = near + (far - near) * hc;
+      for (let deg = 15; deg <= 160; deg += 5) {
+        const ca = Math.cos(deg * DEG) * u, cc = Math.sin(deg * DEG) * side;
+        let hits = 0;
+        for (let k = 0; k < 8; k++) { const r = (0.2 + 0.1 * k) * w; if (panel(hinge + ca * r, hx + cc * r)) hits++; }
+        if (hits < 7) continue;
+        // A leaf ends; a wall that happens to start at the jamb runs on.
+        if (!panel(hinge + ca * 1.3 * w, hx + cc * 1.3 * w) && !panel(hinge + ca * 1.5 * w, hx + cc * 1.5 * w)) return 'leaf';
+      }
+    }
+    // Beyond: most lines of sight through the gap meet vertical geometry within 1.5 m.
+    let seen = 0, tries = 0;
+    for (let a = s0 + 0.1 * w; a < s1 - 0.1 * w; a += 0.05) {
+      tries++;
+      for (let d = 0.15; d <= 1.5; d += cell) if (popcount(bitsAt(a, far + side * d, 0)) >= 2) { seen++; break; }
+    }
+    if (tries && seen / tries >= 0.6) return 'beyond';
+  }
+  return null;
 }
 
 // ---------- 7: rooms ----------
@@ -652,12 +872,16 @@ function simplifyRectilinear(pts, cell, ox, oz, minEdge) {
   return P;
 }
 
-function snapPolygonToWalls(P, segs, tol) {
+// Rooms meet wall centre lines, except where only one face of a wall is known: there the
+// room stops at the scanned face, so floor area stays the measured inside area. An unscanned
+// area (`faces`) stops at the near face of every wall.
+function snapPolygonToWalls(P, segs, tol, faces) {
   const hs = segs.filter(s => s.dir === 'h'), vs = segs.filter(s => s.dir === 'v');
+  const line = (s, v) => faces || s.aligned ? s.c + Math.sign(v - s.c) * s.thick / 2 : s.c;
   const out = P.map(([x, y]) => {
     let bx = x, by = y, dx = tol, dy = tol;
-    for (const v of vs) { if (y < v.a0 - tol || y > v.a1 + tol) continue; const d = Math.abs(v.c - x); if (d < dx) { dx = d; bx = v.c; } }
-    for (const h of hs) { if (x < h.a0 - tol || x > h.a1 + tol) continue; const d = Math.abs(h.c - y); if (d < dy) { dy = d; by = h.c; } }
+    for (const v of vs) { if (y < v.a0 - tol || y > v.a1 + tol) continue; const c = line(v, x), d = Math.abs(c - x); if (d < dx) { dx = d; bx = c; } }
+    for (const h of hs) { if (x < h.a0 - tol || x > h.a1 + tol) continue; const c = line(h, y), d = Math.abs(c - y); if (d < dy) { dy = d; by = c; } }
     return [bx, by];
   });
   // Re-rectilinearize: consecutive points must share x or y; fix by averaging.
@@ -688,6 +912,15 @@ function polygonArea(P) {
   let a = 0;
   for (let i = 0; i < P.length; i++) { const [x1, y1] = P[i], [x2, y2] = P[(i + 1) % P.length]; a += x1 * y2 - x2 * y1; }
   return Math.abs(a) / 2;
+}
+
+function roomOutline(mask, W, H, segs, grid, o, faces) {
+  const pts = tracePolygon(mask, W, H);
+  if (!pts || pts.length < 4) return null;
+  let P = simplifyRectilinear(pts, grid.cell, grid.ox, grid.oz, o.roomMinEdge);
+  P = snapPolygonToWalls(P, segs, 0.3, faces);
+  P = simplifyRectilinear(P.map(([x, y]) => [(x - grid.ox) / grid.cell, (y - grid.oz) / grid.cell]), grid.cell, grid.ox, grid.oz, o.roomMinEdge);
+  return P.length >= 4 && polygonArea(P) >= o.roomMinArea ? P : null;
 }
 
 // ---------- per-level analysis ----------
@@ -725,18 +958,20 @@ function analyzeLevel(L, grid, o, debug) {
   segs = snapCorners(segs, o);
   segs = segs.filter(s => s.a1 - s.a0 >= o.wallMinLen);
   classifyExterior(segs, fp, grid);
+  alignOneSidedWalls(segs, L, grid, o);
+  // Let walls, not the ragged footprint edge, bound rooms wherever a wall exists.
+  const fpGrown = dilate(fp, W, H, Math.round(0.12 / cell));
+  const zones = closeEnvelope(segs, fpGrown, grid, o);
+  if (zones.length) {
+    // Walls bounding an unscanned zone are inside the envelope now; they keep their side.
+    const inside = new Uint8Array(fp);
+    for (const z of zones) for (let k = 0; k < N; k++) if (z[k]) inside[k] = 1;
+    classifyExterior(segs, inside, grid, true);
+  }
   // Openings.
   for (const s of segs) s.openings = profileOpenings(s, L, grid, o);
   // Rooms: footprint minus drawn walls (with gaps closed).
-  const wallDraw = new Uint8Array(N);
-  for (const s of segs) {
-    const half = Math.max(s.thick / 2, 0.05) + 0.03;
-    const i0 = Math.floor(((s.dir === 'h' ? s.a0 : s.c - half) - grid.ox) / cell), i1 = Math.ceil(((s.dir === 'h' ? s.a1 : s.c + half) - grid.ox) / cell);
-    const j0 = Math.floor(((s.dir === 'h' ? s.c - half : s.a0) - grid.oz) / cell), j1 = Math.ceil(((s.dir === 'h' ? s.c + half : s.a1) - grid.oz) / cell);
-    for (let j = Math.max(0, j0); j < Math.min(H, j1); j++) for (let i = Math.max(0, i0); i < Math.min(W, i1); i++) wallDraw[j * W + i] = 1;
-  }
-  // Let walls, not the ragged footprint edge, bound rooms wherever a wall exists.
-  const fpGrown = dilate(fp, W, H, Math.round(0.12 / cell));
+  const wallDraw = wallRaster(segs, grid);
   const roomMask = new Uint8Array(N);
   for (let k = 0; k < N; k++) roomMask[k] = fpGrown[k] && !wallDraw[k] ? 1 : 0;
   const rm = open(roomMask, W, H, 2);
@@ -746,17 +981,19 @@ function analyzeLevel(L, grid, o, debug) {
     if (sizes[l] < o.roomMinArea * cellsPerM2) continue;
     const m = new Uint8Array(N);
     for (let k = 0; k < N; k++) if (labels[k] === l) m[k] = 1;
-    const filled = fillHoles(m, W, H, Math.round(0.6 * cellsPerM2));
-    const pts = tracePolygon(filled, W, H);
-    if (!pts || pts.length < 4) continue;
-    let P = simplifyRectilinear(pts, cell, grid.ox, grid.oz, o.roomMinEdge);
-    P = snapPolygonToWalls(P, segs, 0.3);
-    P = simplifyRectilinear(P.map(([x, y]) => [(x - grid.ox) / cell, (y - grid.oz) / cell]), cell, grid.ox, grid.oz, o.roomMinEdge);
-    if (P.length >= 4 && polygonArea(P) >= o.roomMinArea) rooms.push({ pts: P, area: polygonArea(P), cells: sizes[l] });
+    const P = roomOutline(fillHoles(m, W, H, Math.round(0.6 * cellsPerM2)), W, H, segs, grid, o, false);
+    if (P) rooms.push({ pts: P, area: polygonArea(P), cells: sizes[l] });
   }
   rooms.sort((a, b) => b.area - a.area);
+  // Unscanned zones closed by the envelope: kept apart from rooms and from floor area.
+  for (const z of zones) {
+    const m = new Uint8Array(N);
+    for (let k = 0; k < N; k++) m[k] = z[k] && !wallDraw[k] ? 1 : 0;
+    const P = roomOutline(fillHoles(open(m, W, H, 2), W, H, Math.round(0.6 * cellsPerM2)), W, H, segs, grid, o, true);
+    if (P) rooms.push({ pts: P, area: polygonArea(P), kind: 'unscanned' });
+  }
   const result = { segs, rooms, floorArea: fp.reduce((n, v) => n + v, 0) / cellsPerM2 };
-  if (debug) result.debug = { fp, wall, wallDraw, roomMask: rm, labels };
+  if (debug) result.debug = { fp, wall, wallDraw, roomMask: rm, labels, zones };
   return result;
 }
 
@@ -815,22 +1052,29 @@ export function scanToPlan(posIn, idx, options, progress) {
       const id = prefix + 'w' + (si + 1);
       const ax = s.dir === 'h' ? s.a0 : s.c, ay = s.dir === 'h' ? s.c : s.a0;
       const bx = s.dir === 'h' ? s.a1 : s.c, by = s.dir === 'h' ? s.c : s.a1;
-      const thick = Math.max(0.09, Math.min(0.35, s.exterior ? Math.max(s.thick, 0.15) : s.thick));
+      // An aligned wall's thickness placed its centre line; keep it so the scanned face stays put.
+      const thick = s.aligned ? s.thick : Math.max(0.09, Math.min(0.35, s.exterior ? Math.max(s.thick, 0.15) : s.thick));
       walls.push({ id, ax: round(ax), ay: round(ay), bx: round(bx), by: round(by), thickness: Math.round(thick * 1000) / 1000, height: null, material: s.exterior ? 'mat-fiber' : 'mat-drywall', exterior: s.exterior });
       const L2 = s.a1 - s.a0;
       s.openings.forEach((op, oi) => {
         const t = ((op.s0 + op.s1) / 2 - s.a0) / L2;
         const rec = { id: prefix + 'o' + (si + 1) + '-' + (oi + 1), wallId: id, type: op.type, t: Math.round(t * 1000) / 1000, width: round(op.width), height: round(op.height) };
         if (op.type === 'window') rec.sill = round(op.sill);
+        if (op.evidence) rec.evidence = op.evidence;
+        if (op.confidence) rec.confidence = op.confidence;
         openings.push(rec);
       });
     });
-    r.rooms.forEach((rm, ri) => rooms.push({ id: prefix + 'r' + (ri + 1), name: 'Room ' + (ri + 1), pts: rm.pts, material: 'mat-oak', area: rm.area }));
+    let roomNo = 0, unscannedNo = 0;
+    r.rooms.forEach((rm, ri) => rooms.push(rm.kind === 'unscanned'
+      // Not a room anyone measured: no floor material, never part of floor area.
+      ? { id: prefix + 'u' + (++unscannedNo), name: 'Unscanned area · verify', kind: 'unscanned', pts: rm.pts, material: null, area: rm.area }
+      : { id: prefix + 'r' + (ri + 1), name: 'Room ' + (++roomNo), pts: rm.pts, material: 'mat-oak', area: rm.area }));
     outLevels.push({
       id: 'lvl-' + li, name: names[li], elevation: round(L.floorY - base), height: round(L.ceilY - L.floorY),
       flatCeiling: L.flatCeiling, floorArea: r.floorArea, walls, openings, rooms,
       datum: { surfaceId: L.f.id, ceilingSurfaceId: L.ceiling?.id || null,
-        confidence: detection.signed && L.flatCeiling && L.coverage > 0.75 && L.enclosure > 0.5 && L.f.maxY - L.f.minY < 0.15 ? 'supported' : 'review',
+        confidence: detection.signed && L.flatCeiling && L.coverage > 0.75 && L.enclosure > 0.5 && L.f.spread < 0.15 ? 'supported' : 'review',
         ceilingCoverage: round(L.coverage), wallSupport: round(L.enclosure) },
       // A conservative storey envelope retains lower site evidence in the underlay.
       // It does not promote that evidence to indoor rooms or additional storeys.

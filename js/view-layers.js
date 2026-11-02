@@ -21,13 +21,30 @@ export function layerScans(prop, layer) {
   return ((prop && prop.scans) || []).filter(s => scanLayer(s) === layer);
 }
 
-// A layer reads as shown while any of its records is visible.
-export function layerShown(prop, layer) {
-  return layerScans(prop, layer).some(s => s.visible !== false);
+// Fixtures (fixtures.js) of kind 'furniture' follow the furnishings layer too, through
+// prop.env.hideFurniture; built-ins (counter and cabinet runs, appliances, bath) are part of
+// the building and always show, like walls.
+export const isFurnitureFixture = f => !!f && f.kind === 'furniture';
+export function layerFixtures(prop, layer) {
+  return layer === 'furnishings' ? ((prop && prop.fixtures) || []).filter(isFurnitureFixture) : [];
+}
+export function fixtureShown(prop, f) {
+  return !isFurnitureFixture(f) || !(prop && prop.env && prop.env.hideFurniture);
+}
+export function layerHasMembers(prop, layer) {
+  return layerScans(prop, layer).length + layerFixtures(prop, layer).length > 0;
 }
 
-// Show or hide every record in the layer; returns the records whose visibility changed.
+// A layer reads as shown while any of its records is visible.
+export function layerShown(prop, layer) {
+  return layerScans(prop, layer).some(s => s.visible !== false) ||
+    layerFixtures(prop, layer).some(f => fixtureShown(prop, f));
+}
+
+// Show or hide every record in the layer; returns the scan records whose visibility changed
+// (furniture fixtures follow prop.env.hideFurniture, set here too).
 export function setLayerShown(prop, layer, on) {
+  if (layerFixtures(prop, layer).length && prop.env) prop.env.hideFurniture = !on;
   const changed = [];
   for (const s of layerScans(prop, layer)) {
     if ((s.visible !== false) === !!on) continue;

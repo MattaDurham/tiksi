@@ -83,3 +83,28 @@ test('a broad sloping ceiling remains an estimate requiring review', () => {
   const ceiling = r.surfaces.find(s => s.facing === 'down');
   assert.ok(ceiling.maxElevation - ceiling.minElevation > 0.3);
 });
+
+test('narrow fringe between floor and ceiling cannot merge them into one mid-room surface', async () => {
+  const { gardenFloorScan, FLOOR_Y } = await import('./fixtures/garden-floor-scan.mjs');
+  for (const options of [{}, { soffit: false }]) {
+    const r = scanToPlan(...Object.values(gardenFloorScan(options)));
+    const what = JSON.stringify(options);
+    assert.ok(Math.abs(r.baseY - FLOOR_Y) < 0.03, `${what}: indoor floor datum lost: ${r.baseY}`);
+    assert.equal(r.levels.length, 1, `${what}: garden, deck and cellar are not storeys`);
+    const L = r.levels[0];
+    // A 12 cm bulkhead is part of the ceiling; it neither lowers the storey nor slopes it.
+    assert.ok(Math.abs(L.height - 2.3) < 0.02, `${what}: storey height ${L.height}`);
+    assert.equal(L.flatCeiling, true);
+    assert.equal(L.datum.confidence, 'supported');
+    const by = id => r.surfaces.find(s => s.id === id);
+    assert.ok(Math.abs(by(L.datum.surfaceId).elevation) < 0.02 && by(L.datum.surfaceId).facing === 'up');
+    assert.ok(Math.abs(by(L.datum.ceilingSurfaceId).elevation - 2.3) < 0.02 && by(L.datum.ceilingSurfaceId).facing === 'down');
+    // Site surfaces stay evidence at their own elevations.
+    const near = (e, facing) => r.surfaces.find(s => Math.abs(s.elevation - e) < 0.05 && s.facing === facing);
+    assert.ok(near(0.42, 'up')?.area > 35, `${what}: raised garden kept as evidence`);
+    assert.ok(near(2.64, 'down')?.area > 15, `${what}: overhead deck kept as evidence`);
+    assert.ok(near(-2.34, 'up'), `${what}: cellar landing kept as evidence`);
+    assert.ok(L.walls.length >= 4 && L.rooms.length >= 1);
+    assert.ok(L.rooms.every(rm => rm.pts.every(([, y]) => y > -0.3)), 'No room on the garden');
+  }
+});

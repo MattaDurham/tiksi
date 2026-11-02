@@ -51,8 +51,8 @@ for (const L of r.levels) {
   console.log('  walls (' + L.walls.length + '):');
   for (const w of L.walls) console.log('    ' + w.id + ' (' + w.ax + ',' + w.ay + ')-(' + w.bx + ',' + w.by + ') ' + Math.hypot(w.bx - w.ax, w.by - w.ay).toFixed(2) + ' m, t=' + w.thickness + (w.exterior ? ' exterior' : ''));
   console.log('  rooms (' + L.rooms.length + '):');
-  for (const rm of L.rooms) console.log('    ' + rm.id + ' ' + area(rm.pts).toFixed(2) + ' m2, ' + rm.pts.length + ' corners');
+  for (const rm of L.rooms) console.log('    ' + rm.id + ' ' + area(rm.pts).toFixed(2) + ' m2, ' + rm.pts.length + ' corners' + (rm.kind ? ' (' + rm.kind + ')' : ''));
   console.log('  openings (' + doors.length + ' doors, ' + wins.length + ' windows):');
-  for (const o of L.openings) console.log('    ' + o.type + ' on ' + o.wallId + ' t=' + o.t + ' w=' + o.width + ' h=' + o.height + (o.sill != null ? ' sill=' + o.sill : ''));
+  for (const o of L.openings) console.log('    ' + o.type + ' on ' + o.wallId + ' t=' + o.t + ' w=' + o.width + ' h=' + o.height + (o.sill != null ? ' sill=' + o.sill : '') + (o.confidence ? ' (' + o.confidence + ' confidence: ' + o.evidence + ')' : ''));
 }
 if (jsonOut) { writeFileSync(jsonOut, JSON.stringify(r, null, 1)); console.log('\nwrote ' + jsonOut); }

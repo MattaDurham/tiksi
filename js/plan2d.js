@@ -6,11 +6,12 @@ import { floorReviewText } from './scan-surfaces.js';
 // swings, glazing lines, dimension strings with ticks, rulers, a north arrow and a scale bar.
 
 import {
-  ws, activeProperty, uid, touch, onChange, fmtLen, parseLen, fmtArea, polyArea,
+  ws, activeProperty, uid, touch, onChange, fmtLen, parseLen, fmtArea, polyArea, roomsFloorArea, countsAsFloor,
   escapeHtml, itemById, getFile, projectLabel, propertyProjects,
   ensureLevels, activeLevel, setActiveLevel, sortLevels, wallsOn, roomsOn, openingsOn,
-  addLevel, deleteLevel, levelHeight, wallHeightOf, levelOfWall,
+  addLevel, deleteLevel, levelHeight, wallHeightOf, levelOfWall, fmtDate, isoToday,
 } from './store.js';
+import { openingSchedule, connectsLabel, resizeOpening, MIN_SIZE } from './opening-schedule.js';
 import { materialSelectHtml } from './materials.js';
 import { icon } from './icons.js';
 import { beginGeometryEdit, cancelGeometryEdit, restoreGeometryEdit } from './edit-history.js';
@@ -20,8 +21,10 @@ import {
   floorCornerAttached, floorCornersOf, snapFloorToWalls,
 } from './wallmove.js';
 import { wallFaces, roomFromWalls, sameFloor } from './roomfill.js';
+import { fixturesOn, fixtureOutline } from './fixtures.js';
+import { proposeFixtures, openFixtureReview } from './fixtures-ui.js';
 import { loadScanObject, applyScanTransform, disposeScanObject } from './scans.js';
-import { layerScans, meshFootprints, footprintsOnLevel } from './view-layers.js';
+import { layerScans, layerHasMembers, isFurnitureFixture, meshFootprints, footprintsOnLevel } from './view-layers.js';
 import { classifyWheel } from './sketchup-nav.js';
 
 const PRESETS = {
@@ -62,12 +65,17 @@ let tool = 'select';
 let wallPreset = 'interior';
 let snapOn = true;
 let dimsOn = false;
+let numbersOn = false;        // NUMBER OPENINGS: D1../W1.. tags and the schedule panel (view only)
 // SHOW toggles: the scan underlay image, and furniture / cabinet / fixture footprints.
 let showScan = true;
 let showFurniture = true;
 const wheelLatch = { at: 0, trackpad: false };
 
-let el = null, canvas = null, ctx = null, wrapEl = null, inspEl = null, hintEl = null, badgeEl = null, levelEl = null;
+let el = null, canvas = null, ctx = null, wrapEl = null, inspEl = null, hintEl = null, badgeEl = null, levelEl = null, scheduleEl = null;
+let scheduleCache = null;    // {key, rows}: the active level's numbered openings
+let scheduleStale = false, scheduleFocus = null;   // a refresh waits while a size field has focus
+let scheduleResume = null;   // the size field being typed in when a disk acknowledgment remounts PLAN
+let exportScale = 0;         // pixel ratio while the plan is drawn into an export image
 let raf = 0;
 let prop = null;
 let vs = null; // {zoom, panX, panY}
@@ -92,7 +100,7 @@ let dirty = true;
 let resizeObs = null, offChange = null;
 function invalidate() { dirty = true; }
 
-function dpr() { return window.devicePixelRatio || 1; }
+function dpr() { return exportScale || window.devicePixelRatio || 1; }
 function w2s(p) { return [(p[0] - vs.panX) * vs.zoom, (p[1] - vs.panY) * vs.zoom]; }
 function s2w(x, y) { return [x / vs.zoom + vs.panX, y / vs.zoom + vs.panY]; }
 function rnd(v) { return Math.round(v * 200) / 200; } // 5 mm
@@ -135,14 +143,16 @@ function bounds() {
   return { minX, minY, maxX, maxY };
 }
 
-function fitView() {
+// Fit inside the area right of / below the rulers (`inset`), with a margin for dimension strings.
+function fitFor(cw, ch, inset = RULER) {
   const b = bounds();
-  // Fit inside the area right of / below the rulers, with a margin for dimension strings.
-  const w = wrapEl.clientWidth - RULER, h = wrapEl.clientHeight - RULER;
+  const w = cw - inset, h = ch - inset;
   const bw = Math.max(b.maxX - b.minX, 1), bh = Math.max(b.maxY - b.minY, 1);
-  vs.zoom = Math.min(w / (bw * 1.22), h / (bh * 1.22), 250);
-  vs.panX = b.minX - (w / vs.zoom - bw) / 2 - RULER / vs.zoom;
-  vs.panY = b.minY - (h / vs.zoom - bh) / 2 - RULER / vs.zoom;
+  const zoom = Math.min(w / (bw * 1.22), h / (bh * 1.22), 250);
+  return { zoom, panX: b.minX - (w / zoom - bw) / 2 - inset / zoom, panY: b.minY - (h / zoom - bh) / 2 - inset / zoom };
+}
+function fitView() {
+  Object.assign(vs, fitFor(wrapEl.clientWidth, wrapEl.clientHeight));
   invalidate();
 }
 
@@ -179,7 +189,7 @@ function afterHistoryRestore() {
   ensureLevels(prop);
   selection = null; hover = null; drawing = null; roomDraft = null; calib = null;
   resolveLevelView();
-  renderToolCol(); renderInspector(); updateLevelBadge(); updateHint(); invalidate();
+  renderToolCol(); renderInspector(); renderSchedule(); updateLevelBadge(); updateHint(); invalidate();
 }
 export function undo() { if (restoreGeometryEdit(prop, 'undo')) afterHistoryRestore(); }
 export function redo() { if (restoreGeometryEdit(prop, 'redo')) afterHistoryRestore(); }
@@ -576,6 +586,13 @@ function draw() {
     canvas.width = Math.round(w * d); canvas.height = Math.round(h * d);
     canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
   }
+  paint(w, h, false);
+  return true;
+}
+// One frame at w x h CSS px. An export leaves out the editing chrome (drafts, handles,
+// vignette, rulers) and always carries the opening numbers.
+function paint(w, h, exporting) {
+  const d = dpr();
   frameNo++; hatchMatrix = null;
   ctx.setTransform(d, 0, 0, d, 0, 0);
   ctx.fillStyle = C.bg;
@@ -584,17 +601,21 @@ function draw() {
   drawGrid(w, h);
   if (showScan) drawUnderlay();
   drawRooms();
+  // Built-in fixtures always draw; furniture-kind fixtures follow FURNITURE inside drawFixtures.
+  drawFixtures();
   if (showFurniture) drawFurniture();
   drawWalls();
   for (const o of curOpenings()) drawOpening(o);
   drawRoomLabels();
   drawDims();
-  drawDrafts(w, h);
-  drawSelectionHandles();
-  drawVignette(w, h);
-  drawRulers(w, h);
+  if (numbersOn || exporting) drawOpeningTags();
+  if (!exporting) {
+    drawDrafts(w, h);
+    drawSelectionHandles();
+    drawVignette(w, h);
+    drawRulers(w, h);
+  }
   drawHud(w, h);
-  return true;
 }
 
 function drawGrid(w, h) {
@@ -745,6 +766,17 @@ function drawRooms() {
     let rad = 1;
     for (const p of r.pts) { const s = w2s(p); rad = Math.max(rad, Math.hypot(s[0] - c[0], s[1] - c[1])); }
     tracePoly(r.pts.map(w2s));
+    if (!countsAsFloor(r)) {
+      // Unscanned area: hatched and dim, so it never reads as a measured floor.
+      ctx.fillStyle = hatchPattern(C.faint);
+      ctx.fill();
+      ctx.lineWidth = sel ? 1.6 : 1;
+      ctx.strokeStyle = sel ? C.accent : hov ? C.hover : hexA(C.dim, 0.5);
+      ctx.setLineDash([2, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      continue;
+    }
     const g = ctx.createRadialGradient(c[0], c[1], 0, c[0], c[1], rad * 1.1);
     g.addColorStop(0, hexA(col, sel ? 0.30 : hov ? 0.22 : 0.17));
     g.addColorStop(1, hexA(col, sel ? 0.12 : hov ? 0.08 : 0.05));
@@ -753,6 +785,24 @@ function drawRooms() {
     ctx.lineWidth = sel ? 1.6 : 1;
     ctx.strokeStyle = sel ? C.accent : hov ? C.hover : hexA(col, 0.45);
     ctx.setLineDash(sel ? [] : [5, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+// Fixtures (fixtures.js) as plan outlines: wall cabinets dashed, as drawn above the cut.
+function drawFixtures() {
+  for (const f of fixturesOn(prop, lvl().id)) {
+    if (!showFurniture && isFurnitureFixture(f)) continue;     // FURNITURE hides loose furniture, not built-ins
+    const ring = fixtureOutline(f);
+    if (ring.length < 3) continue;
+    tracePoly(ring.map(w2s));
+    const upper = f.kind === 'wall-run';
+    ctx.fillStyle = upper ? 'rgba(0,0,0,0)' : 'rgba(217,180,124,0.10)';
+    ctx.fill();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = upper ? 'rgba(217,180,124,0.55)' : 'rgba(217,180,124,0.8)';
+    ctx.setLineDash(upper ? [4, 3] : []);
     ctx.stroke();
     ctx.setLineDash([]);
   }
@@ -782,7 +832,7 @@ function drawRoomLabels() {
     ctx.font = `10px ${FONT}`;
     ctx.textAlign = 'center';
     ctx.fillStyle = sel ? hexA(C.accent, 0.85) : C.dim;
-    ctx.fillText(fmtArea(polyArea(r.pts)), s[0], s[1] + 10);
+    ctx.fillText(countsAsFloor(r) ? fmtArea(polyArea(r.pts)) : 'not in floor area', s[0], s[1] + 10);
     ctx.textBaseline = 'alphabetic';
   }
 }
@@ -905,6 +955,189 @@ function drawOpening(o) {
     }
     ctx.restore();
   }
+}
+
+// ---------- opening schedule (NUMBER OPENINGS) ----------
+// Numbers come from opening-schedule.js and run over the whole property, so a tag reads the
+// same on screen, in the schedule panel and on the printed sheet.
+function schedule() {
+  const key = lvl().id + '|' + JSON.stringify([prop.walls, prop.openings, prop.rooms, prop.levels.map(l => [l.id, l.elevation, l.name])]);
+  if (!scheduleCache || scheduleCache.key !== key) scheduleCache = { key, rows: openingSchedule(prop, lvl().id) };
+  return scheduleCache.rows;
+}
+function scheduleRow(id) { return numbersOn ? schedule().find(r => r.id === id) || null : null; }
+// A tag on the side of the wall away from the door swing, so it never sits on the leaf.
+function drawOpeningTags() {
+  for (const row of schedule()) {
+    const w = prop.walls.find(w => w.id === row.wallId);
+    if (!w) continue;
+    const off = w.thickness / 2 + 13 / vs.zoom;
+    const s = w2s([row.cx + row.uy * off, row.cy - row.ux * off]);
+    const sel = selection && selection.kind === 'opening' && selection.id === row.id;
+    const col = sel ? C.accent : row.type === 'door' ? C.door : C.cyan;
+    pill(row.number, s[0], s[1], col, { weight: 700, size: 10.5, bg: sel ? 'rgba(40,26,10,0.95)' : 'rgba(10,14,18,0.94)', stroke: hexA(col, 0.9) });
+  }
+}
+function scheduleCounts(rows) {
+  const n = rows.filter(r => r.type === 'door').length, m = rows.length - n;
+  return n + ' door' + (n === 1 ? '' : 's') + ', ' + m + ' window' + (m === 1 ? '' : 's');
+}
+function renderSchedule() {
+  if (!scheduleEl) return;
+  scheduleStale = false;
+  if (!numbersOn || !prop) { scheduleEl.hidden = true; scheduleEl.innerHTML = ''; return; }
+  const rows = schedule(), selId = selection && selection.kind === 'opening' ? selection.id : null;
+  scheduleEl.hidden = false;
+  scheduleEl.innerHTML = `<div class="ps-head"><b>OPENING SCHEDULE</b><span>${escapeHtml(lvl().name)} &middot; ${scheduleCounts(rows)} &middot; width &times; height</span></div>
+    <div class="ps-acts"><button class="btn small" data-ps="print" title="Print the numbered plan and the schedule">${icon('print')}PRINT</button>
+      <button class="btn small" data-ps="png" title="Save the numbered plan and the schedule as one image to send">${icon('export')}SAVE PNG</button></div>
+    ${rows.length ? `<div class="ps-rows">${rows.map(r => `<div class="ps-row ${r.id === selId ? 'active' : ''}" data-id="${escapeHtml(r.id)}" title="Select ${r.number}">
+      <span class="ps-num ${r.type}">${r.number}</span>
+      <span class="ps-what"><b>${r.type === 'door' ? 'Door' : 'Window'}</b><i>${escapeHtml(connectsLabel(r))}</i></span>
+      <span class="ps-size"><input type="text" data-ps-len="width" value="${escapeHtml(fmtLen(r.width))}" aria-label="${r.number} width"><em>&times;</em><input type="text" data-ps-len="height" value="${escapeHtml(fmtLen(r.height))}" aria-label="${r.number} height"></span>
+    </div>`).join('')}</div>`
+    : '<div class="empty">No doors or windows on this level yet. Place them with DOOR (D) or WINDOW (N).</div>'}`;
+  scheduleEl.querySelector('[data-ps=print]').onclick = printSchedule;
+  scheduleEl.querySelector('[data-ps=png]').onclick = saveSchedulePng;
+  scheduleEl.querySelectorAll('.ps-row').forEach(rowEl => {
+    const id = rowEl.dataset.id;
+    rowEl.onclick = e => { if (!e.target.closest('input')) selectOpening(id); };
+    rowEl.querySelectorAll('[data-ps-len]').forEach(inp => {
+      const key = inp.dataset.psLen;
+      inp.onfocus = () => { if (!(selection && selection.id === id)) selectOpening(id); };
+      inp.onchange = () => editScheduleSize(id, key, inp);
+      inp.onkeydown = e => {
+        if (e.key !== 'Enter' && e.key !== 'Escape') return;
+        e.preventDefault();
+        if (e.key === 'Escape') { inp.value = fmtLen(prop.openings.find(o => o.id === id)?.[key]); inp.blur(); return; }
+        // Enter moves down the column, so a list of corrections can be typed straight in.
+        const next = rows[rows.findIndex(r => r.id === id) + 1];
+        scheduleFocus = next ? { id: next.id, key } : null;
+        inp.blur();   // commits the value (change) and may rebuild the rows: focus the next one after
+        setTimeout(focusScheduleField, 0);
+      };
+    });
+  });
+}
+function focusScheduleField() {
+  if (!scheduleFocus || !scheduleEl) return;
+  const f = scheduleFocus; scheduleFocus = null;
+  const inp = scheduleEl.querySelector(`.ps-row[data-id="${CSS.escape(f.id)}"] [data-ps-len=${f.key}]`);
+  if (!inp) return;
+  inp.focus();
+  // After a remount the half-typed value and caret come back; otherwise the field is selected for typing over.
+  if (f.value != null) { inp.value = f.value; inp.setSelectionRange(f.start, f.end); } else inp.select();
+}
+// Store changes re-render the panel, except under a field being typed in (it catches up on blur).
+function refreshSchedule() {
+  if (!scheduleEl || !numbersOn) return;
+  if (scheduleEl.contains(document.activeElement)) { scheduleStale = true; return; }
+  renderSchedule();
+}
+function markScheduleSelection() {
+  if (!scheduleEl || !numbersOn) return;
+  const id = selection && selection.kind === 'opening' ? selection.id : null;
+  scheduleEl.querySelectorAll('.ps-row').forEach(r => r.classList.toggle('active', r.dataset.id === id));
+}
+function selectOpening(id) {
+  const row = schedule().find(r => r.id === id);
+  if (!row) return;
+  selection = { kind: 'opening', id };
+  // Bring it on screen when it is outside the canvas (a long schedule outruns the view).
+  const [sx, sy] = w2s([row.cx, row.cy]), w = wrapEl.clientWidth, h = wrapEl.clientHeight;
+  if (sx < RULER + 20 || sy < RULER + 20 || sx > w - 20 || sy > h - 20) {
+    vs.panX = row.cx - (w + RULER) / 2 / vs.zoom; vs.panY = row.cy - (h + RULER) / 2 / vs.zoom;
+  }
+  renderInspector(); invalidate();
+}
+function editScheduleSize(id, key, inp) {
+  const o = prop.openings.find(o => o.id === id), row = schedule().find(r => r.id === id);
+  if (!o || !row) return renderSchedule();
+  const v = parseLen(inp.value);
+  if (!(v >= MIN_SIZE)) {
+    inp.value = fmtLen(o[key]);
+    setHint(`Could not read that ${key} for ${row.number}. Try 32", 2'8" or 0.81m.`);
+    return;
+  }
+  const wall = prop.walls.find(w => w.id === o.wallId);
+  pushUndo('resize ' + row.number);
+  const got = resizeOpening(prop, o, { [key]: v }, wallHeightOf(prop, wall));
+  touch();
+  if (got && Math.abs(got[key] - v) > 0.002) setHint(`${row.number} ${key} limited to ${fmtLen(got[key])}: the ${key === 'width' ? 'wall is not long enough' : 'wall is not tall enough'}.`);
+  else setHint(`${row.number} is now ${fmtLen(o.width)} \u00d7 ${fmtLen(o.height)}. Undo reverts it.`);
+  renderInspector(); renderSchedule(); invalidate();
+}
+
+// The active level drawn at its fitted view into a fresh canvas: what PRINT and SAVE PNG send.
+function planImage(W, H, scale) {
+  const saved = { canvas, ctx, vs, selection, hover, hoverPt, drawing, roomDraft, calib };
+  const c = document.createElement('canvas');
+  c.width = Math.round(W * scale); c.height = Math.round(H * scale);
+  try {
+    canvas = c; ctx = c.getContext('2d'); exportScale = scale; hatchCache.clear();
+    vs = Object.assign({}, vs, fitFor(W, H, 0));
+    selection = hover = hoverPt = drawing = roomDraft = calib = null;
+    paint(W, H, true);
+  } finally {
+    ({ canvas, ctx, vs, selection, hover, hoverPt, drawing, roomDraft, calib } = saved);
+    exportScale = 0; hatchCache.clear(); invalidate();
+  }
+  return c;
+}
+function scheduleTitle() { return (prop.name || 'Property') + ' - ' + (lvl().name || 'Level'); }
+function scheduleFileName(ext) {
+  return ('opening schedule ' + scheduleTitle()).replace(/[^\w\- ]+/g, ' ').trim().replace(/\s+/g, '-').toLowerCase() + '.' + ext;
+}
+function printSchedule() {
+  const rows = schedule(), img = planImage(1500, 1000, 2).toDataURL('image/png');
+  const cell = v => `<td class="num">${v == null ? '' : escapeHtml(fmtLen(v))}</td>`;
+  document.getElementById('print-root').innerHTML = `<div class="sheet sheet-page opening-sheet">
+    <div class="s-head"><span class="s-brand">TIKSI</span><span class="s-doc">Opening schedule</span></div>
+    <h1>${escapeHtml(scheduleTitle())}</h1>
+    <div class="s-sub">${scheduleCounts(rows)} - ${escapeHtml(fmtDate(isoToday()))} - please correct any size by its number</div>
+    <img class="s-plan" alt="Numbered plan" src="${img}">
+    <h2>Openings</h2>
+    <table><thead><tr><th>No.</th><th>Type</th><th>Connects</th><th class="num">Width</th><th class="num">Height</th><th class="num">Sill</th></tr></thead>
+      <tbody>${rows.map(r => `<tr><td><b>${r.number}</b></td><td>${r.type === 'door' ? 'Door' : 'Window'}</td><td>${escapeHtml(connectsLabel(r))}</td>${cell(r.width)}${cell(r.height)}${cell(r.sill)}</tr>`).join('')}</tbody></table>
+    <div class="s-foot"><span>tiksi design console</span><span>${escapeHtml(fmtDate(isoToday()))}</span></div>
+  </div>`;
+  window.print();
+}
+// One image holding the numbered plan with the table under it, for a text or an email.
+function saveSchedulePng() {
+  const rows = schedule(), W = 1600, PH = 1000, HEAD = 70, ROW = 30, TH = 44 + rows.length * ROW + 28, S = 2;
+  const plan = planImage(W, PH, S);
+  const c = document.createElement('canvas');
+  c.width = W * S; c.height = (HEAD + PH + TH) * S;
+  const g = c.getContext('2d');
+  g.scale(S, S);
+  g.fillStyle = C.bg; g.fillRect(0, 0, W, HEAD + PH + TH);
+  g.textBaseline = 'middle'; g.textAlign = 'left';
+  g.fillStyle = C.ink; g.font = `700 22px ${FONT}`; g.fillText('OPENING SCHEDULE', 32, 28);
+  g.fillStyle = C.dim; g.font = `14px ${FONT}`;
+  g.fillText(scheduleTitle() + '  -  ' + scheduleCounts(rows) + '  -  ' + fmtDate(isoToday()) + '  -  width x height', 32, 52);
+  g.drawImage(plan, 0, HEAD, W, PH);
+  const cols = [[32, 'NO.'], [120, 'TYPE'], [230, 'CONNECTS'], [1060, 'WIDTH'], [1220, 'HEIGHT'], [1380, 'SILL']];
+  let y = HEAD + PH + 26;
+  g.font = `700 12px ${FONT}`; g.fillStyle = C.dim;
+  for (const [x, t] of cols) g.fillText(t, x, y);
+  g.fillStyle = C.rulerLine; g.fillRect(32, y + 14, W - 64, 1);
+  for (const r of rows) {
+    y += ROW;
+    const vals = [r.number, r.type === 'door' ? 'Door' : 'Window', connectsLabel(r), fmtLen(r.width), fmtLen(r.height), r.sill == null ? '' : fmtLen(r.sill)];
+    vals.forEach((v, i) => {
+      g.font = `${i === 0 ? 700 : 400} 15px ${FONT}`;
+      g.fillStyle = i === 0 ? (r.type === 'door' ? C.door : C.cyan) : C.ink;
+      g.fillText(String(v), cols[i][0], y + 8);
+    });
+  }
+  c.toBlob(blob => {
+    if (!blob) { setHint('The image could not be made in this browser.'); return; }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = scheduleFileName('png');
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  }, 'image/png');
 }
 
 // A dimension string between two world points with extension lines, ticks and a label pill.
@@ -1668,7 +1901,7 @@ function switchLevel(id) {
   setActiveLevel(prop, id);
   selection = null; hover = null; drawing = null; roomDraft = null; calib = null;
   resolveLevelView();
-  touch(); renderToolCol(); renderInspector(); updateLevelBadge(); updateHint(); updateCursor(); invalidate();
+  touch(); renderToolCol(); renderInspector(); renderSchedule(); updateLevelBadge(); updateHint(); updateCursor(); invalidate();
 }
 function stepLevel(dir) {
   const levels = prop.levels;
@@ -1723,10 +1956,11 @@ function renderToolCol() {
     <div class="tool-sep"></div>
     <div class="tool-head">Show</div>
     <label class="tool-check" title="Show the ${curPlan() && curPlan().source === 'scan' ? 'scan' : 'underlay'} image under the plan (G)">${icon('scan')}<span>${curPlan() && curPlan().source !== 'scan' && curPlan().img ? 'UNDERLAY' : 'SCAN'}</span><input type="checkbox" ${showScan ? 'checked' : ''} data-chk="scan"></label>
-    <label class="tool-check" title="${layerScans(prop, 'furnishings').length ? 'Show furniture, cabinet and fixture footprints on this level (K)' : 'No furniture or fixtures model in this property. Import one and set its LAYER in MODEL.'}">${icon('products')}<span>FURNITURE</span><input type="checkbox" ${showFurniture ? 'checked' : ''} data-chk="furniture"></label>
+    <label class="tool-check" title="${layerHasMembers(prop, 'furnishings') ? 'Show furniture, cabinet and fixture footprints on this level (K)' : 'No furniture or fixtures model in this property. Import one and set its LAYER in MODEL.'}">${icon('products')}<span>FURNITURE</span><input type="checkbox" ${showFurniture ? 'checked' : ''} data-chk="furniture"></label>
     <div class="tool-sep"></div>
     <label class="tool-check" title="Snap to wall ends, wall centre lines, floor corners, axes and 15 degree angles">${icon('snap')}<span>SNAP</span><input type="checkbox" ${snapOn ? 'checked' : ''} data-chk="snap"></label>
     <label class="tool-check" title="Show a dimension string on every wall">${icon('dims')}<span>DIMS</span><input type="checkbox" ${dimsOn ? 'checked' : ''} data-chk="dims"></label>
+    <label class="tool-check" title="Number every door and window (D1, W1...) and list their sizes to check, edit, print or send">${icon('door')}<span>NUMBER OPENINGS</span><input type="checkbox" ${numbersOn ? 'checked' : ''} data-chk="numbers"></label>
     <div class="tool-sep"></div>
     ${toolBtn('data-act="fit"', 'fit', 'FIT VIEW', 'F', false)}
   `;
@@ -1745,6 +1979,7 @@ function renderToolCol() {
   tc.querySelectorAll('[data-chk]').forEach(c => c.onchange = () => {
     if (c.dataset.chk === 'snap') snapOn = c.checked;
     if (c.dataset.chk === 'dims') dimsOn = c.checked;
+    if (c.dataset.chk === 'numbers') { numbersOn = c.checked; renderSchedule(); }
     if (c.dataset.chk === 'scan') { showScan = c.checked; if (!showScan && selection && selection.kind === 'underlay') { selection = null; renderInspector(); } }
     if (c.dataset.chk === 'furniture') showFurniture = c.checked;
     invalidate();
@@ -1798,7 +2033,8 @@ function sourceCardHtml() {
   return `<div class="src-card">
     <span class="np-kicker">${label}</span>
     ${src && src.url ? `<a href="${escapeHtml(src.url)}" target="_blank" rel="noopener" title="${escapeHtml(src.url)}">${escapeHtml(src.title || src.url.replace(/^https?:\/\//, ''))}</a>` : ''}
-    ${scan ? `<button class="btn" data-src-plan title="Square the scan up and propose walls, rooms, doors, windows and the underlay again">${icon('scan')}PROPOSE PLAN FROM SCAN</button>` : ''}
+    ${scan ? `<button class="btn" data-src-plan title="Square the scan up and propose walls, rooms, doors, windows and the underlay again">${icon('scan')}PROPOSE PLAN FROM SCAN</button>
+    <button class="btn" data-src-fixtures title="Read counter runs, wall cabinets, tall appliances and furniture from the scan, for review">${icon('scan')}PROPOSE FIXTURES FROM SCAN</button>` : ''}
     <div class="empty">Add captures in FILE → Import.</div>
     ${scan?.floorDetection ? `<details data-floor-review><summary>${escapeHtml(floorReviewText(scan.floorDetection))}</summary>
       <p>Horizontal evidence is retained separately from editable levels. Bounds use plan metres; elevations use the project datum.</p>
@@ -1847,12 +2083,27 @@ function bindSourceCard(insp) {
     } catch (e) { console.error(e); say('Could not propose a plan: ' + String(e && e.message || e), false); }
     finally { sourceBusy = false; }
   };
+  const fxBtn = insp.querySelector('[data-src-fixtures]');
+  if (fxBtn) fxBtn.onclick = async () => {
+    if (sourceBusy) return;
+    const scan = meshScan();
+    if (!scan) return;
+    sourceBusy = true;
+    try {
+      const added = await openFixtureReview(prop, await proposeFixtures(prop, scan, viewHooks), { scanName: scan.name });
+      invalidate(); renderInspector();
+      const st = inspEl && inspEl.querySelector('[data-src-status]');
+      if (st) st.textContent = added.length ? 'Added ' + added.length + ' fixture' + (added.length === 1 ? '' : 's') + '; edit them in MODEL.' : 'No fixtures added.';
+    } catch (e) { console.error(e); say('Could not read fixtures: ' + String(e && e.message || e), false); }
+    finally { sourceBusy = false; }
+  };
 
 }
 
 function renderInspector() {
   if (!inspEl) return;
   const insp = inspEl;
+  markScheduleSelection();
   // The select hint describes what the selection allows; ROOM drops a note about the last one.
   if (tool === 'select' || tool === 'room') updateHint();
 
@@ -1891,8 +2142,8 @@ function renderInspector() {
     const L = lvl();
     const walls = curWalls(), rooms = curRooms(), openings = curOpenings();
     const totalWall = walls.reduce((n, w) => n + Math.hypot(w.bx - w.ax, w.by - w.ay), 0);
-    const floorArea = rooms.reduce((n, r) => n + polyArea(r.pts), 0);
-    const propertyArea = prop.rooms.reduce((n, r) => n + polyArea(r.pts), 0);
+    const floorArea = roomsFloorArea(rooms);
+    const propertyArea = roomsFloorArea(prop.rooms);
     // DELETE LEVEL only when it would succeed; the reason sits on the disabled button.
     const lastLevel = prop.levels.length <= 1;
     const held = walls.length || rooms.length;
@@ -2001,7 +2252,9 @@ function renderInspector() {
   if (selection.kind === 'opening') {
     const o = prop.openings.find(o => o.id === selection.id);
     if (!o) { selection = null; return renderInspector(); }
-    insp.innerHTML = `${head(o.type === 'door' ? 'door' : 'window', o.type === 'door' ? 'DOOR' : 'WINDOW')}
+    const row = scheduleRow(o.id), ow = prop.walls.find(w => w.id === o.wallId);
+    insp.innerHTML = `${head(o.type === 'door' ? 'door' : 'window', (o.type === 'door' ? 'DOOR' : 'WINDOW') + (row ? ' ' + row.number : ''))}
+      ${row ? `<div class="stat-line"><span>Connects</span><b>${escapeHtml(connectsLabel(row))}</b></div>` : ''}
       <div class="field"><label>Type</label>
         <select data-type><option value="door" ${o.type === 'door' ? 'selected' : ''}>Door</option>
         <option value="window" ${o.type === 'window' ? 'selected' : ''}>Window</option></select></div>
@@ -2027,8 +2280,9 @@ function renderInspector() {
         renderInspector();
       };
     };
-    num('w', v => o.width = v);
-    num('h', v => o.height = v);
+    // Through the schedule's rule, so a typed width or height still fits the wall.
+    num('w', v => resizeOpening(prop, o, { width: v }, wallHeightOf(prop, ow)));
+    num('h', v => resizeOpening(prop, o, { height: v }, wallHeightOf(prop, ow)));
     num('s', v => o.sill = v);
     let slidingOpening = false;
     insp.querySelector('[data-t]').oninput = e => { if (!slidingOpening) { pushUndo('move opening'); slidingOpening = true; } o.t = parseFloat(e.target.value); invalidate(); };
@@ -2046,7 +2300,8 @@ function renderInspector() {
       <div class="field"><label>Name</label><input type="text" data-name value="${escapeHtml(r.name || '')}"></div>
       <div class="field"><label>Floor material</label>${materialSelectHtml('floor', r.material, 'data-mat')}</div>
       ${scopeAssignHtml(r.id)}
-      <div class="stat-line"><span>Area</span><b>${fmtArea(polyArea(r.pts))}</b></div>
+      <div class="stat-line"><span>Area</span><b>${fmtArea(polyArea(r.pts))}${countsAsFloor(r) ? '' : ' (not counted)'}</b></div>
+      ${countsAsFloor(r) ? '' : '<div class="empty" style="margin:10px 0">The scan never entered this area (a common stair, a closed-off space). Its outline continues the walls around it; verify it on site. It is not counted in floor area.</div>'}
       <div class="stat-line"><span>Perimeter</span><b>${fmtLen(r.pts.reduce((n, p, i) => n + Math.hypot(p[0] - r.pts[(i + 1) % r.pts.length][0], p[1] - r.pts[(i + 1) % r.pts.length][1]), 0))}</b></div>
       <div class="stat-line"><span>Corners on walls</span><b>${attached} of ${r.pts.length}</b></div>
       <div class="empty" style="margin:10px 0">The floor follows its walls: solid corners sit on a wall and move with it. ${loose ? 'Hollow corners are loose and stay put when walls move.' : ''} Drag a corner to reshape the floor; it snaps to walls and other floors.</div>
@@ -2104,6 +2359,7 @@ export function mount(root) {
         <div class="canvas-level"></div>
         <div class="canvas-hint"></div>
         <div class="canvas-badge"></div>
+        <div class="plan-schedule" hidden></div>
       </div>
       <div class="inspector"></div>
     </div>`;
@@ -2114,6 +2370,8 @@ export function mount(root) {
   hintEl = root.querySelector('.canvas-hint');
   badgeEl = root.querySelector('.canvas-badge');
   levelEl = root.querySelector('.canvas-level');
+  scheduleEl = root.querySelector('.plan-schedule');
+  scheduleEl.addEventListener('focusout', () => setTimeout(() => { if (scheduleStale && scheduleEl && !scheduleEl.contains(document.activeElement)) renderSchedule(); }, 0));
   hatchCache.clear(); textWidthCache.clear(); vignetteKey = '';
   dirty = true;
 
@@ -2135,12 +2393,14 @@ export function mount(root) {
 
   // Inspector edits and other views' changes reach the canvas through the store; layout
   // changes (panel resize, browser zoom) through the observer. Everything else is an input.
-  offChange = onChange(invalidate);
+  offChange = onChange(() => { invalidate(); refreshSchedule(); });
   if (typeof ResizeObserver !== 'undefined') { resizeObs = new ResizeObserver(invalidate); resizeObs.observe(wrapEl); }
   else window.addEventListener('resize', invalidate);
 
   renderToolCol();
   renderInspector();
+  renderSchedule();
+  if (scheduleResume) { scheduleFocus = scheduleResume; scheduleResume = null; focusScheduleField(); }
   updateHint();
   updateCursor();
 
@@ -2153,11 +2413,16 @@ export function mount(root) {
 
 export function unmount() {
   cancelAnimationFrame(raf);
+  // Every disk save remounts the view; typing down the schedule must survive that.
+  const a = document.activeElement;
+  scheduleResume = scheduleEl && a && scheduleEl.contains(a) && a.dataset.psLen
+    ? { id: a.closest('.ps-row').dataset.id, key: a.dataset.psLen, value: a.value, start: a.selectionStart, end: a.selectionEnd } : null;
   window.removeEventListener('keydown', onKeyDown);
   window.removeEventListener('keyup', onKeyUp);
   window.removeEventListener('resize', invalidate);
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
   if (offChange) { offChange(); offChange = null; }
   drawing = null; roomDraft = null; drag = null; hover = null; hoverPt = null; facesCache = null;
-  el = null; canvas = null; ctx = null; wrapEl = null; inspEl = null; hintEl = null; badgeEl = null; levelEl = null;
+  el = null; canvas = null; ctx = null; wrapEl = null; inspEl = null; hintEl = null; badgeEl = null; levelEl = null; scheduleEl = null;
+  scheduleCache = null;
 }

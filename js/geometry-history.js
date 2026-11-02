@@ -6,7 +6,7 @@ const clone = value => JSON.parse(JSON.stringify(value));
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 export function geometrySnapshot(prop) {
   return {
-    data: clone({ id: prop.id, walls: prop.walls, openings: prop.openings, rooms: prop.rooms,
+    data: clone({ id: prop.id, walls: prop.walls, openings: prop.openings, rooms: prop.rooms, fixtures: prop.fixtures || [],
       levels: prop.levels.map(level => ({ ...level, plan: null })), activeLevelId: prop.activeLevelId }),
     plans: Object.fromEntries(prop.levels.map(level => [level.id, level.plan || null])),
   };
@@ -35,7 +35,7 @@ export class GeometryHistory {
     const result = mergeShared(base.data, target.data, current);
     const walls = new Set(result.value.walls.map(w => w.id)), levels = new Set(result.value.levels.map(l => l.id));
     for (const opening of result.value.openings) if (!walls.has(opening.wallId) && current.walls.some(w => w.id === opening.wallId)) result.conflicts.push('openings.' + opening.id);
-    for (const record of [...result.value.walls, ...result.value.rooms]) if (record.level && !levels.has(record.level) && current.levels.some(l => l.id === record.level)) result.conflicts.push('levels.' + record.level);
+    for (const record of [...result.value.walls, ...result.value.rooms, ...(result.value.fixtures || [])]) if (record.level && !levels.has(record.level) && current.levels.some(l => l.id === record.level)) result.conflicts.push('levels.' + record.level);
     return { entry, target, ...result };
   }
   state(prop, direction) {
@@ -50,7 +50,7 @@ export class GeometryHistory {
     const plans = Object.fromEntries(prop.levels.map(level => [level.id, level.plan || null]));
     const data = clone(result.value);
     for (const level of data.levels) level.plan = (level.id in plans ? plans[level.id] : result.target.plans[level.id]) || null;
-    for (const key of ['walls', 'openings', 'rooms', 'levels', 'activeLevelId']) prop[key] = data[key];
+    for (const key of ['walls', 'openings', 'rooms', 'fixtures', 'levels', 'activeLevelId']) prop[key] = key === 'fixtures' ? data.fixtures || [] : data[key];
     this[direction].pop(); this[direction === 'undo' ? 'redo' : 'undo'].push(result.entry);
     return true;
   }

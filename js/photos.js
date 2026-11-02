@@ -10,6 +10,7 @@ import {
 } from './store.js';
 import { addPhotoFromFile, photoUrl, photoBytes, photoById, deletePhoto, isPanoramaAspect, revokePhotoUrls } from './photos-store.js';
 import { addCustomMaterial } from './materials.js';
+import { isVideoFile, importVideos } from './videos.js';
 
 const PLAN_MAX_PX = 4096;   // detailed tracing without unbounded canvas memory
 const MATERIAL_KINDS = ['wall', 'floor', 'ceiling', 'trim', 'any'];
@@ -92,8 +93,15 @@ async function averageColor(src) {
 // while the view is mounted, so navigating away or switching property mid-upload neither
 // aborts the batch nor throws.
 async function addFiles(list) {
+  // Videos are tape-measure evidence: they are kept as originals and reviewed in MEASURE.
+  const clips = Array.from(list || []).filter(isVideoFile);
+  if (clips.length) {
+    const { added, failed } = await importVideos(prop, clips);
+    if (failed.length) alert('Not added:\n' + failed.join('\n'));
+    if (added.length && confirm(added.length + ' video' + (added.length === 1 ? '' : 's') + ' added. Open MEASURE to review the frames?')) { location.hash = '#/measure?video=' + encodeURIComponent(added[0].id); return; }
+  }
   const files = Array.from(list || []).filter(f => f && (f.type.startsWith('image/') || /\.(jpe?g|png|webp|gif|avif|bmp|heic|heif)$/i.test(f.name)));
-  if (!files.length) { if (list && list.length) alert('Only image files can be added as photos.'); return; }
+  if (!files.length) { if (list && list.length && !clips.length) alert('Only image files can be added as photos.'); return; }
   const entries = files.map(file => ({ file, prop }));
   if (importing) {
     importing.queue.push(...entries);
@@ -192,6 +200,7 @@ function clearSky() {
 }
 
 function pinIn3d(p) { location.hash = '#/model?pin=' + encodeURIComponent(p.id); }
+function matchIn3d(p) { location.hash = '#/model?match=' + encodeURIComponent(p.id); }
 
 function unpin(p) {
   p.pin = null;
@@ -532,6 +541,7 @@ function renderDetail() {
           ${p.pin
             ? '<button class="btn on" data-act="pin" title="Show this pin in the 3D model">PINNED: SHOW</button>'
             : '<button class="btn" data-act="pin" title="Place this photo on a surface in the 3D model">PIN IN 3D</button>'}
+          ${p.kind === 'pano' ? '' : '<button class="btn" data-act="match" title="View the model from where this photo was taken, with the photo over it, to check the model against the site">MATCH IN 3D</button>'}
           <div class="ph-mat">
             <button class="btn" data-act="material" title="Create a photo-based material from this image">MATERIAL</button>
             <select data-mat-kind aria-label="Material kind">${MATERIAL_KINDS.map(k => `<option value="${k}">${k}</option>`).join('')}</select>
@@ -552,6 +562,7 @@ function renderDetail() {
       <div class="stat-line"><span>Size</span><b>${escapeHtml(p.w)} x ${escapeHtml(p.h)}</b></div>
       <div class="stat-line"><span>Added</span><b>${escapeHtml(fmtDate(String(p.createdAt || '').slice(0, 10)))}</b></div>
       <div class="stat-line"><span>Pinned in 3D</span><b>${p.pin ? `x ${(+p.pin.x).toFixed(2)}  y ${(+p.pin.y).toFixed(2)}  z ${(+p.pin.z).toFixed(2)}` : 'no'}</b></div>
+      <div class="stat-line"><span>Camera view</span><b>${!p.view ? 'not set' : p.view.from === 'pin' ? 'from pinning' : 'saved'}</b></div>
       ${isSky ? '<div class="stat-line"><span>Sky</span><b class="accent">ACTIVE (lighting the model)</b></div>' : ''}
 
       <div class="ph-actions">
@@ -595,6 +606,7 @@ function renderDetail() {
   act('sky', useAsSky);
   act('clear-sky', clearSky);
   act('pin', pinIn3d);
+  act('match', matchIn3d);
   act('unpin', unpin);
   act('material', materialFromPhoto);
   act('download', download);

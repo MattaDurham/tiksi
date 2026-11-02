@@ -7,10 +7,11 @@
 // its link, the embedded Polycam viewer shows the capture, and the same pipeline runs on
 // the file the user downloads from Polycam and drops here.
 
-import { ws, touch, propertyTemplate, escapeHtml, fmtBytes, fmtLen, fmtArea, polyArea, getFile, activeProperty } from './store.js';
+import { ws, touch, propertyTemplate, escapeHtml, fmtBytes, fmtLen, fmtArea, roomsFloorArea, getFile, activeProperty } from './store.js';
 import { parseCaptureUrl, resolveCapture, downloadAsset, fetchCover, fetchCaptureDirect, fetchCoverDirect, relaysFor, DEFAULT_RELAYS } from './polycam.js';
 import { importScanBytes, SCAN_ACCEPT } from './scans.js';
 import { placeScanBytes, seedProject, proposalSummary } from './scan2plan.js';
+import { proposeFixtures, openFixtureReview } from './fixtures-ui.js';
 import { chooseScanPlacement } from './scanplace.js';
 import { addPhotoFromFile } from './photos-store.js';
 import { icon } from './icons.js';
@@ -365,16 +366,24 @@ async function proposePlan(prop, scan, signal) {
     const added = mode === 'level' || mode === 'beside';
     project = seedProject(prop, applied, (added ? prop.name + ': ' + scan.name : (prop.source && prop.source.title ? prop.source.title : prop.name)) + ': scope from scan');
     if (project) { ws.data.projects.push(project); touch(); log('Seeded a starter project with the takeoffs', 'ok', project.items.length + ' scope items linked to the model'); }
+    // What stands in the rooms, read now and offered for review when the run is done.
+    const fx = log('Reading counters, cabinets and furniture from the scan', 'run');
+    try {
+      const proposals = await proposeFixtures(prop, scan, hooks);
+      fx?.ok(proposals.length ? proposals.length + ' proposed for review' : 'none found');
+      finish(prop, result, applied, proposals.length ? { proposals, scanName: scan.name } : null);
+      return;
+    } catch (e) { console.error(e); fx?.warn('skipped: ' + String(e && e.message || e)); }
   }
   finish(prop, result, applied);
 }
 
-function finish(prop, result, applied) {
+function finish(prop, result, applied, fixtures) {
   run = null;
   dlg.dataset.state = 'done';
   app.refresh();
   const box = dlg.querySelector('[data-np-result]');
-  const floor = prop.rooms.reduce((n, r) => n + polyArea(r.pts), 0);
+  const floor = roomsFloorArea(prop.rooms);
   const levels = prop.levels || [];
   box.hidden = false;
   box.innerHTML = `
@@ -388,10 +397,18 @@ function finish(prop, result, applied) {
         : `<div class="kpi"><span class="k-label">CEILING</span><span class="k-value small">${escapeHtml(fmtLen(levels[0] ? levels[0].height : prop.wallHeight))}</span></div>`}
     </div>
     <div class="np-actions">
+      ${fixtures ? `<button class="btn" data-np-fixtures>${icon('scan')}REVIEW ${fixtures.proposals.length} FIXTURE${fixtures.proposals.length === 1 ? '' : 'S'}</button>` : ''}
       <button class="btn primary" data-np-go="plan">${icon('plan')}OPEN PLAN</button>
       <button class="btn" data-np-go="model">${icon('model')}OPEN MODEL</button>
     </div>`;
   box.querySelectorAll('[data-np-go]').forEach(b => b.onclick = () => { closeDialog(); location.hash = '#/' + b.dataset.npGo; app.remount(); });
+  const fxBtn = box.querySelector('[data-np-fixtures]');
+  if (fxBtn) fxBtn.onclick = async () => {
+    const added = await openFixtureReview(prop, fixtures.proposals, { scanName: fixtures.scanName });
+    fxBtn.disabled = true;
+    fxBtn.textContent = added.length ? 'ADDED ' + added.length + ' FIXTURE' + (added.length === 1 ? '' : 'S') : 'NO FIXTURES ADDED';
+    app.refresh();
+  };
   showCloseOnly();
   setStatus(applied ? 'Done. Every proposed element is editable; the underlay of every level is the scan itself.' : 'Done.', 'ok');
 }
