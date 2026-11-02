@@ -73,6 +73,8 @@ converter history.
 | Wall group (extruded face, openings cut) | Plan line, thickness, height, level tag | Group placement and face bounds: start/end, thickness, height. A copy becomes a new wall |
 | Opening group nested in its wall | Span along the wall, sill and head | Position along the wall, width, height, sill |
 | Room group (floor face) | Outline, name (the group name), level tag | Largest horizontal face outline; the group name |
+| Fixture group (`kind: 'fixture'`, a nested group per prism) | Counter and cabinet runs, appliances, furniture and bath fixtures, framed at the fixture's origin along its direction, with their finishes and level tag | A box fixture's placement, turn and bounds (position, rotation, width, depth, height, bottom); a run's back line carried by the group transform, its depth by the transform's scale, its bottom and height from the bounds. A copy becomes a new fixture; a deleted group deletes the fixture |
+| Finishes (SketchUp materials named `Tiksi: <material>`) | Wall faces by side (room-facing faces take the interior finish), room floors, door and window panes, in the material's colour | Not read: Tiksi owns finishes and repaints them on every write |
 | Plan underlay image | Calibrated placement on the level | Not read: Tiksi owns underlays |
 | Anything else drawn in SketchUp | Never written or removed | Kept in the .skp only, counted in the status |
 
@@ -82,6 +84,12 @@ compares each element three ways (SketchUp now, Tiksi now, last agreed state), s
 either side apply and simultaneous edits to one element are reported instead of lost.
 Keep Tiksi groups at the top level of the model; an opening moved out of its wall group is
 reported and left unchanged.
+
+A finish change rewrites the .skp but is not a geometry change, so it never reads back as
+a SketchUp edit. `Tiksi: ` materials are reused by name, so rewrites do not pile up copies;
+one given a texture in SketchUp keeps it, and SketchUp's own materials are never touched.
+A material id missing from the library is painted the 3D view's default colour and named
+in the mirror status.
 
 ## Local setup
 

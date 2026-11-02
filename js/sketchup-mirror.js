@@ -2,9 +2,10 @@
 // installed SketchUp, every <name>.tiksi in the folder has a <name>.skp beside it:
 //
 //   Tiksi -> SketchUp   each wall is a group (its openings cut, a nested group per opening),
-//                       each room a floor group, each level a tag, each plan underlay an
-//                       image. Groups carry a "tiksi" dictionary: their id and the values
-//                       they were written from.
+//                       each room a floor group, each fixture (fixtures.js) a group of
+//                       prisms, each level a tag, each plan underlay an image. Groups carry a "tiksi" dictionary: their id and the values
+//                       they were written from. Faces wear Tiksi's finishes as SketchUp
+//                       materials named "Tiksi: <material name>", so a rewrite repaints them.
 //   SketchUp -> Tiksi   when the .skp changes on disk (saved in SketchUp), its groups are
 //                       read back and merged element by element against the last state
 //                       both sides agreed on: moved, stretched, raised, renamed and deleted
@@ -15,8 +16,9 @@
 // its version and the conflict is reported. The pure parts here (spec, signatures, merge)
 // run under Node for tests; the rest talks to /api/model-conversion/mirror.
 
-import { wallHeightOf, levelOfWall, levelOfRoom, levelHeight, uid } from './store.js';
-import { openingSpans } from './wall-solids.js';
+import { wallHeightOf, levelOfWall, levelOfRoom, levelHeight, roomsOn, uid } from './store.js';
+import { openingSpans, wallFaceMaterialIds } from './wall-solids.js';
+import { fixtureShape, fixtureMirrorParams, fixtureLocalFrame, fixtureParts, fixtureLabel, fixturesOn, normaliseFixture, FIXTURE_FALLBACK } from './fixtures.js';
 
 export const MIRROR_FORMAT = 'tiksi-sketchup-mirror';
 const mm = v => Math.round(Number(v || 0) * 1000);           // signatures compare to the millimetre
@@ -54,15 +56,59 @@ export function elementState(prop) {
     const p = { pts: r.pts.map(q => [q[0], q[1]]), name: r.name || '' };
     out.set(r.id, { kind: 'room', sig: roomSig(p), params: p });
   }
+  for (const f of prop.fixtures || []) {
+    if (!fixtureShape(f)) continue;
+    const p = fixtureMirrorParams(f);
+    out.set(f.id, { kind: 'fixture', sig: fixtureSig(p), params: p });
+  }
   return out;
 }
 
 export function wallSig(p) { return ['wall', mm(p.ax), mm(p.ay), mm(p.bx), mm(p.by), mm(p.thickness), mm(p.height)].join(','); }
 export function openingSig(p) { return ['opening', p.wallId, permille(p.t), mm(p.width), mm(p.height), mm(p.sill)].join(','); }
 export function roomSig(p) { return ['room', p.name || '', ...(p.pts || []).map(q => mm(q[0]) + ':' + mm(q[1]))].join(','); }
+// Rotation to a tenth of a degree, the rest to the millimetre.
+const decideg = v => ((Math.round(Number(v || 0) * 10) % 3600) + 3600) % 3600;
+export function fixtureSig(p) {
+  const head = ['fixture', p.kind || '', p.subtype || '', p.shape || ''];
+  if (p.shape === 'box') return head.concat([mm(p.x), mm(p.y), decideg(p.rot), mm(p.w), mm(p.d), mm(p.y0), mm(p.h)]).join(',');
+  return head.concat((p.pts || []).map(q => mm(q[0]) + ':' + mm(q[1])), [mm(p.depth), mm(p.y0), mm(p.h)]).join(',');
+}
 
-export function mirrorSpec(prop) {
-  const state = elementState(prop);
+// Finishes as SketchUp should paint them: { id, name, color } from the workspace materials,
+// with the 3D view's fallback colour when an id is unset or unknown (unknown ones warn).
+// Two materials sharing a name both take their id in brackets, so neither repaints the other.
+const FALLBACK = {
+  wall: { name: 'Default wall', color: '#d8d4cc' }, floor: { name: 'Default floor', color: '#97999b' },
+  door: { name: 'Default trim', color: '#f3f1ec' }, window: { name: 'Default glass', color: '#d2e7ee' },
+  'fx-top': { name: 'Default counter', color: FIXTURE_FALLBACK.top }, 'fx-body': { name: 'Default cabinet', color: FIXTURE_FALLBACK.body },
+  'fx-kick': { name: 'Default toe kick', color: FIXTURE_FALLBACK.kick }, 'fx-appliance': { name: 'Default appliance', color: FIXTURE_FALLBACK.appliance },
+  'fx-fabric': { name: 'Default upholstery', color: FIXTURE_FALLBACK.fabric }, 'fx-wood': { name: 'Default wood', color: FIXTURE_FALLBACK.wood },
+  'fx-bath': { name: 'Default porcelain', color: FIXTURE_FALLBACK.bath },
+};
+const OPENING_MATERIAL = { door: 'mat-trim', window: 'mat-glass' };
+const HEX = /^#[0-9a-f]{6}$/i;
+
+function materialResolver(materials, warnings) {
+  const byId = new Map((materials || []).filter(m => m && m.id).map(m => [m.id, m]));
+  const named = new Map();
+  for (const m of byId.values()) named.set(String(m.name || m.id), (named.get(String(m.name || m.id)) || 0) + 1);
+  const warned = new Set();
+  return (id, role, owner) => {
+    const m = id ? byId.get(id) : null;
+    if (!m) {
+      if (id && !warned.has(id)) { warned.add(id); warnings.push('material ' + id + ' on ' + owner + ' is not in the material library; painted ' + FALLBACK[role].name); }
+      return { id: id || null, name: FALLBACK[role].name, color: FALLBACK[role].color };
+    }
+    const name = String(m.name || m.id);
+    return { id: m.id, name: named.get(name) > 1 ? name + ' (' + m.id + ')' : name, color: HEX.test(m.color) ? m.color.toLowerCase() : FALLBACK[role].color };
+  };
+}
+
+// `materials` is the workspace material library (ws.data.materials).
+export function mirrorSpec(prop, materials) {
+  const state = elementState(prop), warnings = [];
+  const finish = materialResolver(materials, warnings);
   const walls = [];
   for (const w of prop.walls || []) {
     const st = state.get(w.id);
@@ -70,22 +116,44 @@ export function mirrorSpec(prop) {
     const lvl = levelOfWall(prop, w);
     const holes = (prop.openings || []).filter(o => o.wallId === w.id && state.has(o.id)).map(o => {
       const p = state.get(o.id).params;
-      return { id: o.id, type: o.type, t: p.t, width: p.width, height: p.height, sill: p.sill, s0: p.s0, s1: p.s1, v0: p.v0, v1: p.v1 };
+      const role = o.type === 'window' ? 'window' : 'door';
+      return { id: o.id, type: o.type, t: p.t, width: p.width, height: p.height, sill: p.sill, s0: p.s0, s1: p.s1, v0: p.v0, v1: p.v1,
+        material: finish(OPENING_MATERIAL[role], role, 'opening ' + o.id) };
     });
-    walls.push(Object.assign({ id: w.id, level: lvl.id, elevation: lvl.elevation, name: 'Wall ' + w.id, holes }, st.params));
+    // pos: the long face on the side the plan normal (-uy, ux) of a -> b points to (in the
+    // .skp, local y = -thickness/2); neg: the opposite face; other: ends, top and reveals.
+    const ids = wallFaceMaterialIds(w, roomsOn(prop, lvl.id));
+    const faces = Object.fromEntries(Object.entries(ids).map(([face, id]) => [face, finish(id, 'wall', 'wall ' + w.id)]));
+    walls.push(Object.assign({ id: w.id, level: lvl.id, elevation: lvl.elevation, name: 'Wall ' + w.id, holes, materials: faces }, st.params));
   }
   const rooms = (prop.rooms || []).filter(r => state.has(r.id)).map(r => {
     const lvl = levelOfRoom(prop, r);
-    return { id: r.id, level: lvl.id, elevation: lvl.elevation, name: r.name || '', pts: state.get(r.id).params.pts };
+    return { id: r.id, level: lvl.id, elevation: lvl.elevation, name: r.name || '', pts: state.get(r.id).params.pts, material: finish(r.material, 'floor', 'room ' + r.id) };
   });
+  // Fixtures: one group per fixture, framed at its origin (a box's centre, a run's first
+  // back-line point) along its own direction; parts are prisms in that frame, (u, v) metres.
+  const fixtures = [];
+  for (const lvl of prop.levels || []) for (const f of fixturesOn(prop, lvl.id)) {
+    const st = state.get(f.id);
+    if (!st) continue;
+    const { origin, angle, toLocal } = fixtureLocalFrame(f);
+    const r6 = v => Math.round(v * 1e6) / 1e6 || 0;
+    const parts = fixtureParts(f).filter(q => q.pts.length >= 3 && q.y1 - q.y0 > 1e-4).map(q => ({
+      pts: q.pts.map(pt => toLocal(pt).map(r6)), z0: r6(q.y0), z1: r6(q.y1),
+      material: finish(q.material, FALLBACK['fx-' + q.role] ? 'fx-' + q.role : 'fx-body', 'fixture ' + f.id),
+    }));
+    fixtures.push({ id: f.id, level: lvl.id, elevation: lvl.elevation, name: fixtureLabel(f), kind: f.kind, subtype: f.subtype || null, shape: fixtureShape(f),
+      origin: origin.map(r6), angle: r6(angle), parts, base: st.params, local: st.params.shape === 'run' ? { pts: f.pts.map(pt => toLocal(pt).map(r6)) } : null });
+  }
   const elements = {};
   for (const [id, st] of state) elements[id] = { kind: st.kind, sig: st.sig };
   return {
     format: MIRROR_FORMAT, version: 1,
     property: { id: prop.id, name: prop.name || '' },
     levels: (prop.levels || []).map(l => ({ id: l.id, name: l.name, elevation: l.elevation, height: l.height })),
-    walls, rooms, elements,
+    walls, rooms, fixtures, elements,
     underlays: (prop.levels || []).map(l => underlayOf(l)).filter(Boolean),
+    warnings,
   };
 }
 
@@ -104,6 +172,8 @@ export function hash(s) {
   return (h >>> 0).toString(36);
 }
 
+// Finishes are part of the spec, so a material change rewrites the .skp; `elements` holds
+// geometry signatures only, so the read-back never reports it as a SketchUp edit.
 export function specSignature(spec) {
   return hash(JSON.stringify(Object.assign({}, spec, { underlays: spec.underlays.map(u => u.sig) })));
 }
@@ -114,6 +184,7 @@ const readSig = {
   wall: p => wallSig(p),
   opening: p => openingSig(p),
   room: p => roomSig(p),
+  fixture: p => fixtureSig(p),
 };
 
 // `read` is the server's reading of the .skp. `synced` maps id -> signature at the last
@@ -196,6 +267,24 @@ export function mergeMirror(prop, read, synced, seenBefore) {
     }
   }
 
+  const fixtureById = new Map((prop.fixtures || []).map(f => [f.id, f]));
+  for (const rf of read.fixtures || []) {
+    let id = rf.id, action;
+    if (!id || seen.has(id)) action = 'copy';
+    else { seen.add(id); action = decide(id, 'fixture', rf.now, rf.base); }
+    const template = fixtureById.get(id);
+    if (action === 'apply') { applyFixture(template, rf.now); report.applied.push(id); }
+    else if ((action === 'copy' || action === 'add') && (template || (rf.now && rf.now.kind))) {
+      const fresh = JSON.parse(JSON.stringify(template || { kind: rf.now.kind, subtype: rf.now.subtype, level: rf.level, provenance: { source: 'user' } }));
+      fresh.id = action === 'copy' ? uid('fx') : id;
+      if (!(prop.levels || []).some(l => l.id === fresh.level)) fresh.level = (prop.levels[0] || {}).id;
+      applyFixture(fresh, rf.now);
+      if (!normaliseFixture(fresh)) continue;
+      (prop.fixtures = prop.fixtures || []).push(fresh);
+      report.added.push(fresh.id);
+    }
+  }
+
   // Elements this .skp was written with and no longer holds: deleted in SketchUp. (An
   // element Tiksi added after the file was opened in SketchUp is not in its record.)
   for (const [id, cur] of before) {
@@ -206,6 +295,7 @@ export function mergeMirror(prop, read, synced, seenBefore) {
       prop.walls = prop.walls.filter(w => w.id !== id);
       prop.openings = prop.openings.filter(o => o.wallId !== id);
     } else if (cur.kind === 'opening') prop.openings = prop.openings.filter(o => o.id !== id);
+    else if (cur.kind === 'fixture') prop.fixtures = prop.fixtures.filter(f => f.id !== id);
     else prop.rooms = prop.rooms.filter(r => r.id !== id);
     report.deleted.push(id);
   }
@@ -228,6 +318,23 @@ function applyOpening(o, now, wallId) {
   if (now.width > 0.05) o.width = round(now.width);
   if (now.height > 0.05) o.height = round(now.height);
   if (o.type === 'window') o.sill = round(Math.max(0, now.sill));
+}
+
+// A fixture moved, turned or stretched in SketchUp. Its own parameters (toe kick, seat
+// height, finishes) stay; a size SketchUp reports as collapsed is ignored.
+function applyFixture(f, now) {
+  if (!now) return;
+  if (now.shape === 'box') {
+    for (const k of ['x', 'y']) if (Number.isFinite(now[k])) f[k] = round(now[k]);
+    if (Number.isFinite(now.rot)) f.rot = Math.round(((now.rot % 360) + 360) % 360 * 100) / 100;
+    for (const k of ['w', 'd', 'h']) if (now[k] > 0.02) f[k] = round(now[k]);
+  } else if (Array.isArray(now.pts) && now.pts.length >= 2) {
+    f.pts = now.pts.map(p => [round(p[0]), round(p[1])]);
+    if (now.depth > 0.02) f.depth = round(now.depth);
+    if (now.h > 0.02) f.h = round(now.h);
+  }
+  if (Number.isFinite(now.y0)) f.y0 = round(now.y0);
+  if (f.provenance && f.provenance.source === 'scan') f.provenance = Object.assign({}, f.provenance, { source: 'user' });
 }
 
 function applyRoom(r, now) {
@@ -346,8 +453,9 @@ export async function mirrorChangedOnDisk(folder, entry) {
 
 // One round for one property: read a .skp saved elsewhere, merge it, then write the mirror
 // if Tiksi's side is ahead. `entry` is the folder record of the property (files.js); its
-// `mirror` field keeps { file, mtime, size, sig, underlays, synced, report, at }.
-export async function syncMirror(folder, prop, entry, write) {
+// `mirror` field keeps { file, mtime, size, sig, underlays, synced, report, warnings, at }.
+// `materials` is the workspace material library the finishes are painted from.
+export async function syncMirror(folder, prop, entry, write, materials) {
   const ms = entry.mirror || (entry.mirror = { synced: {}, underlays: {} });
   const name = mirrorFileName(entry.file);
   let report = null, changed = false;
@@ -373,7 +481,7 @@ export async function syncMirror(folder, prop, entry, write) {
     ms.synced = syncedState(prop);
     ms.report = summarise(report);
   }
-  const spec = mirrorSpec(prop), sig = specSignature(spec);
+  const spec = mirrorSpec(prop, materials), sig = specSignature(spec);
   const underlayChanged = spec.underlays.some(u => (ms.underlays || {})[u.level] !== u.sig);
   if (!got || sig !== ms.sig || underlayChanged) {
     const files = {};
@@ -388,7 +496,7 @@ export async function syncMirror(folder, prop, entry, write) {
     const handle = got ? got.handle : await folder.getFileHandle(name, { create: true });
     await write(handle, new Blob([bytes]));
     const f = await handle.getFile();
-    Object.assign(ms, { file: name, mtime: f.lastModified, size: f.size, sig, at: Date.now() });
+    Object.assign(ms, { file: name, mtime: f.lastModified, size: f.size, sig, at: Date.now(), warnings: spec.warnings.slice(0, 10) });
     ms.underlays = Object.fromEntries(spec.underlays.map(u => [u.level, u.sig]));
     ms.synced = syncedState(prop);
   }

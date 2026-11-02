@@ -58,6 +58,22 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(restarted.snapshot()['data']['properties'][0]['measurements'][0]['frameAssetId'], 'mf-a')
         self.assertEqual(set(restarted.part_assets['prop-a']), {'vid-a', 'mf-a'})
 
+    def test_fixtures_travel_in_the_project_file_and_come_back_from_disk(self):
+        data = workspace()
+        data['properties'][0]['fixtures'] = [
+            {'id': 'fx-run', 'level': 'lvl-0', 'kind': 'base-run', 'pts': [[0, 0], [2.4, 0]], 'side': 1, 'depth': 0.62, 'y0': 0, 'h': 0.91,
+             'corners': [None, None], 'material': 'mat-quartz', 'provenance': {'source': 'scan', 'confidence': 0.82, 'scanId': 'scan-a'}},
+            {'id': 'fx-bed', 'level': 'lvl-0', 'kind': 'furniture', 'subtype': 'bed', 'x': 3, 'y': 2, 'rot': 90, 'w': 2.0, 'd': 1.57, 'y0': 0, 'h': 0.59,
+             'provenance': {'source': 'tape', 'confidence': None}},
+        ]
+        self.commit(data)
+        with zipfile.ZipFile(Path(self.service.paths['prop-a'])) as archive:
+            self.assertEqual(json.loads(archive.read('workspace.json'))['properties'][0]['fixtures'], data['properties'][0]['fixtures'])
+        import shutil
+        shutil.rmtree(self.root / 'runtime')
+        restored = WorkspaceService(self.root / 'runtime', self.root / 'projects')
+        self.assertEqual(restored.snapshot()['data']['properties'][0]['fixtures'], data['properties'][0]['fixtures'])
+
     def test_stale_device_cannot_overwrite_and_external_file_edit_is_seen(self):
         revision = self.commit(workspace())
         self.commit(workspace('Newer'))
