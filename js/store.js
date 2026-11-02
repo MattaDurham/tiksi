@@ -711,8 +711,15 @@ export function elementInfo(propertyId, elementId) {
     return { kind: 'wall', id: w.id, label: 'Wall', length: len, height: h, area: len * h, material: w.material, level: levelOfWall(p, w).name };
   }
   const r = p.rooms.find(r => r.id === elementId);
-  if (r) return { kind: 'room', id: r.id, label: r.name || 'Room', area: polyArea(r.pts), material: r.material, level: levelOfRoom(p, r).name };
+  if (r) return { kind: 'room', id: r.id, label: r.name || 'Room', area: polyArea(r.pts), material: r.material, level: levelOfRoom(p, r).name, unscanned: !countsAsFloor(r) };
   return null;
+}
+
+// An unscanned area (a common stair the scan never entered, closed off by the envelope) is
+// drawn for the record but nobody measured its floor: it never counts toward floor area.
+export const countsAsFloor = r => !r || r.kind !== 'unscanned';
+export function roomsFloorArea(rooms) {
+  return (rooms || []).reduce((n, r) => n + (countsAsFloor(r) ? polyArea(r.pts) : 0), 0);
 }
 
 export function polyArea(pts) {

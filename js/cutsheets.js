@@ -132,7 +132,7 @@ function itemSheetHtml(project, item) {
   const elements = (item.elementIds || []).map(id => elementInfo(project.propertyId, id)).filter(Boolean);
   const matIds = new Set(elements.map(e => e.material).filter(Boolean));
   const wallArea = elements.filter(e => e.kind === 'wall').reduce((n, e) => n + e.area, 0);
-  const floorArea = elements.filter(e => e.kind === 'room').reduce((n, e) => n + e.area, 0);
+  const floorArea = elements.filter(e => e.kind === 'room' && !e.unscanned).reduce((n, e) => n + e.area, 0);
 
   return `<div class="sheet sheet-page">
     <div class="s-head"><span class="s-brand">TIKSI</span><span class="s-doc">Scope cut sheet</span></div>

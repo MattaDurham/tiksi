@@ -7,7 +7,7 @@
 // its link, the embedded Polycam viewer shows the capture, and the same pipeline runs on
 // the file the user downloads from Polycam and drops here.
 
-import { ws, touch, propertyTemplate, escapeHtml, fmtBytes, fmtLen, fmtArea, polyArea, getFile, activeProperty } from './store.js';
+import { ws, touch, propertyTemplate, escapeHtml, fmtBytes, fmtLen, fmtArea, roomsFloorArea, getFile, activeProperty } from './store.js';
 import { parseCaptureUrl, resolveCapture, downloadAsset, fetchCover, fetchCaptureDirect, fetchCoverDirect, relaysFor, DEFAULT_RELAYS } from './polycam.js';
 import { importScanBytes, SCAN_ACCEPT } from './scans.js';
 import { placeScanBytes, seedProject, proposalSummary } from './scan2plan.js';
@@ -374,7 +374,7 @@ function finish(prop, result, applied) {
   dlg.dataset.state = 'done';
   app.refresh();
   const box = dlg.querySelector('[data-np-result]');
-  const floor = prop.rooms.reduce((n, r) => n + polyArea(r.pts), 0);
+  const floor = roomsFloorArea(prop.rooms);
   const levels = prop.levels || [];
   box.hidden = false;
   box.innerHTML = `

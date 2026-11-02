@@ -6,7 +6,7 @@ import { floorReviewText } from './scan-surfaces.js';
 // swings, glazing lines, dimension strings with ticks, rulers, a north arrow and a scale bar.
 
 import {
-  ws, activeProperty, uid, touch, onChange, fmtLen, parseLen, fmtArea, polyArea,
+  ws, activeProperty, uid, touch, onChange, fmtLen, parseLen, fmtArea, polyArea, roomsFloorArea, countsAsFloor,
   escapeHtml, itemById, getFile, projectLabel,
   ensureLevels, activeLevel, setActiveLevel, sortLevels, wallsOn, roomsOn, openingsOn,
   addLevel, deleteLevel, levelHeight, wallHeightOf, levelOfWall,
@@ -698,6 +698,17 @@ function drawRooms() {
     let rad = 1;
     for (const p of r.pts) { const s = w2s(p); rad = Math.max(rad, Math.hypot(s[0] - c[0], s[1] - c[1])); }
     tracePoly(r.pts.map(w2s));
+    if (!countsAsFloor(r)) {
+      // Unscanned area: hatched and dim, so it never reads as a measured floor.
+      ctx.fillStyle = hatchPattern(C.faint);
+      ctx.fill();
+      ctx.lineWidth = sel ? 1.6 : 1;
+      ctx.strokeStyle = sel ? C.accent : hov ? C.hover : hexA(C.dim, 0.5);
+      ctx.setLineDash([2, 4]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      continue;
+    }
     const g = ctx.createRadialGradient(c[0], c[1], 0, c[0], c[1], rad * 1.1);
     g.addColorStop(0, hexA(col, sel ? 0.30 : hov ? 0.22 : 0.17));
     g.addColorStop(1, hexA(col, sel ? 0.12 : hov ? 0.08 : 0.05));
@@ -735,7 +746,7 @@ function drawRoomLabels() {
     ctx.font = `10px ${FONT}`;
     ctx.textAlign = 'center';
     ctx.fillStyle = sel ? hexA(C.accent, 0.85) : C.dim;
-    ctx.fillText(fmtArea(polyArea(r.pts)), s[0], s[1] + 10);
+    ctx.fillText(countsAsFloor(r) ? fmtArea(polyArea(r.pts)) : 'not in floor area', s[0], s[1] + 10);
     ctx.textBaseline = 'alphabetic';
   }
 }
@@ -1830,8 +1841,8 @@ function renderInspector() {
     const L = lvl();
     const walls = curWalls(), rooms = curRooms(), openings = curOpenings();
     const totalWall = walls.reduce((n, w) => n + Math.hypot(w.bx - w.ax, w.by - w.ay), 0);
-    const floorArea = rooms.reduce((n, r) => n + polyArea(r.pts), 0);
-    const propertyArea = prop.rooms.reduce((n, r) => n + polyArea(r.pts), 0);
+    const floorArea = roomsFloorArea(rooms);
+    const propertyArea = roomsFloorArea(prop.rooms);
     // DELETE LEVEL only when it would succeed; the reason sits on the disabled button.
     const lastLevel = prop.levels.length <= 1;
     const held = walls.length || rooms.length;
@@ -1985,7 +1996,8 @@ function renderInspector() {
       <div class="field"><label>Name</label><input type="text" data-name value="${escapeHtml(r.name || '')}"></div>
       <div class="field"><label>Floor material</label>${materialSelectHtml('floor', r.material, 'data-mat')}</div>
       ${scopeAssignHtml(r.id)}
-      <div class="stat-line"><span>Area</span><b>${fmtArea(polyArea(r.pts))}</b></div>
+      <div class="stat-line"><span>Area</span><b>${fmtArea(polyArea(r.pts))}${countsAsFloor(r) ? '' : ' (not counted)'}</b></div>
+      ${countsAsFloor(r) ? '' : '<div class="empty" style="margin:10px 0">The scan never entered this area (a common stair, a closed-off space). Its outline continues the walls around it; verify it on site. It is not counted in floor area.</div>'}
       <div class="stat-line"><span>Perimeter</span><b>${fmtLen(r.pts.reduce((n, p, i) => n + Math.hypot(p[0] - r.pts[(i + 1) % r.pts.length][0], p[1] - r.pts[(i + 1) % r.pts.length][1]), 0))}</b></div>
       <div class="stat-line"><span>Corners on walls</span><b>${attached} of ${r.pts.length}</b></div>
       <div class="empty" style="margin:10px 0">The floor follows its walls: solid corners sit on a wall and move with it. ${loose ? 'Hollow corners are loose and stay put when walls move.' : ''} Drag a corner to reshape the floor; it snaps to walls and other floors.</div>
