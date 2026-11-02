@@ -41,6 +41,23 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(restored.snapshot()['data']['properties'], data['properties'])
         self.assertEqual((restored.root / 'blobs' / digest).read_bytes(), payload)
 
+    def test_videos_and_measurement_frames_travel_in_the_project_bundle(self):
+        video, frame, stray = b'\x00\x00\x00\x18ftypmp42 synthetic video', b'\xff\xd8 synthetic frame', b'unreferenced'
+        assets = {}
+        for key, payload, kind in (('vid-a', video, 'video'), ('mf-a', frame, 'frame'), ('mf-stray', stray, 'frame')):
+            digest, size = self.service.store_blob(io.BytesIO(payload)); assets[key] = {'hash': digest, 'size': size, 'kind': kind}
+        data = workspace(); prop = data['properties'][0]
+        prop['videos'] = [{'id': 'vid-a', 'name': 'walkthrough.mov', 'mime': 'video/quicktime'}]
+        prop['measurements'] = [{'id': 'ms-a', 'videoId': 'vid-a', 'seconds': 12, 'frameAssetId': 'mf-a', 'value': 0.8382},
+                                {'id': 'ms-b', 'videoId': 'vid-a', 'seconds': 13, 'frameAssetId': None, 'value': None}]
+        self.commit(data, assets)
+        with zipfile.ZipFile(self.service.paths['prop-a']) as archive:
+            files = {item['id']: archive.read(item['path']) for item in json.loads(archive.read('manifest.json'))['files']}
+        self.assertEqual(files, {'vid-a': video, 'mf-a': frame}, 'the video and the saved frame are kept; an unreferenced frame is not')
+        restarted = WorkspaceService(self.root / 'runtime', self.root / 'projects')
+        self.assertEqual(restarted.snapshot()['data']['properties'][0]['measurements'][0]['frameAssetId'], 'mf-a')
+        self.assertEqual(set(restarted.part_assets['prop-a']), {'vid-a', 'mf-a'})
+
     def test_fixtures_travel_in_the_project_file_and_come_back_from_disk(self):
         data = workspace()
         data['properties'][0]['fixtures'] = [

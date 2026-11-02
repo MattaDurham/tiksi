@@ -16,6 +16,7 @@ Open **GUIDE** at the top of Tiksi for chapter search, expandable screenshots an
 - [Edit elsewhere and compare before/after](#exchange)
 - [Choose and customize finishes](#materials)
 - [Keep photos attached to the room](#photos)
+- [Read tape measurements from a walk-through video](#measure)
 - [Reconstruct a model from photos](#reconstruct)
 - [Research real products and suppliers](#sourcing)
 - [Turn the design into scoped work](#projects)
@@ -45,6 +46,7 @@ The same sample property appears throughout this guide. The left rail changes vi
 | MODEL | Inspect the 3D design, imported scans, photo pins and before/after. |
 | MATERIALS | Choose and tune finishes or make a material from a photo. |
 | PHOTOS | Keep site images, notes, room links and model pins together. |
+| MEASURE | Read tape measurements from walk-through video frames and apply them to the model. |
 | PHOTO TO 3D | Reconstruct a textured model from overlapping photographs. |
 | SOURCING | Research products and compare cited supplier evidence. |
 | PROJECTS | Turn the design into scoped work, quantities and dependencies. |
@@ -356,6 +358,36 @@ Open PHOTOS and select an unpinned reference card. Choose PIN IN 3D, then click 
 
 > **Good to know:** Ordinary photos do not automatically supply reliable camera positions. Place their pins yourself unless a capture provides usable pose data. The sample images in this guide are illustrations.
 
+<a id="measure"></a>
+
+## Read tape measurements from a walk-through video
+
+**Where:** MEASURE
+
+A phone video of someone holding a tape against cabinets, doors, appliances and fixtures holds many more measurements than a quick look finds. MEASURE keeps the original video with the project, points you at the seconds where a tape blade is visible, and records each reading you take from a frame. It finds likely frames; a person reads the numbers.
+
+### Try it
+
+1. Open MEASURE and choose ADD VIDEO (MP4 or MOV, up to 600 MB), or drop the file on the view. PHOTOS and FILE → Import send videos here too. The original file is kept in the project.
+2. With the local Tiksi server and ffmpeg on the Mac, the video is analysed once: a strip of one thumbnail per second appears under the frame, and seconds where a long yellow strip (a tape blade) is visible are outlined in yellow.
+3. Use TAPE ▶ (Shift+→) to jump between those seconds. Each jump looks at the frames around that moment and shows the sharpest one in which the blade is still visible. → and ← step one second; . and , step a tenth; B looks for the sharpest frame near any moment.
+4. Scroll to zoom and drag to pan. Shift+drag (or CROP) draws a box around the numbers; the box is kept with the reading.
+5. Type the value as the tape shows it: 33 1/2, 33-1/2", 2'-9 1/2" or 85 cm. In imperial units a bare number means inches; the field shows how it was read. Add what was measured, the direction (width, height, depth) and how sure you are (clear, probable, unreadable).
+6. Attach the reading to a door or window width or height or a wall length, or keep it as a note. SAVE READING stores it with its frame. APPLY changes the model the same way a typed edit in PLAN does, so UNDO in the top bar reverts it.
+7. Readings nobody has explained yet (no element, nothing said about what was measured, or unreadable numbers) collect in ASK THE OWNER with their frames. COPY LIST copies the questions as text to send.
+
+### Other features here
+
+**Without ffmpeg.** The server reports that frame extraction needs ffmpeg (brew install ffmpeg). Videos are still kept, and a video this browser can play is reviewed in its own player; readings capture the frame shown.
+
+**What the candidates mean.** Each second is checked for yellow pixels that form one long, narrow shape of reasonable size. Yellow walls, wood and small yellow objects are passed over. The timeline shows each candidate's strip size and length ratio. It ranks frames for review and does not read the numbers.
+
+**Readings and the model.** A reading that was applied and later undone or edited shows NOT IN MODEL. Changing an applied reading's value or element makes it a new proposal to apply.
+
+**Saved with the project.** The video, the frame saved for each reading and the crop travel inside the .tiksi file. The contact sheet and candidates are derived and rebuilt when needed.
+
+> **Good to know:** Unsupported or damaged files are reported, not dropped: a file that is not MP4/MOV is refused with the reason, and a video that cannot be decoded is kept and marked NOT READABLE with the decoder's message.
+
 <a id="reconstruct"></a>
 
 ## Reconstruct a model from photos
@@ -598,7 +630,7 @@ Settings groups display, model environment and workspace maintenance. This synth
 
 ### Other features here
 
-**Keep a SketchUp mirror.** With the local server and SketchUp on this Mac, each project gets a .skp beside its canonical .tiksi. Keep Tiksi open on the Mac while authoring so saved native edits return to the shared project; phone clients see the synced results. The static edition instead needs a linked folder. EDIT IN SKETCHUP in MODEL or PLAN opens the native file on the Mac. Walls, floors, doors and windows arrive painted with their Tiksi finishes (materials named "Tiksi: ..."), and every rewrite repaints them, so change finishes in Tiksi: paint applied to Tiksi's own groups in SketchUp is replaced on the next write, while geometry and paint you add outside them stay.
+**Keep a SketchUp mirror.** With the local server and SketchUp on this Mac, each project gets a .skp beside its canonical .tiksi. Keep Tiksi open on the Mac while authoring so saved native edits return to the shared project; phone clients see the synced results. The static edition instead needs a linked folder. EDIT IN SKETCHUP in MODEL or PLAN opens the native file on the Mac.
 
 **Save workspace backup.** Exports every property together. Keep a .tiksi per property for ordinary project handoffs.
 
@@ -626,7 +658,7 @@ Use the visible tooltips and inspector labels when you forget a control. These a
 
 **Model navigation.** Drag or middle-drag: orbit. Shift+drag or right-drag: pan. Wheel or pinch: zoom. F: frame. O: orbit. W: walk. T: top. C: section. X: X-ray. G: scan. K: furniture. M: move walls. D: measure. P: pin photo. N: note. Right-click: note menu.
 
-**Geometry undo.** Top-bar UNDO / REDO work in PLAN and MODEL. Cmd/Ctrl+Z: undo. Cmd/Ctrl+Shift+Z or Ctrl+Y: redo. History is per project for the current session. Escape ends an active tool action.
+**Geometry undo.** Top-bar UNDO / REDO work in PLAN, MODEL and MEASURE (applied tape readings). Cmd/Ctrl+Z: undo. Cmd/Ctrl+Shift+Z or Ctrl+Y: redo. History is per project for the current session. Escape ends an active tool action.
 
 **Move one wall.** Alt/Option while dragging isolates that wall from the normal connected-wall behavior; floors stay where they are.
 

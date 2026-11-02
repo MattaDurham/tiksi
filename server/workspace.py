@@ -284,6 +284,9 @@ class WorkspaceService:
                 ids.add(scan['id'])
                 if scan.get('originalFileId'): ids.add(scan['originalFileId'])
             ids.update(p['id'] for p in prop.get('photos', []))
+            # Walk-through videos and the frames saved with tape readings are originals too.
+            ids.update(v['id'] for v in prop.get('videos', []) if isinstance(v, dict) and isinstance(v.get('id'), str))
+            ids.update(m['frameAssetId'] for m in prop.get('measurements', []) if isinstance(m, dict) and isinstance(m.get('frameAssetId'), str))
         return ids
 
     @staticmethod

@@ -19,6 +19,8 @@ import * as plan2d from './plan2d.js';
 import * as viewer3d from './viewer3d.js';
 import * as materialsview from './materialsview.js';
 import * as photos from './photos.js';
+import * as measure from './measure.js';
+import { isVideoFile, addVideoFromFile } from './videos.js';
 import * as reconstruction from './reconstruction.js';
 import * as research from './research.js';
 import * as projects from './projects.js';
@@ -41,6 +43,7 @@ const VIEWS = {
   model: viewer3d,
   materials: materialsview,
   photos,
+  measure,
   reconstruct: reconstruction,
   research,
   projects,
@@ -210,7 +213,7 @@ async function offerStorageCleanup(afterReplace) {
 function refreshHistoryControls() {
   const group = document.getElementById('edit-history');
   if (!group) return;
-  group.hidden = !['plan', 'model'].includes(currentName);
+  group.hidden = !['plan', 'model', 'measure'].includes(currentName);
   const state = editHistoryState(activeProperty());
   for (const direction of ['undo', 'redo']) {
     const button = document.getElementById('btn-' + direction), item = state[direction];
@@ -229,7 +232,7 @@ function bindHistoryControls() {
   }
   onEditHistoryChange(refreshHistoryControls);
   window.addEventListener('keydown', e => {
-    if (!['plan', 'model'].includes(currentName) || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+    if (!['plan', 'model', 'measure'].includes(currentName) || !(e.ctrlKey || e.metaKey) || e.altKey) return;
     if (e.target?.matches('input, textarea, select') || e.target?.isContentEditable || document.querySelector('dialog[open]')) return;
     const key = e.key.toLowerCase();
     if (key !== 'z' && !(e.ctrlKey && key === 'y')) return;
@@ -266,6 +269,8 @@ async function importAnyFile(file) {
   if (/\.(jpe?g|png|webp|heic|heif|tiff?|avif)$/i.test(file.name)) {
     await addPhotoFromFile(prop, file); touch(); return 'photo';
   }
+  // Walk-through videos are measurement evidence: kept as originals and reviewed in MEASURE.
+  if (isVideoFile(file)) { await addVideoFromFile(prop, file); return 'measure'; }
   const scan = await importScanFile(file, prop);
   if (!scan) throw new Error('Choose a supported model or a native source for conversion.');
   viewer3d.focusScanOnMount(scan.id);
@@ -281,12 +286,12 @@ function openFileMenu(initialTab = 'project', selected) {
     <section data-file-panel="project"><h3>Save your project</h3><p>A .tiksi file keeps your plan, models, original captures, pinned photos, materials and project work together.</p>
       <div class="file-actions"><button class="btn primary" data-project-save>SAVE PROJECT</button><button class="btn" data-project-as>SAVE AS…</button><button class="btn" data-project-open>OPEN / IMPORT…</button></div><p data-file-target></p>
       <button class="btn" data-new-property>NEW PROPERTY</button></section>
-    <section data-file-panel="capture" hidden><h3>Bring your room into Tiksi</h3><p>Choose photos, a scan, a 3D model or a saved project. Imported projects add or update properties here.</p><button class="btn primary" data-capture-open>CHOOSE FILES…</button><button class="btn" data-polycam>POLYCAM LINK</button><button class="btn" data-photo3d>PHOTOS → 3D</button></section>
+    <section data-file-panel="capture" hidden><h3>Bring your room into Tiksi</h3><p>Choose photos, a walk-through video, a scan, a 3D model or a saved project. Imported projects add or update properties here.</p><button class="btn primary" data-capture-open>CHOOSE FILES…</button><button class="btn" data-polycam>POLYCAM LINK</button><button class="btn" data-photo3d>PHOTOS → 3D</button></section>
     <section data-file-panel="exchange" hidden data-file-exchange></section>
     <section data-file-panel="settings" hidden><h3>Display</h3><label>Units <select data-file-units><option value="imperial">Feet / square feet</option><option value="metric">Metres / square metres</option></select></label><details><summary>Model environment</summary><div data-file-env></div></details><h3>Where this project is kept</h3><p data-own-folder-label></p><div class="file-actions"><button class="btn primary" data-own-folder-link>CHOOSE FOLDER</button><button class="btn" data-folder-open>OPEN FROM FOLDER</button><button class="btn" data-own-folder-unlink>STOP KEEPING IT IN A FOLDER</button></div>
       <label>Keep a SketchUp mirror (.skp) beside each project <input type="checkbox" data-mirror-on></label><p data-mirror-label></p>
       <details><summary>Workspace backup & maintenance</summary><h3>Projects without their own folder</h3><p data-folder-label></p><div class="file-actions"><button class="btn" data-folder-link>KEEP THEM IN ONE FOLDER</button><button class="btn" data-folder-unlink>UNLINK</button></div><p>Project saves are usually enough. A workspace backup carries every property.</p><button class="btn" data-workspace-save>SAVE WORKSPACE BACKUP</button><button class="btn" data-demo>ADD DEMO PROJECTS</button><button class="btn" data-storage>CLEAN UNUSED STORAGE</button><p>Replace workspace is available only when you intentionally want to restore a full backup.</p><button class="btn" data-workspace-replace>REPLACE FROM BACKUP…</button></details></section>
-    <p role="status" data-file-status></p><input type="file" data-any-file hidden multiple accept=".tiksi,.json,${SCAN_ACCEPT},.c4d,.max,.ma,.mb,.rfa,.dwf,.mtl,.bin,.tga,.jpg,.jpeg,.png,.webp,.heic,.heif,.tif,.tiff,.avif"><input type="file" data-replace-file hidden accept=".json,.zip,.tiksi">`;
+    <p role="status" data-file-status></p><input type="file" data-any-file hidden multiple accept=".tiksi,.json,${SCAN_ACCEPT},.c4d,.max,.ma,.mb,.rfa,.dwf,.mtl,.bin,.tga,.jpg,.jpeg,.png,.webp,.heic,.heif,.tif,.tiff,.avif,.mp4,.mov,.m4v"><input type="file" data-replace-file hidden accept=".json,.zip,.tiksi">`;
   document.body.append(dialog);dialog.showModal();dialog.addEventListener('close',()=>dialog.remove());
   const envHost=dialog.querySelector('[data-file-env]');
   if(currentName==='model')viewer3d.mountEnvironmentSettings(envHost);
@@ -329,7 +334,7 @@ function openFileMenu(initialTab = 'project', selected) {
       const {zipSync}=await import('three/addons/libs/fflate.module.js'),entries={};
       for(const f of files){if(entries[f.name])throw new Error('Two resources have the same name; import a ZIP retaining the folder structure.');entries[f.name]=new Uint8Array(await f.arrayBuffer());}
       type=await importAnyFile(new File([zipSync(entries)],models[0].name+'.zip'));
-    } else for(const file of files)type=await importAnyFile(file);ensureBuiltinMaterials();refreshTopbar();if(type==='model'&&currentName!=='model')location.hash='#/model';else if(type==='photo'&&currentName!=='photos')location.hash='#/photos';else remountView();dialog.close();});
+    } else for(const file of files)type=await importAnyFile(file);ensureBuiltinMaterials();refreshTopbar();if(type==='model'&&currentName!=='model')location.hash='#/model';else if(type==='photo'&&currentName!=='photos')location.hash='#/photos';else if(type==='measure'&&currentName!=='measure')location.hash='#/measure';else remountView();dialog.close();});
   on('[data-new-property]',()=>{dialog.close();openNewPropertyDialog();});
   on('[data-polycam]',()=>{dialog.close();openNewPropertyDialog({into:prop?.id});});
   on('[data-photo3d]',()=>{dialog.close();location.hash='#/reconstruct';});

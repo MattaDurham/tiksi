@@ -28,3 +28,15 @@ test('typed negative feet-and-inches parse below the datum', () => {
     assert.ok(Math.abs(store.parseLen(store.fmtLen(m)) - m) < 0.5 / 12 * FT, 'round trip within half an inch: ' + m);
   }
 });
+
+test('tape readings with fractions, unicode fractions and metric units parse exactly', () => {
+  store.ws.data.settings.units = 'imperial';
+  const IN = 0.0254, near = (text, inches) => assert.ok(Math.abs(store.parseLen(text) - inches * IN) < 1e-9, text);
+  near('33 1/2"', 33.5); near('33-1/2"', 33.5); near('9½"', 9.5); near('1/4"', 0.25); near('33 1/2 in', 33.5);
+  near("2'-9 1/2\"", 33.5); near("2' 9-1/2\"", 33.5); near('85 cm', 85 / 2.54); near('850 mm', 850 / 25.4);
+  near("-7'-7\"", -91); near('30"', 30);
+  for (const bad of ['3 1/0"', 'x"', '1/"']) assert.ok(Number.isNaN(store.parseLen(bad)), bad + ' is not a length');
+  store.ws.data.settings.units = 'metric';
+  assert.ok(Math.abs(store.parseLen('0.85') - 0.85) < 1e-12, 'plain numbers stay metres in metric');
+  store.ws.data.settings.units = 'imperial';
+});
