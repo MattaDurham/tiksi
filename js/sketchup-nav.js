@@ -61,19 +61,27 @@ export function attachSketchupNavigation(controls, { pickPoint, canOrbit = () =>
   }
   setButtons();
 
-  // Capture phase: runs before OrbitControls reads the press, so the pivot is set first.
+  // Capture phase: runs before OrbitControls reads the press, so the buttons are current.
   function onDown(e) {
     if (!controls.enabled || e.pointerType !== 'mouse' && e.pointerType !== 'pen') return;
     setButtons();
     const base = e.button === 0 ? controls.mouseButtons.LEFT : e.button === 1 ? controls.mouseButtons.MIDDLE : e.button === 2 ? controls.mouseButtons.RIGHT : -1;
-    drag = { base, x: e.clientX, y: e.clientY };
+    // The pivot waits for a real drag: a plain click never pays for a raycast into a big scan.
+    const orbit = base === ROTATE && !e.shiftKey && !e.ctrlKey && !e.metaKey;
+    drag = { base, x: e.clientX, y: e.clientY, pivotFrom: orbit ? { clientX: e.clientX, clientY: e.clientY } : null };
     if (e.button === 1) e.preventDefault();          // no autoscroll on middle press
-    if (base !== ROTATE || e.shiftKey || e.ctrlKey || e.metaKey) return;
-    const hit = pickPoint(e);
+  }
+  function onMove(e) {
+    if (!drag) return;
+    drag.x = e.clientX; drag.y = e.clientY;
+    const from = drag.pivotFrom;
+    if (!from || Math.hypot(e.clientX - from.clientX, e.clientY - from.clientY) < 4) return;
+    drag.pivotFrom = null;
+    if (controls.state !== ROTATE) return;
+    const hit = pickPoint(from);
     const pivot = hit && pivotOnViewAxis(controls.object.position, controls.target, hit, controls.minDistance);
     if (pivot) { controls.target.copy(pivot); controls.update(); }
   }
-  function onMove(e) { if (drag) { drag.x = e.clientX; drag.y = e.clientY; } }
   function onUp() { drag = null; }
 
   // Shift down or up mid-drag swaps orbit and pan from where the pointer is now.
