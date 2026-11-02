@@ -27,7 +27,7 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 import {
   ws, activeProperty, defaultEnv, uid, touch, fmtLen, parseLen, fmtArea, polyArea,
-  escapeHtml, deleteFile, getFile, itemById, materialById, isoToday, projectLabel,
+  escapeHtml, deleteFile, getFile, itemById, materialById, isoToday, projectLabel, propertyProjects,
   ensureLevels, wallsOn, roomsOn, wallHeightOf, levelOfWall, levelOfRoom, levelHeight, topOfLevels,
 } from './store.js';
 import { placeScanBytes, seedProject, proposalSummary } from './scan2plan.js';
@@ -2021,8 +2021,8 @@ export function mountEnvironmentSettings(host) {
 function finiteNum(v, fallback) { const n = Number(v); return Number.isFinite(n) ? n : fallback; }
 function scopeAssignHtml(elementId) {
   let current = '';
-  for (const pr of ws.data.projects) for (const it of pr.items) if ((it.elementIds || []).includes(elementId)) current = it.id;
-  const groups = ws.data.projects.map(pr => {
+  for (const pr of propertyProjects()) for (const it of pr.items) if ((it.elementIds || []).includes(elementId)) current = it.id;
+  const groups = propertyProjects().map(pr => {
     const opts = pr.items.map(it => `<option value="${escapeHtml(it.id)}" ${it.id === current ? 'selected' : ''}>${escapeHtml(it.name)}</option>`).join('');
     return opts ? `<optgroup label="${escapeHtml(projectLabel(pr))}">${opts}</optgroup>` : '';
   }).join('');
@@ -2031,7 +2031,7 @@ function scopeAssignHtml(elementId) {
 }
 function linkedProductsHtml(elementId) {
   const linked = [];
-  for (const pr of ws.data.projects) for (const it of pr.items) {
+  for (const pr of propertyProjects()) for (const it of pr.items) {
     if ((it.elementIds || []).includes(elementId)) {
       for (const prod of ws.data.products) if ((prod.itemIds || []).includes(it.id)) linked.push(prod);
     }

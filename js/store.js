@@ -674,6 +674,15 @@ export function materialById(id) {
 
 export function projectById(id) { return ws.data.projects.find(p => p.id === id) || null; }
 
+// The projects of the active property, in list order: what PROJECTS, BUDGET, SCHEDULE and the
+// scope pickers show. A project whose property is gone (or that never had one) counts as the
+// active property's, so nothing drops out of sight.
+export function propertyProjects() {
+  const d = ws.data, p = activeProperty();
+  const known = new Set(d.properties.map(x => x.id));
+  return d.projects.filter(pr => (p && pr.propertyId === p.id) || !known.has(pr.propertyId));
+}
+
 // Subprojects: small pieces of work inside a project (a punch list, a room's fixes). Each is an
 // ordinary project with its own status, scope and budget, plus a parentId naming a top-level
 // project on the same property, a priority, an optional room and where it came from (source).
@@ -686,9 +695,9 @@ export function projectLabel(pr) {
 }
 
 export function allScopeItems() {
-  // [{project, item}] across all projects, in project order.
+  // [{project, item}] across the active property's projects, in project order.
   const out = [];
-  for (const pr of ws.data.projects) for (const it of pr.items) out.push({ project: pr, item: it });
+  for (const pr of propertyProjects()) for (const it of pr.items) out.push({ project: pr, item: it });
   return out;
 }
 
@@ -830,7 +839,7 @@ export function projectTotals(pr) {
 
 export function selectedTotals() {
   const t = { low: 0, likely: 0, high: 0 };
-  for (const pr of ws.data.projects) {
+  for (const pr of propertyProjects()) {
     if (!pr.selected) continue;
     const x = projectTotals(pr);
     t.low += x.low; t.likely += x.likely; t.high += x.high;

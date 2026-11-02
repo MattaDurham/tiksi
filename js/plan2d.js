@@ -7,7 +7,7 @@ import { floorReviewText } from './scan-surfaces.js';
 
 import {
   ws, activeProperty, uid, touch, onChange, fmtLen, parseLen, fmtArea, polyArea,
-  escapeHtml, itemById, getFile, projectLabel,
+  escapeHtml, itemById, getFile, projectLabel, propertyProjects,
   ensureLevels, activeLevel, setActiveLevel, sortLevels, wallsOn, roomsOn, openingsOn,
   addLevel, deleteLevel, levelHeight, wallHeightOf, levelOfWall,
 } from './store.js';
@@ -1694,8 +1694,8 @@ function renderToolCol() {
 function scopeAssignHtml(elementId) {
   // Which scope item currently references this element?
   let current = '';
-  for (const pr of ws.data.projects) for (const it of pr.items) if ((it.elementIds || []).includes(elementId)) current = it.id;
-  const groups = ws.data.projects.map(pr => {
+  for (const pr of propertyProjects()) for (const it of pr.items) if ((it.elementIds || []).includes(elementId)) current = it.id;
+  const groups = propertyProjects().map(pr => {
     const opts = pr.items.map(it => `<option value="${it.id}" ${it.id === current ? 'selected' : ''}>${escapeHtml(it.name)}</option>`).join('');
     return opts ? `<optgroup label="${escapeHtml(projectLabel(pr))}">${opts}</optgroup>` : '';
   }).join('');
