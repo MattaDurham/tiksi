@@ -46,13 +46,15 @@ import {
   loadScanObject, applyScanTransform, disposeScanObject,
   scanStats, dropScanToFloor, centerScanOnModel, releaseSplatRenderer, splatDrawables, splatBusy,
 } from './scans.js';
+import { attachSketchupNavigation } from './sketchup-nav.js';
+import { LAYERS, LAYER_LABELS, scanLayer, layerScans, layerShown, setLayerShown } from './view-layers.js';
 
 // ---------- persistent GPU state (one context for the life of the page) ----------
 let renderer = null, pmrem = null;
 
 // ---------- per-mount state ----------
 let el = null, wrapEl = null, inspEl = null, hud = {};
-let scene = null, camera = null, controls = null, walk = null, gizmo = null, composer = null, passes = {};
+let scene = null, camera = null, controls = null, nav = null, walk = null, gizmo = null, composer = null, passes = {};
 let sky = null, envSky = null, sun = null, hemi = null, envRT = null, skyScene = null, panoTex = null, panoId = null;
 let modelGroup = null, groundGroup = null, scanRoot = null, pinRoot = null, noteRoot = null, lightRoot = null, measureRoot = null;
 let prop = null;
@@ -192,6 +194,11 @@ function setupScene() {
   controls.minDistance = 0.3;
   controls.maxDistance = 400;
   controls.addEventListener('change', () => requestRender(2));
+  nav = attachSketchupNavigation(controls, {
+    pickPoint: e => { if (!scene || !modelGroup) return null; const hit = pick(e, { pins: false, notes: false, ground: true }); return hit ? hit.point : null; },
+    canOrbit: () => mode !== 'top',
+    onChange: () => requestRender(2),
+  });
 
   walk = new PointerLockControls(camera, renderer.domElement);
   walk.disconnect();
@@ -688,6 +695,7 @@ function setMode(next) {
   mode = next;
   controls.enabled = next !== 'walk';
   controls.enableRotate = next !== 'top';
+  nav.refresh();
   // A photo can look up at a ceiling; ordinary orbiting stays above the horizon.
   controls.maxPolarAngle = match ? MATCH_POLAR : ORBIT_POLAR;
   if (next === 'walk') startWalk();
@@ -1979,7 +1987,7 @@ function defaultHint() {
   if (tool === 'note') return noteHint();
   if (tool === 'move') return 'MOVE WALLS: select a wall, drag the gizmo arrow to slide it; connected walls follow on release.';
   if (section.on) return 'SECTION: slide the cut height in the mode bar to look inside.';
-  return 'Drag to orbit, right-drag to pan, scroll to zoom. Click elements to inspect; right-click to pin a note.';
+  return 'Drag or middle-drag to orbit, hold Shift to pan, scroll to zoom (trackpad: swipe orbits, Shift+swipe pans, pinch zooms). Click elements to inspect; right-click to pin a note.';
 }
 function showProgress(label, frac) {
   const p = hud.progress;
@@ -2071,6 +2079,16 @@ function applyXray() {
   requestRender(3);
 }
 function toggleXray() { xray = !xray; applyXray(); renderHud(); renderToolCol(); }
+// SHOW SCAN / SHOW FURNITURE: every scan or model in the layer follows the button.
+function toggleLayer(layer) {
+  if (!layerScans(prop, layer).length) return;
+  const changed = setLayerShown(prop, layer, !layerShown(prop, layer));
+  for (const s of changed) applyScanTransform(s, scanObjs[s.id]);
+  if (!changed.length) return;
+  fitShadow(); applyEnvironment();
+  renderToolCol(); renderInspector();
+  touch(); requestRender(3);
+}
 
 // ---------- environment panel ----------
 function sunLabel(el) { return el >= 0 ? 'SUN ' + Math.round(el) + '&deg;' : (el > -6 ? 'TWILIGHT' : 'NIGHT'); }
@@ -2563,6 +2581,7 @@ function renderInspector() {
       ${isPts ? `<div class="field"><label>Point size</label><input type="range" min="0.002" max="0.08" step="0.001" value="${finiteNum(s.pointSize, 0.012)}" data-ps></div>
       <div class="field"><label>Colour</label><select data-pc><option value="rgb" ${s.pointColor === 'rgb' ? 'selected' : ''}>Scan colours</option><option value="height" ${s.pointColor === 'height' ? 'selected' : ''}>Height ramp</option><option value="solid" ${s.pointColor === 'solid' ? 'selected' : ''}>Solid amber</option></select></div>` : ''}
       ${isSplat ? `<button class="btn" data-flip ${dis}>FLIP UP AXIS</button>` : ''}
+      <div class="field"><label>Layer</label><select data-layer-of title="Which SHOW toggle this scan or model follows">${LAYERS.map(l => `<option value="${l}" ${scanLayer(s) === l ? 'selected' : ''}>${escapeHtml(LAYER_LABELS[l])}</option>`).join('')}</select></div>
       <label class="tool-check"><input type="checkbox" ${s.visible !== false ? 'checked' : ''} data-vis> VISIBLE</label>
       <button class="btn" data-frame ${dis}>FRAME SCAN</button>
       <button class="btn" data-floor ${dis}>DROP TO FLOOR</button>
@@ -2600,7 +2619,8 @@ function renderInspector() {
     if (pc) pc.onchange = e => { s.pointColor = e.target.value; upd(); };
     const flip = inspEl.querySelector('[data-flip]');
     if (flip) flip.onclick = () => { s.flip = !s.flip; upd(); };
-    inspEl.querySelector('[data-vis]').onchange = e => { s.visible = e.target.checked; upd(); };
+    inspEl.querySelector('[data-vis]').onchange = e => { s.visible = e.target.checked; upd(); renderToolCol(); };
+    inspEl.querySelector('[data-layer-of]').onchange = e => { s.layer = e.target.value; touch(); renderToolCol(); };
     inspEl.querySelector('[data-frame]').onclick = () => { if (obj) frameObject(obj); };
     inspEl.querySelector('[data-floor]').onclick = () => { if (obj) { dropScanToFloor(s, obj); upd(); renderInspector(); } };
     inspEl.querySelector('[data-center]').onclick = () => { if (obj) { centerScanOnModel(s, obj, modelBounds(prop)); upd(); renderInspector(); } };
@@ -2640,6 +2660,13 @@ function renderToolCol() {
   const scanRows = prop.scans.map(s => `<button class="tool-btn v-scan-row ${scanSelected(s.id) ? 'active' : ''}" data-scan="${escapeHtml(s.id)}" title="${escapeHtml(s.name)}${scanObjs[s.id] ? '' : ' (' + escapeHtml(scanState[s.id] || 'loading') + ')'}">${icon(s.kind === 'splat' ? 'splat' : s.kind === 'mesh' ? 'model' : 'scan')}<span class="tb-text">${escapeHtml(s.name.length > 14 ? s.name.slice(0, 12) + '..' : s.name)}</span><kbd class="key">${escapeHtml(scanBadge(s))}</kbd></button>`).join('');
   // One toggle per storey, lit while the level is shown; the key badge is its floor elevation.
   const hidden = hiddenLevels();
+  // One toggle per view layer, lit while any of its scans or models is shown.
+  const layerRow = (layer, ic, label, key) => {
+    const members = layerScans(prop, layer), shown = layerShown(prop, layer);
+    const what = layer === 'scan' ? 'the scan capture (Polycam mesh, point cloud or splat)' : 'furniture, cabinets and fixtures';
+    const title = members.length ? (shown ? 'Hide ' : 'Show ') + what + ' (' + key + ')' : 'No ' + LAYER_LABELS[layer].toLowerCase() + ' in this property. Set a scan\'s LAYER in its inspector.';
+    return `<button class="tool-btn ${shown ? 'active' : ''}" data-layer="${layer}" aria-pressed="${shown}" ${members.length ? '' : 'disabled'} title="${escapeHtml(title)}">${icon(shown ? ic : 'eye-off')}<span class="tb-text">${label}</span><kbd class="key">${key}</kbd></button>`;
+  };
   const levelRows = prop.levels.map(l => `<button class="tool-btn ${hidden.has(l.id) ? '' : 'active'}" data-level="${escapeHtml(l.id)}" title="${hidden.has(l.id) ? 'Show' : 'Hide'} ${escapeHtml(l.name)} (floor at ${escapeHtml(fmtLen(l.elevation))})">${icon(hidden.has(l.id) ? 'eye-off' : 'layers')}<span class="tb-text">${escapeHtml(l.name.length > 14 ? l.name.slice(0, 12) + '..' : l.name)}</span><kbd class="key">${escapeHtml(fmtLen(l.elevation, { short: true }))}</kbd></button>`).join('');
   tc.innerHTML = `
     <div class="tool-head">VIEW</div>
@@ -2655,6 +2682,10 @@ function renderToolCol() {
     ${tb('pin', 'pin', 'PIN PHOTO', 'P', tool === 'pin')}
     ${tb('note', 'note', 'NOTE', 'N', tool === 'note')}
     ${tb('sketchup', 'external', 'EDIT IN SKETCHUP')}
+    <div class="tool-sep"></div>
+    <div class="tool-head">SHOW</div>
+    ${layerRow('scan', 'scan', 'SCAN', 'G')}
+    ${layerRow('furnishings', 'products', 'FURNITURE', 'K')}
     <div class="tool-sep"></div>
     <div class="tool-head">LEVELS</div>
     ${levelRows}
@@ -2701,6 +2732,7 @@ function renderToolCol() {
   on('before',()=>compare('before'));on('after',()=>compare('after'));
   tc.querySelectorAll('[data-scan]').forEach(b => b.onclick = () => setSelection({ kind: 'scan', id: b.dataset.scan }));
   tc.querySelectorAll('[data-level]').forEach(b => b.onclick = () => toggleLevel(b.dataset.level));
+  tc.querySelectorAll('[data-layer]').forEach(b => b.onclick = () => toggleLayer(b.dataset.layer));
   on('rebuild', () => { rebuildModel(); rebuildGround(); buildAllPins(); buildAllNotes(); });
 }
 function setTool(next) {
@@ -2739,6 +2771,8 @@ function onKeyDown(e) {
     case 'KeyN': if (tool === 'note') setTool('select'); else startNoteMode(null); break;
     case 'KeyC': toggleSection(); break;
     case 'KeyX': toggleXray(); break;
+    case 'KeyG': toggleLayer('scan'); break;
+    case 'KeyK': toggleLayer('furnishings'); break;
     case 'Escape':
       if (match) endMatch();
       else if (tool !== 'select') setTool('select');
