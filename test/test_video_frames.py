@@ -15,7 +15,7 @@ from unittest.mock import patch
 import urllib.error
 import urllib.request
 
-from server.video_frames import VideoFrameService, VideoError, tape_component, sharpness
+from server.video_frames import VideoFrameService, VideoError, tape_component, sharpness, find_tool
 
 FFMPEG, FFPROBE = shutil.which('ffmpeg'), shutil.which('ffprobe')
 ROOT = Path(__file__).resolve().parent.parent
@@ -85,6 +85,17 @@ class WithoutFfmpeg(unittest.TestCase):
             self.assertEqual(list(Path(temp).iterdir()), [], 'nothing is cached without a decoder')
             with patch.dict(os.environ, {'TIKSI_FFMPEG': '', 'TIKSI_FFPROBE': ''}):
                 self.assertFalse(VideoFrameService(temp).capabilities()['ffmpeg'], 'an empty override turns frames off')
+
+    def test_homebrew_tools_found_without_path(self):
+        # The live service starts from a login item whose PATH has no Homebrew folder.
+        with tempfile.TemporaryDirectory() as temp:
+            bin_dir = Path(temp) / 'bin'; bin_dir.mkdir()
+            tool = bin_dir / 'ffmpeg'; tool.write_text('#!/bin/sh\n'); tool.chmod(0o755)
+            plain = bin_dir / 'ffprobe'; plain.write_text('not executable')
+            with patch.dict(os.environ, {'PATH': '/usr/bin:/bin'}), patch('shutil.which', return_value=None):
+                self.assertEqual(find_tool('ffmpeg', (str(bin_dir),)), str(tool))
+                self.assertIsNone(find_tool('ffprobe', (str(bin_dir),)), 'a file that cannot run is not a tool')
+                self.assertIsNone(find_tool('ffmpeg', (str(Path(temp) / 'missing'),)))
 
 
 @unittest.skipUnless(FFMPEG and FFPROBE, 'ffmpeg/ffprobe are not installed; the no-ffmpeg path is tested above')

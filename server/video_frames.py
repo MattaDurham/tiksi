@@ -20,6 +20,17 @@ import time
 from urllib.parse import urlsplit
 
 MAX_BYTES = 600 * 1024 * 1024
+# A login item's PATH lacks Homebrew, so the live service would miss an installed ffmpeg.
+TOOL_DIRS = ('/opt/homebrew/bin', '/usr/local/bin')
+
+
+def find_tool(name, dirs=TOOL_DIRS):
+    found = shutil.which(name)
+    if found: return found
+    for folder in dirs:
+        path = Path(folder) / name
+        if path.is_file() and os.access(path, os.X_OK): return str(path)
+    return None
 MAX_SECONDS = 3600
 CACHE_BYTES = 4 * 1024 ** 3
 CACHE_JOBS = 12
@@ -101,8 +112,8 @@ class VideoFrameService:
         self.root = Path(root); self.root.mkdir(parents=True, exist_ok=True)
         self.token = secrets.token_urlsafe(32)
         # TIKSI_FFMPEG / TIKSI_FFPROBE name other binaries; an empty value turns frames off.
-        self.ffmpeg = ffmpeg if ffmpeg is not None else os.environ.get('TIKSI_FFMPEG', shutil.which('ffmpeg'))
-        self.ffprobe = ffprobe if ffprobe is not None else os.environ.get('TIKSI_FFPROBE', shutil.which('ffprobe'))
+        self.ffmpeg = ffmpeg if ffmpeg is not None else os.environ.get('TIKSI_FFMPEG', find_tool('ffmpeg'))
+        self.ffprobe = ffprobe if ffprobe is not None else os.environ.get('TIKSI_FFPROBE', find_tool('ffprobe'))
         self.lock = threading.RLock(); self.analysis = threading.Lock(); self.frames = threading.Lock()
         self.processes = {}; self.threads = {}; self.closed = False
         # Bursts are temporary; analyses interrupted by a restart can be resumed on request.
