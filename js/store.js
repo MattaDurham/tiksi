@@ -1,6 +1,8 @@
 // tiksi store: workspace state, persistence, units, shared helpers.
 // All lengths are stored in meters, money in USD, dates as ISO strings.
 
+import { normalizeView } from './photo-match.js';
+
 const LS_KEY = 'tiksi.workspace.v1';   // storage slot, not the schema version (see migrate)
 const SCHEMA_VERSION = 2;
 const M_PER_FT = 0.3048;
@@ -602,6 +604,8 @@ function migrate(d) {
       if (!Array.isArray(ph.elementIds)) ph.elementIds = [];
       if (!Array.isArray(ph.itemIds)) ph.itemIds = [];
       if (ph.pin === undefined) ph.pin = null;
+      // The camera a photo was taken from (MATCH PHOTO). Optional: older photos have none.
+      if (ph.view !== undefined) { const v = normalizeView(ph.view); if (v) ph.view = v; else delete ph.view; }
       if (!ph.createdAt) ph.createdAt = new Date(0).toISOString();
       // '' is the slim localStorage form (thumbnail lives in IndexedDB, see persistable).
       if (typeof ph.thumb !== 'string' || (ph.thumb && !THUMB_RE.test(ph.thumb))) ph.thumb = '';
