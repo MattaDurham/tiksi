@@ -133,7 +133,7 @@ export function addFixtureHtml() {
   const opts = Object.entries(FIXTURE_KINDS).flatMap(([kind, k]) => k.subtypes.length
     ? k.subtypes.map(s => `<option value="${kind}:${s}">${escapeHtml(fixtureLabel({ kind, subtype: s }))}</option>`)
     : [`<option value="${kind}:">${escapeHtml(k.label)}</option>`]).join('');
-  return `<div class="field"><label>Add a fixture</label><select data-fx-kind>${opts}</select></div><button class="btn" data-fx-add>ADD FIXTURE HERE</button>`;
+  return `<div class="tool-sep"></div><div class="field"><label>Add a fixture</label><select data-fx-kind>${opts}</select></div><button class="btn" data-fx-add>ADD FIXTURE HERE</button>`;
 }
 
 const len = (label, key, value, hint) => `<div class="field"><label>${label}</label><input type="text" data-fx-len="${key}" value="${escapeHtml(fmtLen(value))}"${hint ? ` title="${escapeHtml(hint)}"` : ''}></div>`;
