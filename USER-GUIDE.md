@@ -187,7 +187,7 @@ In PLAN, use SELECT and click a wall. Edit the wall height in the inspector to e
 
 **Underlay editing.** Click the image to select it and change opacity; drag it only while selected to align it. Remove it without deleting the traced walls.
 
-**Navigation and undo.** Drag empty canvas or a floor to pan. Scroll also pans. Pinch or Cmd/Ctrl+scroll zooms. Space-drag or middle-drag pans anywhere; F fits the view. UNDO and REDO are in the top bar in PLAN and MODEL. One wall gesture includes its joined walls, openings and floor corners.
+**Navigation and undo.** Drag empty canvas or a floor to pan. A trackpad swipe also pans. A mouse wheel, a pinch or Cmd/Ctrl+scroll zooms about the cursor. Space-drag or middle-drag pans anywhere; F fits the view. SHOW toggles the scan underlay (G) and furniture, cabinet and fixture footprints (K). UNDO and REDO are in the top bar in PLAN and MODEL. One wall gesture includes its joined walls, openings and floor corners.
 
 > **Good to know:** Calibrate the underlay before tracing: calibration changes the image scale, not walls you already drew. Rooms need their own ROOM floors to create floor surfaces and floor-area takeoffs. Recheck scan-generated geometry against measurements on site.
 
@@ -205,7 +205,7 @@ Use the tool column for camera and inspection actions. The inspector follows the
 
 ### Try it
 
-1. Open MODEL and use FRAME if the room is outside the camera. Drag to orbit, scroll to zoom, or use the TOP control for a plan-like view.
+1. Open MODEL and use FRAME if the room is outside the camera. Drag or middle-drag to orbit about the point under the cursor, hold Shift to pan (even mid-drag), scroll to zoom, or use the TOP control for a plan-like view. On a trackpad, swipe orbits, Shift+swipe pans and pinch zooms.
 2. Click a wall, floor or ceiling to inspect it. Change the offered dimensions or material in the inspector.
 3. Choose MOVE WALLS, select a native wall and drag its gizmo. Joined walls and room corners follow. Return to PLAN for exact outlines; imported mesh surfaces do not expose native wall controls.
 4. Use SECTION to cut through the building and reveal interiors. Use X-RAY to inspect overlapping references.
@@ -646,11 +646,11 @@ Use the visible tooltips and inspector labels when you forget a control. These a
 
 **Save / open.** Cmd/Ctrl+S: save. Cmd/Ctrl+Shift+S: save as. Cmd/Ctrl+O: open.
 
-**Plan navigation.** F: fit view. Scroll or drag empty canvas: pan. Pinch or Cmd/Ctrl+scroll: zoom. Space-drag or middle-drag: pan. [ and ]: step between levels.
+**Plan navigation.** F: fit view. Drag empty canvas or trackpad swipe: pan. Mouse wheel, pinch or Cmd/Ctrl+scroll: zoom. Space-drag or middle-drag: pan. G: scan underlay. K: furniture. [ and ]: step between levels.
 
 **Plan drawing.** V: select. W: wall. D: door. N: window. R: room. C: calibrate. With ROOM, a click inside closed walls floors that room and Alt-click starts an outline; click the first point or double-click to close an outline.
 
-**Model navigation.** F: frame. O: orbit. W: walk. T: top. C: section. X: X-ray. M: move walls. D: measure. P: pin photo. N: note. Right-click: note menu.
+**Model navigation.** Drag or middle-drag: orbit. Shift+drag or right-drag: pan. Wheel or pinch: zoom. F: frame. O: orbit. W: walk. T: top. C: section. X: X-ray. G: scan. K: furniture. M: move walls. D: measure. P: pin photo. N: note. Right-click: note menu.
 
 **Geometry undo.** Top-bar UNDO / REDO work in PLAN, MODEL and MEASURE (applied tape readings). Cmd/Ctrl+Z: undo. Cmd/Ctrl+Shift+Z or Ctrl+Y: redo. History is per project for the current session. Escape ends an active tool action.
 
