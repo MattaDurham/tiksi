@@ -4,7 +4,8 @@
 //   Tiksi -> SketchUp   each wall is a group (its openings cut, a nested group per opening),
 //                       each room a floor group, each level a tag, each plan underlay an
 //                       image. Groups carry a "tiksi" dictionary: their id and the values
-//                       they were written from.
+//                       they were written from. Faces wear Tiksi's finishes as SketchUp
+//                       materials named "Tiksi: <material name>", so a rewrite repaints them.
 //   SketchUp -> Tiksi   when the .skp changes on disk (saved in SketchUp), its groups are
 //                       read back and merged element by element against the last state
 //                       both sides agreed on: moved, stretched, raised, renamed and deleted
@@ -15,8 +16,8 @@
 // its version and the conflict is reported. The pure parts here (spec, signatures, merge)
 // run under Node for tests; the rest talks to /api/model-conversion/mirror.
 
-import { wallHeightOf, levelOfWall, levelOfRoom, levelHeight, uid } from './store.js';
-import { openingSpans } from './wall-solids.js';
+import { wallHeightOf, levelOfWall, levelOfRoom, levelHeight, roomsOn, uid } from './store.js';
+import { openingSpans, wallFaceMaterialIds } from './wall-solids.js';
 
 export const MIRROR_FORMAT = 'tiksi-sketchup-mirror';
 const mm = v => Math.round(Number(v || 0) * 1000);           // signatures compare to the millimetre
@@ -61,8 +62,36 @@ export function wallSig(p) { return ['wall', mm(p.ax), mm(p.ay), mm(p.bx), mm(p.
 export function openingSig(p) { return ['opening', p.wallId, permille(p.t), mm(p.width), mm(p.height), mm(p.sill)].join(','); }
 export function roomSig(p) { return ['room', p.name || '', ...(p.pts || []).map(q => mm(q[0]) + ':' + mm(q[1]))].join(','); }
 
-export function mirrorSpec(prop) {
-  const state = elementState(prop);
+// Finishes as SketchUp should paint them: { id, name, color } from the workspace materials,
+// with the 3D view's fallback colour when an id is unset or unknown (unknown ones warn).
+// Two materials sharing a name both take their id in brackets, so neither repaints the other.
+const FALLBACK = {
+  wall: { name: 'Default wall', color: '#d8d4cc' }, floor: { name: 'Default floor', color: '#97999b' },
+  door: { name: 'Default trim', color: '#f3f1ec' }, window: { name: 'Default glass', color: '#d2e7ee' },
+};
+const OPENING_MATERIAL = { door: 'mat-trim', window: 'mat-glass' };
+const HEX = /^#[0-9a-f]{6}$/i;
+
+function materialResolver(materials, warnings) {
+  const byId = new Map((materials || []).filter(m => m && m.id).map(m => [m.id, m]));
+  const named = new Map();
+  for (const m of byId.values()) named.set(String(m.name || m.id), (named.get(String(m.name || m.id)) || 0) + 1);
+  const warned = new Set();
+  return (id, role, owner) => {
+    const m = id ? byId.get(id) : null;
+    if (!m) {
+      if (id && !warned.has(id)) { warned.add(id); warnings.push('material ' + id + ' on ' + owner + ' is not in the material library; painted ' + FALLBACK[role].name); }
+      return { id: id || null, name: FALLBACK[role].name, color: FALLBACK[role].color };
+    }
+    const name = String(m.name || m.id);
+    return { id: m.id, name: named.get(name) > 1 ? name + ' (' + m.id + ')' : name, color: HEX.test(m.color) ? m.color.toLowerCase() : FALLBACK[role].color };
+  };
+}
+
+// `materials` is the workspace material library (ws.data.materials).
+export function mirrorSpec(prop, materials) {
+  const state = elementState(prop), warnings = [];
+  const finish = materialResolver(materials, warnings);
   const walls = [];
   for (const w of prop.walls || []) {
     const st = state.get(w.id);
@@ -70,13 +99,19 @@ export function mirrorSpec(prop) {
     const lvl = levelOfWall(prop, w);
     const holes = (prop.openings || []).filter(o => o.wallId === w.id && state.has(o.id)).map(o => {
       const p = state.get(o.id).params;
-      return { id: o.id, type: o.type, t: p.t, width: p.width, height: p.height, sill: p.sill, s0: p.s0, s1: p.s1, v0: p.v0, v1: p.v1 };
+      const role = o.type === 'window' ? 'window' : 'door';
+      return { id: o.id, type: o.type, t: p.t, width: p.width, height: p.height, sill: p.sill, s0: p.s0, s1: p.s1, v0: p.v0, v1: p.v1,
+        material: finish(OPENING_MATERIAL[role], role, 'opening ' + o.id) };
     });
-    walls.push(Object.assign({ id: w.id, level: lvl.id, elevation: lvl.elevation, name: 'Wall ' + w.id, holes }, st.params));
+    // pos: the long face on the side the plan normal (-uy, ux) of a -> b points to (in the
+    // .skp, local y = -thickness/2); neg: the opposite face; other: ends, top and reveals.
+    const ids = wallFaceMaterialIds(w, roomsOn(prop, lvl.id));
+    const faces = Object.fromEntries(Object.entries(ids).map(([face, id]) => [face, finish(id, 'wall', 'wall ' + w.id)]));
+    walls.push(Object.assign({ id: w.id, level: lvl.id, elevation: lvl.elevation, name: 'Wall ' + w.id, holes, materials: faces }, st.params));
   }
   const rooms = (prop.rooms || []).filter(r => state.has(r.id)).map(r => {
     const lvl = levelOfRoom(prop, r);
-    return { id: r.id, level: lvl.id, elevation: lvl.elevation, name: r.name || '', pts: state.get(r.id).params.pts };
+    return { id: r.id, level: lvl.id, elevation: lvl.elevation, name: r.name || '', pts: state.get(r.id).params.pts, material: finish(r.material, 'floor', 'room ' + r.id) };
   });
   const elements = {};
   for (const [id, st] of state) elements[id] = { kind: st.kind, sig: st.sig };
@@ -86,6 +121,7 @@ export function mirrorSpec(prop) {
     levels: (prop.levels || []).map(l => ({ id: l.id, name: l.name, elevation: l.elevation, height: l.height })),
     walls, rooms, elements,
     underlays: (prop.levels || []).map(l => underlayOf(l)).filter(Boolean),
+    warnings,
   };
 }
 
@@ -104,6 +140,8 @@ export function hash(s) {
   return (h >>> 0).toString(36);
 }
 
+// Finishes are part of the spec, so a material change rewrites the .skp; `elements` holds
+// geometry signatures only, so the read-back never reports it as a SketchUp edit.
 export function specSignature(spec) {
   return hash(JSON.stringify(Object.assign({}, spec, { underlays: spec.underlays.map(u => u.sig) })));
 }
@@ -346,8 +384,9 @@ export async function mirrorChangedOnDisk(folder, entry) {
 
 // One round for one property: read a .skp saved elsewhere, merge it, then write the mirror
 // if Tiksi's side is ahead. `entry` is the folder record of the property (files.js); its
-// `mirror` field keeps { file, mtime, size, sig, underlays, synced, report, at }.
-export async function syncMirror(folder, prop, entry, write) {
+// `mirror` field keeps { file, mtime, size, sig, underlays, synced, report, warnings, at }.
+// `materials` is the workspace material library the finishes are painted from.
+export async function syncMirror(folder, prop, entry, write, materials) {
   const ms = entry.mirror || (entry.mirror = { synced: {}, underlays: {} });
   const name = mirrorFileName(entry.file);
   let report = null, changed = false;
@@ -373,7 +412,7 @@ export async function syncMirror(folder, prop, entry, write) {
     ms.synced = syncedState(prop);
     ms.report = summarise(report);
   }
-  const spec = mirrorSpec(prop), sig = specSignature(spec);
+  const spec = mirrorSpec(prop, materials), sig = specSignature(spec);
   const underlayChanged = spec.underlays.some(u => (ms.underlays || {})[u.level] !== u.sig);
   if (!got || sig !== ms.sig || underlayChanged) {
     const files = {};
@@ -388,7 +427,7 @@ export async function syncMirror(folder, prop, entry, write) {
     const handle = got ? got.handle : await folder.getFileHandle(name, { create: true });
     await write(handle, new Blob([bytes]));
     const f = await handle.getFile();
-    Object.assign(ms, { file: name, mtime: f.lastModified, size: f.size, sig, at: Date.now() });
+    Object.assign(ms, { file: name, mtime: f.lastModified, size: f.size, sig, at: Date.now(), warnings: spec.warnings.slice(0, 10) });
     ms.underlays = Object.fromEntries(spec.underlays.map(u => [u.level, u.sig]));
     ms.synced = syncedState(prop);
   }

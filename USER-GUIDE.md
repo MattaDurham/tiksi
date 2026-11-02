@@ -590,7 +590,7 @@ Settings groups display, model environment and workspace maintenance. This synth
 
 ### Other features here
 
-**Keep a SketchUp mirror.** With the local server and SketchUp on this Mac, each project gets a .skp beside its canonical .tiksi. Keep Tiksi open on the Mac while authoring so saved native edits return to the shared project; phone clients see the synced results. The static edition instead needs a linked folder. EDIT IN SKETCHUP in MODEL or PLAN opens the native file on the Mac.
+**Keep a SketchUp mirror.** With the local server and SketchUp on this Mac, each project gets a .skp beside its canonical .tiksi. Keep Tiksi open on the Mac while authoring so saved native edits return to the shared project; phone clients see the synced results. The static edition instead needs a linked folder. EDIT IN SKETCHUP in MODEL or PLAN opens the native file on the Mac. Walls, floors, doors and windows arrive painted with their Tiksi finishes (materials named "Tiksi: ..."), and every rewrite repaints them, so change finishes in Tiksi: paint applied to Tiksi's own groups in SketchUp is replaced on the next write, while geometry and paint you add outside them stay.
 
 **Save workspace backup.** Exports every property together. Keep a .tiksi per property for ordinary project handoffs.
 

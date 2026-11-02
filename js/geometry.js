@@ -18,7 +18,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { materialById, ensureLevels, levelHeight, levelOfRoom, wallsOn, roomsOn, openingsOn } from './store.js';
 import { materialFor } from './textures.js';
-import { openingSpans, wallSolids } from './wall-solids.js';
+import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, pointInPoly } from './wall-solids.js';
 
 const FALLBACK_WALL = '#d8d4cc';
 const FALLBACK_FLOOR = '#97999b';
@@ -213,44 +213,12 @@ function mergedMesh(geos, material, userData) {
 }
 
 // ---------- plan helpers ----------
-function pointInPoly(px, py, pts) {
-  let inside = false;
-  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-    const [xi, yi] = pts[i], [xj, yj] = pts[j];
-    if ((yi > py) !== (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi) + xi) inside = !inside;
-  }
-  return inside;
-}
+// Room sides and the interior finish live in wall-solids.js (shared with the SketchUp mirror).
+export { wallInteriorMaterialId };
 function segDist(px, py, ax, ay, bx, by) {
   const dx = bx - ax, dy = by - ay;
   const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy || 1)));
   return Math.hypot(px - ax - dx * t, py - ay - dy * t);
-}
-function roomAt(rooms, x, y) {
-  for (const r of rooms) if (r.pts && r.pts.length > 2 && pointInPoly(x, y, r.pts)) return r;
-  return null;
-}
-
-// Which rooms border each side of a wall (+1 = local +z side, -1 = local -z side).
-function wallSides(wall, rooms) {
-  const L = Math.hypot(wall.bx - wall.ax, wall.by - wall.ay) || 1;
-  const ux = (wall.bx - wall.ax) / L, uy = (wall.by - wall.ay) / L;
-  const nx = -uy, ny = ux;                       // local +z direction in plan
-  const th = wall.thickness || 0.114;
-  const off = th / 2 + 0.08;
-  const mx = (wall.ax + wall.bx) / 2, my = (wall.ay + wall.by) / 2;
-  const probe = (sgn, f) => roomAt(rooms, mx + ux * (f - 0.5) * L * 0.6 + nx * off * sgn, my + uy * (f - 0.5) * L * 0.6 + ny * off * sgn);
-  // Probe three points along the wall so a room that only covers part of a long wall still counts.
-  const pos = probe(1, 0.5) || probe(1, 0.2) || probe(1, 0.8);
-  const neg = probe(-1, 0.5) || probe(-1, 0.2) || probe(-1, 0.8);
-  return { pos, neg };
-}
-
-// Share the renderer's automatic finish choice with inspection and sourcing actions.
-export function wallInteriorMaterialId(wall, rooms) {
-  const sides = wallSides(wall, rooms);
-  const exterior = !!sides.pos !== !!sides.neg;
-  return wall.materialIn || (exterior ? 'mat-drywall' : wall.material);
 }
 
 // ---------- wall joints ----------
