@@ -1,6 +1,6 @@
 // Contextual sourcing. Research stays on the local server; saved selections travel
 // with the workspace, including the evidence used to choose them.
-import { ws, uid, touch, escapeHtml, allScopeItems, activeProperty } from './store.js';
+import { ws, uid, touch, escapeHtml, allScopeItems, itemById, activeProperty } from './store.js';
 import { diskWorkspace } from './disk-workspace.js';
 
 const API = '/api/material-research';
@@ -277,7 +277,7 @@ function saveCandidate(i) {
   captureDraft();
   // Apply the current scope selection only when the brief still belongs to this job.
   const sameContext = context.id === jobContext.id && context.kind === jobContext.kind;
-  const itemIds = (sameContext ? draft.itemIds : jobItemIds).filter(id => allScopeItems().some(x => x.item.id === id));
+  const itemIds = (sameContext ? draft.itemIds : jobItemIds).filter(id => itemById(id));
   const materialIds = ws.data.materials.some(m => m.id === jobContext.materialId) ? [jobContext.materialId] : [];
   const existing = ws.data.products.find(p => p.research?.jobId === job.id && p.research?.candidateId === (candidate.id || String(i)));
   if (existing) { saved.add(i); notice = 'This candidate is already saved in Products.'; renderResults(); return; }
