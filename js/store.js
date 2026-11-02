@@ -1,6 +1,8 @@
 // tiksi store: workspace state, persistence, units, shared helpers.
 // All lengths are stored in meters, money in USD, dates as ISO strings.
 
+import { normaliseFixtures } from './fixtures.js';
+
 const LS_KEY = 'tiksi.workspace.v1';   // storage slot, not the schema version (see migrate)
 const SCHEMA_VERSION = 2;
 const M_PER_FT = 0.3048;
@@ -193,6 +195,7 @@ export function projectSlice(propId, data) {
   for (const s of p.scans || []) for (const id of [...Object.values(s.materialBindings || {}),...Object.values(s.materialIdentities || {})]) matIds.add(id);
   for (const w of p.walls || []) matIds.add(w.material);
   for (const r of p.rooms || []) { matIds.add(r.material); matIds.add(r.ceilingMaterial); }
+  for (const f of p.fixtures || []) { matIds.add(f.material); matIds.add(f.bodyMaterial); }
   for (const m of d.materials || []) if (m && m.custom && materialOwners(m).includes(propId)) matIds.add(m.id);
   const products = (d.products || []).filter(pr => (pr.itemIds || []).some(id => itemIds.has(id)) || (pr.materialIds || []).some(id => matIds.has(id)));
   const photoIds = new Set((p.photos || []).map(ph => ph.id));
@@ -351,7 +354,7 @@ export function propertyTemplate(name) {
   return {
     id: uid('prop'), name: name || 'New property', notes: '', wallHeight: 2.44,
     levels: [levelTemplate('lvl-0', 'Main level', 0, 2.44)], activeLevelId: 'lvl-0',
-    walls: [], openings: [], rooms: [], scans: [], photos: [], notePins: [], env: defaultEnv(), source: null,
+    walls: [], openings: [], rooms: [], fixtures: [], scans: [], photos: [], notePins: [], env: defaultEnv(), source: null,
   };
 }
 
@@ -481,7 +484,7 @@ export function addLevel(prop, opts) {
 export function deleteLevel(prop, id) {
   const l = levelById(prop, id);
   if (!l || prop.levels.length <= 1) return false;
-  if (wallsOn(prop, id).length || roomsOn(prop, id).length) return false;
+  if (wallsOn(prop, id).length || roomsOn(prop, id).length || (prop.fixtures || []).some(f => f.level === id)) return false;
   prop.levels = prop.levels.filter(x => x !== l);
   if (prop.activeLevelId === id) prop.activeLevelId = lowestLevel(prop).id;
   forgetPlanImage(id, prop.id);
@@ -513,6 +516,7 @@ function sanitiseIds(d) {
     for (const s of p.scans) fix(s, 'scan');
     for (const ph of p.photos) fix(ph, 'ph');
     for (const n of p.notePins) fix(n, 'note');
+    for (const f of p.fixtures || []) fix(f, 'fx');
   }
   for (const m of d.materials) fix(m, 'mat');
   for (const pr of d.products) fix(pr, 'prod');
@@ -543,7 +547,7 @@ function validateWorkspace(d) {
     if (d[key] != null && !Array.isArray(d[key])) throw new Error(key + ' must be a list');
     for (const rec of d[key] || []) if (!rec || typeof rec !== 'object' || Array.isArray(rec)) throw new Error(key + ' contains an invalid record');
   }
-  for (const p of d.properties || []) for (const key of ['levels','walls','openings','rooms','scans','photos','notePins']) {
+  for (const p of d.properties || []) for (const key of ['levels','walls','openings','rooms','fixtures','scans','photos','notePins']) {
     if (p[key] != null && !Array.isArray(p[key])) throw new Error('property ' + key + ' must be a list');
     for (const rec of p[key] || []) if (!rec || typeof rec !== 'object' || Array.isArray(rec)) throw new Error('property ' + key + ' contains an invalid record');
   }
@@ -573,6 +577,8 @@ function migrate(d) {
     // Levels: the pre-level shape (property.plan, no `level` on walls and rooms) becomes one
     // "Main level" at elevation 0; anything already shaped that way is only checked.
     ensureLevels(p);
+    // Fixtures (fixtures.js): counter runs, cabinets, appliances, furniture on a level.
+    p.fixtures = normaliseFixtures(p.fixtures, p);
     // v2: photos, environment, richer scan and room records. Merge over whatever is there
     // so partially filled objects from hand-edited or older exports keep their values.
     p.photos = p.photos || [];
@@ -674,6 +680,15 @@ export function materialById(id) {
 
 export function projectById(id) { return ws.data.projects.find(p => p.id === id) || null; }
 
+// The projects of the active property, in list order: what PROJECTS, BUDGET, SCHEDULE and the
+// scope pickers show. A project whose property is gone (or that never had one) counts as the
+// active property's, so nothing drops out of sight.
+export function propertyProjects() {
+  const d = ws.data, p = activeProperty();
+  const known = new Set(d.properties.map(x => x.id));
+  return d.projects.filter(pr => (p && pr.propertyId === p.id) || !known.has(pr.propertyId));
+}
+
 // Subprojects: small pieces of work inside a project (a punch list, a room's fixes). Each is an
 // ordinary project with its own status, scope and budget, plus a parentId naming a top-level
 // project on the same property, a priority, an optional room and where it came from (source).
@@ -686,9 +701,9 @@ export function projectLabel(pr) {
 }
 
 export function allScopeItems() {
-  // [{project, item}] across all projects, in project order.
+  // [{project, item}] across the active property's projects, in project order.
   const out = [];
-  for (const pr of ws.data.projects) for (const it of pr.items) out.push({ project: pr, item: it });
+  for (const pr of propertyProjects()) for (const it of pr.items) out.push({ project: pr, item: it });
   return out;
 }
 
@@ -837,7 +852,7 @@ export function projectTotals(pr) {
 
 export function selectedTotals() {
   const t = { low: 0, likely: 0, high: 0 };
-  for (const pr of ws.data.projects) {
+  for (const pr of propertyProjects()) {
     if (!pr.selected) continue;
     const x = projectTotals(pr);
     t.low += x.low; t.likely += x.likely; t.high += x.high;

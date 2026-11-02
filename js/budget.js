@@ -3,7 +3,7 @@
 
 import {
   ws, touch, fmtMoney, parseMoney, escapeHtml, projectTotals, selectedTotals,
-  fmtDate, isoToday, projectLabel,
+  fmtDate, isoToday, projectLabel, propertyProjects,
 } from './store.js';
 import { icon } from './icons.js';
 
@@ -19,8 +19,9 @@ function render() {
   const remaining = cap - sel.likely;
   const pct = cap > 0 ? Math.min(sel.likely / cap, 1.4) : 0;
 
+  const projects = propertyProjects();
   const byCat = Object.create(null);
-  for (const p of d.projects) {
+  for (const p of projects) {
     if (!p.selected) continue;
     const t = projectTotals(p);
     byCat[p.category] = byCat[p.category] || { low: 0, likely: 0, high: 0, n: 0 };
@@ -28,9 +29,9 @@ function render() {
     byCat[p.category].n++;
   }
 
-  const selectedProjects = d.projects.filter(p => p.selected);
-  const parked = d.projects.filter(p => !p.selected);
-  const maxLikely = Math.max(...d.projects.map(p => projectTotals(p).likely), 1);
+  const selectedProjects = projects.filter(p => p.selected);
+  const parked = projects.filter(p => !p.selected);
+  const maxLikely = Math.max(...projects.map(p => projectTotals(p).likely), 1);
 
   el.innerHTML = `
     <div class="view-scroll">
@@ -56,7 +57,7 @@ function render() {
         <div class="kpi ${remaining < 0 ? 'over' : 'ok'}">
           <div class="k-label">${remaining < 0 ? 'Over cap' : 'Remaining'}</div>
           <div class="k-value">${fmtMoney(Math.abs(remaining))}</div>
-          <div class="k-sub">${selectedProjects.length} of ${d.projects.length} projects selected</div>
+          <div class="k-sub">${selectedProjects.length} of ${projects.length} projects selected</div>
         </div>
       </div>
       <div class="capbar" style="max-width:640px; margin-top:26px">
@@ -125,8 +126,9 @@ export function budgetReportHtml() {
   const d = ws.data;
   const cap = d.settings.budgetCap || 0;
   const sel = selectedTotals();
-  const selectedProjects = d.projects.filter(p => p.selected);
-  const parked = d.projects.filter(p => !p.selected);
+  const projects = propertyProjects();
+  const selectedProjects = projects.filter(p => p.selected);
+  const parked = projects.filter(p => !p.selected);
   const byCat = Object.create(null);
   for (const p of selectedProjects) {
     const t = projectTotals(p);

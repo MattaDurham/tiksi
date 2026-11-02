@@ -6,7 +6,7 @@
 import {
   ws, uid, touch, fmtMoney, parseMoney, escapeHtml, projectTotals, itemTotals,
   activeProperty, elementInfo, fmtLen, fmtArea, isoToday,
-  PRIORITIES, subprojectsOf, projectById, roomsOn,
+  PRIORITIES, subprojectsOf, projectById, roomsOn, propertyProjects,
 } from './store.js';
 import { icon } from './icons.js';
 
@@ -49,17 +49,18 @@ function roomOf(p) {
 function render() {
   if (!el) return;
   const d = ws.data;
-  if (activeProjectId && !d.projects.find(p => p.id === activeProjectId)) activeProjectId = null;
-  const tops = d.projects.filter(p => !p.parentId);
+  const mine = propertyProjects();
+  if (activeProjectId && !mine.find(p => p.id === activeProjectId)) activeProjectId = null;
+  const tops = mine.filter(p => !p.parentId);
   if (!activeProjectId && tops.length) activeProjectId = tops[0].id;
-  const active = d.projects.find(p => p.id === activeProjectId);
-  const subCount = d.projects.length - tops.length;
+  const active = mine.find(p => p.id === activeProjectId);
+  const subCount = mine.length - tops.length;
 
   el.innerHTML = `
     <div class="view-scroll">
       <div class="view-head">
         <span class="view-title">PROJECTS</span>
-        <span class="view-sub">${tops.length} projects${subCount ? ', ' + subCount + ' subprojects' : ''}, ${d.projects.filter(p => p.selected).length} selected into the program</span>
+        <span class="view-sub">${tops.length} projects${subCount ? ', ' + subCount + ' subprojects' : ''}, ${mine.filter(p => p.selected).length} selected into the program</span>
         <span class="sp" style="flex:1"></span>
         <button class="btn primary" id="new-project">${icon('plus')}NEW PROJECT</button>
       </div>

@@ -134,6 +134,8 @@ FILE → Import offers CHOOSE FILES, POLYCAM LINK and PHOTOS → 3D.
 
 **Propose plan later.** In MODEL, select a mesh scan and choose PROPOSE PLAN FROM SCAN. The PLAN property inspector also offers the action for its available source mesh.
 
+**Fixtures from the scan.** After a plan proposal, or later with PROPOSE FIXTURES FROM SCAN (MODEL mesh inspector or the PLAN scan card), Tiksi reads counter runs, wall cabinets, tall appliances, beds, sofas, tables, desks and storage from the mesh. Each proposal shows its confidence and the heights it rests on; tick the ones that are really there. Click a fixture in MODEL to correct its sizes or mark it tape measured; ADD FIXTURE HERE adds one by hand. Fixtures save with the project, follow Undo, show as outlines in PLAN and become tagged groups in the SketchUp mirror, where moving, turning, stretching or deleting one comes back to Tiksi.
+
 **Multi-file imports.** Keep OBJ/MTL/images and glTF/buffers/images together. Choose their complete package rather than a model that refers to missing texture files.
 
 **Originals and handoffs.** FILE → 3D exchange retains original source downloads and diagnostic handoffs for formats that need an agent or authoring application.
@@ -446,7 +448,7 @@ Choose a project to edit its scope. Each row can carry quantity, unit, low/likel
 
 **Subprojects.** A subproject is a project inside a project, one level deep. Change its priority and status from the parent’s SUBPROJECTS table, move it with Part of, and record where it came from in Source. BUDGET and SCHEDULE show it as Project / Subproject. Deleting a project deletes its subprojects.
 
-**Across properties.** PROJECTS lists workspace-wide work. A new project belongs to the active property, but selecting another property does not filter the project list, budget or schedule.
+**Across properties.** PROJECTS, BUDGET, SCHEDULE and CUT SHEETS show the projects of the active property. A new project belongs to the active property; choose another property in PROPERTY to see its projects.
 
 > **Good to know:** Costs are per quantity unit: 120 square feet at $5 per square foot totals $600. Use one lump-sum quantity for a lump-sum quote. Set zero duration days for budget-only items; they stay out of the schedule.
 
@@ -504,7 +506,7 @@ Budget totals follow the selected projects and their scope quantities and cost i
 
 **Cost ranges.** The report preserves uncertainty as low/likely/high values instead of presenting one guessed price.
 
-**Program selection.** Only selected projects contribute to the program totals, across every property in the workspace.
+**Program selection.** Only the selected projects of the active property contribute to the program totals.
 
 **Quantity changes.** Updating a scope item quantity or cost updates the report. Products provide specification context; scope costs still need review.
 
@@ -590,7 +592,7 @@ Settings groups display, model environment and workspace maintenance. This synth
 
 ### Other features here
 
-**Keep a SketchUp mirror.** With the local server and SketchUp on this Mac, each project gets a .skp beside its canonical .tiksi. Keep Tiksi open on the Mac while authoring so saved native edits return to the shared project; phone clients see the synced results. The static edition instead needs a linked folder. EDIT IN SKETCHUP in MODEL or PLAN opens the native file on the Mac.
+**Keep a SketchUp mirror.** With the local server and SketchUp on this Mac, each project gets a .skp beside its canonical .tiksi. Keep Tiksi open on the Mac while authoring so saved native edits return to the shared project; phone clients see the synced results. The static edition instead needs a linked folder. EDIT IN SKETCHUP in MODEL or PLAN opens the native file on the Mac. Walls, floors, doors and windows arrive painted with their Tiksi finishes (materials named "Tiksi: ..."), and every rewrite repaints them, so change finishes in Tiksi: paint applied to Tiksi's own groups in SketchUp is replaced on the next write, while geometry and paint you add outside them stay.
 
 **Save workspace backup.** Exports every property together. Keep a .tiksi per property for ordinary project handoffs.
 

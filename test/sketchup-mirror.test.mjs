@@ -224,3 +224,92 @@ test('underlays SketchUp cannot read are re-encoded, the rest are sent as they a
   assert.equal(sent.length, 1, 'PNG and JPEG need no re-encoding');
   assert.equal(await sketchupImageBytes('data:image/gif;base64,R0lGOD', encode), null, 'unsupported images are not sent');
 });
+
+// ---------- finishes ----------
+
+const MATS = [
+  { id: 'mat-brick', name: 'Brick, red', color: '#9C4A3A' },
+  { id: 'mat-sage', name: 'Sage paint', color: '#8fa58a' },
+  { id: 'mat-drywall', name: 'Drywall, painted', color: '#d8d4cc' },
+  { id: 'mat-oak', name: 'White oak flooring', color: '#c9a06a' },
+  { id: 'mat-trim', name: 'Trim, painted semi-gloss', color: '#f4f2ec' },
+  { id: 'mat-glass', name: 'Glass, clear', color: '#d2e7ee' },
+  { id: 'mat-unused', name: 'Unused tile', color: '#123456' },
+];
+const mats = () => structuredClone(MATS);
+const pick = (list, id) => { const m = list.find(x => x.id === id); return { id: m.id, name: m.name, color: m.color.toLowerCase() }; };
+
+// Brick outside; the south wall painted sage inside; a second room east of the studio
+// makes the east wall a partition.
+function finished() {
+  const p = room();
+  for (const w of p.walls) w.material = 'mat-brick';
+  p.walls.find(w => w.id === 'w-s').materialIn = 'mat-sage';
+  p.rooms.push({ id: 'r-2', level: p.levels[0].id, name: 'Annex', pts: [[4, 0], [6, 0], [6, 3], [4, 3]], material: 'mat-oak', ceilingMaterial: null });
+  return p;
+}
+
+test('spec carries each face\'s finish the way the 3D view paints it', () => {
+  const list = mats(), spec = mirrorSpec(finished(), list);
+  const wall = id => spec.walls.find(w => w.id === id).materials;
+  // The studio lies on the +normal side of every wall drawn round it, so that is `pos`.
+  assert.deepEqual(wall('w-s'), { pos: pick(list, 'mat-sage'), neg: pick(list, 'mat-brick'), other: pick(list, 'mat-brick') });
+  assert.equal(wall('w-s').neg.color, '#9c4a3a', 'colours go out as lower-case hex');
+  assert.deepEqual(wall('w-n'), { pos: pick(list, 'mat-drywall'), neg: pick(list, 'mat-brick'), other: pick(list, 'mat-brick') },
+    'an exterior wall with an automatic interior is drywall on the room side');
+  assert.deepEqual(wall('w-e'), { pos: pick(list, 'mat-brick'), neg: pick(list, 'mat-brick'), other: pick(list, 'mat-brick') },
+    'a partition with an automatic interior wears its own finish both sides');
+  assert.deepEqual(spec.rooms.find(r => r.id === 'r-1').material, pick(list, 'mat-oak'));
+  const holes = Object.fromEntries(spec.walls.find(w => w.id === 'w-s').holes.map(h => [h.id, h.material]));
+  assert.deepEqual(holes, { 'o-door': pick(list, 'mat-trim'), 'o-win': pick(list, 'mat-glass') });
+  assert.deepEqual(spec.warnings, []);
+});
+
+test('a finish change rewrites the mirror without reading back as a SketchUp edit', () => {
+  const p = finished(), list = mats();
+  const written = mirrorSpec(p, list), synced = syncedState(p);
+  // An unused material, or the same values in a fresh copy, do not trigger a rewrite.
+  const other = mats(); other.find(m => m.id === 'mat-unused').color = '#654321';
+  assert.equal(specSignature(mirrorSpec(p, other)), specSignature(written));
+  const recolour = mats(); recolour.find(m => m.id === 'mat-sage').color = '#334455';
+  assert.notEqual(specSignature(mirrorSpec(p, recolour)), specSignature(written), 'a used material\'s colour');
+  const renamed = mats(); renamed.find(m => m.id === 'mat-oak').name = 'Walnut flooring';
+  assert.notEqual(specSignature(mirrorSpec(p, renamed)), specSignature(written), 'a used material\'s name');
+  p.rooms.find(r => r.id === 'r-1').material = 'mat-sage';
+  p.walls.find(w => w.id === 'w-n').materialIn = 'mat-sage';
+  const changed = mirrorSpec(p, list);
+  assert.notEqual(specSignature(changed), specSignature(written), 'an element\'s material');
+  assert.deepEqual(changed.elements, written.elements, 'element signatures are geometry only');
+  assert.deepEqual(syncedState(p), synced);
+  // The .skp written before the change comes back unedited: nothing to merge, nothing lost.
+  const before = JSON.stringify(p);
+  const r = mergeMirror(p, readOf(written), synced);
+  assert.deepEqual([r.applied, r.added, r.deleted, r.conflicts], [[], [], [], []]);
+  assert.equal(JSON.stringify(p), before, 'the new finishes stay in Tiksi');
+});
+
+test('an unknown material falls back to the 3D view\'s colour with a warning', () => {
+  const p = finished();
+  p.walls.find(w => w.id === 'w-w').material = 'mat-gone';
+  p.walls.find(w => w.id === 'w-n').material = 'mat-gone';
+  p.rooms.find(r => r.id === 'r-1').material = null;
+  const spec = mirrorSpec(p, mats().filter(m => m.id !== 'mat-trim'));
+  assert.deepEqual(spec.walls.find(w => w.id === 'w-w').materials.neg, { id: 'mat-gone', name: 'Default wall', color: '#d8d4cc' });
+  assert.deepEqual(spec.rooms.find(r => r.id === 'r-1').material, { id: null, name: 'Default floor', color: '#97999b' }, 'an unset floor is not an error');
+  assert.deepEqual(spec.walls.find(w => w.id === 'w-s').holes.find(h => h.id === 'o-door').material, { id: 'mat-trim', name: 'Default trim', color: '#f3f1ec' });
+  assert.deepEqual(spec.warnings, [
+    'material mat-trim on opening o-door is not in the material library; painted Default trim',
+    'material mat-gone on wall w-n is not in the material library; painted Default wall',
+  ], 'one warning per missing material');
+  const bad = mats(); bad.find(m => m.id === 'mat-oak').color = 'oak';
+  assert.equal(mirrorSpec(finished(), bad).rooms[0].material.color, '#97999b', 'an unusable colour takes the fallback');
+  assert.equal(mirrorSpec(finished()).walls[0].materials.pos.name, 'Default wall', 'no library at all still writes');
+});
+
+test('materials sharing a name keep separate SketchUp materials', () => {
+  const p = finished(), list = mats();
+  list.find(m => m.id === 'mat-sage').name = 'Brick, red';
+  const south = mirrorSpec(p, list).walls.find(w => w.id === 'w-s').materials;
+  assert.equal(south.pos.name, 'Brick, red (mat-sage)');
+  assert.equal(south.neg.name, 'Brick, red (mat-brick)');
+});
