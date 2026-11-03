@@ -20,9 +20,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    # The full preflight (every browser e2e suite) takes 14-16 minutes on hosted runners, so a
-    # 15-minute cap cut passing runs off. 25 minutes leaves room to grow and still stops a hang.
-    timeout-minutes: 25
+    # The full preflight (every browser e2e suite) now takes 21-25 minutes on hosted runners (macOS
+    # is the slower one), so a 25-minute cap cut passing runs off. 35 minutes leaves room to grow
+    # and still stops a hang.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
