@@ -29,14 +29,24 @@ Do not refresh a preview hosting an active session.
 3. `scripts/branch.sh pr <slug> --title "..." --body-file <file>` pushes the
    branch and creates/updates a draft PR. Branch development requested by the
    owner includes this step. No permission is inferred to push main.
-4. Watch `gh pr checks <number> --watch`; fix, commit, push and recheck failures.
-5. Report preview URL, behavior changed, branch/PR, completed verification, and
-   private state touched. Offer Merge it / Keep testing / Discard when finished.
+4. Start `gh pr checks <number> --watch` in the background; never wait on it
+   before the handoff. Fix, commit, push and recheck failures. Rerun once a
+   check that fails on a test your change cannot affect.
+5. Report preview URL, behavior changed, branch/PR, completed verification,
+   whether online checks are still running, and private state touched. Offer Merge it / Keep testing / Discard when finished.
 
-"Merge it" authorizes the entire landing: update/retest branch, make PR ready,
-then `scripts/branch.sh merge <slug> --owner-approved`. The command requires a
-clean live main, clean branch, exact PR head, latest main included and green CI;
-it checks locally, merges, pushes main, then cleans up if GitHub reads Merged.
+"Merge it" authorizes the entire landing, run end to end without waiting for
+online checks that are still running: update/retest branch, make PR ready, then
+`scripts/branch.sh merge <slug> --owner-approved`. The command requires a clean
+live main, clean branch, exact PR head and latest main included. A check that
+finished without passing (failed, cancelled, timed out) refuses the merge; a
+check still running or not yet started only warns. It runs the local preflight,
+merges, pushes main, then cleans up if GitHub reads Merged. Then watch main's
+checks for the merge in the background and fix main if they fail: with the
+branch's checks possibly unfinished, main's run is the one that grades the merge.
+When the owner says the checks are not needed (a change to text only, say), add
+`--skip-checks`: it ignores the online checks and runs only the seconds-long
+syntax and private-state pass. Use it only on the owner's word.
 It never restarts the live service. If a step fails, report the actual state and
 finish the authorized remaining steps when safe. Never close a PR whose head is
 already in main. `discard <slug> --owner-approved` refuses dirty worktrees and
