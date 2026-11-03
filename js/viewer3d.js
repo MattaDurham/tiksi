@@ -2820,7 +2820,7 @@ export function mount(root) {
         <div class="v-toast"></div>
         <div class="v-hint"></div>
       </div>
-      <div class="inspector"></div>
+      <div class="inspector" data-side-pane="model"></div>
     </div>`;
   wrapEl = root.querySelector('.canvas-wrap');
   inspEl = root.querySelector('.inspector');

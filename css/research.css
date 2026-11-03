@@ -38,7 +38,7 @@
 .research-comparison th:first-child { min-width:100px; }
 .research-error { color:var(--danger,#ef7777); }
 .prod-layout { display:grid; grid-template-columns:minmax(0,1fr); gap:16px; align-items:start; }
-.prod-layout.has-editor { grid-template-columns:minmax(0,1fr) 340px; }
+.prod-layout.has-editor { grid-template-columns:minmax(0,1fr) var(--side-w, 340px); }
 .prod-layout > * { min-width:0; }
 .prod-provenance { font-size:12px; overflow-wrap:anywhere; }
 @media (max-width:760px) {

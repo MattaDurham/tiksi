@@ -289,7 +289,7 @@ select option { background: var(--panel-2); color: var(--ink); }
 h3.kicker { font-weight: 700; }
 
 /* ---------- editor layouts (plan + model) ---------- */
-.editor-layout { display: grid; grid-template-columns: 156px 1fr 272px; height: 100%; }
+.editor-layout { display: grid; grid-template-columns: 156px minmax(0, 1fr) var(--side-w, 272px); height: 100%; }
 .tool-col {
   background: var(--panel); border-right: 1px solid var(--line);
   padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; overflow-x: hidden;
@@ -413,6 +413,21 @@ h3.kicker { font-weight: 700; }
   background: var(--panel); border-left: 1px solid var(--line);
   padding: 14px 14px 24px; overflow-y: auto; font-size: 12.5px;
 }
+/* Drag handle on a right-hand pane's border (js/pane-resize.js). */
+.side-resizable { position: relative; }
+.side-handle {
+  position: absolute; z-index: 15; width: 8px; cursor: col-resize; touch-action: none;
+}
+.side-handle[hidden] { display: none; }
+.side-handle::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px;
+  background: transparent; transition: background 120ms;
+}
+.side-handle:hover::after, .side-handle:focus-visible::after, .side-resizing .side-handle::after { background: var(--accent); }
+.side-handle:focus-visible { outline: none; }
+body.side-resizing { cursor: col-resize; user-select: none; }
+body.side-resizing iframe, body.side-resizing canvas { pointer-events: none; }
+
 .inspector h3 {
   font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; color: var(--accent);
   margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line);
