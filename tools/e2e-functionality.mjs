@@ -68,7 +68,9 @@ try {
   await page.locator('[data-act=undo]').click();
   assert.equal(await page.evaluate(async()=>{const s=await import('/js/store.js');return s.activeProperty().walls.length;}),beforeWalls,'undo restores traced geometry');
   await navigateToView(page, 'projects'); await page.locator('#new-project').waitFor();
-  await page.locator('#new-project').click(); await page.locator('#add-item').click();
+  await page.locator('#new-project').click();
+  await page.locator('#proj-detail [data-f=name]').fill('Synthetic audit project'); await page.locator('#proj-detail [data-f=name]').press('Enter');
+  await page.locator('#add-item').click();
   await page.locator('[data-if=qty]').fill('0'); await page.locator('[data-if=qty]').press('Tab');
   await page.locator('[data-money=likely]').fill('100'); await page.locator('[data-money=likely]').press('Tab');
   assert.equal(await page.locator('[data-if=qty]').inputValue(), '0');

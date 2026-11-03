@@ -24,8 +24,7 @@ const page = await (await browser.newContext({ viewport: { width: 1400, height: 
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));
 const check = (ok, label) => { assert.ok(ok, label); console.log('  ok   ' + label); };
-const answers = [];
-page.on('dialog', d => d.type() === 'prompt' ? d.accept(answers.shift()) : d.accept());
+page.on('dialog', d => d.accept());
 const data = () => page.evaluate(async () => {
   const s = await import('/js/store.js');
   return s.ws.data.projects.map(p => ({ id: p.id, name: p.name, parentId: p.parentId, priority: p.priority, roomId: p.roomId, source: p.source, status: p.status }));
@@ -52,9 +51,12 @@ try {
   console.log('\n[add] subprojects are added from the project and listed under its card');
   for (const name of ['Shelf in the basement bath', 'Door does not latch', 'Toilet is clogged']) {
     await page.click('.proj-card[data-id="proj-list"]');
-    answers.push(name);
     await page.click('#add-sub');
     await page.waitForSelector(`.sub-crumb`);
+    // The new subproject's name field has focus; Enter keeps the typed name.
+    check(await page.evaluate(() => document.activeElement?.matches('#proj-detail [data-f="name"]')), 'ADD SUBPROJECT puts the cursor in its name field');
+    await page.keyboard.type(name);
+    await page.keyboard.press('Enter');
   }
   let d = await data();
   const subs = d.filter(p => p.parentId === 'proj-list');

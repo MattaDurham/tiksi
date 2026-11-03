@@ -17,7 +17,17 @@ let el = null;
 let editingId = null;
 let query = '', catFilter = '';
 
-export function mount(root) { el = root; render(); }
+export function mount(root) {
+  el = root;
+  // Deep link from PROJECTS: #/products?select=<productId> opens that product's form.
+  const m = /[?&]select=([^&]+)/.exec(location.hash);
+  if (m) {
+    const id = decodeURIComponent(m[1]);
+    if (ws.data.products.some(p => p.id === id)) { editingId = id; query = ''; catFilter = ''; }
+    history.replaceState(null, '', '#/products');
+  }
+  render();
+}
 export function unmount() { el = null; editingId = null; }
 
 function render() {

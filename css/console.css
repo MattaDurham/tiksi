@@ -591,6 +591,101 @@ table.grid .bar.on { background: linear-gradient(90deg, #de8c2f, #f2a64b); box-s
 .sub-crumb { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; color: var(--dim); margin-bottom: 8px; }
 #subs-table .sub-open { display: block; width: 100%; min-width: 160px; text-transform: none; letter-spacing: 0; font-size: 12.5px; color: var(--ink); text-align: left; white-space: normal; line-height: 1.35; }
 
+/* PROJECTS: search, status chips, VIEW menu and the list/board switch */
+.proj-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 14px; }
+.proj-tools .sp { flex: 1; }
+.proj-tools [hidden] { display: none; }
+.proj-tools .search-input { width: 270px; max-width: 100%; }
+.proj-status { display: flex; flex-wrap: wrap; gap: 4px; }
+.ps-chip {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; line-height: 1.5;
+  padding: 3px 9px; border-radius: 999px; border: 1px solid var(--line-2); background: rgba(255, 255, 255, 0.02); color: var(--dim);
+  transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+.ps-chip b { font-weight: 600; margin-left: 3px; color: inherit; }
+.ps-chip:not(.on) { opacity: 0.72; }
+.ps-chip:hover { opacity: 1; border-color: var(--line-2); }
+.ps-chip.on { opacity: 1; border-color: currentColor; box-shadow: inset 0 0 0 1px currentColor; }
+.ps-chip.on:not([class*="status-"]) { color: var(--accent); }
+.pv-menu { position: relative; }
+.pv-menu > summary { list-style: none; }
+.pv-menu > summary::-webkit-details-marker { display: none; }
+.pv-menu[open] > summary { border-color: var(--accent); color: var(--accent); }
+.pv-pop {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; width: 250px; display: grid; gap: 10px; padding: 12px;
+  background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--radius-lg); box-shadow: var(--shadow-2);
+}
+.pv-check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink); cursor: pointer; }
+.proj-group-head {
+  display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; padding: 0 2px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim);
+}
+.proj-card.context { opacity: 0.55; }
+.proj-card .p-hit { margin-top: 5px; font-family: var(--mono); font-size: 10px; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* board: one column per status; cards drag between columns */
+.proj-board-layout { display: grid; gap: 18px; }
+.proj-board { display: grid; grid-template-columns: repeat(5, minmax(210px, 1fr)); gap: 10px; overflow-x: auto; padding-bottom: 4px; }
+.pb-col {
+  display: flex; flex-direction: column; gap: 8px; min-height: 140px; padding: 8px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg);
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.pb-col.over { border-color: var(--accent); background: var(--accent-soft); }
+.pb-head { display: flex; justify-content: space-between; align-items: center; padding: 2px 2px 0; font-size: 11px; }
+.pb-cards { display: flex; flex-direction: column; gap: 8px; }
+.pb-empty { border: 1px dashed var(--line-2); border-radius: var(--radius); padding: 16px 8px; text-align: center; font-family: var(--mono); font-size: 10px; color: var(--faint); }
+.proj-card.dragging { opacity: 0.4; }
+/* a project's money and progress, above its fields */
+.proj-summary { display: flex; flex-wrap: wrap; gap: 10px 24px; padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
+.ps-stat { display: flex; flex-direction: column; gap: 1px; min-width: 92px; }
+.ps-stat b { font-family: var(--mono); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ps-stat span { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
+.ps-bar { display: block; height: 3px; margin-top: 4px; border-radius: 2px; background: var(--line-2); overflow: hidden; }
+.ps-bar i { display: block; height: 100%; background: var(--green); }
+/* scope item rows: done checkbox, open arrow, status and links; the panel under an open row */
+#items-table .it-check { width: 28px; text-align: center; }
+#items-table td { padding: 6px 4px; }
+#items-table input[data-money] { width: 74px; min-width: 74px; }
+#items-table .it-name { display: flex; align-items: center; gap: 2px; min-width: 150px; }
+#items-table .it-links { margin: 1px 0 0 22px; width: calc(100% - 22px); padding: 1px 5px; }
+.it-state { color: var(--cyan); margin-right: 6px; }
+.it-toggle {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 22px;
+  background: transparent; border: 0; border-radius: 4px; color: var(--faint);
+}
+.it-toggle:hover { color: var(--ink); background: rgba(255, 255, 255, 0.05); }
+#items-table tr.it-done td, #items-table tr.it-done input { color: var(--faint); }
+#items-table tr.it-done input[data-if="name"] { text-decoration: line-through; }
+#items-table tr.it-open td { background: rgba(232, 151, 58, 0.045); }
+.it-links {
+  display: block; width: 100%; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 4px;
+  color: var(--ink); font-family: var(--mono); font-size: 10.5px; padding: 3px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.it-links:hover { border-color: var(--line-2); color: var(--accent); }
+.it-links.none { color: var(--faint); opacity: 0; }
+#items-table tr:hover .it-links.none, #items-table .it-links.none:focus-visible { opacity: 1; }
+table.grid tbody tr.item-more td, table.grid tbody tr.item-more:hover td { background: var(--panel); padding: 0; }
+.item-panel { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; padding: 12px 14px 14px 36px; border-left: 2px solid var(--accent); }
+.ip-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ip-col > label { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); }
+.ip-col > label:not(:first-child) { margin-top: 6px; }
+.ip-col textarea { width: 100%; min-height: 104px; resize: vertical; }
+table.grid .item-panel select { border-color: var(--line-2); width: auto; max-width: 100%; }
+.ip-chips { display: flex; flex-wrap: wrap; gap: 5px; font-size: 11.5px; }
+.link-chip { display: inline-flex; align-items: center; max-width: 100%; border: 1px solid var(--line-2); border-radius: 999px; background: rgba(255, 255, 255, 0.025); font-size: 11.5px; }
+.link-chip > a, .link-chip > span { padding: 2px 3px 2px 10px; color: var(--ink); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.link-chip > a:hover { color: var(--accent); text-decoration: underline; }
+.link-chip > button { display: inline-flex; padding: 3px 7px 3px 3px; background: transparent; border: 0; color: var(--faint); }
+.link-chip > button:hover { color: var(--red); }
+.link-chip.missing { border-style: dashed; }
+.link-chip.missing > span { color: var(--faint); }
+.ip-photos { display: flex; flex-wrap: wrap; gap: 6px; font-size: 11.5px; }
+.ip-photos a { display: grid; place-items: center; width: 64px; height: 48px; overflow: hidden; border: 1px solid var(--line-2); border-radius: 4px; color: var(--dim); font-size: 10px; text-decoration: none; }
+.ip-photos a:hover { border-color: var(--accent); }
+.ip-photos img { width: 100%; height: 100%; object-fit: cover; }
+.ip-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+a.btn { text-decoration: none; }
+
 /* ---------- money / kpi ---------- */
 .kpi-band { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
 .kpi {
@@ -982,7 +1077,9 @@ kbd {
   .two-col { grid-template-columns: minmax(0, 1fr); height: auto; overflow: visible; }
   #proj-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
   #proj-detail { overflow-x: auto; }
-  #items-table { min-width: 820px; }
+  #items-table { min-width: 860px; }
+  .proj-tools .search-input { width: 100%; }
+  .item-panel { grid-template-columns: minmax(0, 1fr); padding-left: 14px; }
   .field-row { flex-wrap: wrap; }
   .field-row .field { flex: 1 1 140px !important; }
   input[type="text"], input[type="number"], input[type="date"], textarea, select { font-size: 16px !important; }
