@@ -350,7 +350,7 @@ export function projectFolder(propId) {
   return own ? { name: own.name, parentName: own.parentName || null, label: folderLabel(propId), permitted: own.permitted } : null;
 }
 
-// "68 Chatsworth › Tiksi" when Tiksi made its folder inside the one picked, else the folder's name.
+// "12 Example Ave › Tiksi" when Tiksi made its folder inside the one picked, else the folder's name.
 export function folderLabel(propId) {
   const own = state.projectFolders.get(propId);
   if (!own) return '';

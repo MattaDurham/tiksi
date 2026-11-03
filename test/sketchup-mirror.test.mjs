@@ -57,7 +57,7 @@ test('spec carries walls with cut openings, rooms, elements and the underlay', (
   assert.deepEqual(Object.keys(spec.elements).sort(), ['o-door', 'o-win', 'r-1', 'w-e', 'w-n', 'w-s', 'w-w']);
   assert.deepEqual(spec.underlays[0], { level: p.levels[0].id, levelName: p.levels[0].name, elevation: 0, sig: spec.underlays[0].sig, x: -1, y: -2, widthM: 4, heightM: 2 });
   assert.equal(specSignature(spec), specSignature(mirrorSpec(p)), 'signature is stable');
-  assert.equal(mirrorFileName('160 W 66th St #55E.tiksi'), '160 W 66th St #55E.skp');
+  assert.equal(mirrorFileName('12 Example Ave #3B.tiksi'), '12 Example Ave #3B.skp');
 });
 
 test('an unedited .skp changes nothing', () => {
