@@ -18,7 +18,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { materialById, ensureLevels, levelHeight, levelOfRoom, wallsOn, roomsOn, openingsOn } from './store.js';
 import { materialFor } from './textures.js';
-import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, pointInPoly } from './wall-solids.js';
+import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, pointInPoly, doorLeaves } from './wall-solids.js';
 import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
 import { fixtureShown } from './view-layers.js';
 
@@ -430,17 +430,17 @@ function buildDoor(o, s0, s1, top, th, sides, ctx) {
   if (tmesh) g.add(tmesh);
 
   const interior = !!(sides.pos && sides.neg);
-  const archway = w > 1.25 && interior;           // wide interior openings are cased, not hung
-  if (!archway) {
-    // A wide door to the outside is a pair (French doors, a slider drawn as a door): each
-    // leaf hangs from its own jamb and they meet closed in the middle.
-    const pair = w > 1.25;
+  const leaves = doorLeaves(o, w, interior);      // 0: wide interior openings are cased, not hung
+  if (leaves) {
+    // A pair (French doors, a slider drawn as a door): each leaf hangs from its own jamb and
+    // they meet in the middle, closed outside, both ajar to the same side inside.
+    const pair = leaves === 2;
     const leafW = pair ? (w - JAMB_W * 2 - 0.009) / 2 : w - JAMB_W * 2 - 0.006;
     const leafH = top - JAMB_W - 0.012;
     const swingSide = sides.pos ? 1 : -1;
     const swing = interior ? -swingSide * THREE.MathUtils.degToRad(25) : 0;
     g.add(doorLeaf(o, leafW, leafH, s0 + JAMB_W + 0.003, swing, ctx));
-    if (pair) g.add(doorLeaf(o, leafW, leafH, s1 - JAMB_W - 0.003, Math.PI, ctx));
+    if (pair) g.add(doorLeaf(o, leafW, leafH, s1 - JAMB_W - 0.003, Math.PI - swing, ctx));
   }
   return g;
 }

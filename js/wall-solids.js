@@ -89,3 +89,18 @@ export function wallFaceMaterialIds(wall, rooms) {
   const sides = wallSides(wall, rooms), inId = wallInteriorMaterialId(wall, rooms);
   return { pos: sides.pos ? inId : wall.material, neg: sides.neg ? inId : wall.material, other: wall.material };
 }
+
+// ---------- door leaves ----------
+// How a door hangs: 0 (a cased archway), 1 or 2 leaves. o.leaves is the owner's call; without
+// it a door wider than 1.25 m is a pair to the outside (French doors) and an archway inside.
+export function doorLeaves(o, width, interior) {
+  if (o.leaves === 1 || o.leaves === 2) return o.leaves;
+  return width > 1.25 ? (interior ? 0 : 2) : 1;
+}
+
+// Plan swings along the wall, s from the opening centre: each hinges at s, its leaf r long,
+// closing toward s + dir * r. Only an explicit pair draws two; they meet in the middle.
+export function doorSwings(o) {
+  const half = o.width / 2;
+  return o.leaves === 2 ? [{ s: -half, r: half, dir: 1 }, { s: half, r: half, dir: -1 }] : [{ s: -half, r: o.width, dir: 1 }];
+}
