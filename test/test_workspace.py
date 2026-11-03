@@ -143,6 +143,39 @@ class WorkspaceTests(unittest.TestCase):
             with zipfile.ZipFile(path) as archive:
                 self.assertEqual(json.loads(archive.read('workspace.json'))['properties'], data['properties'])
 
+    def test_open_route_opens_only_paths_inside_the_project_folder_from_this_mac(self):
+        self.commit(workspace())
+        folder = Path(self.service.paths['prop-a']).parent
+        doc = folder / 'Product documents' / 'Example X1' / 'manual.pdf'
+        doc.parent.mkdir(parents=True); doc.write_bytes(b'synthetic manual')
+        (self.root / 'outside.txt').write_text('not a project file')
+        self.service.run = Mock(return_value=Mock(returncode=0, stderr=''))
+        def post(body, client='127.0.0.1', identifier='prop-a'):
+            data = json.dumps(body).encode()
+            class Handler:
+                path = '/api/workspace/open/' + identifier; command = 'POST'; client_address = (client, 1234)
+                connection = Mock()
+                headers = {'Host': 'localhost:8888', 'Content-Length': str(len(data)), 'X-Tiksi-Workspace': '1', 'X-Tiksi-Token': self.service.token}
+                rfile = io.BytesIO(data); wfile = io.BytesIO()
+                def send_response(self, status): self.status = status
+                def send_header(self, *args): pass
+                def end_headers(self): pass
+            handler = Handler(); self.service.dispatch(handler)
+            return handler.status, json.loads(handler.wfile.getvalue())
+        status, reply = post({'path': 'Product documents/Example X1/manual.pdf'})
+        self.assertEqual(status, 200, reply)
+        self.assertEqual(self.service.run.call_args[0][0], ['open', str(doc.resolve())])
+        self.assertEqual(post({'path': ''})[0], 200)
+        self.assertEqual(self.service.run.call_args[0][0], ['open', str(folder.resolve())])
+        self.service.run.reset_mock()
+        for bad in ('../outside.txt', '/etc/hosts', 'Product documents/../../outside.txt'):
+            self.assertEqual(post({'path': bad})[0], 400, bad)
+        self.assertEqual(post({'path': 'Product documents/missing.pdf'})[0], 404)
+        self.assertEqual(post({'path': ''}, identifier='prop-missing')[0], 404)
+        status, reply = post({'path': ''}, client='100.80.1.2')
+        self.assertEqual(status, 422); self.assertIn('Mac running Tiksi', reply['error'])
+        self.service.run.assert_not_called()
+
     def test_missing_assets_and_missing_project_file_fail_without_overwrite(self):
         self.commit(workspace())
         with self.assertRaises(WorkspaceError): self.commit(workspace('Bad'), {'missing': {'hash': 'f' * 64, 'size': 4}})

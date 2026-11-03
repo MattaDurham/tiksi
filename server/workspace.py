@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import subprocess
 import threading
 import tempfile
 import zipfile
@@ -26,7 +27,25 @@ class WorkspaceError(ValueError):
         self.status = status
 
 
+def open_in_folder(folder, relative, run=subprocess.run):
+    """Open a file or folder inside a project folder with the Mac's default app (Finder for folders)."""
+    if not isinstance(relative, str) or len(relative) > 1024 or '\0' in relative or relative.startswith(('/', '\\')):
+        raise WorkspaceError('Invalid project file path')
+    parts = Path(relative).parts
+    if any(part in ('..',) for part in parts): raise WorkspaceError('Invalid project file path')
+    root = Path(folder).resolve()
+    target = (root / relative).resolve()
+    if not target.is_relative_to(root): raise WorkspaceError('Invalid project file path')
+    if not target.exists(): raise WorkspaceError((relative or 'The project folder') + ' is not in the project folder on this Mac', 404)
+    try: result = run(['open', str(target)], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error: raise WorkspaceError('Could not open ' + target.name + ': ' + str(error), 422)
+    if result.returncode: raise WorkspaceError('Could not open ' + target.name + ': ' + (result.stderr or '').strip()[:300], 422)
+    return target
+
+
 class WorkspaceService:
+    run = staticmethod(subprocess.run)
+
     def __init__(self, root, projects_dir=None):
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -52,6 +71,11 @@ class WorkspaceService:
 
     def active_jobs(self):
         return self.jobs
+
+    def project_folder(self, identifier):
+        # A project file sits in its folder, or in that folder's Tiksi/ subfolder (see refresh).
+        folder = Path(self.paths[identifier]).parent
+        return folder.parent if folder.name == 'Tiksi' else folder
 
     def recover(self):
         journal = self.root / 'pending.json'
@@ -380,6 +404,17 @@ class WorkspaceService:
                         temp = model.with_suffix('.skp.tmp'); temp.write_bytes(value); os.replace(temp, model)
                     self.reply(h, 200, {})
                 else: raise WorkspaceError('Mirror endpoint not found', 404)
+            elif path.startswith('/api/workspace/open/') and h.command == 'POST':
+                # Product documents and the project folder, opened in Finder or Preview on this Mac.
+                from server.sketchup_open import at_this_mac
+                identifier = path.removeprefix('/api/workspace/open/')
+                if identifier not in self.paths: raise WorkspaceError('This property has no project folder yet; save it to disk first', 404)
+                if not at_this_mac(h.client_address[0], h.headers.get('Host')): raise WorkspaceError('Project files open on the Mac running Tiksi; use Tiksi at localhost on that Mac', 422)
+                try: request = json.loads(self.read(h, 64 * 1024))
+                except (ValueError, UnicodeDecodeError): raise WorkspaceError('Open request must be JSON')
+                if not isinstance(request, dict): raise WorkspaceError('Open request must be an object')
+                target = open_in_folder(self.project_folder(identifier), request.get('path', ''), self.run)
+                self.reply(h, 200, {'path': str(target.relative_to(self.project_folder(identifier).resolve())), 'folder': self.project_folder(identifier).name})
             elif path.startswith('/api/workspace/blobs/') and h.command == 'GET':
                 digest = path.removeprefix('/api/workspace/blobs/')
                 if not HASH.fullmatch(digest): raise WorkspaceError('Asset not found', 404)
