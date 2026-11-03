@@ -48,7 +48,7 @@ export function mount(root) {
       </div>
       <div class="mv-body">
         <div class="mv-grid-scroll"><div class="mv-grid"></div></div>
-        <aside class="mv-editor" hidden></aside>
+        <aside class="mv-editor" data-side-pane="materials" hidden></aside>
       </div>
     </div>`;
   gridEl = root.querySelector('.mv-grid');

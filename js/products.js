@@ -55,7 +55,7 @@ function render() {
           `<div class="empty-state"><span class="empty-ic">${icon('products')}</span>
             <b>${d.products.length ? 'No products match' : 'No products yet'}</b>
             ${d.products.length ? 'Try a different search or category.' : 'Research a product on the web, then capture it here with its vendor link, price and specs.'}</div>`}
-        ${editingId != null ? `<div class="card" id="prod-form"></div>` : ''}
+        ${editingId != null ? `<div class="card" id="prod-form" data-side-pane="products"></div>` : ''}
       </div>
     </div>`;
 

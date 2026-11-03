@@ -2363,7 +2363,7 @@ export function mount(root) {
         <div class="canvas-badge"></div>
         <div class="plan-schedule" hidden></div>
       </div>
-      <div class="inspector"></div>
+      <div class="inspector" data-side-pane="plan"></div>
     </div>`;
   canvas = root.querySelector('canvas');
   ctx = canvas.getContext('2d');
