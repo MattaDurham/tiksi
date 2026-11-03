@@ -12,6 +12,7 @@ import {
   addLevel, deleteLevel, levelHeight, wallHeightOf, levelOfWall, fmtDate, isoToday,
 } from './store.js';
 import { openingSchedule, connectsLabel, resizeOpening, MIN_SIZE } from './opening-schedule.js';
+import { doorSwings } from './wall-solids.js';
 import { materialSelectHtml } from './materials.js';
 import { icon } from './icons.js';
 import { beginGeometryEdit, cancelGeometryEdit, restoreGeometryEdit } from './edit-history.js';
@@ -912,20 +913,23 @@ function drawOpening(o) {
     ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
   }
   if (o.type === 'door') {
-    // Hinge at -half end; solid leaf + quarter-circle swing.
-    const hx = p.cx - ux * half, hy = p.cy - uy * half;
-    const hs = w2s([hx, hy]), ls = w2s([hx + nx * o.width, hy + ny * o.width]);
+    // Hinge at the -half end (a pair: both ends); solid leaf + quarter-circle swing.
     // n is u rotated +90 degrees in screen space, so the swing is always the default-direction
     // quarter from the wall direction; a computed end angle could wrap and sweep 270 degrees.
     const a1 = Math.atan2(uy, ux);
     ctx.save();
     if (sel) { ctx.shadowColor = 'rgba(232,151,58,0.7)'; ctx.shadowBlur = 10; }
-    ctx.strokeStyle = hexA(col, 0.8);
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.arc(hs[0], hs[1], o.width * vs.zoom, a1, a1 + Math.PI / 2); ctx.stroke();
-    ctx.strokeStyle = col;
-    ctx.lineWidth = Math.max(2.5, Math.min(5, 0.045 * vs.zoom));
-    ctx.beginPath(); ctx.moveTo(hs[0], hs[1]); ctx.lineTo(ls[0], ls[1]); ctx.stroke();
+    for (const sw of doorSwings(o)) {
+      const hx = p.cx + ux * sw.s, hy = p.cy + uy * sw.s;
+      const hs = w2s([hx, hy]), ls = w2s([hx + nx * sw.r, hy + ny * sw.r]);
+      const a0 = sw.dir > 0 ? a1 : a1 + Math.PI / 2;
+      ctx.strokeStyle = hexA(col, 0.8);
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(hs[0], hs[1], sw.r * vs.zoom, a0, a0 + Math.PI / 2); ctx.stroke();
+      ctx.strokeStyle = col;
+      ctx.lineWidth = Math.max(2.5, Math.min(5, 0.045 * vs.zoom));
+      ctx.beginPath(); ctx.moveTo(hs[0], hs[1]); ctx.lineTo(ls[0], ls[1]); ctx.stroke();
+    }
     ctx.restore();
     // Threshold: a hairline across the opening at the wall centreline.
     const t0 = w2s([p.cx - ux * half, p.cy - uy * half]), t1 = w2s([p.cx + ux * half, p.cy + uy * half]);
@@ -2263,6 +2267,9 @@ function renderInspector() {
         ${lenField('Height', o.height, 'h')}
       </div>
       ${o.type === 'window' ? lenField('Sill height', o.sill || 0, 's') : ''}
+      ${o.type === 'door' ? `<div class="field"><label>Leaves</label>
+        <select data-leaves><option value="1" ${o.leaves === 2 ? '' : 'selected'}>Single</option>
+        <option value="2" ${o.leaves === 2 ? 'selected' : ''}>Pair</option></select></div>` : ''}
       <div class="field"><label>Position along wall</label>
         <input type="range" min="0.02" max="0.98" step="0.005" value="${o.t}" data-t></div>
       <button class="btn danger" data-del>${icon('trash')}DELETE</button>`;
@@ -2284,6 +2291,8 @@ function renderInspector() {
     num('w', v => resizeOpening(prop, o, { width: v }, wallHeightOf(prop, ow)));
     num('h', v => resizeOpening(prop, o, { height: v }, wallHeightOf(prop, ow)));
     num('s', v => o.sill = v);
+    const leavesSel = insp.querySelector('[data-leaves]');
+    if (leavesSel) leavesSel.onchange = e => { pushUndo('change door leaves'); o.leaves = Number(e.target.value); touch(); renderInspector(); };
     let slidingOpening = false;
     insp.querySelector('[data-t]').oninput = e => { if (!slidingOpening) { pushUndo('move opening'); slidingOpening = true; } o.t = parseFloat(e.target.value); invalidate(); };
     insp.querySelector('[data-t]').onchange = () => { slidingOpening = false; touch(); };
