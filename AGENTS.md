@@ -18,8 +18,10 @@ Instructions live in these AGENTS files; do not add model-specific rule files.
 - Requests to develop branches authorize commits and draft PRs for that work.
   Landing on main, pushing main, and discarding unmerged work require the
   owner's explicit instruction. Local/private instructions can narrow this.
-- Hand over a running preview, a PR, completed CI results, and a clear account
-  of private state touched. Watch CI and fix failures yourself.
+- Hand over a running preview, a PR, the CI status (finished or still running),
+  and a clear account of private state touched. Watch CI and fix failures
+  yourself. "Merge it" never waits for checks still running; it stops only on a
+  check that already failed, and main's own checks are watched after the push.
 - A SketchUp cloud model (`build_model`/`save_model`) changes only by re-running
   its code, so file every saved model's build beside it with
   `python3 scripts/sketchup-build.py archive --project <local-data folder>

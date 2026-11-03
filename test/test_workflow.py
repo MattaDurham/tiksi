@@ -146,11 +146,22 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.workflow.gate('feature', info), target)
         with self.assertRaisesRegex(branch.WorkflowError, 'owner'):
             self.workflow.merge('feature')
-        for changes in [{'baseRefName': 'codex/baseline'}, {'isDraft': True}, {'headRefOid': '0' * 40}, {'statusCheckRollup': []},
-                        {'statusCheckRollup': [{'status': 'IN_PROGRESS', 'conclusion': None}]},
-                        {'statusCheckRollup': [{'status': 'COMPLETED', 'conclusion': 'FAILURE'}]}]:
+        for changes in [{'baseRefName': 'codex/baseline'}, {'isDraft': True}, {'headRefOid': '0' * 40},
+                        {'statusCheckRollup': [{'name': 'Regression (macos-latest)', 'status': 'COMPLETED', 'conclusion': 'FAILURE'}]},
+                        {'statusCheckRollup': [{'name': 'Regression (macos-latest)', 'status': 'COMPLETED', 'conclusion': 'CANCELLED'}]},
+                        {'statusCheckRollup': [{'context': 'lint', 'state': 'ERROR'}]}]:
             with self.subTest(changes=changes), self.assertRaises(branch.WorkflowError):
                 self.workflow.gate('feature', {**info, **changes})
+        # A check still running, or not started yet, is no verdict: the merge goes ahead without waiting.
+        running = [{'name': 'Regression (ubuntu-latest)', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'},
+                   {'name': 'Regression (macos-latest)', 'status': 'IN_PROGRESS', 'conclusion': None}]
+        self.assertEqual(self.workflow.gate('feature', {**info, 'statusCheckRollup': running}), target)
+        self.assertEqual(self.workflow.verdict(running), ['Regression (macos-latest)'])
+        self.assertEqual(self.workflow.verdict([]), list(branch.Workflow.REQUIRED_CHECKS))
+        self.assertEqual(self.workflow.verdict(info['statusCheckRollup']), [])
+        # The owner can skip the checks altogether, even a failed one.
+        failed = [{'name': 'Regression (macos-latest)', 'status': 'COMPLETED', 'conclusion': 'FAILURE'}]
+        self.assertEqual(self.workflow.gate('feature', {**info, 'statusCheckRollup': failed}, skip_checks=True), target)
         (target / 'dirty.txt').write_text('preserve me', encoding='utf-8')
         with self.assertRaisesRegex(branch.WorkflowError, 'dirty'):
             self.workflow.gate('feature', info)

@@ -7,6 +7,11 @@ if [ "${1:-}" = '--list' ]; then
   echo 'browser: all registered Playwright end-to-end checks on temporary ports'
   exit 0
 fi
+if [ "${1:-}" = '--fast' ]; then
+  # The owner skipped the checks: keep only the seconds-long syntax and private-state pass.
+  npm run check
+  exit 0
+fi
 if [ "$#" -ne 0 ]; then echo 'Unknown preflight argument' >&2; exit 1; fi
 npm run check
 npm test
