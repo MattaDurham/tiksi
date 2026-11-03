@@ -26,7 +26,6 @@ import { fixturesOn, fixtureOutline } from './fixtures.js';
 import { proposeFixtures, openFixtureReview } from './fixtures-ui.js';
 import { loadScanObject, applyScanTransform, disposeScanObject } from './scans.js';
 import { layerScans, layerHasMembers, isFurnitureFixture, meshFootprints, footprintsOnLevel } from './view-layers.js';
-import { classifyWheel } from './sketchup-nav.js';
 
 const PRESETS = {
   interior: { thickness: 0.114, material: 'mat-drywall' },   // 4.5 in stud wall
@@ -70,7 +69,6 @@ let numbersOn = false;        // NUMBER OPENINGS: D1../W1.. tags and the schedul
 // SHOW toggles: the scan underlay image, and furniture / cabinet / fixture footprints.
 let showScan = true;
 let showFurniture = true;
-const wheelLatch = { at: 0, trackpad: false };
 
 let el = null, canvas = null, ctx = null, wrapEl = null, inspEl = null, hintEl = null, badgeEl = null, levelEl = null, scheduleEl = null;
 let scheduleCache = null;    // {key, rows}: the active level's numbered openings
@@ -1819,19 +1817,14 @@ function onWheel(e) {
   e.preventDefault();
   invalidate();
   const [sx, sy] = canvasPos(e);
-  // As in SketchUp: a mouse wheel or a pinch zooms about the cursor, a trackpad swipe pans.
-  const kind = classifyWheel(e, wheelLatch, performance.now(), { canOrbit: false });
-  if (kind === 'zoom') {
-    const line = e.deltaMode === 1 ? 16 : 1;
-    const factor = Math.exp(-e.deltaY * line * (e.ctrlKey || e.metaKey ? 0.01 : 0.0015));
-    const [wx, wy] = s2w(sx, sy);
-    vs.zoom = Math.max(4, Math.min(400, vs.zoom * factor));
-    vs.panX = wx - sx / vs.zoom;
-    vs.panY = wy - sy / vs.zoom;
-  } else {
-    vs.panX += e.deltaX / vs.zoom;
-    vs.panY += e.deltaY / vs.zoom;
-  }
+  // The wheel (or a pinch, which arrives as Ctrl + wheel) always zooms about the cursor;
+  // dragging pans. There is no orbit in plan.
+  const line = e.deltaMode === 1 ? 16 : 1;
+  const factor = Math.exp(-e.deltaY * line * (e.ctrlKey || e.metaKey ? 0.01 : 0.0015));
+  const [wx, wy] = s2w(sx, sy);
+  vs.zoom = Math.max(4, Math.min(400, vs.zoom * factor));
+  vs.panX = wx - sx / vs.zoom;
+  vs.panY = wy - sy / vs.zoom;
 }
 
 function onKeyDown(e) {
@@ -1883,7 +1876,7 @@ function updateHint() {
       ? 'Floors follow their walls. Drag a corner to reshape this floor; it snaps to walls. Dragging elsewhere pans.'
       : selection && selection.kind === 'underlay'
         ? 'Drag the image to align it with the walls. Esc deselects it; dragging then pans again.'
-        : 'Click to select. Drag a wall or a selected wall\'s corner; joined walls and floors follow (Alt detaches). Drag elsewhere or swipe to pan; scroll or pinch zooms. F fits view.',
+        : 'Click to select. Drag a wall or a selected wall\'s corner; joined walls and floors follow (Alt detaches). Drag elsewhere to pan; scroll or pinch zooms. F fits view.',
     wall: drawing ? 'Click to place the next corner. Double-click or Esc to end the chain.' : 'Click to start a wall chain. Walls snap to wall ends, along walls (diamond), axes and 15 degree angles.',
     door: 'Click on a wall to place a door.',
     window: 'Click on a wall to place a window.',
