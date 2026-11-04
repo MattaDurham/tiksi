@@ -27,7 +27,17 @@ let query = '', catFilter = '', statusFilter = '', scope = 'property';
 let message = '';                 // result of the last open-file or price action, shown in the editor
 let pollTimer = null;
 
-export function mount(root) { el = root; render(); pollPriceChecks(); }
+export function mount(root) {
+  el = root;
+  // Deep link from PROJECTS: #/products?select=<productId> opens that product's form.
+  const m = /[?&]select=([^&]+)/.exec(location.hash);
+  if (m) {
+    const id = decodeURIComponent(m[1]);
+    if (byId(id)) { editingId = id; draft = null; query = ''; catFilter = ''; statusFilter = ''; }
+    history.replaceState(null, '', '#/products');
+  }
+  render(); pollPriceChecks();
+}
 // The open editor (and an unsaved new product) survive a redraw: a disk sync swaps in fresh
 // workspace data and remounts this view while someone may be typing.
 export function unmount() { el = null; }

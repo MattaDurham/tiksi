@@ -655,6 +655,12 @@ export function mount(root) {
       <p class="muted">No property yet. Create one from the PROPERTY selector in the top bar.</p></div>`;
     return;
   }
+  // Deep link from PROJECTS: #/photos?select=<photoId> selects that photo.
+  const m = /[?&]select=([^&]+)/.exec(location.hash);
+  if (m) {
+    if (photoById(prop, decodeURIComponent(m[1]))) { selectedId = decodeURIComponent(m[1]); Object.assign(filters, { kind: '', room: '', pin: '', q: '' }); }
+    history.replaceState(null, '', '#/photos');
+  }
   if (selectedId && !photoById(prop, selectedId)) selectedId = null;
   // A room filter from another property (or a deleted room) would hide every photo while the
   // select shows ALL ROOMS.

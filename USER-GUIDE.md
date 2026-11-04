@@ -466,15 +466,22 @@ Choose a project to edit its scope. Each row can carry quantity, unit, low/likel
 
 ### Try it
 
-1. Choose NEW PROJECT, give it a name, category, status and earliest start, and write the scope notes.
+1. Choose NEW PROJECT and type its name in the field that opens (Esc removes a new project you have not used). Set its category, status and earliest start, and write the scope notes.
 2. Use ADD ITEM for each piece of work. Name it clearly and enter its quantity and unit.
 3. Enter low, likely and high unit costs. Keep quantity and price units consistent; the totals are calculated from these inputs.
 4. Add duration in days. Use the predecessor summary control to choose the items that must finish first.
-5. Link model elements from the PLAN/MODEL inspector and products from PRODUCTS. Relevant photos can be linked in PHOTOS.
-6. Use the project’s selection checkbox to include or exclude it from the budget program and schedule.
-7. For a list of small jobs, such as a punch list, use ADD SUBPROJECT. Each subproject has its own status, priority, room and source, and is listed under its project, open ones first.
+5. Open a scope item with the arrow beside its name to see its status, notes, linked rooms and walls, products and photos. Link rooms, walls and products there; each link opens PLAN, PRODUCTS or PHOTOS on that record. Photos can be linked to an item in PHOTOS.
+6. Tick the box at the start of a row when the item is done. Done items move to the bottom and the project counts them.
+7. Use the project’s selection checkbox to include or exclude it from the budget program and schedule.
+8. For a list of small jobs, such as a punch list, use ADD SUBPROJECT. Each subproject has its own status, priority, room and source, and is listed under its project, open ones first.
 
 ### Other features here
+
+**Find a project.** Search matches project names, notes, source and room, and every scope item name and note; press / to jump to the box. The status chips show how many projects and subprojects have each status. VIEW filters by category, room, priority and program, sorts, and groups the list. The list remembers these in this browser for each property.
+
+**Board.** BOARD shows one column per status. Drag a card to another column, or focus it and press Left or Right, to change its status.
+
+**Priced and done.** The line above a project’s fields shows its likely total, how many items have a price and how many are done. A project with no prices says so instead of showing $0.
 
 **Draft finish estimates.** CREATE FINISH ESTIMATE on an imported model can seed measured scope items. Review and complete them here.
 
