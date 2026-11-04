@@ -75,7 +75,10 @@ try {
   assert.equal(await page.evaluate(async () => { const s = await import('/js/store.js'); return s.projectTotals(s.ws.data.projects.at(-1)).likely; }), 0, 'zero quantity contributes zero to budget');
   await navigateToView(page, 'products'); await page.locator('#new-prod').waitFor(); await page.locator('#new-prod').click();
   await page.locator('#prod-form [data-f=name]').fill('Synthetic audit product'); await page.locator('#prod-form [data-f=name]').press('Tab');
-  await page.locator('[data-items]').selectOption({ label: 'Synthetic audit project / New item' }); await page.locator('#prod-done').click();
+  await page.setInputFiles('#prod-form [data-image-file]', { name: 'audit.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGMwnpkGRAwQCgAgugTJyID6aQAAAABJRU5ErkJggg==', 'base64') });
+  await page.waitForFunction(() => !document.querySelector('#prod-add').disabled); await page.locator('#prod-add').click();
+  await page.locator('[data-items] fieldset', { hasText: 'Synthetic audit project' }).getByLabel('New item').check(); await page.locator('#prod-done').click();
+  assert.ok(await page.evaluate(async () => { const s = await import('/js/store.js'); return s.projectSlice(s.activeProperty().id).products.some(p => p.name === 'Synthetic audit product' && p.itemIds.length === 1); }), 'the new product is linked to the work item and saved with this property');
   assert.ok((await page.locator('#view').innerText()).includes('Synthetic audit product'));
   await navigateToView(page, 'budget'); await page.locator('#cap-input').waitFor(); await page.locator('#cap-input').fill('50000'); await page.locator('#cap-input').press('Tab');
   await page.locator('#print-report').click(); assert.ok((await page.locator('#print-root').innerText()).includes('$50,000'));

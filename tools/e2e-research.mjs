@@ -118,13 +118,23 @@ try {
   assert.match(unverified.notes, /Confirm coverage and conversion/);
   await page.evaluate(() => { location.hash = '#/products'; });
   await page.waitForSelector('[data-edit]'); await page.locator('[data-edit]').last().click();
-  assert.equal(await page.inputValue('#prod-form [data-f="category"]'), 'Kitchen faucet');
+  assert.equal(await page.inputValue('#prod-category'), 'Kitchen faucet');
   await page.locator('#prod-form [data-f="brand"]').fill('Edited example manufacturer');
   await page.locator('#prod-form [data-f="brand"]').blur();
-  assert.equal(await page.inputValue('#prod-form [data-f="category"]'), 'Kitchen faucet', 'editing another field retains the imported category');
-  await page.selectOption('#prod-cat', 'Kitchen faucet');
+  assert.equal(await page.inputValue('#prod-category'), 'Kitchen faucet', 'editing another field retains the imported category');
+  // The category filter narrows as you type: a word start ("fau") finds "Kitchen faucet".
+  await page.click('#prod-cat'); await page.keyboard.type('fau');
+  assert.deepEqual(await page.locator('#prod-cat-list [role=option]').allInnerTexts(), ['Kitchen faucet\n2']);
+  await page.keyboard.press('Enter');
   assert.equal(await page.locator('[data-edit]').count(), 2, 'specific imported categories are usable filters');
-  await page.selectOption('#prod-cat', '');
+  assert.equal(await page.inputValue('#prod-cat'), 'Kitchen faucet');
+  await page.click('#prod-cat-clear');
+  assert.equal(await page.inputValue('#prod-cat'), '');
+  assert.deepEqual(await page.evaluate(async () => (await import('/js/products.js')).rankOptions(['tile', 'hvac', 'tile-wall', 'kitchen tile', 'textile'], 'til')),
+    ['tile', 'tile-wall', 'kitchen tile', 'textile'], 'names starting with the letters come first, then word starts, then any match');
+  // The editor's category takes a new name typed in.
+  await page.fill('#prod-category', 'Bar faucet'); await page.keyboard.press('Enter');
+  assert.equal(await page.evaluate(() => workspace.data.products.at(-1).category), 'Bar faucet');
   await page.locator('.prod-provenance summary').click();
   assert.match(await page.locator('.prod-provenance').innerText(), /Synthetic manufacturer sheet/);
   assert.match(await page.locator('.prod-provenance').innerText(), /Opened source/i);
@@ -135,6 +145,30 @@ try {
   await page.click('[data-start]'); await page.waitForSelector('[data-cancel]');
   await page.click('[data-cancel]'); await page.waitForFunction(() => document.querySelector('[data-results]').textContent.includes('CANCELLED'));
   assert.equal(cancelCalls, 1);
+  // REFRESH re-checks one product's price for its exact model and records where and when.
+  await page.evaluate(() => { workspace.data.products.unshift({ id: 'prod-refresh', name: 'Synthetic tile', brand: 'Example manufacturer', model: 'SYN-1', category: 'tile', url: 'https://example.com/tile', price: 5, unit: 'sf', imageUrl: '', specs: '', notes: '', itemIds: [] }); location.hash = '#/products'; });
+  await page.waitForSelector('[data-edit="prod-refresh"]'); await page.click('[data-edit="prod-refresh"] .p-name');
+  assert.match(await page.locator('.prod-price-source').innerText(), /never checked/);
+  await page.click('#prod-refresh-price');
+  await page.waitForFunction(() => workspace.data.products[0].priceCheck?.jobId === 'job-fixture');
+  assert.equal(posted.mode, 'focused'); assert.match(posted.query, /SYN-1/); assert.match(posted.query, /example\.com\/tile/);
+  finish = true;
+  await page.waitForFunction(() => workspace.data.products[0].priceCheck?.status === 'updated', null, { timeout: 20000 });
+  const refreshed = await page.evaluate(() => workspace.data.products[0]);
+  assert.equal(refreshed.price, 8); assert.equal(refreshed.unit, 'sf');
+  assert.equal(refreshed.priceSourceUrl, 'https://example.com/vendor-price'); assert.ok(Date.parse(refreshed.priceCheckedAt));
+  assert.equal(refreshed.priceHistory.at(-1).how, 'refreshed by research');
+  assert.match(await page.locator('#prod-form').innerText(), /Price changed from \$5.* to \$8/);
+  assert.equal(await page.locator('#prod-form [data-price-link]').getAttribute('href'), 'https://example.com/vendor-price');
+  assert.doesNotMatch(await page.locator('.prod-price-source').innerText(), /never checked/);
+  // Only a verified USD price for the same model replaces the price.
+  const kept = await page.evaluate(async () => {
+    const { applyPriceCheck } = await import('/js/products.js');
+    const p = { model: 'SYN-1', price: 5, unit: 'sf' };
+    const changed = applyPriceCheck(p, { id: 'x', status: 'completed', products: [{ model: 'SYN-1', name: 'x', price: 7, currency: 'EUR', unit: 'sf', priceStatus: 'verified' }, { model: 'OTHER-2', name: 'y', price: 3, currency: 'USD', unit: 'sf', priceStatus: 'verified' }] });
+    return { changed, price: p.price, status: p.priceCheck.status };
+  });
+  assert.deepEqual(kept, { changed: false, price: 5, status: 'unchanged' });
   await page.setViewportSize({ width: 402, height: 874 });
   await page.evaluate(() => research.openResearch({ name: 'Mobile fixture', kind: 'fixture' }));
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= 402), 'mobile does not overflow the viewport');
@@ -162,6 +196,17 @@ try {
   await app.click('#new-prod');
   await app.locator('#prod-form [data-f="name"]').fill('Synthetic fixture for routing');
   await app.locator('#prod-form [data-f="name"]').blur();
+  // A new product cannot be added without an image.
+  assert.equal(await app.locator('#prod-add').isDisabled(), true);
+  assert.equal(await app.evaluate(async () => (await import('/js/store.js')).ws.data.products.some(p => p.name === 'Synthetic fixture for routing')), false);
+  await app.locator('#prod-form [data-image-url]').fill('https://example.invalid/missing.png'); await app.locator('#prod-form [data-image-url]').press('Tab');
+  await app.waitForFunction(() => /did not load/.test(document.querySelector('[data-image-status]').textContent));
+  assert.equal(await app.locator('#prod-add').isDisabled(), true, 'an image link that does not load does not count');
+  await app.setInputFiles('#prod-form [data-image-file]', { name: 'fixture.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGMwnpkGRAwQCgAgugTJyID6aQAAAABJRU5ErkJggg==', 'base64') });
+  await app.waitForFunction(() => !document.querySelector('#prod-add').disabled);
+  await app.click('#prod-add');
+  const added = await app.evaluate(async () => (await import('/js/store.js')).ws.data.products[0]);
+  assert.equal(added.name, 'Synthetic fixture for routing'); assert.match(added.imageUrl, /^data:image\/jpeg;base64,/);
   await app.click('#prod-research');
   await app.waitForSelector('#research-query');
   assert.equal(await app.inputValue('#research-query'), 'Synthetic fixture for routing');

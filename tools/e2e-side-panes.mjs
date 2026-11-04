@@ -124,12 +124,11 @@ try {
     ['model', '.editor-layout > [data-side-pane="model"]'],
     ['measure', '.ms-layout > [data-side-pane="measure"]'],
     ['materials', '.mv-body > [data-side-pane="materials"]', '.mv-card'],
-    ['products', '.prod-layout > [data-side-pane="products"]', '[data-edit]'],
+    ['products', '.prod-layout > [data-side-pane="products"]'],
   ]) {
     await page.goto(url + '/#/' + view);
     await settle();
-    // A new product is saved and the disk sync then rebuilds the view (closing its editor), so
-    // create one first and open it from its card.
+    // NEW PRODUCT opens its form (not saved until it has an image) in the side pane.
     if (view === 'products') { await page.locator('#new-prod').click(); await settle(); }
     if (open) await page.locator(open).first().click();
     const sidePane = page.locator(selector);

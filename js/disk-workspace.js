@@ -253,6 +253,9 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     while (mirrorRunning) { if (Date.now() > deadline) throw new Error('SketchUp sync is still busy; try again after it finishes.'); await new Promise(r => setTimeout(r, 100)); }
     await mirror(prop);
     return (await request('/mirror/' + encodeURIComponent(prop.id) + '/open', { method: 'POST' })).json();
+  }, async openProjectPath(prop, path = '') {
+    // A product document or the project folder itself, opened in Finder/Preview on this Mac.
+    return (await request('/open/' + encodeURIComponent(prop.id), { method: 'POST', body: JSON.stringify({ path }), headers: { 'Content-Type': 'application/json' } })).json();
   }, get paths() { return paths; }, get folder() { return cap.projectsFolder; }, get pending() { return pending; } };
   const initial = await (await request()).json();
   revision = initial.revision; paths = initial.paths || {}; assets = initial.assets || {};
