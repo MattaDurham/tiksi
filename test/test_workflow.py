@@ -285,6 +285,30 @@ class SERVICE:
         self.assertEqual(self.git('status', '--porcelain'), '')
         self.assertEqual(len(self.git('rev-list', '--parents', '-n', '1', 'main').split()), 3)
 
+    def test_merge_marks_a_draft_ready_and_runs_the_quick_preflight(self):
+        (self.root / 'scripts/preflight.sh').write_text('#!/bin/sh\necho "$@" > "$PREFLIGHT_ARGS"\n', encoding='utf-8')
+        self.git('commit', '-qam', 'Record preflight arguments')
+        remote = self.add_origin()
+        target = self.start()
+        self.commit_feature(target)
+        head = self.git('rev-parse', 'HEAD', cwd=target)
+        self.git('push', '-u', 'origin', 'codex/feature', cwd=target)
+        args = Path(self.temp.name) / 'preflight-args'
+        calls = []
+        def gh(*command):
+            calls.append(command)
+            return ''
+        def pr_state(*_, **__):
+            merged = subprocess.run(['git', 'merge-base', '--is-ancestor', head, 'main'], cwd=self.root).returncode == 0
+            ready = ('pr', 'ready', 'codex/feature') in calls
+            return {**self.green_pr(target), 'isDraft': not ready, 'state': 'MERGED' if merged else 'OPEN'}
+        with patch.dict(os.environ, {'PREFLIGHT_ARGS': str(args)}), \
+                patch.object(self.workflow, 'pr_info', side_effect=pr_state), patch.object(self.workflow, 'gh', side_effect=gh):
+            self.workflow.merge('feature', owner_approved=True)
+        self.assertIn(('pr', 'ready', 'codex/feature'), calls)
+        self.assertEqual(args.read_text(encoding='utf-8').strip(), '--merge')
+        self.assertEqual(self.git('rev-parse', 'main', cwd=remote), self.git('rev-parse', 'main'))
+
     def test_unknown_flags_and_primary_adoption_rejected(self):
         result = subprocess.run(['python3', str(ROOT / 'scripts/branch.py'), 'serve', 'example', '--unknown'], cwd=self.root, capture_output=True)
         self.assertNotEqual(result.returncode, 0)

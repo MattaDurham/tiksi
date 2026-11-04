@@ -2424,6 +2424,15 @@ export function mount(root) {
   if (typeof ResizeObserver !== 'undefined') { resizeObs = new ResizeObserver(invalidate); resizeObs.observe(wrapEl); }
   else window.addEventListener('resize', invalidate);
 
+  // Deep link from PROJECTS: #/plan?select=<room, wall or opening id> selects it on its level.
+  const sel = /[?&]select=([^&]+)/.exec(location.hash);
+  if (sel) {
+    // Consume the query so a reload, Back or a bookmark returns to the plain plan view
+    // (replaceState does not fire hashchange, so the router is not re-entered).
+    history.replaceState(null, '', '#/plan');
+    selectFromLink(decodeURIComponent(sel[1]));
+  }
+
   renderToolCol();
   renderInspector();
   renderSchedule();
@@ -2436,6 +2445,27 @@ export function mount(root) {
     raf = requestAnimationFrame(loop);
   };
   raf = requestAnimationFrame(loop);
+}
+
+// Select a room, wall or opening named by a link and centre it once the canvas has its size
+// (after the first fit, which is queued earlier in mount). Its level becomes the active one.
+function selectFromLink(id) {
+  const opening = (prop.openings || []).find(o => o.id === id);
+  const wall = prop.walls.find(w => w.id === (opening ? opening.wallId : id));
+  const room = !wall && prop.rooms.find(r => r.id === id);
+  const target = wall || room;
+  if (!target) return;
+  const level = levelOfWall(prop, target);
+  if (level && level.id !== lvl().id) { setActiveLevel(prop, level.id); resolveLevelView(); }
+  selection = opening ? { kind: 'opening', id } : { kind: wall ? 'wall' : 'room', id };
+  const pts = wall ? [[wall.ax, wall.ay], [wall.bx, wall.by]] : room.pts;
+  const cx = pts.reduce((n, q) => n + q[0], 0) / pts.length, cy = pts.reduce((n, q) => n + q[1], 0) / pts.length;
+  requestAnimationFrame(() => {
+    if (!wrapEl || !vs) return;
+    vs.panX = cx - (wrapEl.clientWidth + RULER) / 2 / vs.zoom;
+    vs.panY = cy - (wrapEl.clientHeight + RULER) / 2 / vs.zoom;
+    invalidate();
+  });
 }
 
 export function unmount() {

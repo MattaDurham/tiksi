@@ -200,7 +200,8 @@ export function projectSlice(propId, data) {
   for (const r of p.rooms || []) { matIds.add(r.material); matIds.add(r.ceilingMaterial); }
   for (const f of p.fixtures || []) { matIds.add(f.material); matIds.add(f.bodyMaterial); }
   for (const m of d.materials || []) if (m && m.custom && materialOwners(m).includes(propId)) matIds.add(m.id);
-  const products = (d.products || []).filter(pr => (pr.itemIds || []).some(id => itemIds.has(id)) || (pr.materialIds || []).some(id => matIds.has(id)));
+  // A product added while this property was open (propertyIds) stays with it before it is linked to work.
+  const products = (d.products || []).filter(pr => (pr.itemIds || []).some(id => itemIds.has(id)) || (pr.materialIds || []).some(id => matIds.has(id)) || (pr.propertyIds || []).includes(propId));
   const photoIds = new Set((p.photos || []).map(ph => ph.id));
   // The file's list is itself the record of what it keeps (mergeWorkspace), so the browser's
   // owner list stays out of it: other properties' ids neither leak nor mark this file unsaved.
@@ -675,6 +676,11 @@ function migrate(d) {
     if (!PRIORITIES.includes(pr.priority)) pr.priority = '';
     if (typeof pr.roomId !== 'string') pr.roomId = '';
     if (typeof pr.source !== 'string') pr.source = '';
+    // Scope items track their own progress; an older file's items start as 'todo'.
+    for (const it of pr.items) {
+      if (!ITEM_STATUSES.includes(it.status)) it.status = 'todo';
+      if (typeof it.doneAt !== 'string') it.doneAt = '';
+    }
   }
   sanitiseIds(d);
   fixParents(d);
@@ -736,6 +742,8 @@ export function propertyProjects() {
 // ordinary project with its own status, scope and budget, plus a parentId naming a top-level
 // project on the same property, a priority, an optional room and where it came from (source).
 export const PRIORITIES = ['high', 'medium', 'low'];
+// A scope item's own progress, separate from its project's status: a punch list closes item by item.
+export const ITEM_STATUSES = ['todo', 'ordered', 'in-progress', 'done'];
 export function subprojectsOf(pr) { return pr ? ws.data.projects.filter(x => x.parentId === pr.id) : []; }
 // "Parent / Child" for a subproject, the plain name otherwise.
 export function projectLabel(pr) {
@@ -904,6 +912,14 @@ export function projectTotals(pr) {
     t.low += x.low; t.likely += x.likely; t.high += x.high;
   }
   return t;
+}
+
+// How far a project's scope has got: items with any price, and items marked done. A $0
+// total means nothing when no item is priced, so the views say "no prices" instead.
+export function itemPriced(it) { return [it.low, it.likely, it.high].some(v => Number(v) > 0); }
+export function projectProgress(pr) {
+  const items = pr.items || [];
+  return { items: items.length, priced: items.filter(itemPriced).length, done: items.filter(it => it.status === 'done').length };
 }
 
 export function selectedTotals() {

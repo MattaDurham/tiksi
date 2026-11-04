@@ -9,7 +9,13 @@ import {
 let el = null;
 let current = null; // {kind:'item'|'product', id}
 
-export function mount(root) { el = root; render(); }
+export function mount(root) {
+  el = root;
+  // Deep link from PROJECTS: #/sheets?item=<scope item id> shows that item's sheet.
+  const m = /[?&]item=([^&]+)/.exec(location.hash);
+  if (m) { current = { kind: 'item', id: decodeURIComponent(m[1]) }; history.replaceState(null, '', '#/sheets'); }
+  render();
+}
 export function unmount() { el = null; }
 
 function render() {
