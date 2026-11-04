@@ -61,6 +61,8 @@ try {
   const box = await page.locator('.v-wrap').boundingBox();
   const vp = page.viewportSize();
   assert.ok(box.width >= vp.width - 1 && box.height >= vp.height - 1, 'the model fills the screen');
+  const canvasPx = await page.locator('.v-wrap canvas').evaluate(c => c.width / c.clientWidth);
+  assert.ok(canvasPx <= 1.5 + 1e-6, 'the phone draws at most 1.5x (this phone is 3x): ' + canvasPx);
   assert.equal(await shown(page, '.fd-frame'), true, 'the overview button is on screen');
   assert.equal(await shown(page, '.fd-panel'), false, 'the panel starts closed');
 

@@ -117,7 +117,10 @@ raycaster.params.Line = { threshold: 0.02 };
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion();
 const walkEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 
-function dpr() { const q = qualityProfile(prop.env.quality); return Math.min((window.devicePixelRatio || 1) * q.scale, q.maxDpr); }
+// The phone layout fills the screen; 1.5x stays sharp at arm's length and keeps orbiting smooth
+// and the battery cooler than a phone's native 3x.
+const PHONE_MAX_DPR = 1.5;
+function dpr() { const q = qualityProfile(prop.env.quality); return Math.min((window.devicePixelRatio || 1) * q.scale, fieldLayout() ? Math.min(q.maxDpr, PHONE_MAX_DPR) : q.maxDpr); }
 // World Y of the highest ceiling: the height the whole model spans (framing, shadows, the section range).
 function modelTop() { return topOfLevels(prop); }
 function lowestElevation() { return prop.levels.reduce((m, l) => Math.min(m, l.elevation), Infinity); }
