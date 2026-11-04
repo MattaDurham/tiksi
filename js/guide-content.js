@@ -14,6 +14,7 @@ export const viewMap = [
   { label: 'BUDGET', route: 'budget', purpose: 'Compare low, likely and high costs against a budget cap.' },
   { label: 'SCHEDULE', route: 'schedule', purpose: 'See durations, task dependencies and the critical path.' },
   { label: 'CUT SHEETS', route: 'sheets', purpose: 'Print a specification sheet for a scope item or product.' },
+  { label: 'DOCUMENTS', route: 'documents', purpose: 'Lay out live plans, sections, elevations, 3D views and schedules on drawing sheets; keep saved PDFs.' },
 ];
 
 export const chapters = [
@@ -362,6 +363,27 @@ export const chapters = [
     ],
     note: 'These are specification handoffs built from your saved information. Review them before issuing instructions or ordering materials.',
     related: ['projects', 'photos', 'products'],
+  },
+  {
+    id: 'documents', group: 'Project work', title: 'Make a drawing set from the model', path: 'DOCUMENTS', route: 'documents', workspace: 'DOCUMENTS', image: 'documents.png',
+    intro: 'DOCUMENTS lays the model out on drawing sheets, the way a layout program sits beside a 3D modeller. Plans, sections, elevations and 3D views are placed at a drawing scale and redraw whenever the model changes, so the set never falls behind the design.',
+    caption: 'A sheet with a floor plan cut at 3\'-11", a section through the plan, a 3D view and a door schedule, with the title block down the right edge.',
+    steps: [
+      'Open DOCUMENTS and choose NEW SET. A set starts with one sheet on 11 x 17 paper; change the paper, orientation and title block in the panel on the right.',
+      'Use ADD to place a PLAN, SECTION, ELEVATION, 3D VIEW, PHOTO OR PAGE, SCHEDULE or TEXT on the sheet. Drag a view to move it and drag its corner to resize it.',
+      'Select a view to set its scale, style, level, cut height or camera. Double-click a model view to adjust it on the sheet: drag to pan, scroll to change the scale, or orbit a 3D view.',
+      'Add sheets with ADD SHEET. Drawing numbers run across the set, and section cuts are marked on the plans.',
+      'DOWNLOAD PDF for a copy, or SAVE PDF TO PROJECT to keep it in the property as the next revision. Saved PDFs, uploaded drawings and product documents are listed under SAVED DOCUMENTS.',
+    ],
+    features: [
+      ['Live views', 'Plan cuts, sections, elevations and 3D views render from the current model, including imported SketchUp and scan models, every time the model changes.'],
+      ['Drawing scale', 'Orthographic views use architectural scales from 1" = 1\'-0" to 1/32" = 1\'-0", with a FIT button to frame the plan.'],
+      ['Plan layer', 'Plans draw the cut walls solid, door swings, windows, wall dimensions and room names with areas as crisp vectors over the model.'],
+      ['Schedules', 'Door and window, room, product and scope item lists stay in step with PLAN, PRODUCTS and PROJECTS.'],
+      ['Revisions', 'Each saved PDF becomes the next revision in the title block and a document of the property, so it travels in the project file.'],
+    ],
+    note: 'Views are rendered images of the model at the chosen scale; check dimensions on site before ordering or cutting. PDFs are printed at 150 dots per inch.',
+    related: ['sheets', 'plan', 'model'],
   },
   {
     id: 'settings', group: 'Reference', title: 'Settings, backups and storage', path: 'FILE → Settings', image: 'settings.png',

@@ -3642,7 +3642,19 @@ function warmPrograms() {
   if (hadScans) scene.add(scanRoot);
 }
 
+// The camera the 3D view last showed, per property, so DOCUMENTS can place a 3D view from it.
+let lastView = null;
+export function lastCameraView(propId) { return lastView && lastView.propId === propId ? lastView : null; }
+function rememberView() {
+  if (!camera || !prop) return;
+  const dir = camera.getWorldDirection(new THREE.Vector3());
+  const t = controls && controls.target && controls.enabled !== false ? controls.target.clone() : camera.position.clone().addScaledVector(dir, 5);
+  if (t.distanceTo(camera.position) < 1e-3) t.copy(camera.position).addScaledVector(dir, 5);
+  lastView = { propId: prop.id, position: camera.position.toArray(), target: t.toArray(), fov: camera.fov };
+}
+
 export function unmount() {
+  try { rememberView(); } catch (e) { console.error(e); }
   if (exportDialog) exportDialog.close();
   if (renderer) renderer.setAnimationLoop(null);
   mountId++;

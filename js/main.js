@@ -29,6 +29,7 @@ import * as products from './products.js';
 import * as budget from './budget.js';
 import * as schedule from './schedule.js';
 import * as cutsheets from './cutsheets.js';
+import * as documentcenter from './documentcenter.js';
 import * as guide from './guide.js';
 import { initNewProperty, openNewPropertyDialog, dialogOpen } from './newproperty.js';
 import { parseCaptureUrl } from './polycam.js';
@@ -52,6 +53,7 @@ const VIEWS = {
   budget,
   schedule,
   sheets: cutsheets,
+  documents: documentcenter,
   guide,
 };
 

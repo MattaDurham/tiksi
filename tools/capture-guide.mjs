@@ -132,6 +132,10 @@ try {
   await go('budget'); await shot('budget');
   await go('schedule'); await shot('schedule');
   await go('sheets'); await page.locator('.sl-item[data-kind="item"][data-id="guide-item-paint"]').click(); await settle(); await shot('sheets');
+  await go('documents'); await page.locator('[data-new-set]').click(); await settle();
+  for (const kind of ['plan', 'section', 'view3d', 'schedule']) { await page.locator(`[data-add="${kind}"]`).click(); await settle(400); }
+  await page.waitForFunction(() => document.querySelectorAll('.dc-paper svg image').length >= 3, null, { timeout: 60000 });
+  await page.locator('.dc-paper svg').click({ position: { x: 5, y: 5 } }); await settle(1200); await shot('documents');
   }
 
   if (!stillsOnly) {
