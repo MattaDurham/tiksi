@@ -169,7 +169,8 @@ export function yawMatrix(yawDeg, t) {
 function score(occ, pts, m) { let n = 0; for (const p of pts) if (hit(occ, transformPoint(m, p))) n++; return n / (pts.length || 1); }
 
 // Best yaw + translation taking the session's points onto the model's points. Tries `init` first
-// (the scan's own placement), then a coarse search over yaw and position inside the model's box,
+// (a matrix or a list of them: the scan's own placement, sessions already lined up), then a coarse
+// search over yaw and position inside the model's box,
 // then refines by iterative closest point. Returns { matrix, inliers (share within 5 cm), fitM
 // (rms of those), method } or null.
 export function alignSession(sessionPts, modelPts, init, opts = {}) {
@@ -178,8 +179,16 @@ export function alignSession(sessionPts, modelPts, init, opts = {}) {
   const few = sample(sessionPts, opts.searchPoints || 250);
   const indexes = { 0.3: pointIndex(modelPts, 0.3), 0.15: pointIndex(modelPts, 0.15), 0.08: pointIndex(modelPts, 0.08), 0.05: pointIndex(modelPts, 0.05) };
   const coarse = occupancy(sample(modelPts, 60000), 0.2);
-  let best = { m: init ? to4(init) : yawMatrix(0, [0, 0, 0]), s: init ? score(coarse, few, to4(init)) : 0, method: 'scan placement' };
-  if (!(best.s > (opts.goodEnough ?? 0.6))) {
+  // Starting guesses: the scan's own placement, and sessions already lined up (Polycam sessions
+  // of one capture often share a frame). Each promising one is refined; the full search runs
+  // whenever none of them fits well, and the best fit wins.
+  const inits = (Array.isArray(init) && Array.isArray(init[0]) ? init : init ? [init] : []).map(to4);
+  const pts = sample(sessionPts, opts.icpPoints || 3000);
+  const results = [];
+  const scored = inits.map((m, k) => ({ m, s: score(coarse, few, m), method: k ? 'another session' : 'scan placement' })).filter(x => x.s > 0.4).sort((a, b) => b.s - a.s).slice(0, 3);
+  for (const g of scored) results.push({ ...refineYaw(g.m, pts, indexes), method: g.method, searchScore: r5(g.s) });
+  if (!results.some(r => r.inliers >= (opts.goodEnough ?? 0.8))) {
+    let best = { m: yawMatrix(0, [0, 0, 0]), s: 0 };
     const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     for (const p of modelPts) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], p[k]); hi[k] = Math.max(hi[k], p[k]); }
     const mean = [0, 1, 2].map(k => few.reduce((s, p) => s + p[k], 0) / few.length);
@@ -190,27 +199,31 @@ export function alignSession(sessionPts, modelPts, init, opts = {}) {
       // the session's centroid goes to (x, model mean height +- 0.6 m, z) inside the model's box
       for (let x = lo[0]; x <= hi[0]; x += step) for (let z = lo[2]; z <= hi[2]; z += step) for (let dy = -0.6; dy <= 0.61; dy += 0.2) {
         const m = yawMatrix(yaw, [x - rm[0], my + dy - rm[1], z - rm[2]]);
-        const s = score(coarse, few, m);
-        if (s > best.s) best = { m, s, method: 'search' };
+        const sc = score(coarse, few, m);
+        if (sc > best.s) best = { m, s: sc };
       }
     }
+    results.push({ ...refineYaw(best.m, pts, indexes), method: 'search', searchScore: r5(best.s) });
   }
-  // Iterative closest point, yaw + translation only.
-  let m = best.m, pts = sample(sessionPts, opts.icpPoints || 3000), last = Infinity;
+  results.sort((a, b) => b.inliers - a.inliers || (a.fitM ?? 1) - (b.fitM ?? 1));
+  return results[0];
+}
+// Iterative closest point from `m`, yaw + translation only, with shrinking match distances.
+function refineYaw(m, pts, indexes) {
+  let last = Infinity;
   for (let it = 0; it < 40; it++) {
     const maxD = it < 10 ? 0.3 : it < 25 ? 0.15 : 0.08, index = indexes[maxD];
     const P = [], Q = [];
     for (const p of pts) { const q0 = transformPoint(m, p), q = nearest(index, q0, maxD); if (q) { P.push(q0); Q.push(q); } }
     if (P.length < 30) break;
-    const d = rigidYaw(P, Q);
-    m = mulMatrix(d, m);
+    m = mulMatrix(rigidYaw(P, Q), m);
     const err = Math.sqrt(P.reduce((s, p, i) => s + (p[0] - Q[i][0]) ** 2 + (p[1] - Q[i][1]) ** 2 + (p[2] - Q[i][2]) ** 2, 0) / P.length);
     if (Math.abs(last - err) < 1e-5 && it > 25) break;
     last = err;
   }
   let inl = 0, ss = 0;
   for (const p of pts) { const q0 = transformPoint(m, p), q = nearest(indexes[0.05], q0, 0.05); if (q) { inl++; ss += (q[0] - q0[0]) ** 2 + (q[1] - q0[1]) ** 2 + (q[2] - q0[2]) ** 2; } }
-  return { matrix: m.map(r5), inliers: r5(inl / pts.length), fitM: inl ? r5(Math.sqrt(ss / inl)) : null, method: best.method, searchScore: r5(best.s) };
+  return { matrix: m.map(r5), inliers: r5(inl / pts.length), fitM: inl ? r5(Math.sqrt(ss / inl)) : null };
 }
 // Yaw about y and translation that best take P onto Q (2D Procrustes in x-z, mean height in y).
 function rigidYaw(P, Q) {

@@ -2012,9 +2012,11 @@ async function lineUpSessions(setId) {
   if (!folder) return;
   const model = sampleModelPoints();
   if (model.points.length < 500) { toast('The model has too little surface to line the scan up against. Load the scan or draw the plan first.', 'warn'); return; }
-  const init = scanPlacementMatrix(), report = [];
-  const token = mountId;
-  for (const seg of segmentsOf(set)) {
+  const report = [], token = mountId;
+  const inits = [scanPlacementMatrix()].filter(Boolean);
+  // Larger sessions first: once one is lined up, its placement is a starting guess for the rest.
+  const segs = segmentsOf(set).sort((a, b) => set.keyframes.filter(r => r[KF.seg] === b).length - set.keyframes.filter(r => r[KF.seg] === a).length);
+  for (const seg of segs) {
     const rows = set.keyframes.filter(r => r[KF.seg] === seg && folder.files.get(r[KF.stem]) && folder.files.get(r[KF.stem]).depth);
     if (rows.length < 3) { report.push('session ' + seg + ': no depth maps'); continue; }
     setHint('Lining up scan session ' + seg + ' (' + rows.length + ' frames)…');
@@ -2030,7 +2032,8 @@ async function lineUpSessions(setId) {
       } catch (e) { /* a damaged depth map is skipped */ }
     }
     if (token !== mountId) return;
-    const r = alignSession(pts, model.points, init);
+    const r = alignSession(pts, model.points, inits.length ? inits : null);
+    if (r && r.inliers >= 0.6) inits.push(r.matrix);
     if (!r || r.inliers < 0.35) { report.push('session ' + seg + ': could not line up' + (r ? ' (' + Math.round(r.inliers * 100) + '% of points on the model)' : '')); continue; }
     set.sessions[String(seg)] = { matrix: r.matrix, method: r.method, inliers: r.inliers, fitM: r.fitM };
     report.push('session ' + seg + ': ' + Math.round(r.inliers * 100) + '% of points within 5 cm, ' + (r.fitM * 100).toFixed(1) + ' cm average');
