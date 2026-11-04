@@ -626,7 +626,7 @@ export function mount(root) {
         <div class="ms-frame-info"></div>
         <div class="ms-timeline"></div>
       </section>
-      <aside class="ms-side inspector"><section class="ms-form" aria-label="Record a reading"></section><section class="ms-list" aria-label="Readings on this video"></section><section class="ms-ask" aria-label="Ask the owner"></section></aside>
+      <aside class="ms-side inspector" data-side-pane="measure"><section class="ms-form" aria-label="Record a reading"></section><section class="ms-list" aria-label="Readings on this video"></section><section class="ms-ask" aria-label="Ask the owner"></section></aside>
       <div class="ms-drop" hidden><div class="ph-drop-box">DROP VIDEOS TO ADD THEM TO ${escapeHtml(prop.name).toUpperCase()}</div></div>
     </div>`;
   const input = root.querySelector('[data-file]');

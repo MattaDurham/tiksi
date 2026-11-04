@@ -1988,7 +1988,7 @@ function defaultHint() {
   if (tool === 'note') return noteHint();
   if (tool === 'move') return 'MOVE WALLS: select a wall, drag the gizmo arrow to slide it; connected walls follow on release.';
   if (section.on) return 'SECTION: slide the cut height in the mode bar to look inside.';
-  return 'Drag or middle-drag to orbit, hold Shift to pan, scroll to zoom (trackpad: swipe orbits, Shift+swipe pans, pinch zooms). Click elements to inspect; right-click to pin a note.';
+  return 'Drag or middle-drag to orbit, hold Shift to pan, scroll or pinch to zoom. Click elements to inspect; right-click to pin a note.';
 }
 function showProgress(label, frac) {
   const p = hud.progress;
@@ -2820,7 +2820,7 @@ export function mount(root) {
         <div class="v-toast"></div>
         <div class="v-hint"></div>
       </div>
-      <div class="inspector"></div>
+      <div class="inspector" data-side-pane="model"></div>
     </div>`;
   wrapEl = root.querySelector('.canvas-wrap');
   inspEl = root.querySelector('.inspector');

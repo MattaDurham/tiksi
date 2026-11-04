@@ -92,6 +92,19 @@ async function request(path, options = {}) {
   } finally { clearTimeout(timeout); }
 }
 
+// Products' REFRESH PRICE runs a focused job through the same server and token.
+export async function researchApi(path, options) {
+  if (!capabilities?.token) capabilities = await request('/capabilities');
+  if (!capabilities.available) throw new Error(capabilities.reason || 'Live research is unavailable on this server.');
+  try { return await request(path, options); }
+  catch (e) {
+    // A restarted server issues a new token; fetch it once and retry.
+    if (!/Refresh research capabilities/.test(e.message)) throw e;
+    capabilities = await request('/capabilities');
+    return request(path, options);
+  }
+}
+
 async function checkCapabilities() {
   const seq = generation;
   try { const data = await request('/capabilities'); if (seq !== generation) return; capabilities = data; }

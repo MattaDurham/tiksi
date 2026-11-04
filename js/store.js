@@ -198,7 +198,8 @@ export function projectSlice(propId, data) {
   for (const r of p.rooms || []) { matIds.add(r.material); matIds.add(r.ceilingMaterial); }
   for (const f of p.fixtures || []) { matIds.add(f.material); matIds.add(f.bodyMaterial); }
   for (const m of d.materials || []) if (m && m.custom && materialOwners(m).includes(propId)) matIds.add(m.id);
-  const products = (d.products || []).filter(pr => (pr.itemIds || []).some(id => itemIds.has(id)) || (pr.materialIds || []).some(id => matIds.has(id)));
+  // A product added while this property was open (propertyIds) stays with it before it is linked to work.
+  const products = (d.products || []).filter(pr => (pr.itemIds || []).some(id => itemIds.has(id)) || (pr.materialIds || []).some(id => matIds.has(id)) || (pr.propertyIds || []).includes(propId));
   const photoIds = new Set((p.photos || []).map(ph => ph.id));
   // The file's list is itself the record of what it keeps (mergeWorkspace), so the browser's
   // owner list stays out of it: other properties' ids neither leak nor mark this file unsaved.

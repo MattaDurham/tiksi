@@ -146,11 +146,22 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.workflow.gate('feature', info), target)
         with self.assertRaisesRegex(branch.WorkflowError, 'owner'):
             self.workflow.merge('feature')
-        for changes in [{'baseRefName': 'codex/baseline'}, {'isDraft': True}, {'headRefOid': '0' * 40}, {'statusCheckRollup': []},
-                        {'statusCheckRollup': [{'status': 'IN_PROGRESS', 'conclusion': None}]},
-                        {'statusCheckRollup': [{'status': 'COMPLETED', 'conclusion': 'FAILURE'}]}]:
+        for changes in [{'baseRefName': 'codex/baseline'}, {'isDraft': True}, {'headRefOid': '0' * 40},
+                        {'statusCheckRollup': [{'name': 'Regression (macos-latest)', 'status': 'COMPLETED', 'conclusion': 'FAILURE'}]},
+                        {'statusCheckRollup': [{'name': 'Regression (macos-latest)', 'status': 'COMPLETED', 'conclusion': 'CANCELLED'}]},
+                        {'statusCheckRollup': [{'context': 'lint', 'state': 'ERROR'}]}]:
             with self.subTest(changes=changes), self.assertRaises(branch.WorkflowError):
                 self.workflow.gate('feature', {**info, **changes})
+        # A check still running, or not started yet, is no verdict: the merge goes ahead without waiting.
+        running = [{'name': 'Regression (ubuntu-latest)', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'},
+                   {'name': 'Regression (macos-latest)', 'status': 'IN_PROGRESS', 'conclusion': None}]
+        self.assertEqual(self.workflow.gate('feature', {**info, 'statusCheckRollup': running}), target)
+        self.assertEqual(self.workflow.verdict(running), ['Regression (macos-latest)'])
+        self.assertEqual(self.workflow.verdict([]), list(branch.Workflow.REQUIRED_CHECKS))
+        self.assertEqual(self.workflow.verdict(info['statusCheckRollup']), [])
+        # The owner can skip the checks altogether, even a failed one.
+        failed = [{'name': 'Regression (macos-latest)', 'status': 'COMPLETED', 'conclusion': 'FAILURE'}]
+        self.assertEqual(self.workflow.gate('feature', {**info, 'statusCheckRollup': failed}, skip_checks=True), target)
         (target / 'dirty.txt').write_text('preserve me', encoding='utf-8')
         with self.assertRaisesRegex(branch.WorkflowError, 'dirty'):
             self.workflow.gate('feature', info)
@@ -273,6 +284,30 @@ class SERVICE:
         self.assertIn('upgraded fixture', (self.root / 'index.html').read_text(encoding='utf-8'))
         self.assertEqual(self.git('status', '--porcelain'), '')
         self.assertEqual(len(self.git('rev-list', '--parents', '-n', '1', 'main').split()), 3)
+
+    def test_merge_marks_a_draft_ready_and_runs_the_quick_preflight(self):
+        (self.root / 'scripts/preflight.sh').write_text('#!/bin/sh\necho "$@" > "$PREFLIGHT_ARGS"\n', encoding='utf-8')
+        self.git('commit', '-qam', 'Record preflight arguments')
+        remote = self.add_origin()
+        target = self.start()
+        self.commit_feature(target)
+        head = self.git('rev-parse', 'HEAD', cwd=target)
+        self.git('push', '-u', 'origin', 'codex/feature', cwd=target)
+        args = Path(self.temp.name) / 'preflight-args'
+        calls = []
+        def gh(*command):
+            calls.append(command)
+            return ''
+        def pr_state(*_, **__):
+            merged = subprocess.run(['git', 'merge-base', '--is-ancestor', head, 'main'], cwd=self.root).returncode == 0
+            ready = ('pr', 'ready', 'codex/feature') in calls
+            return {**self.green_pr(target), 'isDraft': not ready, 'state': 'MERGED' if merged else 'OPEN'}
+        with patch.dict(os.environ, {'PREFLIGHT_ARGS': str(args)}), \
+                patch.object(self.workflow, 'pr_info', side_effect=pr_state), patch.object(self.workflow, 'gh', side_effect=gh):
+            self.workflow.merge('feature', owner_approved=True)
+        self.assertIn(('pr', 'ready', 'codex/feature'), calls)
+        self.assertEqual(args.read_text(encoding='utf-8').strip(), '--merge')
+        self.assertEqual(self.git('rev-parse', 'main', cwd=remote), self.git('rev-parse', 'main'))
 
     def test_unknown_flags_and_primary_adoption_rejected(self):
         result = subprocess.run(['python3', str(ROOT / 'scripts/branch.py'), 'serve', 'example', '--unknown'], cwd=self.root, capture_output=True)

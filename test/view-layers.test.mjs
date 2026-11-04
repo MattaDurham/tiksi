@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from '../vendor/three.module.min.js';
 import { scanLayer, layerShown, setLayerShown, meshFootprints, footprintsOnLevel } from '../js/view-layers.js';
-import { looksLikeTrackpad, classifyWheel, pivotOnViewAxis } from '../js/sketchup-nav.js';
+import { attachSketchupNavigation, pivotOnViewAxis } from '../js/sketchup-nav.js';
 
 test('scans fall into scan, furnishings and model layers; an explicit layer wins', () => {
   assert.equal(scanLayer({ name: 'Polycam capture · survey', kind: 'mesh' }), 'scan');
@@ -53,27 +53,60 @@ test('mesh footprints are world-space outlines with heights, specks dropped, fil
   assert.deepEqual(footprintsOnLevel(fps, 3, 2.7).map(f => f.name), ['Bed']);
 });
 
-test('wheel events: mouse notches zoom, trackpad swipes orbit or pan with Shift, pinches zoom', () => {
-  const mouse = { deltaX: 0, deltaY: 100, deltaMode: 0, wheelDeltaY: -120, wheelDeltaX: 0 };
-  const pad = { deltaX: 0, deltaY: 7, deltaMode: 0, wheelDeltaY: -21, wheelDeltaX: 0 };
-  const firefoxWheel = { deltaX: 0, deltaY: 3, deltaMode: 1 };
-  assert.equal(looksLikeTrackpad(mouse), false);
-  assert.equal(looksLikeTrackpad(pad), true);
-  assert.equal(looksLikeTrackpad({ deltaX: 2, deltaY: 3, deltaMode: 0 }), true);
-  assert.equal(looksLikeTrackpad(firefoxWheel), false);
-  assert.equal(looksLikeTrackpad({ deltaX: 0, deltaY: 4, deltaMode: 0 }), true);
+// Synthetic stand-ins for OrbitControls and the DOM: just what the navigation reads.
+function fakeNav({ canOrbit = true } = {}) {
+  globalThis.window = new EventTarget();
+  const calls = [];
+  const controls = {
+    domElement: new EventTarget(), enabled: true, enablePan: true, enableRotate: true, state: -1,
+    mouseButtons: {}, object: { position: new THREE.Vector3(0, 0, 10) }, target: new THREE.Vector3(), minDistance: 0.3,
+    _handleMouseDownPan: at => calls.push(['pan', at.clientX, at.clientY]),
+    _handleMouseDownRotate: at => calls.push(['rotate', at.clientX, at.clientY]),
+    update() {},
+  };
+  let orbit = canOrbit;
+  const nav = attachSketchupNavigation(controls, { pickPoint: () => null, canOrbit: () => orbit });
+  return { controls, calls, nav, setOrbit: v => { orbit = v; } };
+}
+const ev = (type, props) => Object.assign(new Event(type, { cancelable: true }), props);
 
-  assert.equal(classifyWheel(mouse, { at: 0 }, 1000), 'zoom');
-  assert.equal(classifyWheel(pad, { at: 0 }, 1000), 'orbit');
-  assert.equal(classifyWheel({ ...pad, shiftKey: true }, { at: 0 }, 1000), 'pan');
-  assert.equal(classifyWheel(pad, { at: 0 }, 1000, { canOrbit: false }), 'pan');
-  assert.equal(classifyWheel({ ...pad, ctrlKey: true }, { at: 0 }, 1000), 'zoom');
+test('model mouse: left drag orbits, right drag pans; with orbit off every drag pans', () => {
+  const { controls, nav, setOrbit } = fakeNav();
+  assert.deepEqual(controls.mouseButtons, { LEFT: 0, MIDDLE: 0, RIGHT: 2 });
+  setOrbit(false); nav.refresh();
+  assert.deepEqual(controls.mouseButtons, { LEFT: 2, MIDDLE: 2, RIGHT: 2 });
+  nav.dispose();
+});
 
-  // A gesture keeps its device: momentum that looks like a wheel stays a swipe until a pause.
-  const latch = { at: 0 };
-  assert.equal(classifyWheel(pad, latch, 1000), 'orbit');
-  assert.equal(classifyWheel(mouse, latch, 1050), 'orbit');
-  assert.equal(classifyWheel(mouse, latch, 1500), 'zoom');
+test('model mouse: the wheel is never taken over, so every wheel event zooms', () => {
+  const { controls, nav } = fakeNav();
+  let reached = 0;
+  controls.domElement.addEventListener('wheel', () => { reached++; });
+  // A Mac mouse wheel and a trackpad swipe can report the same numbers; neither is diverted.
+  for (const props of [{ deltaX: 0, deltaY: 4, deltaMode: 0, wheelDeltaY: -12 }, { deltaX: 0, deltaY: 100, deltaMode: 0, wheelDeltaY: -120 }, { deltaX: 3, deltaY: 7, deltaMode: 0 }]) {
+    const e = ev('wheel', props);
+    controls.domElement.dispatchEvent(e);
+    assert.equal(e.defaultPrevented, false);
+  }
+  assert.equal(reached, 3);
+  nav.dispose();
+});
+
+test('model mouse: Shift pressed mid-drag switches orbit to pan at the pointer, releasing it orbits again', () => {
+  const { controls, calls, nav } = fakeNav();
+  controls.domElement.dispatchEvent(ev('pointerdown', { button: 0, pointerType: 'mouse', clientX: 100, clientY: 50 }));
+  controls.state = 0;                       // OrbitControls starts its orbit
+  controls.domElement.dispatchEvent(ev('pointermove', { clientX: 120, clientY: 60 }));
+  window.dispatchEvent(ev('keydown', { key: 'Shift', shiftKey: true }));
+  assert.equal(controls.state, 2);
+  window.dispatchEvent(ev('keyup', { key: 'Shift', shiftKey: false }));
+  assert.equal(controls.state, 0);
+  assert.deepEqual(calls, [['pan', 120, 60], ['rotate', 120, 60]]);
+  // After release, Shift does nothing.
+  window.dispatchEvent(ev('pointerup', {}));
+  window.dispatchEvent(ev('keydown', { key: 'Shift', shiftKey: true }));
+  assert.equal(controls.state, 0);
+  nav.dispose();
 });
 
 test('the orbit pivot moves along the view axis to the depth of the point under the cursor', () => {
