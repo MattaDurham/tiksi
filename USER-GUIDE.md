@@ -24,6 +24,7 @@ Open **GUIDE** at the top of Tiksi for chapter search, expandable screenshots an
 - [Compare scope against the budget](#budget)
 - [Sequence the work](#schedule)
 - [Print a useful specification sheet](#sheets)
+- [Make a drawing set from the model](#documents)
 - [Settings, backups and storage](#settings)
 - [Shortcuts and common questions](#shortcuts)
 
@@ -54,6 +55,7 @@ The same sample property appears throughout this guide. The left rail changes vi
 | BUDGET | Compare low, likely and high costs against a budget cap. |
 | SCHEDULE | See durations, task dependencies and the critical path. |
 | CUT SHEETS | Print a specification sheet for a scope item or product. |
+| DOCUMENTS | Lay out live plans, sections, elevations, 3D views and schedules on drawing sheets; keep saved PDFs. |
 
 ### A useful first session
 
@@ -509,23 +511,27 @@ Choose a project to edit its scope. Each row can carry quantity, unit, low/likel
 
 Products are the real fixtures and materials you may buy. Keep manufacturer details, specifications, price units and vendor links connected to the scope.
 
-![Open a product card to inspect or edit its name, price, unit, vendor URL, specification lines and scope links.](js/guide-assets/products.png)
+![Open a product card to edit its image, price and where that price came from, vendor and manufacturer links, specification lines, spec documents and work items.](js/guide-assets/products.png)
 
-Open a product card to inspect or edit its name, price, unit, vendor URL, specification lines and scope links.
+Open a product card to edit its image, price and where that price came from, vendor and manufacturer links, specification lines, spec documents and work items.
 
 ### Try it
 
-1. Choose NEW PRODUCT for a manual entry, or save a candidate from SOURCING.
-2. Enter brand, model, category, specification lines and notes. Add the vendor URL and an image URL if available.
-3. Record the price with its unit: each, square foot or linear foot, for example. Do not mix a package price with a surface-area quantity.
-4. Choose the scope items where the product is used. Review the matching project cost entries.
-5. Open the vendor link to confirm purchase details, or use CUT SHEETS to print the saved specification for a contractor or supplier.
+1. Choose NEW PRODUCT for a manual entry, or save a candidate from SOURCING. A new product needs an image: paste an image link, upload a picture or paste one into the form.
+2. Enter brand, model, category, specification lines and notes. Type a few letters in Category to narrow the list, or type a new category. Add the vendor link (where to buy) and the manufacturer link (the maker's product page).
+3. Record the price with its unit: each, square foot or linear foot, for example. Under the price, keep the link to the page showing it; Tiksi records the date it was checked. REFRESH asks a research agent for the current price of that exact model and changes the price only when it finds a verified USD price.
+4. Tick the work items the product is for. A ticked item lists the product on its cut sheet, and the product is saved in that property's project file.
+5. Open the saved manuals and spec sheets, the spec folder or the project folder from the editor (on the Mac that keeps the project folders), or use CUT SHEETS to print the saved specification.
 
 ### Other features here
 
+**This property or all.** THIS PROPERTY shows the products linked to the open property's work or materials, or added while it was open. ALL shows every property's products.
+
+**Status filter.** Find products missing an image or price, prices not checked in 90 days, products with spec documents, or products not yet linked to work.
+
 **Research alternatives.** Reopen sourcing from an existing product without losing its current saved specification.
 
-**Evidence history.** Products saved from research retain cited evidence and source context.
+**Evidence history.** Products saved from research retain cited evidence and source context. Every price change keeps its source link and date.
 
 **Estimate matching.** A unique product/material match with a per-square-foot price can contribute to a model finish estimate. Ambiguous matches stay unpriced.
 
@@ -618,6 +624,40 @@ Choose a scope item or product from the list, review its sheet, then PRINT.
 **Product sheets.** Show the saved manufacturer/model details, specification lines, price unit and vendor link.
 
 > **Good to know:** These are specification handoffs built from your saved information. Review them before issuing instructions or ordering materials.
+
+<a id="documents"></a>
+
+## Make a drawing set from the model
+
+**Where:** DOCUMENTS
+
+DOCUMENTS lays the model out on drawing sheets, the way a layout program sits beside a 3D modeller. Plans, sections, elevations and 3D views are placed at a drawing scale and redraw whenever the model changes, so the set never falls behind the design.
+
+![A sheet with a floor plan cut at 3'-11", a section through the plan, a 3D view and a door schedule, with the title block down the right edge.](js/guide-assets/documents.png)
+
+A sheet with a floor plan cut at 3'-11", a section through the plan, a 3D view and a door schedule, with the title block down the right edge.
+
+### Try it
+
+1. Open DOCUMENTS and choose NEW SET. A set starts with one sheet on 11 x 17 paper; change the paper, orientation and title block in the panel on the right.
+2. Use ADD to place a PLAN, SECTION, ELEVATION, 3D VIEW, PHOTO OR PAGE, SCHEDULE or TEXT on the sheet. Drag a view to move it and drag its corner to resize it.
+3. Select a view to set its scale, style, level, cut height or camera. Double-click a model view to adjust it on the sheet: drag to pan, scroll to change the scale, or orbit a 3D view.
+4. Add sheets with ADD SHEET. Drawing numbers run across the set, and section cuts are marked on the plans.
+5. DOWNLOAD PDF for a copy, or SAVE PDF TO PROJECT to keep it in the property as the next revision. Saved PDFs, uploaded drawings and product documents are listed under SAVED DOCUMENTS.
+
+### Other features here
+
+**Live views.** Plan cuts, sections, elevations and 3D views render from the current model, including imported SketchUp and scan models, every time the model changes.
+
+**Drawing scale.** Orthographic views use architectural scales from 1" = 1'-0" to 1/32" = 1'-0", with a FIT button to frame the plan.
+
+**Plan layer.** Plans draw the cut walls solid, door swings, windows, wall dimensions and room names with areas as crisp vectors over the model.
+
+**Schedules.** Door and window, room, product and scope item lists stay in step with PLAN, PRODUCTS and PROJECTS.
+
+**Revisions.** Each saved PDF becomes the next revision in the title block and a document of the property, so it travels in the project file.
+
+> **Good to know:** Views are rendered images of the model at the chosen scale; check dimensions on site before ordering or cutting. PDFs are printed at 150 dots per inch.
 
 <a id="settings"></a>
 

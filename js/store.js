@@ -5,6 +5,7 @@ import { normalizeView } from './photo-match.js';
 import { normalizePositions } from './positions.js';
 import { normalizePin, normalizeLens, normalizeCameraSets, normalizeWallAnchor } from './pin-records.js';
 import { normaliseFixtures } from './fixtures.js';
+import { normalizeDocSets } from './doc-sets.js';
 
 const LS_KEY = 'tiksi.workspace.v1';   // storage slot, not the schema version (see migrate)
 const SCHEMA_VERSION = 2;
@@ -359,7 +360,7 @@ export function propertyTemplate(name) {
     id: uid('prop'), name: name || 'New property', notes: '', wallHeight: 2.44,
     levels: [levelTemplate('lvl-0', 'Main level', 0, 2.44)], activeLevelId: 'lvl-0',
     walls: [], openings: [], rooms: [], fixtures: [], scans: [], photos: [], notePins: [], videos: [], measurements: [], env: defaultEnv(), source: null,
-    photoPositions: [], positionCounter: 0, cameraSets: [],
+    photoPositions: [], positionCounter: 0, cameraSets: [], docSets: [],
   };
 }
 
@@ -655,6 +656,8 @@ function migrate(d) {
     // Numbered photo positions (positions.js) and Polycam camera sets (polycam-cameras.js).
     normalizePositions(p);
     p.cameraSets = normalizeCameraSets(p.cameraSets);
+    // Drawing sets for DOCUMENTS (doc-sets.js): sheets of live plan, section, 3D and schedule views.
+    normalizeDocSets(p);
     // Notes pinned to a point in the model (MODEL, right-click). `notes` on the property is
     // its own free text; these are separate.
     const num = v => typeof v === 'number' || (typeof v === 'string' && v.trim()) ? Number(v) : NaN;
