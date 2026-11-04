@@ -2556,7 +2556,7 @@ async function addScanToScene(scan) {
   scanObjs[scan.id] = obj;
   applyScanTransform(scan, obj);
   // A model's parts get their tags the first time it loads (tags-scene.js); they are stored.
-  if (detectModelTags(prop, scan, obj)) touch();
+  const tagged = detectModelTags(prop, scan, obj);
   applyModelTagVisibility(prop, scan, obj);
   scanRoot.add(obj);
   setModelXray(obj, xray ? prop.env.xrayOpacity : null);
@@ -2565,6 +2565,8 @@ async function addScanToScene(scan) {
   applySection();
   updateOutlineTargets();
   setScanState(scan.id, 'ready');
+  // New tags and counts show in the lists straight away.
+  if (tagged) { touch(); renderToolCol(); if (!selection) renderInspector(); }
   requestRender(scan.kind === 'splat' ? 8 : 3);
   return obj;
 }

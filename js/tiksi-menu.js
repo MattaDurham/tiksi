@@ -34,6 +34,14 @@ export function setOnScreen(id, on) {
   for (const fn of listeners) { try { fn(id, !!on); } catch (e) { console.error(e); } }
   applyAppScreen();
 }
+// Forget every ON SCREEN choice: the screen goes back to how Tiksi starts ({ all: true } puts
+// every group on it instead).
+export function resetScreen(all = false) {
+  prefs = all ? { all: true } : {};
+  try { if (all) localStorage.setItem(KEY, JSON.stringify(prefs)); else localStorage.removeItem(KEY); } catch { /* this session only */ }
+  for (const fn of listeners) { try { fn('*', null); } catch (e) { console.error(e); } }
+  applyAppScreen();
+}
 export function onScreenChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 export function setMenuProvider(fn) { provider = fn; if (menuEl) render(); return () => { if (provider === fn) provider = null; }; }
 
@@ -60,7 +68,8 @@ function render() {
   menuEl.innerHTML = groups.map((g, gi) => `<section class="tk-group">
       <header><span>${esc(g.title.toUpperCase())}</span>${g.screen ? `<label class="tk-pin" title="${esc(g.screen.label || 'Show this group on the screen')}"><input type="checkbox" data-screen="${esc(g.screen.id)}" ${g.screen.on ? 'checked' : ''}><span>ON SCREEN</span></label>` : ''}</header>
       ${g.items.map((it, ii) => `<button class="tk-item ${it.active ? 'active' : ''}" role="menuitem" data-item="${gi}:${ii}" ${it.disabled ? 'disabled' : ''}><span>${esc(it.label)}</span>${it.key ? `<kbd>${esc(it.key)}</kbd>` : ''}</button>`).join('')}
-    </section>`).join('') + '<p class="tk-foot">Turn a group ON SCREEN to keep it beside the view. Keyboard shortcuts work either way.</p>';
+    </section>`).join('') + '<p class="tk-foot">Turn a group ON SCREEN to keep it beside the view. Keyboard shortcuts work either way. <button class="link-btn" data-screen-reset>Back to the default screen</button></p>';
+  menuEl.querySelector('[data-screen-reset]').onclick = () => { resetScreen(); render(); };
   menuEl.querySelectorAll('[data-screen]').forEach(i => i.onchange = () => { setOnScreen(i.dataset.screen, i.checked); render(); });
   menuEl.querySelectorAll('[data-item]').forEach(b => b.onclick = () => {
     const [gi, ii] = b.dataset.item.split(':').map(Number), it = groups[gi] && groups[gi].items[ii];
