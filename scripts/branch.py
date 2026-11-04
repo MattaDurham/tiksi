@@ -348,9 +348,12 @@ class Workflow:
     def merge(self, slug, owner_approved=False, keep=False, skip_checks=False):
         if not owner_approved: raise WorkflowError('Merge requires the owner\'s instruction and --owner-approved.')
         info = self.pr_info(slug)
+        if info and info['state'] == 'OPEN' and info['isDraft']:
+            self.gh('pr', 'ready', self.validate(slug))
+            info = self.pr_info(slug)
         target = self.gate(slug, info, skip_checks=skip_checks)
         if skip_checks:
-            print('Skipping the online checks and the browser tests on the owner\'s instruction.')
+            print('Skipping the online checks and the unit tests on the owner\'s instruction.')
         else:
             running = self.verdict(info.get('statusCheckRollup') or [])
             if running: print(f'Still running, no verdict yet: {", ".join(running)}. Merging without waiting; '
@@ -358,7 +361,7 @@ class Workflow:
         # Use the live gate if present so a branch cannot weaken its own landing gate.
         gate = self.live / 'scripts/preflight.sh'
         if not gate.exists(): gate = target / 'scripts/preflight.sh'
-        run(['sh', str(gate), *(['--fast'] if skip_checks else [])], target, capture=False)
+        run(['sh', str(gate), '--fast' if skip_checks else '--merge'], target, capture=False)
         with self.lock():
             self.gate(slug, skip_checks=skip_checks)
             if self.metadata(target): self.stop(slug)
