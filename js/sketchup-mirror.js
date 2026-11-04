@@ -18,6 +18,7 @@
 
 import { wallHeightOf, levelOfWall, levelOfRoom, levelHeight, roomsOn, uid } from './store.js';
 import { openingSpans, wallFaceMaterialIds } from './wall-solids.js';
+import { tagIdOf, tagById } from './tags.js';
 import { fixtureShape, fixtureMirrorParams, fixtureLocalFrame, fixtureParts, fixtureLabel, fixturesOn, normaliseFixture, FIXTURE_FALLBACK } from './fixtures.js';
 
 export const MIRROR_FORMAT = 'tiksi-sketchup-mirror';
@@ -109,6 +110,8 @@ function materialResolver(materials, warnings) {
 export function mirrorSpec(prop, materials) {
   const state = elementState(prop), warnings = [];
   const finish = materialResolver(materials, warnings);
+  // Each group goes on its Tiksi tag as a SketchUp tag of the same name ('' = the level's tag).
+  const tag = key => { const t = tagById(prop, tagIdOf(prop, key)); return t ? t.name : ''; };
   const walls = [];
   for (const w of prop.walls || []) {
     const st = state.get(w.id);
@@ -118,17 +121,17 @@ export function mirrorSpec(prop, materials) {
       const p = state.get(o.id).params;
       const role = o.type === 'window' ? 'window' : 'door';
       return { id: o.id, type: o.type, t: p.t, width: p.width, height: p.height, sill: p.sill, s0: p.s0, s1: p.s1, v0: p.v0, v1: p.v1,
-        material: finish(OPENING_MATERIAL[role], role, 'opening ' + o.id) };
+        material: finish(OPENING_MATERIAL[role], role, 'opening ' + o.id), tag: tag('opening:' + o.id) };
     });
     // pos: the long face on the side the plan normal (-uy, ux) of a -> b points to (in the
     // .skp, local y = -thickness/2); neg: the opposite face; other: ends, top and reveals.
     const ids = wallFaceMaterialIds(w, roomsOn(prop, lvl.id));
     const faces = Object.fromEntries(Object.entries(ids).map(([face, id]) => [face, finish(id, 'wall', 'wall ' + w.id)]));
-    walls.push(Object.assign({ id: w.id, level: lvl.id, elevation: lvl.elevation, name: 'Wall ' + w.id, holes, materials: faces }, st.params));
+    walls.push(Object.assign({ id: w.id, level: lvl.id, elevation: lvl.elevation, name: 'Wall ' + w.id, holes, materials: faces, tag: tag('wall:' + w.id) }, st.params));
   }
   const rooms = (prop.rooms || []).filter(r => state.has(r.id)).map(r => {
     const lvl = levelOfRoom(prop, r);
-    return { id: r.id, level: lvl.id, elevation: lvl.elevation, name: r.name || '', pts: state.get(r.id).params.pts, material: finish(r.material, 'floor', 'room ' + r.id) };
+    return { id: r.id, level: lvl.id, elevation: lvl.elevation, name: r.name || '', pts: state.get(r.id).params.pts, material: finish(r.material, 'floor', 'room ' + r.id), tag: tag('room:' + r.id) };
   });
   // Fixtures: one group per fixture, framed at its origin (a box's centre, a run's first
   // back-line point) along its own direction; parts are prisms in that frame, (u, v) metres.
@@ -143,7 +146,7 @@ export function mirrorSpec(prop, materials) {
       material: finish(q.material, FALLBACK['fx-' + q.role] ? 'fx-' + q.role : 'fx-body', 'fixture ' + f.id),
     }));
     fixtures.push({ id: f.id, level: lvl.id, elevation: lvl.elevation, name: fixtureLabel(f), kind: f.kind, subtype: f.subtype || null, shape: fixtureShape(f),
-      origin: origin.map(r6), angle: r6(angle), parts, base: st.params, local: st.params.shape === 'run' ? { pts: f.pts.map(pt => toLocal(pt).map(r6)) } : null });
+      origin: origin.map(r6), angle: r6(angle), parts, base: st.params, tag: tag('fixture:' + f.id), local: st.params.shape === 'run' ? { pts: f.pts.map(pt => toLocal(pt).map(r6)) } : null });
   }
   const elements = {};
   for (const [id, st] of state) elements[id] = { kind: st.kind, sig: st.sig };
@@ -151,6 +154,7 @@ export function mirrorSpec(prop, materials) {
     format: MIRROR_FORMAT, version: 1,
     property: { id: prop.id, name: prop.name || '' },
     levels: (prop.levels || []).map(l => ({ id: l.id, name: l.name, elevation: l.elevation, height: l.height })),
+    tags: (prop.tags || []).map(t => ({ name: t.name, visible: t.visible !== false })),
     walls, rooms, fixtures, elements,
     underlays: (prop.levels || []).map(l => underlayOf(l)).filter(Boolean),
     warnings,

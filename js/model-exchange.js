@@ -8,6 +8,7 @@ import { buildPropertyGroup, disposeBuilt } from './geometry.js';
 import { getFile, materialById } from './store.js';
 import { loadMesh, applyScanTransform, disposeScanObject } from './scans.js';
 import { applyModelMaterials } from './model-materials.js';
+import { stampTags, partKeyForObject } from './tags-scene.js';
 import { pendingTextureJobs } from './textures.js';
 
 const xml = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
@@ -28,7 +29,7 @@ async function meshForScan(scan) {
   const obj = await loadMesh(rec.buffer, scan.format);
   await applyModelMaterials(scan, obj);
   const wrapper = new THREE.Group(), inner = new THREE.Group();
-  inner.add(obj); wrapper.add(inner); wrapper.userData.inner = inner;
+  inner.add(obj); wrapper.add(inner); Object.assign(wrapper.userData, { inner, id: scan.id, scanKind: 'mesh' });
   applyScanTransform(scan, wrapper);
   wrapper.visible=true; // Explicit exports can include a hidden before-state model.
   return wrapper;
@@ -53,7 +54,7 @@ function cleanExport(root) {
     let copy;
     source.userData = {};
     try { copy = source.clone(false); } finally { source.userData = data; }
-    copy.userData = { kind: data.kind, id: data.id, ...Object.fromEntries(['ifcGlobalId','ifcClass','ifcProperties','rhinoObjectId','tiksiElementId','tiksiElementKind'].filter(key=>data[key]!=null).map(key=>[key,data[key]])) };
+    copy.userData = { kind: data.kind, id: data.id, ...Object.fromEntries(['ifcGlobalId','ifcClass','ifcProperties','rhinoObjectId','tiksiElementId','tiksiElementKind','tiksiTag','tiksiTagVisible'].filter(key=>data[key]!=null).map(key=>[key,data[key]])) };
     for (const child of source.children) copy.add(copyNode(child));
     return copy;
   };
@@ -61,7 +62,7 @@ function cleanExport(root) {
   clone.traverse(o => {
     const data = o.userData;
     if (data.kind && data.id) o.name = data.kind + ':' + data.id;
-    const metadata=Object.fromEntries(['ifcGlobalId','ifcClass','ifcProperties','rhinoObjectId','tiksiElementId','tiksiElementKind'].filter(key=>data[key]!=null).map(key=>[key,data[key]]));
+    const metadata=Object.fromEntries(['ifcGlobalId','ifcClass','ifcProperties','rhinoObjectId','tiksiElementId','tiksiElementKind','tiksiTag','tiksiTagVisible'].filter(key=>data[key]!=null).map(key=>[key,data[key]]));
     o.userData = { ...metadata, ...(data.kind && data.id ? { tiksiElementId: data.id, tiksiElementKind: data.kind } : {}) };
     if (o.isMesh) {
       const material = m => {
@@ -86,12 +87,14 @@ export async function exportModel(prop, { format = 'glb', source = 'design', sca
       if (!scan) throw new Error('Select a model to export');
       const mesh = await meshForScan(scan); root.add(mesh); disposable.push(mesh);
     } else {
-      built = buildPropertyGroup(prop); root.add(built);
+      // Everything is exported, hidden tags too; each mesh carries its tag (GLB extras, SketchUp tags).
+      built = buildPropertyGroup(prop, { tags: false }); root.add(built);
       if (includeModels) for (const scan of prop.scans || []) if (scan.visible !== false) {
         if (scan.kind !== 'mesh') throw new Error('Visible point clouds/splats cannot be included in this mesh export. Hide them or export their originals.');
         const mesh = await meshForScan(scan); root.add(mesh); disposable.push(mesh);
       }
     }
+    stampTags(prop, root, o => { let w = o; while (w && !(w.userData && w.userData.inner)) w = w.parent; return w ? partKeyForObject(w, o) : null; });
     const deadline = performance.now() + 30000;
     while (pendingTextureJobs()) { if (performance.now() > deadline) throw new Error('Material textures are still loading. Retry when ready.'); await new Promise(r => setTimeout(r, 50)); }
     clone = cleanExport(root);
@@ -109,7 +112,7 @@ export async function exportModel(prop, { format = 'glb', source = 'design', sca
         const c=part.m.color.clone().convertLinearToSRGB();
         const material={name:part.m.name,color:[c.r,c.g,c.b,part.m.opacity ?? 1]};
         if(format==='skp' && part.m.map) {const bytes=await textureBytes(part.m.map);let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));material.texture=btoa(binary);}
-        meshes.push({name:part.name,positions:part.p,uv:part.t,material,extras:part.extras});
+        meshes.push({name:part.name,positions:part.p,uv:part.t,material,extras:part.extras,tag:part.extras?.tiksiTag,tagVisible:part.extras?.tiksiTagVisible});
       }
       const converted=await nativeConvert(new TextEncoder().encode(JSON.stringify({meshes})),'.json',format);
       return {name:base+'.'+format,blob:new Blob([converted.buffer]),warnings:converted.warnings};

@@ -15,7 +15,8 @@ import {
   newSet, newSheet, newViewport, nextSheetNumber, numberViewports, normalizeViewport, lineFrame, lineThrough, elevationLine,
   pdfFromJpegs, worldSpan,
 } from './doc-sets.js';
-import { renderViewport, geometrySignature, modelBounds3d, releaseRenderer } from './sheet-render.js';
+import { renderViewport, geometrySignature, tagSignature, modelBounds3d, releaseRenderer } from './sheet-render.js';
+import { tagShown, UNTAGGED_LABEL, OVERRIDE_UNTAGGED } from './tags.js';
 import { sheetSvg } from './sheet-compose.js';
 import { modelBounds } from './geometry.js';
 import { photoBytes } from './photos-store.js';
@@ -264,7 +265,8 @@ function renderKey(v, px, py) {
   const geo = geometrySignature(prop);
   const params = v.kind === 'plan' ? { levelId: v.levelId, cut: v.cut, center: v.center, scale: v.scale, model: v.layers.model }
     : v.kind === 'view3d' ? { camera: v.camera } : { line: v.line, flip: v.flip, center: v.center, scale: v.scale, clip: v.clip, depth: v.depth };
-  return geo.length + ':' + hash(geo) + JSON.stringify({ ...base, ...params });
+  const tags = tagSignature(prop, v);
+  return geo.length + ':' + hash(geo) + ':' + hash(tags) + JSON.stringify({ ...base, ...params });
 }
 function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); }
 
@@ -550,13 +552,29 @@ function vpInspector(v) {
     ${field('Title', `<input type="text" data-f="title" value="${esc(v.title)}">`)}
     <label class="dc-check"><input type="checkbox" data-bool="showTitle" ${v.showTitle ? 'checked' : ''}> Drawing label under the view</label>
     ${kind}
+    ${v.tags ? vpTagsHtml(v) : ''}
     <h3 class="kicker" style="margin-top:16px">ON THE SHEET <span class="faint">inches</span></h3>
     <div class="field-row4">${['x', 'y', 'w', 'h'].map(k => field(k.toUpperCase(), `<input type="number" step="0.125" data-num="${k}" value="${v[k]}">`)).join('')}</div>
     <div class="dc-btn-row"><button class="btn small" data-dup>DUPLICATE</button><button class="btn small" data-del>REMOVE</button></div>`;
 }
 
+// This view's tags, as in a LayOut scene: each follows the model (MODEL's TAGS) unless set here.
+function vpTagsHtml(v) {
+  const rows = [...(prop.tags || []).map(t => [t.id, t.name, tagShown(prop, t.id)]), [OVERRIDE_UNTAGGED, UNTAGGED_LABEL, prop.tagUntaggedVisible !== false]];
+  const cur = id => typeof v.tags[id] === 'boolean' ? (v.tags[id] ? 'show' : 'hide') : '';
+  return `<h3 class="kicker" style="margin-top:16px">TAGS <span class="faint">this view</span></h3>
+    <div class="dc-tags">${rows.map(([id, name, shown]) => `<label class="dc-tag-row"><span title="${esc(name)}">${esc(name)}</span><select data-vtag="${esc(id)}">${opt('', 'As the model (' + (shown ? 'shown' : 'hidden') + ')', cur(id))}${opt('show', 'Shown', cur(id))}${opt('hide', 'Hidden', cur(id))}</select></label>`).join('')}</div>
+    ${Object.keys(v.tags).length ? '<button class="btn small" data-vtag-reset>FOLLOW THE MODEL FOR EVERY TAG</button>' : ''}`;
+}
+
 function bindVpInspector(host, v) {
   const changed = (rerenderInspector = false) => { touch(); drawSheet(); if (rerenderInspector) renderInspector(); };
+  host.querySelectorAll('[data-vtag]').forEach(i => i.onchange = () => {
+    const id = i.dataset.vtag;
+    if (i.value) v.tags[id] = i.value === 'show'; else delete v.tags[id];
+    changed(true);
+  });
+  host.querySelector('[data-vtag-reset]')?.addEventListener('click', () => { v.tags = {}; changed(true); });
   host.querySelectorAll('[data-f]').forEach(i => i.onchange = () => {
     const k = i.dataset.f;
     v[k] = k === 'scale' ? Number(i.value) : i.value;
