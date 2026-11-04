@@ -649,7 +649,8 @@ function boundsInfo() {
 }
 function fitDistance(radius) {
   const fov = THREE.MathUtils.degToRad(camera.fov);
-  const aspect = Math.max(0.6, camera.aspect || 1);
+  // A portrait phone is about 0.46 wide to 1 tall; fit to it so the model is not cut off.
+  const aspect = Math.max(0.35, camera.aspect || 1);
   const hfov = 2 * Math.atan(Math.tan(fov / 2) * aspect);
   return radius / Math.sin(Math.min(fov, hfov) / 2) * 1.08;
 }
@@ -748,7 +749,7 @@ function startWalk() {
   if (look.distanceTo(camera.position) < 0.5) look.set(sx, walkFloor + 1.5, sz - 5);
   camera.lookAt(look);
   walk.connect(renderer.domElement);
-  toast('WALK: WASD / arrows move, Shift runs. Drag to look, or click the view to capture the mouse. Esc exits.', 'info', 5000);
+  toast(fieldLayout() ? 'WALK: drag to look around, hold the arrows to move.' : 'WALK: WASD / arrows move, Shift runs. Drag to look, or click the view to capture the mouse. Esc exits.', 'info', 5000);
 }
 
 function stepWalk(dt) {
@@ -1055,7 +1056,7 @@ function onPointerUp(e) {
   if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > 5) return;      // it was a drag, not a click
   if (mode === 'walk') {
     // A plain click in walk mode captures the mouse for free-look (a user gesture is required).
-    if (!walkLocked) { try { walk.lock(); } catch (err) { /* drag-look keeps working */ } }
+    if (!walkLocked && e.pointerType !== 'touch') { try { walk.lock(); } catch (err) { /* drag-look keeps working */ } }
     return;
   }
   if (tool === 'measure') return addMeasurePoint(e);
@@ -1064,6 +1065,8 @@ function onPointerUp(e) {
   if (match && match.points && match.points.mode === 'model') return addMatchModelPoint(e);
   const hit = pick(e);
   if (!hit || hit.kind === 'ground') { setSelection(null); return; }
+  // The phone layout has no inspector: a tap opens a photo pin and otherwise clears the selection.
+  if (fieldLayout() && hit.kind !== 'pin') { setSelection(null); return; }
   if (hit.kind === 'pin') { setSelection({ kind: 'pin', id: hit.id }); const ph = photoById(prop, hit.id); if (ph && ph.kind === 'document') flyToSheet(hit.id); else openLightbox(hit.id); return; }
   if (hit.kind === 'camera') { startMatch(hit.id); return; }
   if (hit.kind === 'position') { setSelection({ kind: 'position', id: hit.id }); return; }
@@ -2888,6 +2891,8 @@ function renderEnvPanel(p = hud.env) {
 }
 
 export function mountEnvironmentSettings(host) {
+  // MODEL with no property yet has nothing to set (and FILE must still open to add one).
+  if (!prop || !scene) { host.innerHTML = '<p class="muted">Add a property to set its model environment.</p>'; return; }
   host.className='v-env open file-env';
   renderEnvPanel(host);
 }
@@ -3999,4 +4004,65 @@ export function unmount() {
   scanRoot = null; pinRoot = null; noteRoot = null; measureRoot = null; cameraRoot = null; positionRoot = null;
   el = null; wrapEl = null; inspEl = null; hud = {};
   selection = null; hoverTarget = null; tween = null; pressed = null; dragLook = null; rightPress = null; movingNoteId = null;
+}
+
+// ---------- phone layout (field.js) ----------
+// The phone layout hides the tool column, inspector and HUD; its side panel reads the view's
+// state and drives it through these calls.
+const fieldLayout = () => document.documentElement.classList.contains('phone');
+export function fieldState() {
+  if (!scene || !prop) return null;
+  const hidden = hiddenLevels();
+  const counts = tagCounts(prop);
+  const lo = Math.min(0.3, lowestElevation() + 0.3);
+  return {
+    mode,
+    cameras: [{ id: 'frame', label: 'Overview' }, { id: 'front', label: 'Front' }, { id: 'iso', label: 'Corner' }],
+    views: (prop.savedViews || []).map(v => ({ id: v.id, label: v.name, on: v.id === activeViewId })),
+    positions: (prop.photoPositions || []).map(p => ({ id: p.id, label: positionLabel(p) })),
+    show: [
+      { id: 'section', label: 'Section cut', on: section.on },
+      { id: 'xray', label: 'X-ray', on: xray },
+      { id: 'pins', label: 'Photos', on: markersShown('pins'), count: prop.photos.filter(ph => ph.pin).length },
+      { id: 'notes', label: 'Notes', on: markersShown('notes'), count: prop.notePins.length },
+    ],
+    section: section.on ? { min: lo, max: modelTop() + 0.3, value: section.height, label: fmtLen(section.height) } : null,
+    levels: prop.levels.map(l => ({ id: l.id, label: l.name, on: !hidden.has(l.id) })),
+    // One switch per tag that holds something; Untagged only when objects sit on no tag.
+    tags: [...prop.tags.map(t => ({ id: t.id, label: t.name, color: t.color, on: t.visible !== false })),
+      { id: UNTAGGED, label: UNTAGGED_LABEL, on: tagShown(prop, UNTAGGED) }].filter(t => (counts.get(t.id) || 0) > 0),
+  };
+}
+export function fieldAction(kind, id, value) {
+  if (!scene || !prop) return;
+  if (kind === 'mode') setMode(id);
+  else if (kind === 'camera') { if (mode !== 'orbit') setMode('orbit'); presetView(id); }
+  else if (kind === 'position') {
+    const pos = (prop.photoPositions || []).find(x => x.id === id);
+    if (!pos) return;
+    if (mode !== 'orbit') setMode('orbit');
+    flyTo(new THREE.Vector3(...pos.view.position), new THREE.Vector3(...pos.view.target), 700);
+  }
+  else if (kind === 'view') goToView(id);
+  else if (kind === 'save-view') addView();
+  else if (kind === 'tag') toggleTag(id || UNTAGGED);
+  else if (kind === 'level') toggleLevel(id);
+  else if (kind === 'section-height') {
+    section.height = Number(value);
+    applySection();
+    renderHud();
+  }
+  else if (kind === 'show') {
+    if (id === 'section') toggleSection();
+    else if (id === 'xray') toggleXray();
+    else if (id === 'pins' || id === 'notes') toggleMarkers(id);
+  }
+}
+// Hold-to-move for walking on a touch screen: dir is forward | back | left | right.
+const WALK_CODES = { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD' };
+export function fieldWalk(dir, down) {
+  const code = WALK_CODES[dir];
+  if (!code || !scene) return;
+  if (down && mode === 'walk') walkKeys[code] = true; else delete walkKeys[code];
+  requestRender(2);
 }

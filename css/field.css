@@ -1,0 +1,146 @@
+/* tiksi - phone layout (js/field.js). The model fills the screen; one side panel holds
+   views, switches and pages. Everything here is scoped to html.phone, so the desktop
+   console is untouched. Safe-area insets keep controls clear of notches and the home bar. */
+
+.fd-bar, .fd-frame, .fd-walk, .fd-scrim, .fd-panel { display: none; }
+.fd-frame[hidden], .fd-walk[hidden], html:not(.phone) .fd-frame { display: none !important; }
+
+html.phone {
+  --fd-top: env(safe-area-inset-top, 0px);
+  --fd-bottom: env(safe-area-inset-bottom, 0px);
+  --fd-left: env(safe-area-inset-left, 0px);
+  --fd-right: env(safe-area-inset-right, 0px);
+  --fd-bar-h: 52px;
+}
+html.phone body { overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+
+/* ---------- shell: no topbar, no rail ---------- */
+html.phone #topbar, html.phone #rail { display: none; }
+html.phone #app { grid-template: minmax(0, 1fr) / minmax(0, 1fr); grid-template-areas: "view"; height: 100vh; height: 100dvh; }
+html.phone:not(.fd-model) #view { padding-top: calc(var(--fd-bar-h) + var(--fd-top)); }
+/* The model's empty state (no property yet) starts below the floating menu button. */
+html.phone.fd-model #view > .view-scroll { padding-top: calc(64px + var(--fd-top)); }
+
+/* Pages other than the model get a slim bar with the menu and the page name. On the model the
+   bar is see-through and only its button takes touches. */
+html.phone .fd-bar {
+  display: flex; align-items: center; gap: 10px; position: fixed; z-index: 40; left: 0; right: 0; top: 0;
+  height: calc(var(--fd-bar-h) + var(--fd-top)); padding: var(--fd-top) calc(12px + var(--fd-right)) 0 calc(10px + var(--fd-left));
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+html.phone .fd-title { font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html.phone.fd-model .fd-bar { background: transparent; border: 0; pointer-events: none; }
+html.phone.fd-model .fd-title { display: none; }
+html.phone .fd-bar .fd-menu { pointer-events: auto; }
+html.phone .fd-bar .history-actions { margin-left: auto; }
+html.phone .fd-bar .history-actions .tb-btn { min-height: 44px; padding: 8px 10px; }
+html.phone.fd-model .fd-bar .history-actions { display: none; }
+
+.fd-btn {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 44px; height: 44px; border-radius: 50%; padding: 0; color: var(--ink);
+  background: rgba(12, 16, 19, 0.62); border: 1px solid rgba(139, 154, 167, 0.24);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2); backdrop-filter: blur(12px) saturate(1.2);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  touch-action: manipulation; user-select: none; -webkit-user-select: none;
+}
+.fd-btn:active, .fd-btn.down { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+html.phone:not(.fd-model) .fd-bar .fd-menu { background: transparent; border-color: transparent; box-shadow: none; }
+
+/* Overview: bottom right, in thumb reach. */
+html.phone.fd-model .fd-frame:not([hidden]) {
+  display: inline-flex; position: fixed; z-index: 30;
+  right: calc(14px + var(--fd-right)); bottom: calc(16px + var(--fd-bottom));
+}
+
+/* Walk pad: hold an arrow to move; drag anywhere else to look. */
+html.phone.fd-model .fd-walk:not([hidden]) {
+  display: grid; position: fixed; z-index: 30; left: calc(14px + var(--fd-left)); bottom: calc(14px + var(--fd-bottom));
+  grid-template: 52px 52px / 52px 52px 52px; gap: 6px;
+  grid-template-areas: ". forward ." "left back right";
+}
+.fd-walk .fd-btn { width: 52px; height: 52px; border-radius: 14px; }
+.fd-walk [data-walk=forward] { grid-area: forward; }
+.fd-walk [data-walk=back] { grid-area: back; }
+.fd-walk [data-walk=left] { grid-area: left; }
+.fd-walk [data-walk=right] { grid-area: right; }
+
+/* ---------- model: the canvas is the whole screen ---------- */
+html.phone .v-layout { display: block; height: 100%; overflow: hidden; }
+html.phone .v-layout > .tool-col, html.phone .v-layout > .inspector, html.phone .v-layout > .side-handle { display: none; }
+html.phone .v-layout .v-wrap { height: 100%; }
+html.phone .v-modes, html.phone .v-compass, html.phone .v-env, html.phone .v-hint, html.phone .v-views { display: none !important; }
+html.phone .v-toast { top: calc(14px + var(--fd-top)); max-width: calc(100% - 132px); text-align: center; }
+html.phone .v-progress { top: calc(66px + var(--fd-top)); width: min(280px, calc(100% - 32px)); }
+html.phone .v-progress.show ~ .v-toast { top: calc(118px + var(--fd-top)); }
+html.phone .v-lightbox img { max-width: 96vw; max-height: 78vh; border-width: 4px; }
+html.phone .v-lb-close { top: calc(12px + var(--fd-top)); right: calc(12px + var(--fd-right)); padding: 12px 16px; font-size: 11px; }
+
+/* ---------- side panel ---------- */
+html.phone .fd-scrim {
+  display: block; position: fixed; inset: 0; z-index: 50; background: rgba(4, 6, 8, 0.32);
+  opacity: 0; pointer-events: none; transition: opacity 200ms var(--ease);
+}
+html.phone.fd-open .fd-scrim { opacity: 1; pointer-events: auto; }
+html.phone .fd-panel {
+  display: flex; flex-direction: column; position: fixed; z-index: 51; top: 0; bottom: 0; left: 0;
+  width: min(320px, 84vw); padding: var(--fd-top) 0 0 var(--fd-left);
+  background: rgba(13, 18, 23, 0.94); border-right: 1px solid var(--line-2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2); backdrop-filter: blur(18px) saturate(1.2);
+  box-shadow: var(--shadow-2);
+  /* Hidden once it has slid away, so nothing in it takes focus or touches while closed. */
+  transform: translateX(-104%); visibility: hidden; transition: transform 240ms var(--ease), visibility 0s linear 240ms;
+}
+html.phone.fd-open .fd-panel { transform: none; visibility: visible; transition: transform 240ms var(--ease), visibility 0s; }
+.fd-head { display: flex; align-items: center; gap: 10px; padding: 10px 10px 10px 16px; border-bottom: 1px solid var(--line); }
+.fd-head select { flex: 1; min-width: 0; max-width: none; height: 44px; font-size: 16px !important; font-family: var(--sans); }
+.fd-prop-name { flex: 1; min-width: 0; font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fd-head .fd-close { background: transparent; border-color: transparent; box-shadow: none; color: var(--dim); }
+.fd-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 6px 16px calc(24px + var(--fd-bottom)); }
+.fd-section { padding: 14px 0 6px; border-bottom: 1px solid var(--line); }
+.fd-section h2 { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; color: var(--faint); margin-bottom: 10px; }
+
+.fd-segs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 3px; border-radius: 12px; background: var(--panel-3); border: 1px solid var(--line); }
+.fd-seg { height: 40px; border: 0; border-radius: 9px; background: transparent; color: var(--dim); font-size: 15px; touch-action: manipulation; }
+.fd-seg.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.fd-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 6px; }
+.fd-chips:first-child { margin-top: 0; }
+.fd-chip {
+  min-height: 40px; padding: 8px 14px; border-radius: 20px; font-size: 14.5px; color: var(--ink); text-align: left;
+  background: var(--panel-2); border: 1px solid var(--line-2); touch-action: manipulation;
+}
+.fd-chip:active { border-color: var(--accent); color: var(--accent); }
+.fd-chip.on { border-color: var(--accent); color: var(--accent); }
+.fd-chip.fd-add { color: var(--dim); border-style: dashed; }
+.fd-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; }
+
+.fd-switch {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 0; background: transparent; border: 0;
+  color: var(--ink); font-size: 16px; text-align: left; touch-action: manipulation;
+}
+.fd-switch span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fd-switch small { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.fd-switch i { position: relative; flex: none; width: 46px; height: 28px; border-radius: 14px; background: var(--panel-3); border: 1px solid var(--line-2); transition: background var(--dur) var(--ease); }
+.fd-switch i::after { content: ''; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--dim); transition: transform var(--dur) var(--ease), background var(--dur) var(--ease); }
+.fd-switch[aria-checked=true] i { background: var(--accent); border-color: var(--accent); }
+.fd-switch[aria-checked=true] i::after { transform: translateX(18px); background: var(--accent-ink); }
+.fd-switch:disabled { opacity: 0.4; }
+
+.fd-range { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 10px; padding: 4px 0 12px; font-size: 14px; color: var(--dim); }
+.fd-range output { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+.fd-range input { grid-column: 1 / -1; width: 100%; height: 32px; accent-color: var(--accent); }
+
+.fd-links { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; }
+.fd-link { display: flex; align-items: center; min-height: 44px; padding: 0; background: transparent; border: 0; color: var(--dim); font-size: 15px; text-decoration: none; text-align: left; }
+.fd-link.on { color: var(--accent); }
+.fd-desktop {
+  display: block; width: 100%; margin-top: 18px; min-height: 44px; border-radius: 10px; font-size: 14px; color: var(--dim);
+  background: transparent; border: 1px solid var(--line-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.phone .fd-panel, html.phone .fd-scrim { transition: none; }
+}
+@media print {
+  .fd-bar, .fd-frame, .fd-walk, .fd-scrim, .fd-panel { display: none !important; }
+}
