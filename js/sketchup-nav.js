@@ -2,7 +2,11 @@
 // methods are pinned with it):
 //   left or middle drag orbits, Shift + drag pans (switching mid-drag as Shift goes down
 //   or up), right drag pans, and the wheel (or a pinch) always zooms toward the cursor.
-// Orbits pivot about the surface under the cursor, as SketchUp's do.
+// Orbits pivot about the surface under the cursor, as SketchUp's do, and so does zooming:
+// OrbitControls moves the camera a share of its distance to the orbit target per wheel step, so
+// with the target left at an old pivot the steps shrank to nothing near that point while the
+// thing under the cursor was still far off. Each zoom gesture re-aims at the surface under the
+// cursor, so the steps follow the distance to what you are zooming toward.
 const ROTATE = 0, PAN = 2;                // OrbitControls' internal drag states
 
 // The orbit pivot for a point under the cursor: the point at the same depth on the view
@@ -15,6 +19,20 @@ export function pivotOnViewAxis(cameraPos, target, hitPoint, minDistance = 0) {
   const depth = hitPoint.clone().sub(cameraPos).dot(axis);
   if (!(depth > minDistance)) return null;
   return cameraPos.clone().addScaledVector(axis, depth);
+}
+
+// The orbit target for a wheel step: the surface under the cursor (at its depth on the view
+// axis). With nothing under the cursor, zooming in with the target nearly reached pushes the
+// target `ahead` metres forward, so the camera keeps moving instead of stalling against it.
+export function zoomTarget(cameraPos, target, hitPoint, zoomingIn, minDistance = 0, ahead = 1) {
+  if (hitPoint) {
+    const pivot = pivotOnViewAxis(cameraPos, target, hitPoint, minDistance);
+    if (pivot) return pivot;
+  }
+  if (!zoomingIn) return null;
+  const axis = target.clone().sub(cameraPos), len = axis.length();
+  if (!(len > 0) || len > Math.max(minDistance * 2, 0.25)) return null;
+  return cameraPos.clone().addScaledVector(axis.divideScalar(len), len + ahead);
 }
 
 // Wire it up. `pickPoint(event)` returns the world point under the cursor or null; `canOrbit()`
@@ -56,6 +74,24 @@ export function attachSketchupNavigation(controls, { pickPoint, canOrbit = () =>
   }
   function onUp() { drag = null; }
 
+  // Before OrbitControls handles a wheel step (capture phase), aim the zoom at the surface under
+  // the cursor. One raycast per gesture: steps that follow within 150 ms at the same spot reuse
+  // the target OrbitControls keeps in front of the camera, so a long scroll over a big scan stays
+  // smooth.
+  let lastWheel = null;
+  function onWheel(e) {
+    if (!controls.enabled || !controls.enableZoom || !e.deltaY) return;
+    const now = performance.now();
+    const same = lastWheel && now - lastWheel.t < 150 && Math.hypot(e.clientX - lastWheel.x, e.clientY - lastWheel.y) < 6;
+    lastWheel = { t: now, x: e.clientX, y: e.clientY };
+    const cam = controls.object.position;
+    const near = controls.target.distanceTo(cam) < Math.max(controls.minDistance * 2, 0.25);
+    if (same && !near) return;
+    const hit = same ? null : pickPoint(e);
+    const next = zoomTarget(cam, controls.target, hit, e.deltaY < 0, controls.minDistance);
+    if (next) { controls.target.copy(next); controls.object.lookAt(next); }
+  }
+
   // Shift down or up mid-drag swaps orbit and pan from where the pointer is now.
   function onShift(e) {
     if (e.key !== 'Shift' || !drag || drag.base !== ROTATE) return;
@@ -69,6 +105,7 @@ export function attachSketchupNavigation(controls, { pickPoint, canOrbit = () =>
 
   el.addEventListener('pointerdown', onDown, { capture: true });
   el.addEventListener('pointermove', onMove);
+  el.addEventListener('wheel', onWheel, { capture: true, passive: true });
   window.addEventListener('pointerup', onUp);
   window.addEventListener('keydown', onShift);
   window.addEventListener('keyup', onShift);
@@ -77,6 +114,7 @@ export function attachSketchupNavigation(controls, { pickPoint, canOrbit = () =>
     dispose() {
       el.removeEventListener('pointerdown', onDown, { capture: true });
       el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('wheel', onWheel, { capture: true });
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('keydown', onShift);
       window.removeEventListener('keyup', onShift);

@@ -203,7 +203,7 @@ function setupScene() {
   controls.enableDamping = true;
   controls.dampingFactor = 0.09;
   controls.maxPolarAngle = Math.PI * 0.495;
-  controls.minDistance = 0.3;
+  controls.minDistance = 0.05;   // close enough to read a pinned sheet; the wheel aims at the surface under the cursor
   controls.maxDistance = 400;
   controls.addEventListener('change', () => requestRender(2));
   nav = attachSketchupNavigation(controls, {
