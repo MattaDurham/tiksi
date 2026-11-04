@@ -54,6 +54,7 @@ async function navigateToView(page, view) {
 }
 try {
   const page = await browser.newPage({ viewport: { width:1280, height:900 } });
+  await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   page.on('dialog', d => d.accept(d.type() === 'prompt' ? 'Synthetic audit project' : undefined));
   await page.goto(url); await page.locator('[data-prop-name]').waitFor();
@@ -211,6 +212,7 @@ try {
 
   // Real mobile layout at load; this is not a desktop page resized after startup.
   const mobile = await browser.newPage({viewport:{width:402,height:874},isMobile:true,hasTouch:true,deviceScaleFactor:2});
+  await mobile.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   mobile.on('pageerror', e => errors.push(e.message));
   // A phone opens on the model.
   await mobile.goto(url); await mobile.locator('canvas.v-canvas').waitFor();

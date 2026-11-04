@@ -53,7 +53,10 @@ import {
   scanStats, dropScanToFloor, centerScanOnModel, releaseSplatRenderer, splatDrawables, splatBusy,
 } from './scans.js';
 import { attachSketchupNavigation } from './sketchup-nav.js';
-import { LAYERS, LAYER_LABELS, scanLayer, layerScans, layerShown, setLayerShown, layerHasMembers, layerFixtures } from './view-layers.js';
+import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown } from './tags.js';
+import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags } from './saved-views.js';
+import { onScreen, setOnScreen, onScreenChange, setMenuProvider } from './tiksi-menu.js';
+import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility, partKeyForObject, partByKey, partName, planKeyOf } from './tags-scene.js';
 
 // ---------- persistent GPU state (one context for the life of the page) ----------
 let renderer = null, pmrem = null;
@@ -67,6 +70,7 @@ let cameraRoot = null, positionRoot = null;   // photo cameras and numbered phot
 let prop = null;
 let selection = null;          // {kind:'wall'|'room'|'opening'|'scan'|'pin'|'note', id}
 let selectionVersion = 0;      // late mount focus must not replace a newer user selection
+let tagPicks = [];             // tag keys (tags.js) of the selected objects; Shift-click adds more
 let hoverTarget = null;
 let mode = 'orbit';            // orbit | walk | top
 let tool = 'select';           // select | move | measure | pin | note
@@ -1030,7 +1034,8 @@ function pick(e, opts) {
     if (o.userData.kind === 'grid') continue;
     if (opts.surfaceOnly && ['pin', 'note', 'camera', 'position'].includes(o.userData.kind)) continue;
     const n = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : new THREE.Vector3(0, 1, 0);
-    return { kind: o.userData.kind, id: o.userData.id, point: h.point, normal: n, object: o, wallId: o.userData.wallId };
+    const part = o.userData.kind === 'scan' ? partKeyForObject(o, h.object) : null;
+    return { kind: o.userData.kind, id: o.userData.id, point: h.point, normal: n, object: o, wallId: o.userData.wallId, part, mesh: h.object };
   }
   return null;
 }
@@ -1066,8 +1071,15 @@ function onPointerUp(e) {
   if (hit.kind === 'camera') { startMatch(hit.id); return; }
   if (hit.kind === 'position') { setSelection({ kind: 'position', id: hit.id }); return; }
   if (hit.kind === 'note') { setSelection({ kind: 'note', id: hit.id }); return; }
-  if (hit.kind === 'ceiling') { setSelection({ kind: 'room', id: hit.id }); return; }
-  setSelection({ kind: hit.kind, id: hit.id });
+  const key = hit.kind === 'scan' ? hit.part : planKeyOf(hit.mesh);
+  const sel = hit.kind === 'ceiling' ? { kind: 'room', id: hit.id } : { kind: hit.kind, id: hit.id };
+  if (key) sel.tagKey = key;
+  if (e.shiftKey && key && tagPicks.length) {
+    // Shift-click adds an object to (or takes it out of) the selection, to move them to a tag at once.
+    const next = tagPicks.includes(key) ? tagPicks.filter(k => k !== key) : tagPicks.concat(key);
+    if (next.length) { setSelection(sel, next); return; }
+  }
+  setSelection(sel);
 }
 let hoverPending = false;
 function onPointerMove(e) {
@@ -1102,6 +1114,17 @@ function findGroupFor(kind, id) {
   });
   return found;
 }
+// The scene object a tag key names: a plan element's group, or one mesh of a model.
+function objectForKey(key) {
+  const m = /^node:([^#]+)#/.exec(key);
+  if (m) { const w = scanObjs[m[1]]; const part = w && partByKey(w, key); return part ? part.object : null; }
+  const k = /^(wall|room|ceiling|opening|fixture):(.+)$/.exec(key);
+  if (!k || !modelGroup) return null;
+  if (k[1] !== 'ceiling') return findGroupFor(k[1], k[2]);
+  let found = null;
+  modelGroup.traverse(o => { if (!found && o.userData && o.userData.kind === 'ceiling' && o.userData.id === k[2]) found = o; });
+  return found;
+}
 function selectedObject() {
   if (!selection) return null;
   if (selection.kind === 'scan') return scanObjs[selection.id] || null;
@@ -1113,6 +1136,10 @@ function updateOutlineTargets() {
   const sel = selectedObject();
   const selMeshes = [];
   if (sel && selection.kind !== 'scan') sel.traverse(o => { if (o.isMesh && !(o.userData && o.userData.glass)) selMeshes.push(o); });
+  for (const key of tagPicks) {
+    const o = objectForKey(key);
+    if (o && o !== sel) o.traverse(m => { if (m.isMesh && !(m.userData && m.userData.glass)) selMeshes.push(m); });
+  }
   passes.outline.selectedObjects = selMeshes;
   const hov = hoverTarget && hoverTarget !== sel ? hoverTarget : null;
   const hovMeshes = [];
@@ -1124,10 +1151,11 @@ function updateOutlineTargets() {
     if (box) box.visible = !!(selection && selection.kind === 'scan' && selection.id === id);
   }
 }
-function setSelection(sel) {
+function setSelection(sel, picks) {
   selectionVersion++;
   const was = selection;
   selection = sel;
+  tagPicks = picks || (sel && sel.tagKey ? [sel.tagKey] : sel && ['wall', 'opening', 'fixture', 'room'].includes(sel.kind) ? [planKey(sel.kind, sel.id)] : []);
   // A selected note card is drawn with an accent border.
   for (const s of [was, sel]) if (s && s.kind === 'note') redrawNoteCard(s.id);
   // A selected numbered position is drawn in the accent colour.
@@ -2428,6 +2456,11 @@ function openContextMenu(e) {
   items.push(null);
   items.push(['toggle-notes', (markersShown('notes') ? 'HIDE NOTES' : 'SHOW NOTES') + ' (' + nNotes + ')', () => toggleMarkers('notes')]);
   items.push(['toggle-pins', (markersShown('pins') ? 'HIDE PHOTO PINS' : 'SHOW PHOTO PINS') + ' (' + nPins + ')', () => toggleMarkers('pins')]);
+  popupMenu(at, items);
+}
+// A small menu at a screen point: items are [id, label, run] (no run: a line of text), or null for a rule.
+function popupMenu(at, items) {
+  closeContextMenu();
   const menu = document.createElement('div');
   menu.className = 'v-ctx';
   menu.setAttribute('role', 'menu');
@@ -2525,6 +2558,9 @@ async function addScanToScene(scan) {
   if (scanObjs[scan.id]) { scanRoot.remove(scanObjs[scan.id]); disposeScanObject(scanObjs[scan.id]); }
   scanObjs[scan.id] = obj;
   applyScanTransform(scan, obj);
+  // A model's parts get their tags the first time it loads (tags-scene.js); they are stored.
+  const tagged = detectModelTags(prop, scan, obj);
+  applyModelTagVisibility(prop, scan, obj);
   scanRoot.add(obj);
   setModelXray(obj, xray ? prop.env.xrayOpacity : null);
   fitShadow();
@@ -2532,6 +2568,8 @@ async function addScanToScene(scan) {
   applySection();
   updateOutlineTargets();
   setScanState(scan.id, 'ready');
+  // New tags and counts show in the lists straight away.
+  if (tagged) { touch(); renderToolCol(); if (!selection) renderInspector(); }
   requestRender(scan.kind === 'splat' ? 8 : 3);
   return obj;
 }
@@ -2728,17 +2766,29 @@ function applyXray() {
   requestRender(3);
 }
 function toggleXray() { xray = !xray; applyXray(); renderHud(); renderToolCol(); }
-// SHOW SCAN / SHOW FURNITURE: every scan or model in the layer follows the button.
-function toggleLayer(layer) {
-  if (!layerHasMembers(prop, layer)) return;
-  const fixtures = layerFixtures(prop, layer).length > 0;
-  const changed = setLayerShown(prop, layer, !layerShown(prop, layer));
-  for (const s of changed) applyScanTransform(s, scanObjs[s.id]);
-  if (fixtures) rebuildModel();
-  if (!changed.length && !fixtures) return;
-  fitShadow(); applyEnvironment();
-  renderToolCol(); renderInspector();
-  touch(); requestRender(3);
+// TAGS: hiding a tag hides every object on it, in the plan model and in imported models.
+function applyTagVisibility() {
+  if (modelGroup) applyPlanTagVisibility(prop, modelGroup);
+  for (const s of prop.scans) if (scanObjs[s.id]) applyModelTagVisibility(prop, s, scanObjs[s.id]);
+  fitShadow(); applyEnvironment(); updateOutlineTargets();
+  requestRender(3);
+}
+function tagsChanged() { applyTagVisibility(); renderToolCol(); renderInspector(); touch(); }
+function toggleTag(id) {
+  if (id && !tagById(prop, id)) return;
+  setTagShown(prop, id, !tagShown(prop, id));
+  tagsChanged();
+}
+function moveToTag(keys, tagId) {
+  if (!keys.length) return;
+  if (tagId === '__new') {
+    const name = prompt('Name of the new tag');
+    if (!name || !name.trim()) { renderInspector(); return; }
+    tagId = addTag(prop, name).id;
+  }
+  assignTag(prop, keys, tagId);
+  tagsChanged();
+  toast(keys.length + (keys.length === 1 ? ' object' : ' objects') + ' moved to ' + (tagId ? tagById(prop, tagId).name : UNTAGGED_LABEL) + '.', 'ok');
 }
 
 // ---------- environment panel ----------
@@ -3021,6 +3071,93 @@ function renderPinPanel() {
 }
 
 function renderInspector() {
+  renderInspectorBody();
+  if (!inspEl || tool === 'pin' || match) return;
+  const sec = document.createElement('div');
+  sec.className = 'v-tags';
+  if (!selection) { sec.innerHTML = tagManagerHtml(); bindTagManager(sec); inspEl.prepend(sec); }
+  else if (tagPicks.length || selection.kind === 'scan') {
+    sec.innerHTML = tagPickHtml(); bindTagPick(sec);
+    const h = inspEl.querySelector('h3');
+    if (h) h.after(sec); else inspEl.prepend(sec);
+  }
+}
+function tagOptions(current, { mixed = false, extra = '' } = {}) {
+  return (mixed ? '<option value="__mixed" selected>(several tags)</option>' : '') + extra +
+    `<option value="" ${!mixed && !current ? 'selected' : ''}>${UNTAGGED_LABEL}</option>` +
+    prop.tags.map(t => `<option value="${escapeHtml(t.id)}" ${!mixed && current === t.id ? 'selected' : ''}>${escapeHtml(t.name)}</option>`).join('') +
+    '<option value="__new">New tag...</option>';
+}
+// The selected objects' tag: one select moves them all.
+function tagPickHtml() {
+  const s = selection.kind === 'scan' ? prop.scans.find(x => x.id === selection.id) : null;
+  const ids = tagPicks.map(k => tagIdOf(prop, k) || UNTAGGED);
+  const mixed = new Set(ids).size > 1;
+  const one = tagPicks.length === 1 ? tagPicks[0] : null;
+  const part = one && s && scanObjs[s.id] ? partByKey(scanObjs[s.id], one) : null;
+  const what = tagPicks.length > 1 ? tagPicks.length + ' objects selected' : part ? 'Part: ' + partName(part) : '';
+  return `${what ? `<div class="stat-line"><span>${escapeHtml(what)}</span><b></b></div>` : ''}
+    ${tagPicks.length ? `<div class="field"><label>Tag${tagPicks.length > 1 ? ' (moves all ' + tagPicks.length + ')' : ''}</label><select data-tag-pick title="Shift-click more objects to move several at once">${tagOptions(ids[0], { mixed })}</select></div>` : ''}
+    ${s && scanObjs[s.id] ? `<button class="btn" data-tag-detect title="Give every part of this model its automatic tag again: the file's own tags, then part names, then shape. Parts you moved to a tag yourself are moved back.">DETECT TAGS AGAIN</button>` : ''}
+    ${s && scanObjs[s.id] ? `<div class="field"><label>Tag every part of this model</label><select data-tag-model>${tagOptions('', { extra: '<option value="__keep" selected>(choose a tag)</option>' }).replace(`<option value="" selected>`, '<option value="">')}</select></div>` : ''}
+    <div class="empty" style="margin:0 0 8px">Shift-click adds objects to the selection.</div>`;
+}
+function bindTagPick(root) {
+  const pick = root.querySelector('[data-tag-pick]');
+  if (pick) pick.onchange = () => { if (pick.value !== '__mixed') moveToTag(tagPicks.slice(), pick.value); };
+  const again = root.querySelector('[data-tag-detect]');
+  if (again) again.onclick = () => {
+    const s = prop.scans.find(x => x.id === selection.id), obj = s && scanObjs[s.id];
+    if (!obj) return;
+    const n = detectModelTags(prop, s, obj, { again: true });
+    tagsChanged();
+    toast(n + (n === 1 ? ' part' : ' parts') + ' of ' + s.name + ' tagged again.', 'ok');
+  };
+  const all = root.querySelector('[data-tag-model]');
+  if (all) all.onchange = () => {
+    if (all.value === '__keep') return;
+    const keys = Object.keys(prop.tagOf).filter(k => k.startsWith('node:' + selection.id + '#'));
+    moveToTag(keys, all.value);
+  };
+}
+// TAGS, with nothing selected: rename, recolour, show or hide, add and delete tags.
+function tagManagerHtml() {
+  const counts = tagCounts(prop);
+  const row = t => `<div class="v-tag-row" data-tag-row="${escapeHtml(t.id)}">
+      <button class="v-tag-eye ${t.visible !== false ? 'on' : ''}" data-tag-eye="${escapeHtml(t.id)}" aria-pressed="${t.visible !== false}" title="${t.visible !== false ? 'Hide' : 'Show'} ${escapeHtml(t.name)}">${icon(t.visible !== false ? 'eye' : 'eye-off')}</button>
+      <input type="color" data-tag-color="${escapeHtml(t.id)}" value="${escapeHtml(t.color)}" title="Colour">
+      <input type="text" data-tag-name="${escapeHtml(t.id)}" value="${escapeHtml(t.name)}" aria-label="Tag name" maxlength="80">
+      <span class="v-tag-n" title="Objects on this tag">${counts.get(t.id) || 0}</span>
+      <button class="v-tag-del" data-tag-del="${escapeHtml(t.id)}" title="Delete ${escapeHtml(t.name)}; its objects move to Untagged">${icon('close')}</button>
+    </div>`;
+  const un = prop.tagUntaggedVisible !== false;
+  return `<h3>TAGS</h3>
+    ${prop.tags.map(row).join('')}
+    <div class="v-tag-row" data-tag-row="">
+      <button class="v-tag-eye ${un ? 'on' : ''}" data-tag-eye="" aria-pressed="${un}" title="${un ? 'Hide' : 'Show'} objects with no tag">${icon(un ? 'eye' : 'eye-off')}</button>
+      <span class="v-tag-swatch"></span><span class="v-tag-label">${UNTAGGED_LABEL}</span>
+      <span class="v-tag-n">${counts.get(UNTAGGED) || 0}</span><span></span>
+    </div>
+    <div class="v-tag-add"><input type="text" data-tag-new placeholder="New tag name" maxlength="80"><button class="btn" data-tag-add>ADD TAG</button></div>
+    <div class="empty" style="margin:0 0 10px">Every wall, floor, ceiling, opening, fixture and part of an imported model sits on a tag. Click an object to see or change its tag; Shift-click to move several at once.</div>
+    <div class="tool-sep"></div>`;
+}
+function bindTagManager(root) {
+  root.querySelectorAll('[data-tag-eye]').forEach(b => b.onclick = () => toggleTag(b.dataset.tagEye));
+  root.querySelectorAll('[data-tag-color]').forEach(i => i.onchange = () => { if (setTagColor(prop, i.dataset.tagColor, i.value)) { renderToolCol(); touch(); } });
+  root.querySelectorAll('[data-tag-name]').forEach(i => i.onchange = () => { renameTag(prop, i.dataset.tagName, i.value); renderToolCol(); renderInspector(); touch(); });
+  root.querySelectorAll('[data-tag-del]').forEach(b => b.onclick = () => {
+    const t = tagById(prop, b.dataset.tagDel); if (!t) return;
+    const n = keysOnTag(prop, t.id).length;
+    if (n && !confirm('Delete the tag "' + t.name + '"? Its ' + n + (n === 1 ? ' object moves' : ' objects move') + ' to Untagged.')) return;
+    deleteTag(prop, t.id);
+    tagsChanged();
+  });
+  const add = () => { const i = root.querySelector('[data-tag-new]'); if (!i.value.trim()) return; addTag(prop, i.value); tagsChanged(); };
+  root.querySelector('[data-tag-add]').onclick = add;
+  root.querySelector('[data-tag-new]').onkeydown = e => { if (e.key === 'Enter') add(); };
+}
+function renderInspectorBody() {
   if (!inspEl) return;
   if (tool === 'pin') return renderPinPanel();
   if (match) return renderMatchPanel();
@@ -3057,7 +3194,9 @@ function renderInspector() {
     inspEl.querySelector('[data-fx-add]').onclick = () => {
       const [kind, subtype] = inspEl.querySelector('[data-fx-kind]').value.split(':');
       const t = controls.target, lvl = levelAtHeight(t.y);
-      if (kind === 'furniture' && prop.env.hideFurniture) { setLayerShown(prop, 'furnishings', true); renderToolCol(); }   // a new piece is seen
+      // A new piece is seen: its tag is shown if it was hidden.
+      const onTag = prop.tagDefaults[kind === 'furniture' ? 'furniture' : 'fixture'];
+      if (onTag && !tagShown(prop, onTag)) { setTagShown(prop, onTag, true); renderToolCol(); }
       const f = addFixture(prop, kind, subtype, { level: lvl.id, x: Math.round(t.x * 100) / 100, y: Math.round(t.z * 100) / 100 });
       rebuildModel();
       setSelection({ kind: 'fixture', id: f.id });
@@ -3066,14 +3205,14 @@ function renderInspector() {
   }
   if (selection.kind === 'fixture') {
     const f = (prop.fixtures || []).find(x => x.id === selection.id);
-    if (!f) { selection = null; return renderInspector(); }
+    if (!f) { selection = null; tagPicks = []; return renderInspectorBody(); }
     inspEl.innerHTML = fixtureInspectorHtml(prop, f);
     bindFixtureInspector(inspEl, prop, f, { changed: () => { rebuildModel(); renderInspector(); }, deleted: () => { setSelection(null); rebuildModel(); } });
     return;
   }
   if (selection.kind === 'wall') {
     const w = prop.walls.find(w => w.id === selection.id);
-    if (!w) { selection = null; return renderInspector(); }
+    if (!w) { selection = null; tagPicks = []; return renderInspectorBody(); }
     const L = Math.hypot(w.bx - w.ax, w.by - w.ay);
     const lvl = levelOfWall(prop, w);
     const h = wallHeightOf(prop, w);
@@ -3122,7 +3261,7 @@ function renderInspector() {
   }
   if (selection.kind === 'opening') {
     const o = prop.openings.find(o => o.id === selection.id);
-    if (!o) { selection = null; return renderInspector(); }
+    if (!o) { selection = null; tagPicks = []; return renderInspectorBody(); }
     inspEl.innerHTML = `<h3>${o.type === 'window' ? 'WINDOW' : (o.width > 1.25 ? 'CASED OPENING' : 'DOOR')}</h3>
       <div class="field"><label>Type</label><select data-type><option value="door" ${o.type === 'door' ? 'selected' : ''}>Door</option><option value="window" ${o.type === 'window' ? 'selected' : ''}>Window</option></select></div>
       <div class="field-row">
@@ -3156,7 +3295,7 @@ function renderInspector() {
   }
   if (selection.kind === 'room') {
     const r = prop.rooms.find(r => r.id === selection.id);
-    if (!r) { selection = null; return renderInspector(); }
+    if (!r) { selection = null; tagPicks = []; return renderInspectorBody(); }
     inspEl.innerHTML = `<h3>ROOM / FLOOR</h3>
       <div class="field"><label>Name</label><input type="text" data-name value="${escapeHtml(r.name || '')}"></div>
       <div class="stat-line"><span>Level</span><b>${escapeHtml(levelOfRoom(prop, r).name)}</b></div>
@@ -3178,7 +3317,7 @@ function renderInspector() {
   }
   if (selection.kind === 'pin') {
     const ph = photoById(prop, selection.id);
-    if (!ph || !ph.pin) { selection = null; return renderInspector(); }
+    if (!ph || !ph.pin) { selection = null; tagPicks = []; return renderInspectorBody(); }
     const isDoc = ph.kind === 'document';
     const size = ph.pin.size;
     const printOpts = PRINT_SIZES.map(x => `<option value="${x.long}" ${Math.abs(x.long - (size || DEFAULT_PRINT)) < 1e-3 ? 'selected' : ''}>${escapeHtml(x.label)}</option>`).join('');
@@ -3230,7 +3369,7 @@ function renderInspector() {
   }
   if (selection.kind === 'position') {
     const pos = (prop.photoPositions || []).find(x => x.id === selection.id);
-    if (!pos) { selection = null; return renderInspector(); }
+    if (!pos) { selection = null; tagPicks = []; return renderInspectorBody(); }
     const pics = picturesOf(prop, pos.id);
     const strip = role => pics[role].length ? `<div class="field"><label>${ROLE_LABELS[role]} (${pics[role].length})</label><div class="v-thumbs small">${pics[role].map(ph =>
       `<button class="v-thumb" data-open-photo="${escapeHtml(ph.id)}" title="${escapeHtml(ph.name)}"><img src="${escapeHtml(ph.thumb)}" alt=""></button>`).join('')}</div></div>` : '';
@@ -3269,7 +3408,7 @@ function renderInspector() {
   }
   if (selection.kind === 'note') {
     const n = noteById(selection.id);
-    if (!n) { selection = null; return renderInspector(); }
+    if (!n) { selection = null; tagPicks = []; return renderInspectorBody(); }
     const where = noteWhere(n), added = new Date(n.createdAt);
     inspEl.innerHTML = `<h3>NOTE</h3>
       <div class="field"><label>Text</label><textarea data-text rows="5" maxlength="2000">${escapeHtml(n.text || '')}</textarea></div>
@@ -3291,7 +3430,7 @@ function renderInspector() {
   }
   if (selection.kind === 'scan') {
     const s = prop.scans.find(s => s.id === selection.id);
-    if (!s) { selection = null; return renderInspector(); }
+    if (!s) { selection = null; tagPicks = []; return renderInspectorBody(); }
     const obj = scanObjs[s.id] || null;
     const state = obj ? 'ready' : (scanState[s.id] || 'loading');
     const st = obj ? scanStats(obj) : { label: { missing: 'missing from storage - re-import it', failed: 'could not be loaded', loading: 'loading' }[state] || 'loading' };
@@ -3319,7 +3458,6 @@ function renderInspector() {
       ${isPts ? `<div class="field"><label>Point size</label><input type="range" min="0.002" max="0.08" step="0.001" value="${finiteNum(s.pointSize, 0.012)}" data-ps></div>
       <div class="field"><label>Colour</label><select data-pc><option value="rgb" ${s.pointColor === 'rgb' ? 'selected' : ''}>Scan colours</option><option value="height" ${s.pointColor === 'height' ? 'selected' : ''}>Height ramp</option><option value="solid" ${s.pointColor === 'solid' ? 'selected' : ''}>Solid amber</option></select></div>` : ''}
       ${isSplat ? `<button class="btn" data-flip ${dis}>FLIP UP AXIS</button>` : ''}
-      <div class="field"><label>Layer</label><select data-layer-of title="Which SHOW toggle this scan or model follows">${LAYERS.map(l => `<option value="${l}" ${scanLayer(s) === l ? 'selected' : ''}>${escapeHtml(LAYER_LABELS[l])}</option>`).join('')}</select></div>
       <label class="tool-check"><input type="checkbox" ${s.visible !== false ? 'checked' : ''} data-vis> VISIBLE</label>
       <button class="btn" data-frame ${dis}>FRAME SCAN</button>
       <button class="btn" data-floor ${dis}>DROP TO FLOOR</button>
@@ -3358,7 +3496,6 @@ function renderInspector() {
     const flip = inspEl.querySelector('[data-flip]');
     if (flip) flip.onclick = () => { s.flip = !s.flip; upd(); };
     inspEl.querySelector('[data-vis]').onchange = e => { s.visible = e.target.checked; upd(); renderToolCol(); };
-    inspEl.querySelector('[data-layer-of]').onchange = e => { s.layer = e.target.value; touch(); renderToolCol(); };
     inspEl.querySelector('[data-frame]').onclick = () => { if (obj) frameObject(obj); };
     inspEl.querySelector('[data-floor]').onclick = () => { if (obj) { dropScanToFloor(s, obj); upd(); renderInspector(); } };
     inspEl.querySelector('[data-center]').onclick = () => { if (obj) { centerScanOnModel(s, obj, modelBounds(prop)); upd(); renderInspector(); } };
@@ -3373,6 +3510,7 @@ function renderInspector() {
       if(prop.modelSourceId === s.id) { delete prop.modelSourceId; rebuildModel(); }
       if (obj) { scanRoot.remove(obj); disposeScanObject(obj); delete scanObjs[s.id]; }
       delete scanState[s.id];
+      forgetScanTags(prop, s.id);
       fitShadow(); applyEnvironment();
       setSelection(null);
       touch();
@@ -3382,6 +3520,143 @@ function renderInspector() {
     };
     return;
   }
+}
+
+// ---------- saved views (tabs over the model, as SketchUp's scene tabs) ----------
+let activeViewId = null;       // the saved view last gone to, drawn as the current tab
+let offScreen = null, offMenu = null;
+function viewState() {
+  return {
+    camera: { position: camera.position.toArray(), target: controls.target.toArray(), fov: camera.fov },
+    mode: mode === 'top' ? 'top' : 'orbit', section: { on: section.on, height: section.height }, xray,
+    hiddenLevels: [...hiddenLevels()],
+  };
+}
+function addView() {
+  const v = addSavedView(prop, '', viewState());
+  activeViewId = v.id;
+  touch(); renderViews();
+  toast('Saved the view "' + v.name + '" with its camera and tags. Double-click its tab to rename it.', 'ok');
+  return v;
+}
+function goToView(id) {
+  const v = (prop.savedViews || []).find(x => x.id === id);
+  if (!v) return;
+  activeViewId = id;
+  if (match) endMatch();
+  if (v.mode === 'top' && mode !== 'top') setMode('top');
+  else if (v.mode !== 'top' && mode !== 'orbit') setMode('orbit');
+  const tagsMoved = applySavedTags(prop, v) > 0;
+  section.on = v.section.on; section.height = v.section.height;
+  if (xray !== v.xray) { xray = v.xray; applyXray(); }
+  const hidden = hiddenLevels();
+  hidden.clear(); for (const lid of v.hiddenLevels) if (prop.levels.some(l => l.id === lid)) hidden.add(lid);
+  const levels = modelGroup && modelGroup.userData.levels;
+  if (levels) for (const l of levels) l.group.visible = !hidden.has(l.id);
+  rebuildNightLights();
+  applyTagVisibility();
+  applySection();
+  if (camera.fov !== v.camera.fov) { camera.fov = v.camera.fov; camera.updateProjectionMatrix(); }
+  flyTo(new THREE.Vector3(...v.camera.position), new THREE.Vector3(...v.camera.target), 650);
+  const sel = selectedObject();
+  if (sel && !isVisibleChain(sel)) setSelection(null);
+  renderHud(); renderToolCol(); renderInspector(); renderViews();
+  if (tagsMoved) touch();
+}
+function stepView(by) {
+  const list = prop.savedViews || [];
+  if (!list.length) return;
+  const i = list.findIndex(v => v.id === activeViewId);
+  goToView(list[i < 0 ? (by > 0 ? 0 : list.length - 1) : (i + by + list.length) % list.length].id);
+}
+function renameView(id) {
+  const v = (prop.savedViews || []).find(x => x.id === id);
+  if (!v) return;
+  const name = prompt('Name of this view', v.name);
+  if (name && renameSavedView(prop, id, name)) { touch(); renderViews(); }
+}
+function renderViews() {
+  const strip = hud.views;
+  if (!strip) return;
+  const list = prop.savedViews || [];
+  strip.innerHTML = list.map(v => `<button class="v-view-tab ${v.id === activeViewId ? 'active' : ''}" role="tab" aria-selected="${v.id === activeViewId}" data-view-tab="${escapeHtml(v.id)}" title="${escapeHtml(v.name)}: click to go there (Page Up / Page Down step through views). Double-click to rename; right-click to update, move or delete.">${escapeHtml(v.name)}</button>`).join('') +
+    `<button class="v-view-add" data-view-add title="Save this camera, with the tags shown now, as a view" aria-label="Add a saved view">${icon('plus')}${list.length ? '' : '<span>SAVE VIEW</span>'}</button>`;
+  strip.querySelector('[data-view-add]').onclick = addView;
+  strip.querySelectorAll('[data-view-tab]').forEach(b => {
+    const id = b.dataset.viewTab;
+    b.onclick = () => goToView(id);
+    b.ondblclick = () => renameView(id);
+    b.oncontextmenu = e => {
+      e.preventDefault();
+      const i = list.findIndex(v => v.id === id);
+      popupMenu({ x: e.clientX, y: e.clientY }, [
+        ['view-update', 'UPDATE TO THIS CAMERA AND TAGS', () => { updateSavedView(prop, id, viewState()); activeViewId = id; touch(); renderViews(); toast('View updated.', 'ok'); }],
+        ['view-rename', 'RENAME', () => renameView(id)],
+        i > 0 ? ['view-left', 'MOVE LEFT', () => { moveSavedView(prop, id, -1); touch(); renderViews(); }] : null,
+        i < list.length - 1 ? ['view-right', 'MOVE RIGHT', () => { moveSavedView(prop, id, 1); touch(); renderViews(); }] : null,
+        null,
+        ['view-delete', 'DELETE VIEW', () => { if (!confirm('Delete the saved view "' + list[i].name + '"?')) return; deleteSavedView(prop, id); if (activeViewId === id) activeViewId = null; touch(); renderViews(); }],
+      ].filter((it, k, all) => it !== null || (k > 0 && all[k - 1] !== null)));
+    };
+  });
+}
+
+// ---------- what is on the screen, and the Tiksi menu ----------
+// The tool column's groups, the view bar, the compass and the view tabs show only when the
+// Tiksi menu has them ON SCREEN; everything is in the menu either way.
+function applyScreen() {
+  if (!hud.modes) return;
+  hud.modes.hidden = !onScreen('model.modes', false);
+  if (hud.compassBox) hud.compassBox.hidden = !onScreen('model.compass', true);
+  if (hud.views) hud.views.hidden = !onScreen('model.views', true);
+  wrapEl && wrapEl.classList.toggle('v-views-on', !hud.views.hidden);
+}
+function menuGroups() {
+  if (!prop || !scene) return [];
+  const g = (title, id, on, label, items) => ({ title, screen: { id, on: onScreen(id, on), label }, items });
+  const counts = tagCounts(prop);
+  return [
+    g('Saved views', 'model.views', true, 'Tabs over the model', [
+      ...(prop.savedViews || []).map(v => ({ label: v.name, active: v.id === activeViewId, run: () => goToView(v.id) })),
+      { label: 'Save this view', key: '+', run: addView },
+    ]),
+    g('View', 'model.view', false, 'FRAME, FRONT and ISO in the left column', [
+      { label: 'Frame the model', key: 'F', run: () => { if (mode !== 'orbit') setMode('orbit'); presetView('frame'); } },
+      { label: 'Front', run: () => { if (mode !== 'orbit') setMode('orbit'); presetView('front'); } },
+      { label: 'Iso', run: () => { if (mode !== 'orbit') setMode('orbit'); presetView('iso'); } },
+      { label: 'Orbit', key: 'O', active: mode === 'orbit', run: () => setMode('orbit') },
+      { label: 'Walk through', key: 'W', active: mode === 'walk', run: () => setMode('walk') },
+      { label: 'Top, north up', key: 'T', active: mode === 'top', run: () => setMode('top') },
+    ]),
+    g('Display', 'model.modes', false, 'The ORBIT to NOTES bar over the model', [
+      { label: 'Section cut', key: 'C', active: section.on, run: toggleSection },
+      { label: 'X-ray', key: 'X', active: xray, run: toggleXray },
+      { label: 'Sun and environment', run: () => { hud.env.hidden = false; hud.env.classList.add('open'); renderEnvPanel(); } },
+      { label: 'Photo pins', active: markersShown('pins'), run: () => toggleMarkers('pins') },
+      { label: 'Notes', active: markersShown('notes'), run: () => toggleMarkers('notes') },
+      { label: 'Render a still image', run: openStillDialog },
+    ]),
+    g('Tools', 'model.tools', false, 'The tools in the left column', [
+      { label: 'Select', key: 'V', active: tool === 'select', run: () => setTool('select') },
+      { label: 'Move walls', key: 'M', active: tool === 'move', run: () => setTool(tool === 'move' ? 'select' : 'move') },
+      { label: 'Measure', key: 'D', active: tool === 'measure', run: () => setTool(tool === 'measure' ? 'select' : 'measure') },
+      ...(measures.length ? [{ label: 'Clear measures', run: () => { clearMeasures(); renderToolCol(); } }] : []),
+      { label: 'Pin a photo', key: 'P', active: tool === 'pin', run: () => { if (tool === 'pin') setTool('select'); else startPinMode(null); } },
+      { label: 'Note', key: 'N', active: tool === 'note', run: () => { if (tool === 'note') setTool('select'); else startNoteMode(null); } },
+      { label: 'Edit in SketchUp', run: () => document.dispatchEvent(new CustomEvent('tiksi:edit-in-sketchup')) },
+    ]),
+    g('Tags', 'model.tags', false, 'Tag switches in the left column', [
+      ...prop.tags.map(t => ({ label: (t.visible !== false ? 'Hide ' : 'Show ') + t.name + ' (' + (counts.get(t.id) || 0) + ')', active: t.visible !== false, keep: true, run: () => toggleTag(t.id) })),
+      { label: 'Rename, recolour, add or delete tags', run: () => setSelection(null) },
+    ]),
+    g('Levels', 'model.levels', false, 'Level switches in the left column',
+      prop.levels.map(l => ({ label: (hiddenLevels().has(l.id) ? 'Show ' : 'Hide ') + l.name, active: !hiddenLevels().has(l.id), keep: true, run: () => toggleLevel(l.id) }))),
+    g('Models and scans', 'model.models', false, 'The list of imported models in the left column', [
+      ...prop.scans.map(sc => ({ label: sc.name, active: scanSelected(sc.id), run: () => setSelection({ kind: 'scan', id: sc.id }) })),
+      { label: 'Import and exchange models (FILE)', run: () => exchangeDialog() },
+    ]),
+    g('Compass', 'model.compass', true, 'The compass over the model', []),
+  ];
 }
 
 function exchangeDialog(selected) { document.dispatchEvent(new CustomEvent('tiksi:files',{detail:{tab:'exchange',selected}})); }
@@ -3398,43 +3673,41 @@ function renderToolCol() {
   const scanRows = prop.scans.map(s => `<button class="tool-btn v-scan-row ${scanSelected(s.id) ? 'active' : ''}" data-scan="${escapeHtml(s.id)}" title="${escapeHtml(s.name)}${scanObjs[s.id] ? '' : ' (' + escapeHtml(scanState[s.id] || 'loading') + ')'}">${icon(s.kind === 'splat' ? 'splat' : s.kind === 'mesh' ? 'model' : 'scan')}<span class="tb-text">${escapeHtml(s.name.length > 14 ? s.name.slice(0, 12) + '..' : s.name)}</span><kbd class="key">${escapeHtml(scanBadge(s))}</kbd></button>`).join('');
   // One toggle per storey, lit while the level is shown; the key badge is its floor elevation.
   const hidden = hiddenLevels();
-  // One toggle per view layer, lit while any of its scans or models is shown.
-  const layerRow = (layer, ic, label, key) => {
-    const members = layerHasMembers(prop, layer), shown = layerShown(prop, layer);
-    const what = layer === 'scan' ? 'the scan capture (Polycam mesh, point cloud or splat)' : 'furniture, cabinets and fixtures';
-    const title = members ? (shown ? 'Hide ' : 'Show ') + what + ' (' + key + ')' : 'No ' + LAYER_LABELS[layer].toLowerCase() + ' in this property. Set a scan\'s LAYER in its inspector.';
-    return `<button class="tool-btn ${shown ? 'active' : ''}" data-layer="${layer}" aria-pressed="${shown}" ${members ? '' : 'disabled'} title="${escapeHtml(title)}">${icon(shown ? ic : 'eye-off')}<span class="tb-text">${label}</span><kbd class="key">${key}</kbd></button>`;
-  };
+  // One toggle per tag, lit while the tag is shown; the badge counts its objects.
+  const counts = tagCounts(prop);
+  const keyOf = { [CANON.scan.id]: ' (G)', [CANON.furniture.id]: ' (K)' };
+  const tagRow = (id, name, color, shown) => `<button class="tool-btn v-tag-btn ${shown ? 'active' : ''}" data-tag="${escapeHtml(id)}" aria-pressed="${shown}" title="${shown ? 'Hide' : 'Show'} ${escapeHtml(name)}${keyOf[id] || ''}">${icon(shown ? 'eye' : 'eye-off')}<span class="v-tag-dot" style="background:${escapeHtml(color)}"></span><span class="tb-text">${escapeHtml(name.length > 13 ? name.slice(0, 11) + '..' : name)}</span><kbd class="key">${counts.get(id) || 0}</kbd></button>`;
+  const tagRows = prop.tags.map(t => tagRow(t.id, t.name, t.color, t.visible !== false)).join('') +
+    ((counts.get(UNTAGGED) || prop.tagUntaggedVisible === false) ? tagRow(UNTAGGED, UNTAGGED_LABEL, 'transparent', prop.tagUntaggedVisible !== false) : '');
   const levelRows = prop.levels.map(l => `<button class="tool-btn ${hidden.has(l.id) ? '' : 'active'}" data-level="${escapeHtml(l.id)}" title="${hidden.has(l.id) ? 'Show' : 'Hide'} ${escapeHtml(l.name)} (floor at ${escapeHtml(fmtLen(l.elevation))})">${icon(hidden.has(l.id) ? 'eye-off' : 'layers')}<span class="tb-text">${escapeHtml(l.name.length > 14 ? l.name.slice(0, 12) + '..' : l.name)}</span><kbd class="key">${escapeHtml(fmtLen(l.elevation, { short: true }))}</kbd></button>`).join('');
-  tc.innerHTML = `
-    <div class="tool-head">VIEW</div>
+  // Each group is on the screen only when the Tiksi menu says so; otherwise it lives in the menu.
+  const groups = [
+    onScreen('model.view', false) && `<div class="tool-head">VIEW</div>
     ${tb('frame', 'frame', 'FRAME', 'F')}
     ${tb('front', 'target', 'FRONT')}
-    ${tb('iso', 'model', 'ISO')}
-    <div class="tool-sep"></div>
-    <div class="tool-head">TOOLS</div>
+    ${tb('iso', 'model', 'ISO')}`,
+    onScreen('model.tools', false) && `<div class="tool-head">TOOLS</div>
     ${tb('select', 'select', 'SELECT', 'V', tool === 'select')}
     ${tb('move', 'move', 'MOVE WALLS', 'M', tool === 'move')}
     ${tb('measure', 'measure', 'MEASURE', 'D', tool === 'measure')}
     ${measures.length ? tb('clearm', 'close', 'CLEAR MEASURES') : ''}
     ${tb('pin', 'pin', 'PIN', 'P', tool === 'pin')}
     ${tb('note', 'note', 'NOTE', 'N', tool === 'note')}
-    ${tb('sketchup', 'external', 'EDIT IN SKETCHUP')}
-    <div class="tool-sep"></div>
-    <div class="tool-head">SHOW</div>
-    ${layerRow('scan', 'scan', 'SCAN', 'G')}
-    ${layerRow('furnishings', 'products', 'FURNITURE', 'K')}
-    <div class="tool-sep"></div>
-    <div class="tool-head">LEVELS</div>
-    ${levelRows}
-    <div class="tool-sep"></div>
-    <div class="tool-head">MODELS & SCANS</div>
+    ${tb('sketchup', 'external', 'EDIT IN SKETCHUP')}`,
+    onScreen('model.tags', false) && `<div class="tool-head" title="Show or hide each tag. With nothing selected, the panel on the right renames, recolours, adds and deletes tags.">TAGS</div>
+    ${tagRows}`,
+    onScreen('model.levels', false) && `<div class="tool-head">LEVELS</div>
+    ${levelRows}`,
+    onScreen('model.models', false) && `<div class="tool-head">MODELS & SCANS</div>
     ${prop.designComparison ? tb('before', 'scan', 'BEFORE', '', prop.designComparison.view === 'before') + tb('after', 'model', 'AFTER', '', prop.designComparison.view === 'after') : ''}
     ${scanRows}
     <div class="empty" style="padding:6px 8px; font-size:9.5px; color:var(--faint); font-family:var(--mono); line-height:1.5">
       PLY / PCD / XYZ / LAS point clouds, OBJ / GLB meshes, .splat / .spz / .ply Gaussian splats.</div>
     <div class="tool-sep"></div>
-<div class="empty">Import and exchange models in FILE.</div>`;
+<div class="empty">Import and exchange models in FILE.</div>`,
+  ].filter(Boolean);
+  tc.innerHTML = groups.join('<div class="tool-sep"></div>');
+  tc.closest('.v-layout')?.classList.toggle('v-no-tools', !groups.length);
   const on = (act, fn) => { const b = tc.querySelector(`[data-act=${act}]`); if (b) b.onclick = fn; };
   on('frame', () => { if (mode !== 'orbit') setMode('orbit'); presetView('frame'); });
   on('front', () => { if (mode !== 'orbit') setMode('orbit'); presetView('front'); });
@@ -3470,7 +3743,7 @@ function renderToolCol() {
   on('before',()=>compare('before'));on('after',()=>compare('after'));
   tc.querySelectorAll('[data-scan]').forEach(b => b.onclick = () => setSelection({ kind: 'scan', id: b.dataset.scan }));
   tc.querySelectorAll('[data-level]').forEach(b => b.onclick = () => toggleLevel(b.dataset.level));
-  tc.querySelectorAll('[data-layer]').forEach(b => b.onclick = () => toggleLayer(b.dataset.layer));
+  tc.querySelectorAll('[data-tag]').forEach(b => b.onclick = () => toggleTag(b.dataset.tag));
   on('rebuild', () => { rebuildModel(); rebuildGround(); buildAllPins(); buildAllNotes(); });
 }
 function setTool(next) {
@@ -3509,8 +3782,9 @@ function onKeyDown(e) {
     case 'KeyN': if (tool === 'note') setTool('select'); else startNoteMode(null); break;
     case 'KeyC': toggleSection(); break;
     case 'KeyX': toggleXray(); break;
-    case 'KeyG': toggleLayer('scan'); break;
-    case 'KeyK': toggleLayer('furnishings'); break;
+    case 'PageDown': case 'PageUp': stepView(e.code === 'PageDown' ? 1 : -1); break;
+    case 'KeyG': toggleTag(CANON.scan.id); break;
+    case 'KeyK': toggleTag(CANON.furniture.id); break;
     case 'Escape':
       if (match) endMatch();
       else if (tool !== 'select') setTool('select');
@@ -3547,6 +3821,7 @@ export function mount(root) {
     <div class="editor-layout v-layout">
       <div class="tool-col"></div>
       <div class="canvas-wrap v-wrap">
+        <div class="v-views" role="tablist" aria-label="Saved views"></div>
         <div class="v-modes"></div>
         <div class="v-compass" title="North"><div class="v-rose"><span class="n">N</span><span class="e">E</span><span class="s">S</span><span class="w">W</span><i></i></div></div>
         <div class="v-env"></div>
@@ -3561,7 +3836,9 @@ export function mount(root) {
   hud = {
     modes: wrapEl.querySelector('.v-modes'), compass: wrapEl.querySelector('.v-rose'), env: wrapEl.querySelector('.v-env'),
     progress: wrapEl.querySelector('.v-progress'), toast: wrapEl.querySelector('.v-toast'), hint: wrapEl.querySelector('.v-hint'),
+    views: wrapEl.querySelector('.v-views'), compassBox: wrapEl.querySelector('.v-compass'),
   };
+  activeViewId = null;
   mode = 'orbit'; tool = 'select'; selection = null; hoverTarget = null; tween = null; measureDraft = null; pinPhotoId = null; match = null;
   movingNoteId = null; rightPress = null; ctxMenu = null; noteEditor = null;
   panoNagged = false; panoPending = null; panoMissing = null;
@@ -3585,6 +3862,10 @@ export function mount(root) {
   hud.env.hidden=true;
   renderToolCol();
   renderInspector();
+  renderViews();
+  applyScreen();
+  offScreen = onScreenChange(() => { applyScreen(); renderToolCol(); });
+  offMenu = setMenuProvider(menuGroups);
   setHint('');
 
   const c = renderer.domElement;
@@ -3660,6 +3941,8 @@ function rememberView() {
 
 export function unmount() {
   try { rememberView(); } catch (e) { console.error(e); }
+  if (offScreen) { offScreen(); offScreen = null; }
+  if (offMenu) { offMenu(); offMenu = null; }
   if (exportDialog) exportDialog.close();
   if (renderer) renderer.setAnimationLoop(null);
   mountId++;
@@ -3730,24 +4013,24 @@ const fieldLayout = () => document.documentElement.classList.contains('phone');
 export function fieldState() {
   if (!scene || !prop) return null;
   const hidden = hiddenLevels();
-  const layer = (id, label) => ({ id: 'layer:' + id, label, on: layerHasMembers(prop, id) && layerShown(prop, id), disabled: !layerHasMembers(prop, id) });
+  const counts = tagCounts(prop);
   const lo = Math.min(0.3, lowestElevation() + 0.3);
   return {
     mode,
     cameras: [{ id: 'frame', label: 'Overview' }, { id: 'front', label: 'Front' }, { id: 'iso', label: 'Corner' }],
+    views: (prop.savedViews || []).map(v => ({ id: v.id, label: v.name, on: v.id === activeViewId })),
     positions: (prop.photoPositions || []).map(p => ({ id: p.id, label: positionLabel(p) })),
     show: [
       { id: 'section', label: 'Section cut', on: section.on },
       { id: 'xray', label: 'X-ray', on: xray },
       { id: 'pins', label: 'Photos', on: markersShown('pins'), count: prop.photos.filter(ph => ph.pin).length },
       { id: 'notes', label: 'Notes', on: markersShown('notes'), count: prop.notePins.length },
-      layer('scan', 'Scan'),
-      layer('furnishings', 'Furniture'),
     ],
     section: section.on ? { min: lo, max: modelTop() + 0.3, value: section.height, label: fmtLen(section.height) } : null,
     levels: prop.levels.map(l => ({ id: l.id, label: l.name, on: !hidden.has(l.id) })),
-    // Tags (SketchUp-style, one switch per tag) join here as [{ id, label, on }] with a 'tag' action.
-    tags: [],
+    // One switch per tag that holds something; Untagged only when objects sit on no tag.
+    tags: [...prop.tags.map(t => ({ id: t.id, label: t.name, color: t.color, on: t.visible !== false })),
+      { id: UNTAGGED, label: UNTAGGED_LABEL, on: tagShown(prop, UNTAGGED) }].filter(t => (counts.get(t.id) || 0) > 0),
   };
 }
 export function fieldAction(kind, id, value) {
@@ -3760,6 +4043,9 @@ export function fieldAction(kind, id, value) {
     if (mode !== 'orbit') setMode('orbit');
     flyTo(new THREE.Vector3(...pos.view.position), new THREE.Vector3(...pos.view.target), 700);
   }
+  else if (kind === 'view') goToView(id);
+  else if (kind === 'save-view') addView();
+  else if (kind === 'tag') toggleTag(id || UNTAGGED);
   else if (kind === 'level') toggleLevel(id);
   else if (kind === 'section-height') {
     section.height = Number(value);
@@ -3770,7 +4056,6 @@ export function fieldAction(kind, id, value) {
     if (id === 'section') toggleSection();
     else if (id === 'xray') toggleXray();
     else if (id === 'pins' || id === 'notes') toggleMarkers(id);
-    else if (id.startsWith('layer:')) toggleLayer(id.slice(6));
   }
 }
 // Hold-to-move for walking on a touch screen: dir is forward | back | left | right.

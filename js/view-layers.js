@@ -1,7 +1,8 @@
-// View layers shared by PLAN and MODEL. A property's imported scans and models fall into
-// three layers: the raw capture (a Polycam mesh, point cloud or splat), furnishings
-// (furniture, cabinets, fixtures and appliances modelled as their own file) and any other
-// model. A record's own `layer` wins; older records are classified by kind and name.
+// What kind of model a scan record is, as a whole: the raw capture (a Polycam mesh, point
+// cloud or splat), furnishings (furniture, cabinets, fixtures and appliances modelled as their
+// own file) or any other model. A record's own `layer` wins; older records are classified by
+// kind and name. Tag detection (tags-scene.js) starts from it, and PLAN draws furnishing
+// models as footprints.
 export const LAYERS = ['scan', 'furnishings', 'model'];
 export const LAYER_LABELS = { scan: 'Scan capture', furnishings: 'Furniture & fixtures', model: 'Other model' };
 
@@ -21,37 +22,14 @@ export function layerScans(prop, layer) {
   return ((prop && prop.scans) || []).filter(s => scanLayer(s) === layer);
 }
 
-// Fixtures (fixtures.js) of kind 'furniture' follow the furnishings layer too, through
-// prop.env.hideFurniture; built-ins (counter and cabinet runs, appliances, bath) are part of
-// the building and always show, like walls.
+// Fixtures (fixtures.js) of kind 'furniture' count as furnishings for the plan's FURNITURE
+// footprints. Showing and hiding in MODEL and DOCUMENTS is done by tags (tags.js).
 export const isFurnitureFixture = f => !!f && f.kind === 'furniture';
 export function layerFixtures(prop, layer) {
   return layer === 'furnishings' ? ((prop && prop.fixtures) || []).filter(isFurnitureFixture) : [];
 }
-export function fixtureShown(prop, f) {
-  return !isFurnitureFixture(f) || !(prop && prop.env && prop.env.hideFurniture);
-}
 export function layerHasMembers(prop, layer) {
   return layerScans(prop, layer).length + layerFixtures(prop, layer).length > 0;
-}
-
-// A layer reads as shown while any of its records is visible.
-export function layerShown(prop, layer) {
-  return layerScans(prop, layer).some(s => s.visible !== false) ||
-    layerFixtures(prop, layer).some(f => fixtureShown(prop, f));
-}
-
-// Show or hide every record in the layer; returns the scan records whose visibility changed
-// (furniture fixtures follow prop.env.hideFurniture, set here too).
-export function setLayerShown(prop, layer, on) {
-  if (layerFixtures(prop, layer).length && prop.env) prop.env.hideFurniture = !on;
-  const changed = [];
-  for (const s of layerScans(prop, layer)) {
-    if ((s.visible !== false) === !!on) continue;
-    s.visible = !!on;
-    changed.push(s);
-  }
-  return changed;
 }
 
 // Plan footprints of a placed object: one convex outline per mesh in world X/Z (the plan's

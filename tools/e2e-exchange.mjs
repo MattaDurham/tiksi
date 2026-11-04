@@ -15,6 +15,7 @@ try {
   for(let i=0;i<100;i++){try{if((await fetch(url)).ok)break;}catch{}await new Promise(r=>setTimeout(r,50));}
   browser=await chromium.launch({args:['--use-angle=swiftshader','--enable-unsafe-swiftshader']});
   const page=await browser.newPage({viewport:{width:1440,height:1000}}), errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   await page.goto(url);await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   const checks=await page.evaluate(async()=>{
     const THREE=await import('three');

@@ -8,12 +8,13 @@ import { chromium } from 'playwright';
 import { seedGuide } from './guide-fixture.mjs';
 
 const options = process.argv.slice(2);
-let url = 'http://localhost:8643/', output = 'js/guide-assets', stillsOnly = false, demosOnly = false;
+let url = 'http://localhost:8643/', output = 'js/guide-assets', stillsOnly = false, demosOnly = false, only = '';
 for (let i = 0; i < options.length; i++) {
   if (options[i] === '--url' && options[i + 1]) url = options[++i];
   else if (options[i] === '--output' && options[i + 1]) output = options[++i];
   else if (options[i] === '--stills-only') stillsOnly = true;
   else if (options[i] === '--demos-only') demosOnly = true;
+  else if (options[i] === '--only' && options[i + 1]) only = options[++i];
   else throw new Error('Unknown or incomplete capture option: ' + options[i]);
 }
 const origin = new URL(url);
@@ -24,6 +25,7 @@ await mkdir(target, { recursive: true });
 const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 const context = await browser.newContext({ viewport: { width: 1440, height: 960 }, deviceScaleFactor: 1 });
 const page = await context.newPage(), errors = [];
+await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
 page.on('pageerror', error => errors.push(error.message));
 page.setDefaultTimeout(30000);
 
@@ -104,11 +106,48 @@ async function clip(name, actions) {
   console.log('Demo:', name, frames.length, 'actual UI states');
 }
 
+// Tags chapter: the screen as it starts (tools in the Tiksi menu), a synthetic roof model over
+// the sample kitchen with Roof hidden, two saved views, and the menu open.
+async function tagsShot() {
+  await page.evaluate(async () => {
+    const s = await import('/js/store.js'), THREE = await import('three');
+    const { GLTFExporter } = await import('three/addons/exporters/GLTFExporter.js');
+    const p = s.activeProperty(), scene = new THREE.Scene();
+    const slab = new THREE.Mesh(new THREE.BoxGeometry(9, 0.2, 6), new THREE.MeshStandardMaterial({ color: 0x5b6670, roughness: 0.9 }));
+    slab.name = 'Mesh 0'; slab.position.set(4.2, 2.85, 2.7); scene.add(slab);
+    await s.putFile('guide-roof', await new GLTFExporter().parseAsync(scene, { binary: true }), { format: 'glb' });
+    p.scans.push({ id: 'guide-roof', name: 'Sample roof.glb', format: 'glb', kind: 'mesh', pos: [0, 0, 0], rot: [0, 0, 0], rotY: 0, scale: 1, visible: true });
+    s.touch();
+  });
+  await page.evaluate(async () => (await import('/js/tiksi-menu.js')).resetScreen());   // the screen as Tiksi starts
+  await go('model');
+  await page.waitForFunction(async () => Object.keys((await import('/js/store.js')).activeProperty().tagOf).some(k => k.startsWith('node:guide-roof')), null, { timeout: 60000 });
+  await page.keyboard.press('KeyF'); await settle(900);
+  await page.locator('[data-view-add]').click(); await settle(200);
+  await page.locator('.v-tags [data-tag-eye="tag-roof"]').click(); await settle(300);
+  await page.evaluate(async () => { const s = await import('/js/store.js'); const p = s.activeProperty(); p.savedViews[0].name = 'Outside'; s.touch(); });
+  await page.locator('[data-view-add]').click(); await settle(200);
+  await page.evaluate(async () => { const s = await import('/js/store.js'); const p = s.activeProperty(); p.savedViews[1].name = 'Roof off'; s.touch(); });
+  await go('model'); await page.locator('.v-view-tab').nth(1).click(); await settle(1200);
+  await page.locator('#tiksi-menu').click(); await settle(300);
+  await shot('tags');
+  await page.keyboard.press('Escape');
+  // Back to the sample as the other chapters show it.
+  await page.evaluate(async () => {
+    const s = await import('/js/store.js'); const p = s.activeProperty();
+    p.scans = p.scans.filter(x => x.id !== 'guide-roof'); p.savedViews = [];
+    for (const t of p.tags) t.visible = true;
+    s.touch();
+    (await import('/js/tiksi-menu.js')).resetScreen(true);
+  });
+}
+
 try {
   await page.goto(origin.href); await page.locator('[data-prop-name]').waitFor();
   const ids = await seedGuide(page);
   await settle();
-  if (!demosOnly) {
+  if (!demosOnly && (!only || only === 'tags')) await tagsShot();
+  if (!demosOnly && !only) {
   await selectWall(); await shot('plan');
   await go('model'); await page.locator('[data-act="iso"]').click(); await settle(1500);
   await shot('start'); await shot('model');
@@ -138,7 +177,7 @@ try {
   await page.locator('.dc-paper svg').click({ position: { x: 5, y: 5 } }); await settle(1200); await shot('documents');
   }
 
-  if (!stillsOnly) {
+  if (!stillsOnly && !only) {
     await go('plan');
     await clip('files', async frame => {
       await frame('1. Open FILE for saving, importing and settings', '#btn-file');

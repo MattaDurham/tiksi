@@ -180,7 +180,7 @@ function onPanelClick(e) {
   if (!act) return;
   fieldAction(act, t.dataset.id);
   // Moving the camera closes the panel so the view can be seen; switches stay open for more.
-  if (act === 'mode' || act === 'camera' || act === 'position') close();
+  if (act === 'mode' || act === 'camera' || act === 'position' || act === 'view') close();
   else render();
   refreshChrome();
 }
@@ -192,18 +192,21 @@ function render() {
   const props = sel ? Array.from(sel.options).filter(o => o.value) : [];
   const section = (title, body) => body ? `<section class="fd-section"><h2>${title}</h2>${body}</section>` : '';
   const sw = (act, it) => `<button type="button" class="fd-switch" role="switch" aria-checked="${!!it.on}" data-act="${act}" data-id="${escapeHtml(it.id)}" ${it.disabled ? 'disabled' : ''}>
-      <span>${escapeHtml(it.label)}</span>${it.count != null ? `<small>${it.count}</small>` : ''}<i aria-hidden="true"></i></button>`;
+      ${it.color ? `<b class="fd-dot" style="background:${escapeHtml(it.color)}"></b>` : ''}<span>${escapeHtml(it.label)}</span>${it.count != null ? `<small>${it.count}</small>` : ''}<i aria-hidden="true"></i></button>`;
   let model = '';
   if (st) {
     const modes = [['orbit', 'Orbit'], ['walk', 'Walk'], ['top', 'Top']]
       .map(([id, label]) => `<button type="button" class="fd-seg ${st.mode === id ? 'on' : ''}" aria-pressed="${st.mode === id}" data-act="mode" data-id="${id}">${label}</button>`).join('');
     const cams = st.cameras.map(c => `<button type="button" class="fd-chip" data-act="camera" data-id="${c.id}">${escapeHtml(c.label)}</button>`).join('');
+    const saved = st.views.map(v => `<button type="button" class="fd-chip ${v.on ? 'on' : ''}" data-act="view" data-id="${escapeHtml(v.id)}">${escapeHtml(v.label)}</button>`).join('')
+      + '<button type="button" class="fd-chip fd-add" data-act="save-view">+ Save this view</button>';
     const spots = st.positions.map(p => `<button type="button" class="fd-chip" data-act="position" data-id="${escapeHtml(p.id)}">${escapeHtml(p.label)}</button>`).join('');
     const range = st.section ? `<label class="fd-range"><span>Cut height</span><output>${escapeHtml(st.section.label)}</output>
         <input type="range" data-section-height min="${st.section.min.toFixed(2)}" max="${st.section.max.toFixed(2)}" step="0.05" value="${st.section.value}" aria-label="Section cut height"></label>` : '';
     // Only switches that do something here: no scan, no furniture, no photos pinned, no notes.
     const show = st.show.filter(s => !s.disabled && s.count !== 0);
     model = section('View', `<div class="fd-segs" role="group" aria-label="How to move">${modes}</div><div class="fd-chips">${cams}</div>`)
+      + section('Saved views', `<div class="fd-chips">${saved}</div>`)
       + section('Positions', spots && `<div class="fd-chips">${spots}</div>`)
       + section('Show', show.map(s => sw('show', s) + (s.id === 'section' ? range : '')).join(''))
       + section('Tags', st.tags.map(t => sw('tag', t)).join(''))

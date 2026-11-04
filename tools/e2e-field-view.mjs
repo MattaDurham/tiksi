@@ -77,6 +77,17 @@ try {
   await page.locator('.fd-switch[data-id=xray]').click();
   assert.equal((await state3d()).show.find(s => s.id === 'xray').on, true, 'x-ray turns on');
   assert.equal(await page.locator('.fd-switch[data-id=pins]').count(), 0, 'no Photos switch without pinned photos');
+  // Tags: one switch per tag that holds something; switching one hides it in the model.
+  const walls = page.locator('.fd-switch[data-act=tag][data-id="tag-walls"]');
+  assert.equal(await walls.getAttribute('aria-checked'), 'true', 'the Walls tag has a switch, on');
+  await walls.click();
+  assert.equal((await state3d()).tags.find(t => t.id === 'tag-walls').on, false, 'switching Walls off hides the tag');
+  await page.locator('.fd-switch[data-act=tag][data-id="tag-walls"]').click();
+  assert.equal((await state3d()).tags.find(t => t.id === 'tag-walls').on, true);
+  // Saved views: save the current camera, and its chip appears.
+  await page.locator('.fd-chip[data-act=save-view]').click();
+  assert.equal(await page.locator('.fd-chip[data-act=view]').count(), 1, 'a saved view chip appears');
+  assert.equal(await shown(page, '.v-views'), false, 'the saved view tabs stay off the phone screen');
   // A background sync rebuilds the view; the open panel must stay open under the finger.
   await page.evaluate(() => document.getElementById('property-select').dispatchEvent(new Event('change')));
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('fd-open')), true, 'a rebuild of the same page keeps the panel open');
@@ -116,7 +127,7 @@ try {
   await desk.goto(url + '/#/model');
   await desk.locator('.v-wrap canvas').waitFor();
   assert.equal(await desk.evaluate(() => document.documentElement.classList.contains('phone')), false);
-  for (const sel of ['#topbar', '#rail', '.v-layout > .tool-col', '.v-modes']) assert.equal(await shown(desk, sel), true, sel + ' shows on desktop');
+  for (const sel of ['#topbar', '#rail', '.v-views', '.v-compass']) assert.equal(await shown(desk, sel), true, sel + ' shows on desktop');
   for (const sel of ['.fd-bar', '.fd-frame', '.fd-panel']) assert.equal(await shown(desk, sel), false, sel + ' stays out of the desktop');
   assert.equal(await shown(desk, '[data-field-layout=phone]'), true, 'FIELD VIEW is offered in the rail');
 

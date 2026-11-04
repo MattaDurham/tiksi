@@ -17,6 +17,7 @@ await new Promise(r => server.listen(0, 'localhost', r));
 const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto(`http://localhost:${server.address().port}/`);
   await page.locator('[data-prop-name]').waitFor();

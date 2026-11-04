@@ -1198,3 +1198,28 @@ kbd {
 .fx-review .fx-list small { display: block; color: var(--dim); font-size: 11.5px; }
 .fx-review .fx-list em { font: 11px var(--mono); font-style: normal; color: var(--accent); }
 .fx-review .fx-list input { margin-top: 3px; }
+
+/* ---------- Tiksi menu (the logo) ---------- */
+.tk-button { background: none; border: 0; padding: 4px 6px 4px 0; color: inherit; cursor: pointer; border-radius: 8px; font: inherit; }
+.tk-button:hover .brand-mark, .tk-button[aria-expanded="true"] .brand-mark { color: var(--accent); }
+.tk-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tk-caret { display: inline-grid; color: var(--dim); }
+.tk-caret svg { width: 14px; height: 14px; }
+.tk-menu {
+  position: fixed; z-index: 60; width: min(340px, calc(100vw - 16px)); max-height: calc(100vh - 70px); overflow-y: auto;
+  background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 10px; padding: 6px 0 4px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+.tk-group { padding: 4px 0 6px; border-bottom: 1px solid var(--line); }
+.tk-group header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 14px 4px; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.14em; color: var(--faint); }
+.tk-pin { display: flex; align-items: center; gap: 5px; cursor: pointer; color: var(--dim); }
+.tk-pin input { accent-color: var(--accent); margin: 0; }
+.tk-item { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 14px; background: none; border: 0; color: var(--ink); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+.tk-item:hover, .tk-item:focus-visible { background: rgba(255, 255, 255, 0.05); outline: none; }
+.tk-item.active { color: var(--accent); }
+.tk-item.active span::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin-right: 8px; vertical-align: middle; }
+.tk-item:disabled { color: var(--faint); cursor: default; }
+.tk-item kbd { font-family: var(--mono); font-size: 10px; color: var(--faint); border: 1px solid var(--line-2); border-radius: 4px; padding: 0 5px; }
+.tk-foot { margin: 6px 14px 4px; font-size: 11px; line-height: 1.45; color: var(--faint); }
+@media (min-width: 761px) { #app.no-rail { grid-template-columns: 0 1fr; } }
+#app.no-rail #rail { display: none; }
