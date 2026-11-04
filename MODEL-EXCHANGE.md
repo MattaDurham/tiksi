@@ -36,7 +36,7 @@ Codex or Claude. Delete server copies separately in the File panel.
 
 | Format / application | Into Tiksi | Out of Tiksi | Preservation / interpretation boundary |
 | --- | --- | --- | --- |
-| SketchUp SKP | Installed C API → GLB | C API → native SKP | Faces including holes, nested placements, names, diffuse textures/UVs, colours, metre conversion. Native output is grouped editable triangle faces. Scenes, guides, dynamic components and PBR extensions remain in original SKP. Front-face materials drive the mesh. |
+| SketchUp SKP | Installed C API → GLB | C API → native SKP | Faces including holes, nested placements, names, tags (each mesh keeps its SketchUp tag, or the innermost tagged group's, as `sketchupTag` in its GLB node extras; Tiksi turns them into its own tags), diffuse textures/UVs, colours, metre conversion. Native output is grouped editable triangle faces, each group on a SketchUp tag named after its Tiksi tag. Scenes, guides, dynamic components and PBR extensions remain in original SKP. Front-face materials drive the mesh. |
 | Blender BLEND | Installed Blender → GLB | GLB → packed native BLEND | Evaluated geometry/PBR materials; automatic script execution disabled. Linked libraries must be made local. Pack images or include relative resources in one ZIP. Procedural history remains in original BLEND. |
 | GLB / glTF 2.0 | Browser; ZIP embeds external buffers/images | Self-contained GLB | Mesh hierarchy, PBR maps, UVs, transforms and recognized Tiksi/IFC/Rhino IDs. Compression uses local Blender when needed. Static design editing; source animations/rigs are retained in original bytes. |
 | COLLADA DAE | Browser converter, ZIP for textures | DAE + texture ZIP | Metres from declared units, Y/Z-up, static triangles, diffuse colours/textures and names. Other shading is reduced; X-up needs reinterpretation. |
@@ -74,6 +74,7 @@ converter history.
 | Opening group nested in its wall | Span along the wall, sill and head | Position along the wall, width, height, sill |
 | Room group (floor face) | Outline, name (the group name), level tag | Largest horizontal face outline; the group name |
 | Fixture group (`kind: 'fixture'`, a nested group per prism) | Counter and cabinet runs, appliances, furniture and bath fixtures, framed at the fixture's origin along its direction, with their finishes and level tag | A box fixture's placement, turn and bounds (position, rotation, width, depth, height, bottom); a run's back line carried by the group transform, its depth by the transform's scale, its bottom and height from the bounds. A copy becomes a new fixture; a deleted group deletes the fixture |
+| Tags | Each wall, opening, room and fixture group goes on a SketchUp tag named after its Tiksi tag, shown or hidden as in Tiksi; an Untagged element stays on its level's tag | Not read: tags are set in Tiksi |
 | Finishes (SketchUp materials named `Tiksi: <material>`) | Wall faces by side (room-facing faces take the interior finish), room floors, door and window panes, in the material's colour | Not read: Tiksi owns finishes and repaints them on every write |
 | Plan underlay image | Calibrated placement on the level | Not read: Tiksi owns underlays |
 | Anything else drawn in SketchUp | Never written or removed | Kept in the .skp only, counted in the status |

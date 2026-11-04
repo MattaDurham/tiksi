@@ -66,7 +66,7 @@ class ConversionTests(unittest.TestCase):
     def test_real_native_skp_carries_tags_into_glb_nodes(self):
         tri=[0,0,0,2,0,0,0,3,0]
         source=self.root/'tagged.json';source.write_text(json.dumps({'meshes':[
-            {'name':'Shed roof','tag':'Roof','tagVisible':False,'positions':tri,'material':{'name':'Shingle','color':[.3,.3,.3,1]}},
+            {'name':'Shed roof','tag':'Roof','positions':tri,'material':{'name':'Shingle','color':[.3,.3,.3,1]}},
             {'name':'Back wall','tag':'Walls','positions':[v+5 for v in tri],'material':{'name':'Paint','color':[.9,.9,.9,1]}},
             {'name':'Loose part','positions':[v+9 for v in tri],'material':{'name':'Paint','color':[.9,.9,.9,1]}}]}))
         worker=Path(__file__).resolve().parent.parent/'server/sketchup_convert.py'
