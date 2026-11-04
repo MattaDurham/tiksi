@@ -221,7 +221,7 @@ function render() {
           `<div class="empty-state"><span class="empty-ic">${icon('products')}</span>
             <b>${d.products.length ? 'No products match' : 'No products yet'}</b>
             ${d.products.length ? (scope === 'property' && mine && scoped.length < d.products.length ? 'Try ALL to see other properties\' products, or a different search, category or status.' : 'Try a different search, category or status.') : 'Research a product on the web, then capture it here with its image, vendor link, price and specs.'}</div>`}
-        ${formOpen ? `<div class="card" id="prod-form"></div>` : ''}
+        ${formOpen ? `<div class="card" id="prod-form" data-side-pane="products"></div>` : ''}
       </div>
     </div>`;
 

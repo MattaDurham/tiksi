@@ -15,6 +15,7 @@ import { demoWorkspace } from './demo.js';
 import { connectDiskWorkspace, diskWorkspace } from './disk-workspace.js';
 import { editHistoryState, onEditHistoryChange } from './edit-history.js';
 import { icon } from './icons.js';
+import { initPaneResize } from './pane-resize.js';
 import * as plan2d from './plan2d.js';
 import * as viewer3d from './viewer3d.js';
 import * as materialsview from './materialsview.js';
@@ -71,6 +72,7 @@ async function boot() {
   await whenHydrated();
 
   bindTopbar();
+  initPaneResize(document.getElementById('view'));
   bindHistoryControls();
   refreshTopbar();
   onChange(refreshTopbar);

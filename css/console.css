@@ -95,35 +95,14 @@ svg.ic { flex: none; vertical-align: -3px; }
   color: var(--ink);
   line-height: 1;
 }
-.brand-sub {
-  font-family: var(--mono);
-  font-size: 9.5px;
-  letter-spacing: 0.14em;
-  color: var(--faint);
-  text-transform: uppercase;
-  padding-left: 9px;
-  border-left: 1px solid var(--line-2);
-  line-height: 1;
-  white-space: nowrap;
-}
-/* the tag is the first thing the topbar squeezes; below this width it goes rather than wraps */
-@media (max-width: 1140px) { .brand-sub { display: none; } }
 .topbar-group { display: flex; align-items: center; gap: 8px; }
-.topbar-spacer { flex: 1; }
 .history-actions { display: flex; gap: 4px; }
 .history-actions[hidden] { display: none; }
 .history-actions .tb-btn { display: inline-flex; align-items: center; gap: 5px; min-height: 36px; }
 .history-actions .tb-btn:disabled { opacity: .4; cursor: default; }
 @media (min-width: 761px) and (max-width: 1040px) {
-  #topbar .tb-label { display: none; }
   #property-select { max-width: 150px; }
   #topbar .topbar-group { gap: 6px; }
-}
-.tb-label {
-  font-family: var(--mono);
-  font-size: 9.5px;
-  letter-spacing: 0.14em;
-  color: var(--faint);
 }
 .tb-select, select {
   background: var(--panel-3);
@@ -289,7 +268,7 @@ select option { background: var(--panel-2); color: var(--ink); }
 h3.kicker { font-weight: 700; }
 
 /* ---------- editor layouts (plan + model) ---------- */
-.editor-layout { display: grid; grid-template-columns: 156px 1fr 272px; height: 100%; }
+.editor-layout { display: grid; grid-template-columns: 156px minmax(0, 1fr) var(--side-w, 272px); height: 100%; }
 .tool-col {
   background: var(--panel); border-right: 1px solid var(--line);
   padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; overflow-x: hidden;
@@ -413,6 +392,21 @@ h3.kicker { font-weight: 700; }
   background: var(--panel); border-left: 1px solid var(--line);
   padding: 14px 14px 24px; overflow-y: auto; font-size: 12.5px;
 }
+/* Drag handle on a right-hand pane's border (js/pane-resize.js). */
+.side-resizable { position: relative; }
+.side-handle {
+  position: absolute; z-index: 15; width: 8px; cursor: col-resize; touch-action: none;
+}
+.side-handle[hidden] { display: none; }
+.side-handle::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px;
+  background: transparent; transition: background 120ms;
+}
+.side-handle:hover::after, .side-handle:focus-visible::after, .side-resizing .side-handle::after { background: var(--accent); }
+.side-handle:focus-visible { outline: none; }
+body.side-resizing { cursor: col-resize; user-select: none; }
+body.side-resizing iframe, body.side-resizing canvas { pointer-events: none; }
+
 .inspector h3 {
   font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; color: var(--accent);
   margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line);
@@ -1032,10 +1026,8 @@ kbd {
   #app { grid-template: auto auto minmax(0, 1fr) / minmax(0, 1fr); grid-template-areas: "top" "rail" "view"; height: 100dvh; }
   #topbar { flex-wrap: wrap; gap: 8px; padding: 8px 10px; }
   .brand { margin-right: 0; }
-  .brand-sub, .tb-label, .topbar-spacer { display: none; }
   #topbar .topbar-group { min-width: 0; }
   #topbar .topbar-group:last-child { width: 100%; flex-wrap: wrap; }
-  .history-actions { margin-left: auto; }
   .history-actions .tb-btn { min-height: 44px; padding: 8px; }
   #property-select { width: min(205px, 49vw); max-width: 100%; }
   .save-status { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

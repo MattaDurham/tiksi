@@ -25,6 +25,7 @@ let importing = null;       // running upload batch: { done, total, failed, queu
 let lightbox = null;        // { ids, idx } while the lightbox is open
 let dragDepth = 0;
 let previewToken = 0;       // guards async preview loads against stale selections
+let pointerAt = null;       // { x, y } client position while the pointer is over the deck
 
 // ---------- data helpers ----------
 function photos() { return prop.photos || (prop.photos = []); }
@@ -473,6 +474,38 @@ function renderGrid() {
     };
     card.ondblclick = () => openLightbox(card.dataset.id);
   });
+  let frame = 0;
+  grid.onpointermove = e => {
+    if (e.pointerType === 'touch') return;
+    pointerAt = { x: e.clientX, y: e.clientY };
+    if (!frame) frame = requestAnimationFrame(() => { frame = 0; if (pointerAt) liftCardAt(grid, pointerAt.x, pointerAt.y); });
+  };
+  grid.onpointerleave = () => { if (frame) cancelAnimationFrame(frame); frame = 0; pointerAt = null; liftCardAt(grid, null); };
+  // A re-render under a still pointer keeps the same card lifted.
+  if (pointerAt) liftCardAt(grid, pointerAt.x, pointerAt.y);
+}
+
+// The cards overlap, so whichever card is on top is not the one being pointed at: a card's own
+// strip is the part of it left showing, from its top down to where a later row covers it. Pick
+// the card whose top is lowest above the pointer (later rows paint over earlier ones), using
+// layout offsets so a lifted card's transform does not move its strip.
+function liftCardAt(grid, clientX, clientY) {
+  let pick = null;
+  if (clientX != null) {
+    const r = grid.getBoundingClientRect();
+    const x = clientX - r.left - grid.clientLeft + grid.scrollLeft;
+    const y = clientY - r.top - grid.clientTop + grid.scrollTop;
+    for (const card of grid.children) {
+      if (!card.classList.contains('ph-card')) continue;
+      const l = card.offsetLeft, t = card.offsetTop;
+      if (x < l || x > l + card.offsetWidth || y < t || y > t + card.offsetHeight) continue;
+      if (!pick || t > pick.offsetTop) pick = card;
+    }
+  }
+  const prev = grid.querySelector('.ph-card.lift');
+  if (prev === pick) return;
+  if (prev) prev.classList.remove('lift');
+  if (pick) pick.classList.add('lift');
 }
 
 // Scope items of this property's projects (and unassigned ones); an item already linked from
@@ -633,7 +666,7 @@ export function mount(root) {
         <div class="ph-filters toolbar"></div>
         <div class="ph-grid"></div>
       </div>
-      <aside class="ph-detail inspector"></aside>
+      <aside class="ph-detail inspector" data-side-pane="photos"></aside>
       <div class="ph-drop" hidden><div class="ph-drop-box">DROP PHOTOS TO ADD THEM TO ${escapeHtml(prop.name).toUpperCase()}</div></div>
     </div>`;
   render();
@@ -660,6 +693,6 @@ export function unmount() {
   window.removeEventListener('keydown', onKeyDown);
   // A running upload batch keeps going (it owns its state); the preview and lightbox URLs go.
   revokePhotoUrls();
-  lightbox = null; dragDepth = 0;
+  lightbox = null; dragDepth = 0; pointerAt = null;
   el = null; prop = null;
 }
