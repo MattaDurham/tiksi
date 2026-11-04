@@ -112,7 +112,20 @@ try {
   await page.click('[data-layout="board"]');
   check(await page.locator('.pb-col').count() === 5, 'five status columns');
   check(await page.locator('.pb-col[data-col="idea"] .proj-card[data-id="proj-bath"]').count() === 1, 'Bath fixes sits in Idea');
-  await page.locator('.proj-card[data-id="proj-bath"]').dragTo(page.locator('.pb-col[data-col="committed"]'));
+  // The page's own drag events, in the browser's order, on one shared dataTransfer: Playwright's
+  // pointer drag reaches the drop on some machines and not others (macOS CI missed it).
+  const accepted = await page.evaluate(() => {
+    const card = document.querySelector('.proj-card[data-id="proj-bath"]');
+    const col = document.querySelector('.pb-col[data-col="committed"]');
+    const dataTransfer = new DataTransfer();
+    const fire = (el, type) => { const e = new DragEvent(type, { dataTransfer, bubbles: true, cancelable: true }); el.dispatchEvent(e); return e; };
+    fire(card, 'dragstart');
+    const over = fire(col, 'dragover');
+    fire(col, 'drop');
+    fire(card, 'dragend');
+    return over.defaultPrevented && !dataTransfer.types.includes('text/plain');
+  });
+  check(accepted, 'the column accepts the card, and the drag carries no text the link drop would take');
   check((await store(`return s.projectById('proj-bath').status`)) === 'committed', 'dragging to Committed changes the status');
   await page.locator('.proj-card[data-id="proj-bath"]').focus();
   await page.keyboard.press('ArrowRight');
