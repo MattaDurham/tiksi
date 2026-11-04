@@ -2,6 +2,8 @@
 // All lengths are stored in meters, money in USD, dates as ISO strings.
 
 import { normalizeView } from './photo-match.js';
+import { normalizePositions } from './positions.js';
+import { normalizePin, normalizeLens, normalizeCameraSets, normalizeWallAnchor } from './pin-records.js';
 import { normaliseFixtures } from './fixtures.js';
 
 const LS_KEY = 'tiksi.workspace.v1';   // storage slot, not the schema version (see migrate)
@@ -356,6 +358,7 @@ export function propertyTemplate(name) {
     id: uid('prop'), name: name || 'New property', notes: '', wallHeight: 2.44,
     levels: [levelTemplate('lvl-0', 'Main level', 0, 2.44)], activeLevelId: 'lvl-0',
     walls: [], openings: [], rooms: [], fixtures: [], scans: [], photos: [], notePins: [], videos: [], measurements: [], env: defaultEnv(), source: null,
+    photoPositions: [], positionCounter: 0, cameraSets: [],
   };
 }
 
@@ -520,6 +523,8 @@ function sanitiseIds(d) {
     for (const f of p.fixtures || []) fix(f, 'fx');
     for (const v of p.videos) fix(v, 'vid');
     for (const m of p.measurements) fix(m, 'ms');
+    for (const x of p.photoPositions || []) fix(x, 'pos');
+    for (const x of p.cameraSets || []) fix(x, 'cams');
   }
   for (const m of d.materials) fix(m, 'mat');
   for (const pr of d.products) fix(pr, 'prod');
@@ -550,7 +555,7 @@ function validateWorkspace(d) {
     if (d[key] != null && !Array.isArray(d[key])) throw new Error(key + ' must be a list');
     for (const rec of d[key] || []) if (!rec || typeof rec !== 'object' || Array.isArray(rec)) throw new Error(key + ' contains an invalid record');
   }
-  for (const p of d.properties || []) for (const key of ['levels','walls','openings','rooms','fixtures','scans','photos','notePins','videos','measurements']) {
+  for (const p of d.properties || []) for (const key of ['levels','walls','openings','rooms','fixtures','scans','photos','notePins','videos','measurements','photoPositions','cameraSets']) {
     if (p[key] != null && !Array.isArray(p[key])) throw new Error('property ' + key + ' must be a list');
     for (const rec of p[key] || []) if (!rec || typeof rec !== 'object' || Array.isArray(rec)) throw new Error('property ' + key + ' contains an invalid record');
   }
@@ -610,9 +615,14 @@ function migrate(d) {
       if (ph.roomId == null) ph.roomId = '';
       if (!Array.isArray(ph.elementIds)) ph.elementIds = [];
       if (!Array.isArray(ph.itemIds)) ph.itemIds = [];
-      if (ph.pin === undefined) ph.pin = null;
+      if (!['photo', 'pano', 'document'].includes(ph.kind)) ph.kind = 'photo';
+      // Where it hangs (pins.js): a point, or a place on a wall face that follows the wall.
+      ph.pin = normalizePin(ph.pin);
       // The camera a photo was taken from (MATCH PHOTO). Optional: older photos have none.
       if (ph.view !== undefined) { const v = normalizeView(ph.view); if (v) ph.view = v; else delete ph.view; }
+      // The lens read from the photo file (photo-exif.js), and when it was taken.
+      if (ph.lens !== undefined) { const l = normalizeLens(ph.lens); if (l) ph.lens = l; else delete ph.lens; }
+      if (ph.takenAt !== undefined && (typeof ph.takenAt !== 'string' || !ph.takenAt)) delete ph.takenAt;
       if (!ph.createdAt) ph.createdAt = new Date(0).toISOString();
       // '' is the slim localStorage form (thumbnail lives in IndexedDB, see persistable).
       if (typeof ph.thumb !== 'string' || (ph.thumb && !THUMB_RE.test(ph.thumb))) ph.thumb = '';
@@ -641,6 +651,9 @@ function migrate(d) {
       if (!m.crop || !Array.isArray(m.crop) || m.crop.length !== 4 || !m.crop.every(Number.isFinite)) m.crop = null;
       if (!m.createdAt) m.createdAt = new Date(0).toISOString();
     }
+    // Numbered photo positions (positions.js) and Polycam camera sets (polycam-cameras.js).
+    normalizePositions(p);
+    p.cameraSets = normalizeCameraSets(p.cameraSets);
     // Notes pinned to a point in the model (MODEL, right-click). `notes` on the property is
     // its own free text; these are separate.
     const num = v => typeof v === 'number' || (typeof v === 'string' && v.trim()) ? Number(v) : NaN;
@@ -652,6 +665,7 @@ function migrate(d) {
       if (typeof n.roomId !== 'string') n.roomId = '';
       if (!Array.isArray(n.elementIds)) n.elementIds = [];
       if (!n.createdAt) n.createdAt = new Date(0).toISOString();
+      if (n.wall !== undefined) { const w = normalizeWallAnchor(n.wall); if (w) n.wall = w; else delete n.wall; }
     }
   }
   for (const pr of d.projects) {
@@ -1103,10 +1117,10 @@ export function exportWorkspace() {
   if (n) alert('Note: ' + n + ' scan/photo file(s) live in browser storage and are not embedded in a JSON export. Use EXPORT > BUNDLE (.zip) to carry them to another machine.');
 }
 
-const IMAGE_EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/bmp': 'bmp', 'image/heic': 'heic', 'image/heif': 'heif', 'image/tiff': 'tiff' };
-const MIME_BY_EXT = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif', bmp: 'image/bmp', heic: 'image/heic', heif: 'image/heif', tif: 'image/tiff', tiff: 'image/tiff' };
+const IMAGE_EXT_BY_MIME = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/avif': 'avif', 'image/bmp': 'bmp', 'image/heic': 'heic', 'image/heif': 'heif', 'image/tiff': 'tiff' };
+const MIME_BY_EXT = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', avif: 'image/avif', bmp: 'image/bmp', heic: 'image/heic', heif: 'image/heif', tif: 'image/tiff', tiff: 'image/tiff' };
 // Formats that are already compressed: store them in the zip instead of deflating.
-const STORED_EXT = new Set(['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'glb', 'spz', 'laz', 'ksplat', 'mp4', 'mov', 'm4v']);
+const STORED_EXT = new Set(['pdf', 'jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'glb', 'spz', 'laz', 'ksplat', 'mp4', 'mov', 'm4v']);
 const VIDEO_EXT_BY_MIME = { 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/x-m4v': 'm4v' };
 const VIDEO_MIME_BY_EXT = { mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/x-m4v' };
 

@@ -9,6 +9,9 @@ import {
   activeLevel, levelOfRoom,
 } from './store.js';
 import { addPhotoFromFile, photoUrl, photoBytes, photoById, deletePhoto, isPanoramaAspect, revokePhotoUrls } from './photos-store.js';
+import { addDocumentFromFile, documentCanvas, isPdfDocument } from './documents.js';
+import { FOUND_SOURCES } from './photo-match.js';
+import { ROLE_LABELS } from './positions.js';
 import { addCustomMaterial } from './materials.js';
 import { isVideoFile, importVideos } from './videos.js';
 
@@ -37,7 +40,7 @@ function sortedPhotos() {
 function visiblePhotos() {
   const q = filters.q.trim().toLowerCase();
   return sortedPhotos().filter(p => {
-    if (filters.kind && p.kind !== filters.kind) return false;
+    if (filters.kind === 'rendering' ? p.source !== 'rendering' : filters.kind === 'photo' ? (p.kind !== 'photo' || p.source === 'rendering') : (filters.kind && p.kind !== filters.kind)) return false;
     if (filters.room === '-' && p.roomId) return false;                          // "(no room)"
     if (filters.room && filters.room !== '-' && p.roomId !== filters.room) return false;
     if (filters.pin === 'pinned' && !p.pin) return false;
@@ -58,11 +61,21 @@ function roomLabel(r) {
   return prop.levels && prop.levels.length > 1 ? name + ' (' + levelOfRoom(prop, r).name + ')' : name;
 }
 
-function kindLabel(p) { return p.kind === 'pano' ? '360 PANO' : 'PHOTO'; }
+function kindLabel(p) {
+  if (p.kind === 'pano') return '360 PANO';
+  if (p.kind === 'document') return 'DOCUMENT';
+  return p.source === 'rendering' ? 'RENDERING' : p.source === 'polycam-keyframe' ? 'SCAN FRAME' : 'PHOTO';
+}
+const CAMERA_WORDS = { saved: 'lined up by eye', points: 'fitted to points', keyframe: 'from a scan frame', auto: 'placed automatically', position: 'from a numbered position' };
+function cameraWords(p) {
+  if (!p.view || !FOUND_SOURCES.includes(p.view.from)) return 'not found yet';
+  return CAMERA_WORDS[p.view.from] + (p.view.fit && p.view.fit.n ? ' (' + p.view.fit.rmsPx.toFixed(1) + ' px over ' + p.view.fit.n + ')' : '');
+}
+function positionOf(p) { return p.positionId ? (prop.photoPositions || []).find(x => x.id === p.positionId) : null; }
 
 function fileExt(mime) { return { 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
   'image/avif': 'avif', 'image/bmp': 'bmp', 'image/heic': 'heic', 'image/heif': 'heif',
-  'image/tiff': 'tiff', 'image/svg+xml': 'svg' }[mime] || 'jpg'; }
+  'image/tiff': 'tiff', 'image/svg+xml': 'svg', 'application/pdf': 'pdf' }[mime] || 'jpg'; }
 
 function loadImage(src) {
   return new Promise((resolve, reject) => {
@@ -101,8 +114,12 @@ async function addFiles(list) {
     if (failed.length) alert('Not added:\n' + failed.join('\n'));
     if (added.length && confirm(added.length + ' video' + (added.length === 1 ? '' : 's') + ' added. Open MEASURE to review the frames?')) { location.hash = '#/measure?video=' + encodeURIComponent(added[0].id); return; }
   }
+  // PDFs (shop drawings, spec sheets, schedules) become documents that can be pinned in the model.
+  const pdfs = Array.from(list || []).filter(f => f && (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)));
+  for (const f of pdfs) { try { await addDocumentFromFile(prop, f); } catch (e) { alert('Could not read ' + f.name + ': ' + e.message); } }
+  if (pdfs.length && el) render();
   const files = Array.from(list || []).filter(f => f && (f.type.startsWith('image/') || /\.(jpe?g|png|webp|gif|avif|bmp|heic|heif)$/i.test(f.name)));
-  if (!files.length) { if (list && list.length && !clips.length) alert('Only image files can be added as photos.'); return; }
+  if (!files.length) { if (list && list.length && !clips.length && !pdfs.length) alert('Only images and PDFs can be added here.'); return; }
   const entries = files.map(file => ({ file, prop }));
   if (importing) {
     importing.queue.push(...entries);
@@ -309,7 +326,8 @@ async function renderLightbox() {
   box.classList.toggle('pano', p.kind === 'pano');
   box.querySelector('.ph-lb-cap').innerHTML =
     `<b>${escapeHtml(p.name)}</b><span>${kindLabel(p)} - ${escapeHtml(p.w)} x ${escapeHtml(p.h)}${p.roomId ? ' - ' + escapeHtml(roomName(p.roomId)) : ''} - ${lightbox.idx + 1} / ${lightbox.ids.length}</span>`;
-  const url = await photoUrl(id);
+  // A PDF shows its current page; a photo its full-resolution original.
+  const url = isPdfDocument(p) ? await documentCanvas(p, 2400).then(c => c && c.toDataURL('image/jpeg', 0.9)).catch(() => null) : await photoUrl(id);
   if (url && lightbox && lightbox.ids[lightbox.idx] === id) img.src = url;
 }
 
@@ -352,7 +370,7 @@ function renderHead() {
       <button class="btn" data-act="reconstruct">PHOTO TO 3D</button>
       <button class="btn" data-act="camera" title="Take a photo with the phone camera">CAMERA</button>
       <button class="btn ${canPlace ? '' : 'primary'}" data-act="upload">UPLOAD</button>
-      <input type="file" class="hidden-file" data-file="upload" accept="image/*" multiple>
+      <input type="file" class="hidden-file" data-file="upload" accept="image/*,application/pdf,.pdf" multiple>
       <input type="file" class="hidden-file" data-file="camera" accept="image/*" capture="environment">
     </div>`;
   bindUploadButtons(head);
@@ -382,6 +400,8 @@ function renderFilters() {
       <option value="">ALL KINDS</option>
       <option value="photo" ${filters.kind === 'photo' ? 'selected' : ''}>PHOTOS</option>
       <option value="pano" ${filters.kind === 'pano' ? 'selected' : ''}>360 PANORAMAS</option>
+      <option value="document" ${filters.kind === 'document' ? 'selected' : ''}>DOCUMENTS</option>
+      <option value="rendering" ${filters.kind === 'rendering' ? 'selected' : ''}>RENDERINGS</option>
     </select>
     <select data-filter="room" aria-label="Filter by room">
       <option value="">ALL ROOMS</option>
@@ -402,6 +422,8 @@ function renderFilters() {
 function cardHtml(p) {
   const chips = [
     `<span class="chip ${p.kind === 'pano' ? 'cyan' : ''}">${kindLabel(p)}</span>`,
+    positionOf(p) ? `<span class="chip accent">POSITION ${positionOf(p).number} · ${(ROLE_LABELS[p.role] || '').toUpperCase()}</span>` : '',
+    p.kind === 'photo' && p.view && FOUND_SOURCES.includes(p.view.from) ? '<span class="chip green">CAMERA</span>' : '',
     p.roomId ? `<span class="chip">${escapeHtml(roomName(p.roomId))}</span>` : '',
     p.pin ? `<span class="chip accent">PINNED</span>` : '',
     (p.itemIds || []).length ? `<span class="chip green">${p.itemIds.length} ITEM${p.itemIds.length === 1 ? '' : 'S'}</span>` : '',
@@ -434,7 +456,7 @@ function emptyStateHtml() {
     <div class="ph-empty-actions">
       <button class="btn primary" data-act="upload">UPLOAD PHOTOS</button>
       <button class="btn" data-act="camera">USE CAMERA</button>
-      <input type="file" class="hidden-file" data-file="upload" accept="image/*" multiple>
+      <input type="file" class="hidden-file" data-file="upload" accept="image/*,application/pdf,.pdf" multiple>
       <input type="file" class="hidden-file" data-file="camera" accept="image/*" capture="environment">
     </div>
     <p class="ph-empty-foot">Drop image files anywhere on this view, or paste an image from the clipboard. Nothing leaves your browser.</p>
@@ -558,13 +580,13 @@ function renderDetail() {
     <div class="ph-detail-body">
       <h3>${kindLabel(p)}</h3>
       <div class="field"><label>Name</label><input type="text" data-f="name" value="${escapeHtml(p.name)}"></div>
-      <div class="field"><label>Kind</label>
+      ${p.kind === 'document' ? '' : `<div class="field"><label>Kind</label>
         <div class="seg">
           <button class="seg-btn ${p.kind !== 'pano' ? 'active' : ''}" data-kind="photo" style="flex:1">PHOTO</button>
           <button class="seg-btn ${p.kind === 'pano' ? 'active' : ''}" data-kind="pano" style="flex:1">360 PANORAMA</button>
         </div>
         ${looksPano && p.kind !== 'pano' ? '<div class="ph-note">2:1 aspect: this looks like an equirectangular panorama.</div>' : ''}
-      </div>
+      </div>`}
       <div class="field"><label>Send to</label>
         <div class="ph-send">
           <button class="btn" data-act="underlay" title="Trace walls over this image in PLAN">PLAN UNDERLAY</button>
@@ -574,7 +596,8 @@ function renderDetail() {
           ${p.pin
             ? '<button class="btn on" data-act="pin" title="Show this pin in the 3D model">PINNED: SHOW</button>'
             : '<button class="btn" data-act="pin" title="Place this photo on a surface in the 3D model">PIN IN 3D</button>'}
-          ${p.kind === 'pano' ? '' : '<button class="btn" data-act="match" title="View the model from where this photo was taken, with the photo over it, to check the model against the site">MATCH IN 3D</button>'}
+          ${p.kind === 'pano' || p.kind === 'document' ? '' : '<button class="btn" data-act="match" title="Stand where this photo was taken, with the photo over the model, to check the model against the site">PHOTO MODE</button>'}
+          ${isPdfDocument(p) ? '<button class="btn" data-act="openpdf" title="Open the PDF in a new tab">OPEN PDF</button>' : ''}
           <div class="ph-mat">
             <button class="btn" data-act="material" title="Create a photo-based material from this image">MATERIAL</button>
             <select data-mat-kind aria-label="Material kind">${MATERIAL_KINDS.map(k => `<option value="${k}">${k}</option>`).join('')}</select>
@@ -595,7 +618,11 @@ function renderDetail() {
       <div class="stat-line"><span>Size</span><b>${escapeHtml(p.w)} x ${escapeHtml(p.h)}</b></div>
       <div class="stat-line"><span>Added</span><b>${escapeHtml(fmtDate(String(p.createdAt || '').slice(0, 10)))}</b></div>
       <div class="stat-line"><span>Pinned in 3D</span><b>${p.pin ? `x ${(+p.pin.x).toFixed(2)}  y ${(+p.pin.y).toFixed(2)}  z ${(+p.pin.z).toFixed(2)}` : 'no'}</b></div>
-      <div class="stat-line"><span>Camera view</span><b>${!p.view ? 'not set' : p.view.from === 'pin' ? 'from pinning' : 'saved'}</b></div>
+      ${p.kind === 'document' ? `<div class="stat-line"><span>Sheet</span><b>${(p.sheetW * 39.37).toFixed(1)} x ${(p.sheetH * 39.37).toFixed(1)} in${p.pageCount > 1 ? ' · page ' + p.page + ' of ' + p.pageCount : ''}</b></div>`
+        : `<div class="stat-line"><span>Camera</span><b>${escapeHtml(cameraWords(p))}</b></div>
+      ${p.lens ? `<div class="stat-line"><span>Lens</span><b>${p.lens.f35 ? p.lens.f35 + ' mm equiv. · ' : ''}${Math.round(p.lens.hfov)}&deg; across</b></div>` : ''}
+      ${p.takenAt ? `<div class="stat-line"><span>Taken</span><b>${escapeHtml(p.takenAt.replace('T', ' ').slice(0, 16))}</b></div>` : ''}
+      ${positionOf(p) ? `<div class="stat-line"><span>Numbered position</span><b>${positionOf(p).number}${positionOf(p).name ? ' · ' + escapeHtml(positionOf(p).name) : ''} · ${escapeHtml(ROLE_LABELS[p.role] || '')}</b></div>` : ''}`}
       ${isSky ? '<div class="stat-line"><span>Sky</span><b class="accent">ACTIVE (lighting the model)</b></div>' : ''}
 
       <div class="ph-actions">
@@ -607,7 +634,7 @@ function renderDetail() {
 
   // Swap the thumbnail for the full-resolution object URL once it is available.
   const img = pane.querySelector('.ph-preview img');
-  photoUrl(p.id).then(url => {
+  (isPdfDocument(p) ? Promise.resolve(p.thumb) : photoUrl(p.id)).then(url => {
     if (token !== previewToken || !el) return;
     if (url) img.src = url;
     else pane.querySelector('[data-storage]').hidden = false;
@@ -643,6 +670,13 @@ function renderDetail() {
   act('unpin', unpin);
   act('material', materialFromPhoto);
   act('download', download);
+  act('openpdf', async () => {
+    const buf = await photoBytes(p.id);
+    if (!buf) { alert('The PDF file is missing from this browser.'); return; }
+    const url = URL.createObjectURL(new Blob([buf], { type: 'application/pdf' }));
+    window.open(url, '_blank', 'noopener');
+    setTimeout(() => URL.revokeObjectURL(url), 120000);
+  });
   act('delete', remove);
 }
 

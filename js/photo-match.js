@@ -7,6 +7,11 @@
 
 export const LONG_SIDE_FOV = 72;   // degrees across the long side: a phone's main camera
 export const FOV_MIN = 20, FOV_MAX = 120;
+// Where a view came from: the camera at pinning, lined up by eye, the photo file's lens alone,
+// a four-point fit, a Polycam keyframe, the automatic placement helper, or a numbered position.
+export const VIEW_SOURCES = ['pin', 'saved', 'exif', 'points', 'keyframe', 'auto', 'position'];
+// Views that were found from the photo itself rather than assumed.
+export const FOUND_SOURCES = ['saved', 'points', 'keyframe', 'auto', 'position'];
 const DEG = Math.PI / 180;
 
 const vec = v => Array.isArray(v) && v.length === 3 && v.every(n => typeof n === 'number' && Number.isFinite(n));
@@ -23,7 +28,20 @@ export function normalizeView(v) {
   let fov = num(v.fov);
   if (!Number.isFinite(fov)) fov = LONG_SIDE_FOV;
   const out = { position, target, fov: Math.min(FOV_MAX, Math.max(FOV_MIN, fov)) };
-  if (v.from === 'pin' || v.from === 'saved') out.from = v.from;
+  if (VIEW_SOURCES.includes(v.from)) out.from = v.from;
+  // Roll about the view direction in degrees (a photo held slightly crooked), from a fitted camera.
+  const roll = num(v.roll);
+  if (Number.isFinite(roll) && Math.abs(roll) > 1e-3) out.roll = Math.max(-180, Math.min(180, roll));
+  // How well a fitted camera explains the photo: rms pixel error over n point pairs or matches.
+  if (v.fit && typeof v.fit === 'object' && Number.isFinite(num(v.fit.rmsPx))) {
+    out.fit = { rmsPx: num(v.fit.rmsPx), n: Number.isFinite(num(v.fit.n)) ? num(v.fit.n) : 0 };
+  }
+  // The clicked point pairs behind a four-point fit, kept so the camera can be fitted again.
+  if (Array.isArray(v.pairs)) {
+    const pairs = v.pairs.filter(p => p && Array.isArray(p.img) && Array.isArray(p.world) && p.img.length === 2 && p.world.length === 3 && [...p.img, ...p.world].every(x => Number.isFinite(num(x))))
+      .map(p => ({ img: p.img.map(num), world: p.world.map(num) }));
+    if (pairs.length) out.pairs = pairs;
+  }
   return out;
 }
 

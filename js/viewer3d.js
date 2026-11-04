@@ -40,8 +40,14 @@ import { qualityProfile, stillDimensions } from './render-quality.js';
 import { icon } from './icons.js';
 import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapRects, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
 import { planWallMove, applyWallMove, normalOffset } from './wallmove.js';
-import { addPhotoFromFile, photoUrl, photoById, revokePhotoUrls } from './photos-store.js';
-import { normalizeView, defaultHfov, hfovOf, viewFrame, viewForPin, FOV_MIN, FOV_MAX } from './photo-match.js';
+import { addPhotoFromFile, photoUrl, photoById, revokePhotoUrls, photoBytes, ensureCameraFacts } from './photos-store.js';
+import { normalizeView, defaultHfov, hfovOf, viewFrame, viewForPin, FOV_MIN, FOV_MAX, FOUND_SOURCES } from './photo-match.js';
+import { wallAnchor, sheetPlacement, viewForSheet, PRINT_SIZES, DEFAULT_PRINT } from './pins.js';
+import { addDocumentFromFile, documentCanvas, setDocumentPage, isPdfDocument } from './documents.js';
+import { poseFromView, viewFromPose, lookAtPose, solvePose, lensFromHfov, hfovOfLens, project as projectPose, poseFromMatrix } from './camera-solve.js';
+import { takenAtMs } from './photo-exif.js';
+import { KF, keyframeRow, keyframeModelPose, keyframeLens, nearestKeyframe, sharpKeyframes, segmentsOf, decodePng16, depthPoints, alignSession } from './polycam-cameras.js';
+import { addPosition, removePosition, picturesOf, positionLabel, renderingName, renderSize, ROLE_LABELS } from './positions.js';
 import {
   loadScanObject, applyScanTransform, disposeScanObject,
   scanStats, dropScanToFloor, centerScanOnModel, releaseSplatRenderer, splatDrawables, splatBusy,
@@ -57,6 +63,7 @@ let el = null, wrapEl = null, inspEl = null, hud = {};
 let scene = null, camera = null, controls = null, nav = null, walk = null, gizmo = null, composer = null, passes = {};
 let sky = null, envSky = null, sun = null, hemi = null, envRT = null, skyScene = null, panoTex = null, panoId = null;
 let modelGroup = null, groundGroup = null, scanRoot = null, pinRoot = null, noteRoot = null, lightRoot = null, measureRoot = null;
+let cameraRoot = null, positionRoot = null;   // photo cameras and numbered photo positions
 let prop = null;
 let selection = null;          // {kind:'wall'|'room'|'opening'|'scan'|'pin'|'note', id}
 let selectionVersion = 0;      // late mount focus must not replace a newer user selection
@@ -78,7 +85,10 @@ const measures = [];           // {a, b, line, label}
 const scanObjs = {};           // scanId -> Object3D
 const scanState = {};          // scanId -> 'loading' | 'ready' | 'missing' | 'failed'
 const pinObjs = {};            // photoId -> {group, sprite, line, dot, aspect}
-const noteObjs = {};           // noteId -> {group, sprite, line, dot, aspect}
+const noteObjs = {};           // noteId -> {group, sprite, aspect, place}
+const cameraObjs = {};         // photoId -> camera pyramid group
+const positionObjs = {};       // positionId -> numbered marker group
+let polycamFolder = null;      // the Polycam export folder chosen this session: { name, files: Map stem -> {camera, image, depth, confidence} }
 let movingNoteId = null;       // note being re-placed by the NOTE tool (null: the tool adds one)
 let rightPress = null;         // a right-click (or Ctrl-click) in progress: opens the menu if it does not drag
 let ctxMenu = null, noteEditor = null;
@@ -185,6 +195,8 @@ function setupScene() {
   scanRoot = new THREE.Group(); scanRoot.name = 'scans'; scene.add(scanRoot);
   pinRoot = new THREE.Group(); pinRoot.name = 'pins'; scene.add(pinRoot);
   noteRoot = new THREE.Group(); noteRoot.name = 'notes'; scene.add(noteRoot);
+  cameraRoot = new THREE.Group(); cameraRoot.name = 'photo cameras'; scene.add(cameraRoot);
+  positionRoot = new THREE.Group(); positionRoot.name = 'photo positions'; scene.add(positionRoot);
   measureRoot = new THREE.Group(); measureRoot.name = 'measures'; scene.add(measureRoot);
 
   controls = new OrbitControls(camera, renderer.domElement);
@@ -829,6 +841,7 @@ function renderFrame() {
   if (levels) for (const l of levels) l.ceilings.visible = prop.env.showCeilings !== false && (mode === 'walk' || camera.position.y < l.top - 0.05);
   updatePins();
   updateNotes();
+  updateMatchMarkers();
   updateMeasureLabels();
   updateCompass();
   composer.render();
@@ -899,33 +912,63 @@ async function renderStill(options) {
 
 async function renderStillPrepared(options) {
   const token = mountId;
+  const live = () => token === mountId && options.dialog.open;
+  const blob = await renderStillBlob({ ...options, live, status: t => { options.status.textContent = t; } });
+  if (!live()) throw new Error('Export cancelled.');
+  const { width, height } = options;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const slug = String(prop.name || 'property').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'property';
+  a.href = url; a.download = 'tiksi-' + slug + '-' + width + 'x' + height + '-' + isoToday() + '.png';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+// A PNG of the model at width x height: the current view, or `view` (a stored camera with its
+// lens and roll, for numbered photo positions). `live()` says whether to carry on.
+async function renderStillBlob(options) {
+  const token = mountId;
+  const live = options.live || (() => token === mountId);
   const deadline = performance.now() + 60000;
   // Do not save a transient flat-tinted first frame. Photo decoding is counted too.
   while (pendingTextureJobs() || Object.values(scanState).some(s => s === 'loading') || splatBusy()) {
-    if (token !== mountId || !options.dialog.open) throw new Error('Export cancelled.');
+    if (!live()) throw new Error('Export cancelled.');
     if (performance.now() > deadline) throw new Error('Assets are still loading. Wait for the model to finish, then export again.');
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  if (token !== mountId || !options.dialog.open) throw new Error('Export cancelled.');
+  if (!live()) throw new Error('Export cancelled.');
   const { width, height } = options;
   const c = composer, r = renderer;
   const savedPasses = [passes.outline, passes.hover].map(p => [p, p.enabled]);
-  const roots = [pinRoot, noteRoot, measureRoot, gizmo.getHelper()].map(o => [o, o.visible]);
-  const oldAspect = camera.aspect;
+  const roots = [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, gizmo.getHelper()].map(o => [o, o && o.visible]);
+  const oldAspect = camera.aspect, oldFov = camera.fov;
+  const oldPos = camera.position.clone(), oldQuat = camera.quaternion.clone();
+  const matchEl = match && match.el;
   exportingStill = true;
-  options.status.textContent = 'Rendering ' + width + ' × ' + height + '…';
+  if (options.status) options.status('Rendering ' + width + ' × ' + height + '…');
   // Let the status paint before GPU work.
   await new Promise(resolve => requestAnimationFrame(resolve));
   try {
-    if (token !== mountId || !options.dialog.open) throw new Error('Export cancelled.');
+    if (!live()) throw new Error('Export cancelled.');
     // High-resolution stills use SMAA at output size; avoid multiplying their HDR memory by MSAA.
     configureRenderQuality(options.quality, true);
     for (const [p] of savedPasses) p.enabled = false;
     // Photo pins and notes hidden with their toggles stay out of the image too.
-    for (const [o, visible] of roots) o.visible = options.annotations && visible && o !== gizmo.getHelper();
+    for (const [o, visible] of roots) if (o) o.visible = options.annotations && visible && o !== gizmo.getHelper();
+    if (matchEl) matchEl.style.visibility = 'hidden';
     r.setPixelRatio(1); c.setPixelRatio(1);
     r.setSize(width, height, false); c.setSize(width, height);
-    camera.aspect = width / height; camera.updateProjectionMatrix();
+    camera.aspect = width / height;
+    if (options.view) {
+      const v = options.view;
+      camera.position.set(...v.position);
+      camera.up.set(0, 1, 0);
+      camera.lookAt(new THREE.Vector3(...v.target));
+      if (v.roll) camera.rotateZ(v.roll * Math.PI / 180);
+      camera.fov = 2 * Math.atan(Math.tan(v.fov * Math.PI / 360) / camera.aspect) * 180 / Math.PI;
+      camera.updateMatrixWorld();
+    }
+    camera.updateProjectionMatrix();
     for (const m of measures) m.line.material.resolution.set(width, height);
     renderFrame();
     // Snapshot synchronously before WebGL's non-preserved default framebuffer is cleared.
@@ -934,20 +977,17 @@ async function renderStillPrepared(options) {
     snapshot.getContext('2d').drawImage(r.domElement, 0, 0);
     const blob = await new Promise(resolve => snapshot.toBlob(resolve, 'image/png'));
     if (!blob) throw new Error('PNG encoding failed. Choose a smaller size.');
-    if (token !== mountId || !options.dialog.open) throw new Error('Export cancelled.');
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    const slug = String(prop.name || 'property').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'property';
-    a.href = url; a.download = 'tiksi-' + slug + '-' + width + 'x' + height + '-' + isoToday() + '.png';
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return blob;
   } finally {
     exportingStill = false;
     // Navigation can dispose this mount while PNG encoding is running.
     if (token === mountId && composer === c) {
       for (const [p, enabled] of savedPasses) p.enabled = enabled;
-      for (const [o, visible] of roots) o.visible = visible;
-      camera.aspect = oldAspect; camera.updateProjectionMatrix();
+      for (const [o, visible] of roots) if (o) o.visible = visible;
+      if (matchEl) matchEl.style.visibility = '';
+      camera.position.copy(oldPos); camera.quaternion.copy(oldQuat);
+      camera.aspect = oldAspect; camera.fov = oldFov; camera.updateProjectionMatrix();
+      if (controls) controls.update();
       configureRenderQuality(prop.env.quality);
       resize();
       requestRender(2);
@@ -971,6 +1011,8 @@ function pick(e, opts) {
   if (modelGroup) targets.push(modelGroup);
   if (opts.pins !== false && pinRoot) targets.push(pinRoot);
   if (opts.notes !== false && noteRoot) targets.push(noteRoot);
+  if (opts.pins !== false && cameraRoot) targets.push(cameraRoot);
+  if (opts.pins !== false && positionRoot) targets.push(positionRoot);
   if (opts.scans !== false && scanRoot) targets.push(scanRoot);
   if (opts.ground && groundGroup) targets.push(groundGroup);
   const hits = raycaster.intersectObjects(targets, true);
@@ -985,7 +1027,7 @@ function pick(e, opts) {
     while (o && (!o.userData || !o.userData.kind)) o = o.parent;
     if (!o) continue;
     if (o.userData.kind === 'grid') continue;
-    if (opts.surfaceOnly && (o.userData.kind === 'pin' || o.userData.kind === 'note')) continue;
+    if (opts.surfaceOnly && ['pin', 'note', 'camera', 'position'].includes(o.userData.kind)) continue;
     const n = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : new THREE.Vector3(0, 1, 0);
     return { kind: o.userData.kind, id: o.userData.id, point: h.point, normal: n, object: o, wallId: o.userData.wallId };
   }
@@ -1014,9 +1056,12 @@ function onPointerUp(e) {
   if (tool === 'measure') return addMeasurePoint(e);
   if (tool === 'pin') return placePin(e);
   if (tool === 'note') return placeNote(e);
+  if (match && match.points && match.points.mode === 'model') return addMatchModelPoint(e);
   const hit = pick(e);
   if (!hit || hit.kind === 'ground') { setSelection(null); return; }
-  if (hit.kind === 'pin') { setSelection({ kind: 'pin', id: hit.id }); openLightbox(hit.id); return; }
+  if (hit.kind === 'pin') { setSelection({ kind: 'pin', id: hit.id }); const ph = photoById(prop, hit.id); if (ph && ph.kind === 'document') flyToSheet(hit.id); else openLightbox(hit.id); return; }
+  if (hit.kind === 'camera') { startMatch(hit.id); return; }
+  if (hit.kind === 'position') { setSelection({ kind: 'position', id: hit.id }); return; }
   if (hit.kind === 'note') { setSelection({ kind: 'note', id: hit.id }); return; }
   if (hit.kind === 'ceiling') { setSelection({ kind: 'room', id: hit.id }); return; }
   setSelection({ kind: hit.kind, id: hit.id });
@@ -1082,6 +1127,8 @@ function setSelection(sel) {
   selection = sel;
   // A selected note card is drawn with an accent border.
   for (const s of [was, sel]) if (s && s.kind === 'note') redrawNoteCard(s.id);
+  // A selected numbered position is drawn in the accent colour.
+  for (const s of [was, sel]) if (s && s.kind === 'position') { const pos = (prop.photoPositions || []).find(x => x.id === s.id); if (pos) buildPositionMarker(pos); }
   updateOutlineTargets();
   reattachGizmo();
   renderInspector();
@@ -1200,96 +1247,133 @@ function updateMeasureLabels() {
 }
 
 // ---------- photo pins ----------
-function pinCanvas(img, aspect) {
-  const W = 320, H = Math.round(W / aspect);
+// A pinned photo or document lies flat on the surface it was pinned to, like a print put up by
+// hand (pins.js has the maths). A pin on a wall face keeps its place on that wall, so it moves
+// with the wall. Photos whose camera has been found also show that camera as a small pyramid
+// pointing at what the photo shows; clicking it opens the photo over the model.
+const PRINT_BORDER = 0.035;   // white border, as a share of the print's long side
+function printCanvas(img, aspect, isDoc) {
+  const long = 1024;
+  const W = aspect >= 1 ? long : Math.round(long * aspect), H = aspect >= 1 ? Math.round(long / aspect) : long;
   const c = document.createElement('canvas');
-  const pad = 26, frame = 12;
-  c.width = W + pad * 2; c.height = H + pad * 2;
+  c.width = W; c.height = H;
   const ctx = c.getContext('2d');
-  ctx.shadowColor = 'rgba(0,0,0,0.55)'; ctx.shadowBlur = 22; ctx.shadowOffsetY = 8;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(pad, pad, W, H);
-  ctx.shadowColor = 'transparent';
-  if (img) ctx.drawImage(img, pad + frame, pad + frame, W - frame * 2, H - frame * 2);
-  else { ctx.fillStyle = '#c9c4b8'; ctx.fillRect(pad + frame, pad + frame, W - frame * 2, H - frame * 2); }
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+  const b = isDoc ? 0 : Math.round(long * PRINT_BORDER);
+  if (img) ctx.drawImage(img, b, b, W - 2 * b, H - 2 * b);
+  else { ctx.fillStyle = '#c9c4b8'; ctx.fillRect(b, b, W - 2 * b, H - 2 * b); }
+  ctx.strokeStyle = isDoc ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.18)'; ctx.lineWidth = isDoc ? 3 : 2;
+  ctx.strokeRect(1, 1, W - 2, H - 2);
   return c;
+}
+function sheetTexture(canvas) {
+  const t = new THREE.CanvasTexture(canvas);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = renderer ? Math.min(8, renderer.capabilities.getMaxAnisotropy()) : 1;
+  return t;
+}
+// A flat sheet mesh: a unit plane scaled and turned onto `place` (pins.js sheetPlacement).
+function sheetMesh(canvas, kind, id) {
+  const mat = new THREE.MeshBasicMaterial({ map: sheetTexture(canvas), color: new THREE.Color(1.08, 1.08, 1.08), toneMapped: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+  mat.userData.noClip = true;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), mat);
+  mesh.userData = { kind, id };
+  return mesh;
+}
+function placeSheet(mesh, place) {
+  const r = place.right, u = place.up, n = place.normal;
+  const m = new THREE.Matrix4().makeBasis(new THREE.Vector3(r.x, r.y, r.z), new THREE.Vector3(u.x, u.y, u.z), new THREE.Vector3(n.x, n.y, n.z));
+  mesh.quaternion.setFromRotationMatrix(m);
+  mesh.position.set(place.centre.x, place.centre.y, place.centre.z);
+  mesh.scale.set(place.w, place.h, 1);
 }
 function buildPin(photo) {
   removePin(photo.id);
   if (!photo.pin) return;
-  const aspect = (photo.w && photo.h) ? photo.w / photo.h : 4 / 3;
+  const place = sheetPlacement(photo, prop.walls);
+  if (!place) return;
+  const isDoc = photo.kind === 'document';
+  const aspect = photoAspect(photo);
   const group = new THREE.Group();
   group.userData = { kind: 'pin', id: photo.id };
-  const tex = new THREE.CanvasTexture(pinCanvas(null, aspect));
-  tex.colorSpace = THREE.SRGBColorSpace;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: true, toneMapped: false }));
-  sprite.userData = { kind: 'pin', id: photo.id };
-  sprite.material.userData.noClip = true;
-  group.add(sprite);
-  const lineGeo = new THREE.BufferGeometry();
-  lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3));
-  const line = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, depthTest: false }));
-  line.renderOrder = 990;
-  // The leader is decoration: only the card and the anchor dot pick as the pin, otherwise the
-  // line's pick corridor would steal clicks from the wall around every pinned photo.
-  line.raycast = () => {};
-  group.add(line);
-  const dot = new THREE.Mesh(new THREE.CircleGeometry(0.035, 20), new THREE.MeshBasicMaterial({ color: 0xe8973a, side: THREE.DoubleSide }));
-  dot.userData = { kind: 'pin', id: photo.id };
-  group.add(dot);
+  const sheet = sheetMesh(printCanvas(null, aspect, isDoc), 'pin', photo.id);
+  placeSheet(sheet, place);
+  group.add(sheet);
   pinRoot.add(group);
-  const rec = { group, sprite, line, dot, aspect };
+  const rec = { group, sprite: sheet, aspect, place,
+    anchor: new THREE.Vector3(place.centre.x, place.centre.y, place.centre.z), normal: new THREE.Vector3(place.normal.x, place.normal.y, place.normal.z) };
   pinObjs[photo.id] = rec;
-  const img = new Image();
-  img.onload = () => {
-    if (!pinObjs[photo.id]) return;
-    sprite.material.map.dispose();
-    const t = new THREE.CanvasTexture(pinCanvas(img, aspect));
-    t.colorSpace = THREE.SRGBColorSpace;
-    sprite.material.map = t; sprite.material.needsUpdate = true;
+  const token = mountId;
+  const swap = canvas => {
+    if (pinObjs[photo.id] !== rec || token !== mountId || !canvas) return;
+    sheet.material.map.dispose();
+    sheet.material.map = sheetTexture(printCanvas(canvas, aspect, isDoc)); sheet.material.needsUpdate = true;
     requestRender(2);
   };
-  img.src = photo.thumb;
-  positionPin(photo, rec);
-}
-function positionPin(photo, rec) {
-  const p = photo.pin;
-  const n = new THREE.Vector3(p.nx || 0, p.ny == null ? 1 : p.ny, p.nz || 0).normalize();
-  rec.anchor = new THREE.Vector3(p.x, p.y, p.z);
-  rec.normal = n;
-  rec.dot.position.copy(rec.anchor).addScaledVector(n, 0.004);
-  rec.dot.lookAt(rec.anchor.clone().add(n));
-  rec.size = p.size || 0.6;
+  // The thumbnail first, then a sharper image: the page for a document, the full photo otherwise.
+  const thumb = new Image();
+  thumb.onload = () => swap(thumb);
+  if (photo.thumb) thumb.src = photo.thumb;
+  if (isDoc) documentCanvas(photo, 2048).then(swap).catch(e => console.warn('document page', e));
+  else photoUrl(photo.id).then(url => { if (!url) return; const img = new Image(); img.onload = () => swap(img); img.src = url; }).catch(() => {});
+  buildCameraGlyph(photo);
 }
 function removePin(id) {
   const rec = pinObjs[id];
-  if (!rec) return;
-  pinRoot.remove(rec.group);
-  rec.sprite.material.map.dispose(); rec.sprite.material.dispose();
-  rec.line.geometry.dispose(); rec.line.material.dispose();
-  rec.dot.geometry.dispose(); rec.dot.material.dispose();
-  delete pinObjs[id];
-}
-function updatePins() {
-  for (const id of Object.keys(pinObjs)) {
-    const r = pinObjs[id];
-    if (!r.anchor) continue;
-    const d = camera.position.distanceTo(r.anchor);
-    // Keep the card legible: never smaller than ~4% of the view height, never absurdly large.
-    const s = THREE.MathUtils.clamp(Math.max(r.size, d * 0.075), 0.25, 3.5);
-    const lift = 0.12 + s * 0.55;
-    r.sprite.scale.set(s * r.aspect * 1.16, s * 1.16, 1);
-    r.sprite.position.copy(r.anchor).addScaledVector(r.normal, lift);
-    if (Math.abs(r.normal.y) < 0.5) r.sprite.position.y += s * 0.15;
-    const pos = r.line.geometry.getAttribute('position');
-    pos.setXYZ(0, r.anchor.x, r.anchor.y, r.anchor.z);
-    pos.setXYZ(1, r.sprite.position.x, r.sprite.position.y, r.sprite.position.z);
-    pos.needsUpdate = true;
+  if (rec) {
+    pinRoot.remove(rec.group);
+    rec.sprite.material.map.dispose(); rec.sprite.material.dispose(); rec.sprite.geometry.dispose();
+    delete pinObjs[id];
   }
+  removeCameraGlyph(id);
 }
+function updatePins() { /* flat sheets sit still; nothing to do per frame */ }
 function buildAllPins() {
   for (const id of Object.keys(pinObjs)) removePin(id);
-  for (const ph of prop.photos) if (ph.pin) buildPin(ph);
+  for (const id of Object.keys(cameraObjs)) removeCameraGlyph(id);
+  for (const ph of prop.photos) { if (ph.pin) buildPin(ph); else buildCameraGlyph(ph); }
+  buildAllPositions();
+}
+
+// A camera pyramid: apex at the camera, base a frame of the photo's shape `depth` metres ahead.
+function frustumLines(pose, hfov, aspect, depth, color, opacity) {
+  const t = Math.tan(hfov * Math.PI / 360) * depth, s = t / aspect;
+  const R = pose.R, C = new THREE.Vector3(...pose.C);
+  const at = (x, y, z) => new THREE.Vector3(R[0] * x + R[1] * y + R[2] * z, R[3] * x + R[4] * y + R[5] * z, R[6] * x + R[7] * y + R[8] * z).add(C);
+  const corners = [[-t, s], [t, s], [t, -s], [-t, -s]].map(([x, y]) => at(x, y, -depth));
+  const pts = [];
+  for (const c of corners) pts.push(C, c);
+  for (let i = 0; i < 4; i++) pts.push(corners[i], corners[(i + 1) % 4]);
+  pts.push(corners[0].clone().lerp(corners[1], 0.35), at(0, s * 1.35, -depth), at(0, s * 1.35, -depth), corners[0].clone().lerp(corners[1], 0.65));   // a small roof marks the top
+  const geo = new THREE.BufferGeometry().setFromPoints(pts);
+  const lines = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthTest: true }));
+  lines.raycast = () => {};
+  // A pick-able, nearly invisible face across the base so a click on the pyramid opens the photo.
+  const face = new THREE.Mesh(new THREE.BufferGeometry().setFromPoints([corners[0], corners[1], corners[2], corners[0], corners[2], corners[3]]),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false }));
+  return { lines, face, corners };
+}
+function buildCameraGlyph(photo) {
+  removeCameraGlyph(photo.id);
+  const v = photo.kind === 'photo' && photo.view;
+  if (!v || !FOUND_SOURCES.includes(v.from) || !cameraRoot) return;
+  const pose = poseFromView(v);
+  if (!pose) return;
+  const weak = v.fit && v.fit.rmsPx > 12;
+  const { lines, face } = frustumLines(pose, v.fov, photoAspect(photo), 0.32, weak ? 0x9aa3ad : 0xe8973a, weak ? 0.55 : 0.95);
+  face.userData = { kind: 'camera', id: photo.id };
+  const group = new THREE.Group();
+  group.userData = { kind: 'camera', id: photo.id };
+  group.add(lines, face);
+  cameraRoot.add(group);
+  cameraObjs[photo.id] = group;
+}
+function removeCameraGlyph(id) {
+  const g = cameraObjs[id];
+  if (!g) return;
+  cameraRoot && cameraRoot.remove(g);
+  g.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) o.material.dispose(); });
+  delete cameraObjs[id];
 }
 // Unpinned photos in gallery order, after `afterId` and wrapping round.
 function nextUnpinned(afterId) {
@@ -1303,9 +1387,9 @@ function nextUnpinned(afterId) {
 }
 function pinHint() {
   const ph = pinPhotoId && photoById(prop, pinPhotoId);
-  if (!ph) return 'PIN PHOTO: add or choose a photo in the inspector, then click a surface.';
+  if (!ph) return 'PIN: add or choose a photo or document in the inspector, then click the surface to hang it on.';
   const left = prop.photos.filter(p => !p.pin).length;
-  return 'PIN PHOTO: click where "' + ph.name + '" was taken' + (pinBatch && left > 1 ? ' (' + left + ' to place; the next one follows)' : '') + '. Esc stops.';
+  return 'PIN: click the wall or surface to hang "' + ph.name + '" on' + (pinBatch && left > 1 ? ' (' + left + ' to place; the next one follows)' : '') + '. Esc stops.';
 }
 function startPinMode(photoId) {
   endMatch();
@@ -1359,10 +1443,10 @@ function placePin(e) {
   if (!hit) return;
   const ph = photoById(prop, pinPhotoId);
   if (!ph) { pinPhotoId = null; renderInspector(); return; }
-  const size = (ph.pin && ph.pin.size) || 0.6;
-  ph.pin = { x: hit.point.x, y: hit.point.y, z: hit.point.z, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z, size };
-  // The camera at the moment of pinning is the photo's first view; MATCH PHOTO refines it.
-  if (!ph.view && ph.kind !== 'pano') ph.view = currentView(cameraHfov(), 'pin');
+  // Prints keep their chosen size when moved; older pins (card sizes) start at 11 x 14 in.
+  const keep = ph.pin && ph.pin.size && (ph.kind === 'document' || PRINT_SIZES.some(x => Math.abs(x.long - ph.pin.size) < 1e-3));
+  ph.pin = surfacePin(hit, keep ? ph.pin.size : (ph.kind === 'document' ? 1 : DEFAULT_PRINT));
+  ph.roomId = ''; ph.elementIds = (ph.elementIds || []).filter(id => !prop.walls.some(w => w.id === id) && !prop.rooms.some(r => r.id === id));
   linkPinToPlan(ph, hit);
   touch();
   buildPin(ph);
@@ -1382,6 +1466,24 @@ function placePin(e) {
   toast('Photo pinned' + where + '. Click it to open, MOVE PIN to re-place.', 'ok');
   setHint('');
 }
+// Where a click lands, as a pin: the point and normal, its place on a wall face when it is on one
+// (so it follows the wall), and on a floor or ceiling the turn that keeps its top away from you.
+function surfacePin(hit, size) {
+  const pin = { x: hit.point.x, y: hit.point.y, z: hit.point.z, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z, size };
+  const n = hit.normal;
+  if (Math.abs(n.y) < 0.5) {
+    const ids = [hit.kind === 'wall' ? hit.id : null, hit.wallId, ...prop.walls.map(w => w.id)].filter(Boolean);
+    for (const id of ids) {
+      const w = prop.walls.find(x => x.id === id);
+      const a = w && wallAnchor(w, { x: hit.point.x, y: hit.point.y, z: hit.point.z }, { x: n.x, y: n.y, z: n.z });
+      if (a) { pin.wall = a; break; }
+    }
+  } else {
+    const f = new THREE.Vector3(); camera.getWorldDirection(f);
+    pin.turn = Math.round(Math.atan2(-f.x, -f.z) * 180 / Math.PI / 90) * 90 % 360;
+  }
+  return pin;
+}
 function flyToPin(id) {
   showMarkers('pins');
   flyToMarker(pinObjs[id]);
@@ -1395,11 +1497,13 @@ function flyToMarker(r) {
   flyTo(pos, r.anchor.clone(), 700);
 }
 
-// ---------- match photo ----------
-// Fly to the camera a photo was taken from and lay the photo over the render, so the model can
-// be checked (and corrected) against the site. The camera takes the photo's lens and the
-// photo sits in the part of the view that lens frames; orbiting keeps the overlay in place, so
-// the view can be lined up by eye and saved on the photo (photo-match.js has the record).
+// ---------- photo mode (match photo) ----------
+// Stand where a photo was taken and lay the photo over the render, so several photos from
+// different angles line up with the same walls. The camera takes the photo's own lens (read from
+// the file), starts from the best camera known (a saved or fitted one, else the scan frame taken
+// nearest in time), and can be fitted exactly by clicking four or more matching points in the
+// photo and the model. A crooked photo (roll) is turned upright on screen. photo-match.js has the
+// record, camera-solve.js the maths.
 function cameraHfov() { return hfovOf(camera.fov, camera.aspect || 1); }
 function currentView(fov, from) {
   const dir = new THREE.Vector3();
@@ -1409,31 +1513,63 @@ function currentView(fov, from) {
   return normalizeView({ position: camera.position.toArray(), target: target.toArray(), fov, from });
 }
 function photoAspect(ph) { return ph.w > 0 && ph.h > 0 ? ph.w / ph.h : 4 / 3; }
-// `resume` (a remount's {hfov, position, target}) puts the camera straight back where it was.
-function startMatch(id, resume) {
+function cameraFound(ph) { return !!(ph && ph.view && FOUND_SOURCES.includes(ph.view.from)); }
+const SOURCE_LABELS = { saved: 'lined up by eye', points: 'fitted to points', keyframe: 'from a scan frame', auto: 'placed automatically', position: 'from a numbered position', pin: 'not found yet', exif: 'lens only' };
+function cameraLabel(ph) {
+  const v = ph.view;
+  if (!v || !FOUND_SOURCES.includes(v.from)) return ph.lens ? 'not found yet · lens ' + Math.round(ph.lens.hfov) + '°' : 'not found yet';
+  return SOURCE_LABELS[v.from] + (v.fit ? ' · ' + v.fit.rmsPx.toFixed(1) + ' px' : '');
+}
+// The lens of a photo in its own pixels: from the file, else from a horizontal field of view.
+function photoLens(ph, hfov) {
+  if (ph.lens && Math.abs(ph.lens.w - ph.w) < 2 && Math.abs(ph.lens.h - ph.h) < 2) return ph.lens;
+  return lensFromHfov(hfov || (ph.lens && ph.lens.hfov) || defaultHfov(photoAspect(ph)), ph.w || 4032, ph.h || 3024);
+}
+// The scan frame taken closest in time to a photo, as a view with the photo's lens.
+function nearestFrameView(ph, hfov) {
+  const ms = takenAtMs(ph.takenAt);
+  for (const set of prop.cameraSets || []) {
+    const near = nearestKeyframe(set, ms);
+    if (!near) continue;
+    const pose = keyframeModelPose(set, near.row);
+    if (pose) return { view: viewFromPose(pose, hfov), gapMs: near.gapMs, set };
+  }
+  return null;
+}
+// `resume` (a remount's {hfov, position, target}) puts the camera straight back where it was;
+// `opts.view` starts from a given camera (a numbered position).
+async function startMatch(id, resume, opts = {}) {
   const ph = photoById(prop, id);
   if (!ph || !wrapEl) return;
   if (ph.kind === 'pano') { toast('A 360 panorama has no single viewpoint to match. Use it as the sky instead.', 'warn'); return; }
+  if (ph.kind === 'document') { flyToSheet(id); return; }
+  const token = mountId;
+  try { if (await ensureCameraFacts(ph)) touch(); } catch (e) { /* no original bytes: the lens stays assumed */ }
+  if (token !== mountId) return;
   endMatch();
   if (tool !== 'select') setTool('select');
   if (mode !== 'orbit') setMode('orbit');
   const aspect = photoAspect(ph);
-  const view = (resume && normalizeView({ ...resume, fov: resume.hfov })) || normalizeView(ph.view) || (ph.pin && viewForPin(ph.pin, defaultHfov(aspect))) || currentView(defaultHfov(aspect));
+  const lensHfov = ph.lens ? ph.lens.hfov : defaultHfov(aspect);
+  let view = (resume && normalizeView({ ...resume, fov: resume.hfov })) || normalizeView(opts.view) || (cameraFound(ph) && normalizeView(ph.view)) || null;
+  let start = view ? '' : 'pin';
+  if (!view) { const near = nearestFrameView(ph, lensHfov); if (near) { view = near.view; start = 'frame ' + Math.round(near.gapMs / 60000); } }
+  if (!view) view = normalizeView(ph.view && { ...ph.view, fov: lensHfov }) || (ph.pin && viewForPin(ph.pin, lensHfov)) || currentView(lensHfov);
   const box = document.createElement('div');
   box.className = 'v-match';
-  box.innerHTML = '<div class="v-match-frame"><img alt=""></div><div class="v-match-pip"><img alt=""><span></span></div>';
+  box.innerHTML = '<div class="v-match-frame"><img alt=""><div class="v-match-dots"></div></div><div class="v-match-pip"><img alt=""><span></span></div><div class="v-match-model-dots"></div>';
   box.querySelector('.v-match-pip span').textContent = ph.name || '';
   for (const img of box.querySelectorAll('img')) img.src = ph.thumb || '';
   wrapEl.appendChild(box);
-  match = { id, aspect, hfov: view.fov, el: box };
-  const token = mountId;
+  match = { id, aspect, hfov: resume ? resume.hfov : view.fov, roll: resume ? (resume.roll || 0) : (view.roll || 0), el: box, start, points: null, positionId: opts.positionId || null };
   photoUrl(id).then(url => { if (url && match && match.id === id && token === mountId) for (const img of box.querySelectorAll('img')) img.src = url; });
+  box.querySelector('.v-match-frame').addEventListener('click', onMatchPhotoClick);
   controls.maxPolarAngle = MATCH_POLAR;
   applyMarkerVisibility();
   applyMatchFrame();
   flyTo(new THREE.Vector3(...view.position), new THREE.Vector3(...view.target), resume ? 0 : 700);
   renderInspector();
-  setHint('MATCH PHOTO: orbit, pan and zoom until the model lines up with the photo, then SAVE VIEW. Esc ends.');
+  setHint('PHOTO MODE: orbit, pan and zoom until the model lines up with the photo, or FIT WITH POINTS, then SAVE. Esc ends.');
 }
 function applyMatchFrame() {
   if (!match || !wrapEl || !camera) return;
@@ -1443,12 +1579,85 @@ function applyMatchFrame() {
   camera.fov = f.vfov; camera.updateProjectionMatrix();
   const frame = match.el.querySelector('.v-match-frame'), pip = match.el.querySelector('.v-match-pip');
   Object.assign(frame.style, { left: f.x + 'px', top: f.y + 'px', width: f.w + 'px', height: f.h + 'px' });
-  frame.querySelector('img').style.opacity = matchBeside ? 0 : matchOpacity;
+  const img = frame.querySelector('img');
+  img.style.opacity = matchBeside ? 0 : matchOpacity;
+  // A crooked photo is turned upright, so its edges line up with the level render.
+  img.style.transform = match.roll ? `rotate(${-match.roll}deg)` : '';
   match.el.classList.toggle('beside', matchBeside);
+  const picking = !!(match.points && match.points.mode === 'photo');
+  frame.style.pointerEvents = picking ? 'auto' : 'none';
+  frame.style.cursor = picking ? 'crosshair' : '';
   // Side by side: the photo in a card beside the frame it should match, at its own aspect.
   const pw = Math.min(W * 0.42, H * 0.5 * match.aspect);
   Object.assign(pip.style, { width: pw + 'px', height: pw / match.aspect + 'px' });
+  drawMatchPhotoDots();
   requestRender(2);
+}
+// Screen offset in the frame (from its centre, y down) <-> photo pixel, through the roll.
+function framePixel(dx, dy, rect, ph) {
+  const a = (match.roll || 0) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  const px = dx * c - dy * s, py = dx * s + dy * c;
+  return [(px / rect.width + 0.5) * ph.w, (py / rect.height + 0.5) * ph.h];
+}
+function pixelFrame(u, v, rect, ph) {
+  const px = (u / ph.w - 0.5) * rect.width, py = (v / ph.h - 0.5) * rect.height;
+  const a = -(match.roll || 0) * Math.PI / 180, c = Math.cos(a), s = Math.sin(a);
+  return [px * c - py * s + rect.width / 2, px * s + py * c + rect.height / 2];
+}
+function onMatchPhotoClick(e) {
+  if (!match || !match.points || match.points.mode !== 'photo') return;
+  const ph = photoById(prop, match.id);
+  const frame = match.el.querySelector('.v-match-frame'), rect = frame.getBoundingClientRect();
+  const [u, v] = framePixel(e.clientX - rect.left - rect.width / 2, e.clientY - rect.top - rect.height / 2, rect, ph);
+  if (u < 0 || v < 0 || u > ph.w || v > ph.h) return;
+  match.points.pending = [u, v];
+  match.points.mode = 'model';
+  applyMatchFrame(); renderMatchPanel();
+  setHint('PHOTO MODE: now click the same spot in the model.');
+}
+function addMatchModelPoint(e) {
+  const hit = pick(e, { surfaceOnly: true, scans: true, ground: true, pins: false, notes: false });
+  if (!hit) { toast('Click a surface of the model or the scan.', 'warn'); return; }
+  const pts = match.points;
+  pts.pairs.push({ img: pts.pending.map(x => Math.round(x * 10) / 10), world: hit.point.toArray().map(x => Math.round(x * 1e4) / 1e4) });
+  pts.pending = null; pts.mode = 'photo';
+  if (pts.pairs.length >= 4) solveMatchPoints();
+  applyMatchFrame(); renderMatchPanel();
+  setHint(pts.pairs.length >= 4 ? 'PHOTO MODE: fitted to ' + pts.pairs.length + ' points. Add more to check it, or SAVE.' : 'PHOTO MODE: pair ' + pts.pairs.length + ' of 4 placed. Click the next spot in the photo.');
+}
+function solveMatchPoints() {
+  const ph = photoById(prop, match.id), pts = match.points;
+  const lens = photoLens(ph, match.hfov);
+  const init = lookAtPose(camera.position.toArray(), (controls.target).toArray(), match.roll || 0);
+  const fit = solvePose(pts.pairs, lens, init, { solveFocal: !ph.lens && pts.pairs.length >= 6 });
+  if (!fit) { pts.fit = null; toast('Those points do not fit one camera. Check each pair, or line the view up roughly by eye first.', 'warn'); return; }
+  const v = viewFromPose(fit.pose, hfovOfLens({ ...fit.lens, w: lens.w }), Math.max(1, camera.position.distanceTo(controls.target)));
+  pts.fit = { rmsPx: Math.round(fit.rmsPx * 10) / 10, n: pts.pairs.length, errors: fit.errors };
+  match.hfov = v.fov; match.roll = v.roll || 0;
+  flyTo(new THREE.Vector3(...v.position), new THREE.Vector3(...v.target), 0);
+}
+function drawMatchPhotoDots() {
+  if (!match) return;
+  const box = match.el.querySelector('.v-match-dots'), ph = photoById(prop, match.id);
+  if (!box || !ph) return;
+  const pts = match.points;
+  if (!pts) { box.innerHTML = ''; return; }
+  const frame = match.el.querySelector('.v-match-frame');
+  const rect = { width: frame.clientWidth, height: frame.clientHeight };
+  const list = pts.pairs.map((p, i) => [p.img, i + 1, pts.fit && pts.fit.errors ? pts.fit.errors[i] : null]);
+  if (pts.pending) list.push([pts.pending, pts.pairs.length + 1, null]);
+  box.innerHTML = list.map(([[u, v], n, err]) => { const [x, y] = pixelFrame(u, v, rect, ph);
+    return `<i class="v-match-dot photo" style="left:${x}px;top:${y}px" title="${err != null ? err.toFixed(1) + ' px off' : ''}">${n}</i>`; }).join('');
+}
+function updateMatchMarkers() {
+  if (!match || !match.points) return;
+  const box = match.el.querySelector('.v-match-model-dots');
+  const W = wrapEl.clientWidth, H = wrapEl.clientHeight;
+  box.innerHTML = match.points.pairs.map((p, i) => {
+    const q = new THREE.Vector3(...p.world).project(camera);
+    if (q.z > 1) return '';
+    return `<i class="v-match-dot model" style="left:${((q.x + 1) / 2 * W).toFixed(0)}px;top:${((1 - q.y) / 2 * H).toFixed(0)}px">${i + 1}</i>`;
+  }).join('');
 }
 function endMatch() {
   if (!match) return;
@@ -1463,38 +1672,50 @@ function endMatch() {
 function saveMatchView() {
   const ph = match && photoById(prop, match.id);
   if (!ph) return endMatch();
-  ph.view = currentView(match.hfov, 'saved');
+  const pts = match.points;
+  const fitted = pts && pts.fit && pts.pairs.length >= 4;
+  const v = currentView(match.hfov, fitted ? 'points' : 'saved');
+  if (match.roll) v.roll = match.roll;
+  if (fitted) { v.fit = { rmsPx: pts.fit.rmsPx, n: pts.pairs.length }; v.pairs = pts.pairs; }
+  ph.view = normalizeView(v);
   touch();
-  toast('View saved for "' + ph.name + '". MATCH PHOTO returns here.', 'ok');
+  buildCameraGlyph(ph);
+  toast('Camera saved for "' + ph.name + '"' + (fitted ? ' (' + pts.fit.rmsPx + ' px average error over ' + pts.pairs.length + ' points)' : '') + '.', 'ok');
   renderInspector();
 }
-// SAVE VIEW FOR THIS PHOTO outside a match: the camera as it is, with its own lens.
-function saveCurrentViewFor(id) {
-  const ph = photoById(prop, id);
-  if (!ph) return;
-  ph.view = currentView(cameraHfov(), 'saved');
-  touch();
-  toast('Saved the current view for "' + ph.name + '".', 'ok');
-  renderInspector();
-}
-function viewLabel(ph) { return !ph.view ? 'none yet' : ph.view.from === 'pin' ? 'from pinning' : 'saved'; }
+function viewLabel(ph) { return cameraLabel(ph); }
 function renderMatchPanel() {
   const ph = photoById(prop, match.id);
   if (!ph) { endMatch(); return; }
   const pct = Math.round(matchOpacity * 100);
-  inspEl.innerHTML = `<h3>MATCH PHOTO</h3>
+  const pts = match.points;
+  const near = (prop.cameraSets || []).some(s => Object.keys(s.sessions || {}).length) && ph.takenAt ? nearestFrameView(ph, match.hfov) : null;
+  const pos = ph.positionId && (prop.photoPositions || []).find(x => x.id === ph.positionId);
+  const pairsHtml = pts ? `<div class="field"><label>Point pairs <b>${pts.pairs.length}${pts.pending ? ' + 1' : ''}</b></label>
+      <div class="empty" style="margin:2px 0 6px">${pts.mode === 'photo' ? 'Click a sharp corner in the photo' : 'Now click the same spot in the model'}. Four pairs fit the camera; spread them out and use six or more to check it.</div>
+      ${pts.fit ? `<div class="stat-line"><span>Average error</span><b>${pts.fit.rmsPx} px</b></div>` : ''}
+      <div class="seg fill"><button class="seg-btn" data-pt-undo ${pts.pairs.length || pts.pending ? '' : 'disabled'}>UNDO POINT</button><button class="seg-btn" data-pt-clear ${pts.pairs.length ? '' : 'disabled'}>CLEAR</button></div></div>` : '';
+  inspEl.innerHTML = `<h3>PHOTO MODE</h3>
     <div class="v-thumb big active"><img src="${escapeHtml(ph.thumb)}" alt=""></div>
-    <div class="stat-line"><span>${escapeHtml(ph.name)}</span><b>View: ${viewLabel(ph)}</b></div>
-    <div class="empty" style="margin:6px 0 12px">The photo sits in the frame its lens covers. Orbit, pan and zoom until walls, openings and fixtures line up, then save the view. Where they cannot line up, the model differs from the site.</div>
+    <div class="stat-line"><span>${escapeHtml(ph.name)}</span><b>${escapeHtml(cameraLabel(ph))}</b></div>
+    ${ph.takenAt ? `<div class="stat-line"><span>Taken</span><b>${escapeHtml(ph.takenAt.replace('T', ' ').slice(0, 16))}</b></div>` : ''}
+    ${ph.lens ? `<div class="stat-line"><span>Lens (from the photo file)</span><b>${ph.lens.f35 ? ph.lens.f35 + ' mm equiv. · ' : ''}${Math.round(ph.lens.hfov)}&deg;</b></div>` : ''}
+    ${match.start && match.start.startsWith('frame') ? `<div class="empty" style="margin:4px 0">Started at the scan frame taken ${match.start.slice(6)} min from this photo.</div>` : ''}
+    <div class="empty" style="margin:6px 0 12px">The photo sits in the frame its lens covers. Orbit, pan and zoom until walls, openings and fixtures line up, or fit the camera to points. Where they cannot line up, the model differs from the site.</div>
     <div class="field"><label>Show the photo</label><div class="seg fill">
       <button class="seg-btn ${matchBeside ? '' : 'active'}" data-match-layout="over">OVER</button>
       <button class="seg-btn ${matchBeside ? 'active' : ''}" data-match-layout="beside">SIDE BY SIDE</button></div></div>
     <div class="field" ${matchBeside ? 'hidden' : ''}><label>Photo opacity <b data-match-opv>${pct}%</b></label>
       <input type="range" min="0" max="1" step="0.05" value="${matchOpacity}" data-match-op></div>
     <div class="field"><label>Lens (horizontal field of view) <b data-match-fovv>${Math.round(match.hfov)}&deg;</b></label>
-      <input type="range" min="${FOV_MIN}" max="${FOV_MAX}" step="1" value="${Math.round(match.hfov)}" data-match-fov></div>
-    <button class="btn primary" data-match-save>SAVE VIEW FOR THIS PHOTO</button>
-    ${ph.view ? '<button class="btn" data-match-back>BACK TO SAVED VIEW</button>' : ''}
+      <input type="range" min="${FOV_MIN}" max="${FOV_MAX}" step="1" value="${Math.round(match.hfov)}" data-match-fov ${ph.lens ? 'title="Set from the photo file"' : ''}></div>
+    ${pairsHtml}
+    <button class="btn ${pts ? '' : 'primary'}" data-match-points>${pts ? 'STOP PLACING POINTS' : 'FIT WITH POINTS'}</button>
+    ${near ? '<button class="btn" data-match-frame>START AT NEAREST SCAN FRAME</button>' : ''}
+    <button class="btn" data-match-auto title="Match the photo against the scan frames on this Mac">PLACE AUTOMATICALLY</button>
+    <button class="btn primary" data-match-save>SAVE CAMERA FOR THIS PHOTO</button>
+    ${cameraFound(ph) ? '<button class="btn" data-match-back>BACK TO SAVED CAMERA</button>' : ''}
+    ${pos ? `<div class="stat-line"><span>Numbered position</span><b>${escapeHtml(positionLabel(pos))}</b></div>` : '<button class="btn" data-match-pos title="Keep this camera as a numbered position for before, rendering and after pictures">MAKE NUMBERED POSITION</button>'}
     <button class="btn" data-match-open>OPEN FULL SIZE</button>
     <button class="btn" data-match-done>DONE</button>`;
   inspEl.querySelectorAll('[data-match-layout]').forEach(b => b.onclick = () => { matchBeside = b.dataset.matchLayout === 'beside'; applyMatchFrame(); renderMatchPanel(); });
@@ -1502,17 +1723,464 @@ function renderMatchPanel() {
   op.oninput = () => { matchOpacity = parseFloat(op.value); inspEl.querySelector('[data-match-opv]').textContent = Math.round(matchOpacity * 100) + '%'; applyMatchFrame(); };
   const fov = inspEl.querySelector('[data-match-fov]');
   fov.oninput = () => { match.hfov = parseFloat(fov.value); inspEl.querySelector('[data-match-fovv]').innerHTML = Math.round(match.hfov) + '&deg;'; applyMatchFrame(); };
+  inspEl.querySelector('[data-match-points]').onclick = () => {
+    match.points = match.points ? null : { pairs: ph.view && ph.view.from === 'points' && ph.view.pairs ? ph.view.pairs.map(p => ({ img: p.img.slice(), world: p.world.slice() })) : [], pending: null, mode: 'photo', fit: null };
+    if (match.points && match.points.pairs.length >= 4) solveMatchPoints();
+    if (match.points && matchOpacity < 0.35) matchOpacity = 0.6;
+    if (match.points) matchBeside = false;
+    applyMatchFrame(); renderMatchPanel(); updateMatchMarkers();
+    if (!match.points) match.el.querySelector('.v-match-model-dots').innerHTML = '';
+    setHint(match.points ? 'PHOTO MODE: click a sharp corner in the photo, then the same spot in the model.' : 'PHOTO MODE: orbit, pan and zoom until the model lines up with the photo, then SAVE.');
+  };
+  const undo = inspEl.querySelector('[data-pt-undo]'), clear = inspEl.querySelector('[data-pt-clear]');
+  if (undo) undo.onclick = () => { if (pts.pending) { pts.pending = null; pts.mode = 'photo'; } else { pts.pairs.pop(); pts.fit = null; if (pts.pairs.length >= 4) solveMatchPoints(); } applyMatchFrame(); renderMatchPanel(); };
+  if (clear) clear.onclick = () => { pts.pairs = []; pts.pending = null; pts.mode = 'photo'; pts.fit = null; applyMatchFrame(); renderMatchPanel(); };
+  const nf = inspEl.querySelector('[data-match-frame]');
+  if (nf) nf.onclick = () => { const n = nearestFrameView(ph, match.hfov); if (!n) return; match.roll = n.view.roll || 0; applyMatchFrame(); flyTo(new THREE.Vector3(...n.view.position), new THREE.Vector3(...n.view.target), 500); };
+  inspEl.querySelector('[data-match-auto]').onclick = () => openAutoPlacement([ph.id]);
   inspEl.querySelector('[data-match-save]').onclick = saveMatchView;
   const back = inspEl.querySelector('[data-match-back]');
   if (back) back.onclick = () => {
     const v = normalizeView(ph.view);
     if (!v) return;
-    match.hfov = v.fov; applyMatchFrame();
+    match.hfov = v.fov; match.roll = v.roll || 0; applyMatchFrame();
     flyTo(new THREE.Vector3(...v.position), new THREE.Vector3(...v.target), 500);
     renderMatchPanel();
   };
+  const mp = inspEl.querySelector('[data-match-pos]');
+  if (mp) mp.onclick = () => { if (!cameraFound(ph)) saveMatchView(); makePositionFrom(ph.id); };
   inspEl.querySelector('[data-match-open]').onclick = () => openLightbox(ph.id);
   inspEl.querySelector('[data-match-done]').onclick = endMatch;
+}
+
+// ---------- pinned sheets: reading and opening ----------
+function flyToSheet(id) {
+  const r = pinObjs[id];
+  if (!r) return;
+  showMarkers('pins');
+  const v = viewForSheet(r.place, BASE_FOV, camera.aspect || 1.6, 0.85);
+  if (mode === 'walk') setMode('orbit');
+  flyTo(new THREE.Vector3(...v.position), new THREE.Vector3(...v.target), 700);
+}
+async function openPinned(ph) {
+  if (ph.kind !== 'document' || !isPdfDocument(ph)) return openLightbox(ph.id);
+  const buf = await photoBytes(ph.id);
+  if (!buf) { toast('The PDF file is missing from this browser.', 'error'); return; }
+  const url = URL.createObjectURL(new Blob([buf], { type: 'application/pdf' }));
+  const w = window.open(url, '_blank', 'noopener');
+  if (!w) toast('The browser blocked the new tab. Allow pop-ups for Tiksi to open PDFs.', 'warn');
+  setTimeout(() => URL.revokeObjectURL(url), 120000);
+}
+
+// ---------- numbered photo positions ----------
+// A camera fixed in the model and numbered like a section mark on a drawing. Each one collects
+// the before photo, renderings of the current design from exactly that camera (RENDER ALL
+// POSITIONS), and the after photo (positions.js).
+function positionCanvas(pos, selected) {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.beginPath(); ctx.arc(64, 64, 54, 0, Math.PI * 2);
+  ctx.fillStyle = selected ? '#e8973a' : '#1f6fd1'; ctx.fill();
+  ctx.lineWidth = 8; ctx.strokeStyle = '#ffffff'; ctx.stroke();
+  ctx.fillStyle = '#ffffff'; ctx.font = '700 ' + (pos.number > 99 ? 44 : 60) + 'px -apple-system, "Segoe UI", Roboto, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(pos.number), 64, 68);
+  return c;
+}
+function buildPositionMarker(pos) {
+  removePositionMarker(pos.id);
+  const pose = poseFromView(pos.view);
+  if (!pose || !positionRoot) return;
+  const selected = !!(selection && selection.kind === 'position' && selection.id === pos.id);
+  const before = picturesOf(prop, pos.id).before[0];
+  const { lines, face } = frustumLines(pose, pos.view.fov, before ? photoAspect(before) : 4 / 3, 0.45, selected ? 0xe8973a : 0x1f6fd1, 0.95);
+  face.userData = { kind: 'position', id: pos.id };
+  const tex = sheetTexture(positionCanvas(pos, selected));
+  const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, sizeAttenuation: false, depthTest: false, toneMapped: false }));
+  tag.scale.set(0.045, 0.045, 1); tag.renderOrder = 995;
+  tag.position.set(...pose.C);
+  tag.userData = { kind: 'position', id: pos.id };
+  const group = new THREE.Group();
+  group.userData = { kind: 'position', id: pos.id };
+  group.add(lines, face, tag);
+  positionRoot.add(group);
+  positionObjs[pos.id] = group;
+  requestRender(2);
+}
+function removePositionMarker(id) {
+  const g = positionObjs[id];
+  if (!g) return;
+  positionRoot && positionRoot.remove(g);
+  g.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); } });
+  delete positionObjs[id];
+}
+function buildAllPositions() {
+  for (const id of Object.keys(positionObjs)) removePositionMarker(id);
+  for (const pos of prop.photoPositions || []) buildPositionMarker(pos);
+}
+function makePositionFrom(photoId) {
+  const ph = photoById(prop, photoId);
+  if (!ph || !cameraFound(ph)) { toast('Find the camera first: PHOTO MODE, then line it up or FIT WITH POINTS and SAVE.', 'warn'); return; }
+  if (ph.positionId) { setSelection({ kind: 'position', id: ph.positionId }); return; }
+  const room = ph.roomId && prop.rooms.find(r => r.id === ph.roomId);
+  const pos = addPosition(prop, { id: uid('pos'), view: { ...ph.view, from: 'position' }, name: room ? room.name || '' : '', roomId: ph.roomId || '', fromPhoto: ph });
+  touch();
+  buildPositionMarker(pos);
+  if (match) endMatch();
+  setSelection({ kind: 'position', id: pos.id });
+  toast('Numbered position ' + pos.number + ' made from "' + ph.name + '". RENDER ALL POSITIONS makes the design from here.', 'ok');
+}
+function viewFromPosition(id) {
+  const pos = (prop.photoPositions || []).find(x => x.id === id);
+  if (!pos) return;
+  const pics = picturesOf(prop, id);
+  const show = pics.after[pics.after.length - 1] || pics.before[0];
+  if (show) { startMatch(show.id, null, { view: pos.view, positionId: id }); return; }
+  if (mode === 'walk') setMode('orbit');
+  flyTo(new THREE.Vector3(...pos.view.position), new THREE.Vector3(...pos.view.target), 700);
+}
+let renderingPositions = false;
+// Render the current design at each position, from exactly its camera, and file the stills on it.
+async function renderPositions(ids) {
+  if (renderingPositions) return;
+  const list = (prop.photoPositions || []).filter(p => !ids || ids.includes(p.id));
+  if (!list.length) { toast('No numbered positions yet. Make one from a photo whose camera is found.', 'warn'); return; }
+  renderingPositions = true;
+  const token = mountId, made = [];
+  try {
+    for (const [i, pos] of list.entries()) {
+      if (token !== mountId) return;
+      setHint('Rendering position ' + pos.number + ' (' + (i + 1) + ' of ' + list.length + ')…');
+      const { width, height } = renderSize(prop, pos, 2400);
+      const blob = await renderStillBlob({ width, height, quality: prop.env.quality || 'high', annotations: false, view: pos.view });
+      if (token !== mountId) return;
+      const now = new Date();
+      const file = new File([blob], renderingName(pos, now) + '.png', { type: 'image/png' });
+      const rec = await addPhotoFromFile(prop, file, { source: 'rendering', positionId: pos.id, role: 'rendering', renderedAt: now.toISOString(), view: { ...pos.view, from: 'position' } });
+      rec.roomId = pos.roomId || '';
+      made.push(rec);
+    }
+    touch();
+    toast('Rendered ' + made.length + ' position' + (made.length === 1 ? '' : 's') + '. The renderings are in PHOTOS and on each position.', 'ok');
+  } catch (e) {
+    toast('Rendering stopped: ' + e.message, 'error');
+  } finally {
+    renderingPositions = false;
+    if (token === mountId) { setHint(''); renderInspector(); }
+  }
+}
+function positionsListHtml() {
+  const list = prop.photoPositions || [];
+  if (!list.length) return '';
+  return `<h3 style="margin-top:14px">PHOTO POSITIONS</h3>` + list.map(pos => {
+    const pics = picturesOf(prop, pos.id), thumb = (pics.after[0] || pics.rendering[pics.rendering.length - 1] || pics.before[0] || {}).thumb || '';
+    return `<div class="v-pin-row">
+      ${thumb ? `<img src="${escapeHtml(thumb)}" alt="">` : '<i class="v-pos-chip"></i>'}
+      <span class="v-pin-name"><b class="v-pos-num">${pos.number}</b> ${escapeHtml(pos.name || '')} <span class="muted">${pics.before.length}/${pics.rendering.length}/${pics.after.length}</span></span>
+      <button class="btn small" data-pos-open="${escapeHtml(pos.id)}" title="Show this position's pictures">OPEN</button>
+      <button class="btn small" data-pos-view="${escapeHtml(pos.id)}" title="Stand at this position">VIEW</button>
+    </div>`; }).join('') + `<div class="empty" style="margin:4px 0 6px">Counts are before / renderings / after.</div>
+    <button class="btn" data-pos-render-all>RENDER ALL POSITIONS</button>`;
+}
+function bindPositionsList(root) {
+  root.querySelectorAll('[data-pos-open]').forEach(b => b.onclick = () => setSelection({ kind: 'position', id: b.dataset.posOpen }));
+  root.querySelectorAll('[data-pos-view]').forEach(b => b.onclick = () => viewFromPosition(b.dataset.posView));
+  const all = root.querySelector('[data-pos-render-all]');
+  if (all) all.onclick = () => renderPositions(null);
+}
+
+// ---------- scan cameras (Polycam raw export) ----------
+// IMPORT POLYCAM CAMERAS reads every keyframe's camera from a Polycam "raw data" export folder
+// (cameras/*.json). Each tracking session is then lined up with the model once, from the
+// keyframes' depth maps (LINE UP WITH THE MODEL), after which photos start at the scan frame taken
+// nearest in time, sharp frames can be added as ready-placed photos, and the automatic
+// placement helper on this Mac can match photos against them.
+function pickFolder() {
+  return new Promise(resolve => {
+    const input = document.createElement('input');
+    input.type = 'file'; input.webkitdirectory = true; input.multiple = true;
+    input.onchange = () => resolve(Array.from(input.files || []));
+    input.click();
+  });
+}
+function polycamIndex(files) {
+  const map = new Map();
+  let root = '';
+  for (const f of files) {
+    const rel = f.webkitRelativePath || f.name, parts = rel.split('/');
+    const dir = parts[parts.length - 2], stem = parts[parts.length - 1].replace(/\.[^.]+$/, '');
+    if (!['cameras', 'images', 'depth', 'confidence', 'corrected_cameras', 'corrected_images'].includes(dir)) continue;
+    root = root || parts.slice(0, -2).join('/');
+    const rec = map.get(stem) || {}; map.set(stem, rec);
+    const key = { cameras: 'camera', corrected_cameras: 'corrected', images: 'image', corrected_images: 'correctedImage', depth: 'depth', confidence: 'confidence' }[dir];
+    if (key) rec[key] = f;
+  }
+  return { name: root || 'Polycam export', files: map };
+}
+async function importPolycamCameras() {
+  const files = await pickFolder();
+  if (!files.length) return;
+  const idx = polycamIndex(files);
+  const stems = [...idx.files.keys()].filter(k => idx.files.get(k).camera || idx.files.get(k).corrected).sort();
+  if (!stems.length) { toast('No cameras/ folder in that folder. Choose the folder of a Polycam raw data export (it holds cameras, images and depth).', 'warn'); return; }
+  setHint('Reading ' + stems.length + ' scan cameras…');
+  const rows = [];
+  for (let i = 0; i < stems.length; i += 200) {
+    const part = await Promise.all(stems.slice(i, i + 200).map(async stem => {
+      const f = idx.files.get(stem);
+      // Polycam's own globally corrected cameras, when it wrote them, are better than the raw ones.
+      try { return keyframeRow(JSON.parse(await (f.corrected || f.camera).text()), stem); } catch (e) { return null; }
+    }));
+    rows.push(...part.filter(Boolean));
+  }
+  setHint('');
+  if (!rows.length) { toast('None of those camera files could be read.', 'error'); return; }
+  const set = { id: uid('cams'), name: idx.name.split('/').pop() || 'Polycam cameras', source: 'polycam', importedAt: new Date().toISOString(), folder: idx.name, exportPath: '', sessions: {}, keyframes: rows };
+  prop.cameraSets = prop.cameraSets || [];
+  prop.cameraSets.push(set);
+  polycamFolder = idx;
+  touch(); renderInspector();
+  const segs = segmentsOf(set);
+  toast('Read ' + rows.length + ' scan cameras in ' + segs.length + ' tracking session' + (segs.length === 1 ? '' : 's') + '. Next: LINE UP WITH THE MODEL.', 'ok');
+}
+async function ensureFolderFor(set) {
+  if (polycamFolder && polycamFolder.name === set.folder) return polycamFolder;
+  toast('Choose the Polycam export folder "' + set.folder + '" again: the browser does not keep folder access between visits.', 'info');
+  const files = await pickFolder();
+  if (!files.length) return null;
+  const idx = polycamIndex(files);
+  if (!idx.files.size) { toast('That folder is not a Polycam raw data export.', 'warn'); return null; }
+  polycamFolder = idx;
+  return idx;
+}
+// Points on the model's surfaces, in model coordinates: from the scans when any are loaded (their
+// vertices are dense), else area-weighted samples of the plan's walls and floors.
+function sampleModelPoints(limit = 160000) {
+  const out = [], v = new THREE.Vector3();
+  const take = (obj, every) => {
+    const pos = obj.geometry && obj.geometry.getAttribute('position');
+    if (!pos) return;
+    obj.updateWorldMatrix(true, false);
+    for (let i = 0; i < pos.count; i += every) { v.fromBufferAttribute(pos, i).applyMatrix4(obj.matrixWorld); out.push([v.x, v.y, v.z]); }
+  };
+  const scans = [];
+  if (scanRoot) scanRoot.traverse(o => { if ((o.isMesh || o.isPoints) && !o.userData.pickBox && !o.userData.helper && o.geometry) scans.push(o); });
+  const total = scans.reduce((n, o) => n + (o.geometry.getAttribute('position')?.count || 0), 0);
+  if (total > 5000) { for (const o of scans) take(o, Math.max(1, Math.ceil(total / limit))); return { points: out, from: 'scan' }; }
+  const tris = [];
+  if (modelGroup) modelGroup.traverse(o => { if (o.isMesh && o.visible !== false && o.geometry) tris.push(o); });
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  let area = 0;
+  const all = [];
+  for (const o of tris) {
+    o.updateWorldMatrix(true, false);
+    const g = o.geometry, pos = g.getAttribute('position'), index = g.index;
+    const n = index ? index.count / 3 : pos.count / 3;
+    for (let t = 0; t < n; t++) {
+      const i0 = index ? index.getX(t * 3) : t * 3, i1 = index ? index.getX(t * 3 + 1) : t * 3 + 1, i2 = index ? index.getX(t * 3 + 2) : t * 3 + 2;
+      a.fromBufferAttribute(pos, i0).applyMatrix4(o.matrixWorld); b.fromBufferAttribute(pos, i1).applyMatrix4(o.matrixWorld); c.fromBufferAttribute(pos, i2).applyMatrix4(o.matrixWorld);
+      const ar = new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a)).length() / 2;
+      if (ar > 1e-6) { all.push([a.toArray(), b.toArray(), c.toArray(), ar]); area += ar; }
+    }
+  }
+  const density = Math.min(400, limit / (area || 1));
+  for (const [p0, p1, p2, ar] of all) {
+    const k = Math.max(0, Math.round(ar * density));
+    for (let i = 0; i < k; i++) {
+      let r1 = Math.random(), r2 = Math.random();
+      if (r1 + r2 > 1) { r1 = 1 - r1; r2 = 1 - r2; }
+      out.push([0, 1, 2].map(j => p0[j] + r1 * (p1[j] - p0[j]) + r2 * (p2[j] - p0[j])));
+    }
+  }
+  return { points: out, from: 'plan' };
+}
+// The first scan's placement in the model (row-major), as a starting guess: a Polycam mesh export
+// shares its frame with the keyframe cameras of its first session.
+function scanPlacementMatrix() {
+  for (const s of prop.scans) {
+    const o = scanObjs[s.id];
+    if (!o) continue;
+    o.updateWorldMatrix(true, false);
+    const e = o.matrixWorld.elements;
+    return [e[0], e[4], e[8], e[12], e[1], e[5], e[9], e[13], e[2], e[6], e[10], e[14], 0, 0, 0, 1];
+  }
+  return null;
+}
+async function lineUpSessions(setId) {
+  const set = (prop.cameraSets || []).find(s => s.id === setId);
+  if (!set) return;
+  const folder = await ensureFolderFor(set);
+  if (!folder) return;
+  const model = sampleModelPoints();
+  if (model.points.length < 500) { toast('The model has too little surface to line the scan up against. Load the scan or draw the plan first.', 'warn'); return; }
+  const init = scanPlacementMatrix(), report = [];
+  const token = mountId;
+  for (const seg of segmentsOf(set)) {
+    const rows = set.keyframes.filter(r => r[KF.seg] === seg && folder.files.get(r[KF.stem]) && folder.files.get(r[KF.stem]).depth);
+    if (rows.length < 3) { report.push('session ' + seg + ': no depth maps'); continue; }
+    setHint('Lining up scan session ' + seg + ' (' + rows.length + ' frames)…');
+    await new Promise(r => setTimeout(r, 30));
+    const pick = Array.from({ length: Math.min(36, rows.length) }, (_, i) => rows[Math.floor(i * rows.length / Math.min(36, rows.length))]);
+    const pts = [];
+    for (const row of pick) {
+      const f = folder.files.get(row[KF.stem]);
+      try {
+        const depth = await decodePng16(new Uint8Array(await f.depth.arrayBuffer()));
+        const conf = f.confidence ? await decodePng16(new Uint8Array(await f.confidence.arrayBuffer())) : null;
+        pts.push(...depthPoints(row, depth, conf, 6));
+      } catch (e) { /* a damaged depth map is skipped */ }
+    }
+    if (token !== mountId) return;
+    const r = alignSession(pts, model.points, init);
+    if (!r || r.inliers < 0.35) { report.push('session ' + seg + ': could not line up' + (r ? ' (' + Math.round(r.inliers * 100) + '% of points on the model)' : '')); continue; }
+    set.sessions[String(seg)] = { matrix: r.matrix, method: r.method, inliers: r.inliers, fitM: r.fitM };
+    report.push('session ' + seg + ': ' + Math.round(r.inliers * 100) + '% of points within 5 cm, ' + (r.fitM * 100).toFixed(1) + ' cm average');
+  }
+  setHint('');
+  touch(); renderInspector();
+  toast('Scan sessions lined up against the ' + model.from + ': ' + report.join('; ') + '.', report.some(x => x.includes('could not')) ? 'warn' : 'ok', 12000);
+}
+async function addSharpFrames(setId, max = 40) {
+  const set = (prop.cameraSets || []).find(s => s.id === setId);
+  if (!set) return;
+  const folder = await ensureFolderFor(set);
+  if (!folder) return;
+  const lined = { ...set, keyframes: set.keyframes.filter(r => set.sessions[String(r[KF.seg])] && folder.files.get(r[KF.stem]) && folder.files.get(r[KF.stem]).image) };
+  if (!lined.keyframes.length) { toast('Line the scan sessions up with the model first.', 'warn'); return; }
+  const every = Math.max(1, Math.ceil(lined.keyframes.length / max));
+  const rows = sharpKeyframes(lined, every).slice(0, max);
+  const have = new Set(prop.photos.filter(p => p.source === 'polycam-keyframe').map(p => p.name));
+  let added = 0;
+  for (const row of rows) {
+    const name = 'Scan frame ' + row[KF.stem];
+    if (have.has(name)) continue;
+    const f = folder.files.get(row[KF.stem]);
+    const pose = keyframeModelPose(set, row), lens = keyframeLens(row);
+    const hfov = hfovOfLens(lens);
+    try {
+      const rec = await addPhotoFromFile(prop, new File([f.image], name + '.jpg', { type: 'image/jpeg' }),
+        { source: 'polycam-keyframe', view: { ...viewFromPose(pose, hfov), from: 'keyframe', fit: { rmsPx: 0, n: 0 } } });
+      rec.lens = { ...lens, hfov, vfov: 2 * Math.atan(lens.h / (2 * lens.fy)) * 180 / Math.PI, source: 'polycam' };
+      if (row[KF.t]) rec.takenAt = new Date(row[KF.t]).toISOString();
+      buildCameraGlyph(rec);
+      added++;
+    } catch (e) { console.warn('scan frame', e); }
+  }
+  touch(); renderInspector();
+  toast('Added ' + added + ' sharp scan frames as photos, each with its camera. They show as orange pyramids in the model.', 'ok');
+}
+function camerasPanelHtml() {
+  const sets = prop.cameraSets || [];
+  const rows = sets.map(set => {
+    const segs = segmentsOf(set), lined = segs.filter(s => set.sessions[String(s)]);
+    return `<div class="v-cams" data-set="${escapeHtml(set.id)}">
+      <div class="stat-line"><span>${escapeHtml(set.name)}</span><b>${set.keyframes.length} frames</b></div>
+      <div class="stat-line"><span>Sessions lined up</span><b>${lined.length} of ${segs.length}</b></div>
+      ${segs.map(s => { const x = set.sessions[String(s)]; return `<div class="stat-line small"><span>Session ${s}</span><b>${x ? Math.round(x.inliers * 100) + '% · ' + (x.fitM * 100).toFixed(1) + ' cm' : 'not yet'}</b></div>`; }).join('')}
+      <div class="field"><label>Folder on this Mac (for automatic placement)</label><input type="text" data-cams-path placeholder="/Users/…/Source media/keyframes" value="${escapeHtml(set.exportPath || '')}"></div>
+      <button class="btn" data-cams-align>LINE UP WITH THE MODEL</button>
+      <button class="btn" data-cams-frames ${lined.length ? '' : 'disabled'}>ADD SHARP FRAMES AS PHOTOS</button>
+      <button class="btn danger small" data-cams-del>REMOVE THESE CAMERAS</button>
+    </div>`;
+  }).join('');
+  const unplaced = prop.photos.filter(p => p.kind === 'photo' && p.source !== 'rendering' && p.source !== 'polycam-keyframe' && !cameraFound(p)).length;
+  return `<h3 style="margin-top:14px">SCAN CAMERAS</h3>
+    <div class="empty" style="margin-bottom:6px">A Polycam raw data export records the camera of every scan frame. Lined up with the model, it places photos taken during the scan.</div>
+    ${rows}
+    <button class="btn" data-cams-import>IMPORT POLYCAM CAMERAS</button>
+    ${sets.length ? `<button class="btn" data-auto-all ${unplaced ? '' : 'disabled'}>PLACE ${unplaced} PHOTO${unplaced === 1 ? '' : 'S'} AUTOMATICALLY</button>` : ''}`;
+}
+function bindCamerasPanel(root) {
+  const imp = root.querySelector('[data-cams-import]');
+  if (imp) imp.onclick = () => importPolycamCameras();
+  root.querySelectorAll('[data-set]').forEach(box => {
+    const id = box.dataset.set, set = prop.cameraSets.find(s => s.id === id);
+    box.querySelector('[data-cams-align]').onclick = () => lineUpSessions(id);
+    box.querySelector('[data-cams-frames]').onclick = () => addSharpFrames(id);
+    box.querySelector('[data-cams-path]').onchange = e => { set.exportPath = e.target.value.trim(); touch(); };
+    box.querySelector('[data-cams-del]').onclick = () => { prop.cameraSets = prop.cameraSets.filter(s => s.id !== id); touch(); renderInspector(); };
+  });
+  const all = root.querySelector('[data-auto-all]');
+  if (all) all.onclick = () => openAutoPlacement(prop.photos.filter(p => p.kind === 'photo' && p.source !== 'rendering' && p.source !== 'polycam-keyframe' && !cameraFound(p)).map(p => p.id));
+}
+
+// ---------- automatic placement (local helper) ----------
+// Sends photos to the photo placement helper on this Mac (server/photo_placement.py), which
+// matches them against the scan frames and solves each camera. Results are applied at once and
+// can be checked in PHOTO MODE or undone.
+let autoUndo = [];
+async function placementApi(path, options = {}) {
+  const cap = await fetch('/api/photo-placement/capabilities', { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null);
+  if (!cap) throw new Error('Automatic placement runs in the Tiksi app on this Mac (the local server). It is not available here.');
+  if (!cap.available) throw new Error((cap.reason || 'The placement helper is not installed.') + (cap.install ? ' Install it with: ' + cap.install : ''));
+  const headers = { 'Content-Type': 'application/json', ...(cap.token ? { 'X-Tiksi-Token': cap.token } : {}) };
+  const res = await fetch('/api/photo-placement' + path, { ...options, headers: { ...headers, ...(options.headers || {}) } });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || ('the helper answered ' + res.status));
+  return body;
+}
+async function photoForHelper(ph) {
+  const buf = await photoBytes(ph.id);
+  if (!buf) throw new Error('its original file is missing');
+  const bmp = await createImageBitmap(new Blob([buf], { type: ph.mime || 'image/jpeg' }), { imageOrientation: 'from-image' });
+  const s = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * s); c.height = Math.round(bmp.height * s);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close && bmp.close();
+  const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  const lens = photoLens(ph), k = c.width / (ph.w || c.width);
+  return { id: ph.id, name: ph.name, jpeg: btoa(bin), w: c.width, h: c.height, fx: lens.fx * k, fy: lens.fy * k, cx: lens.cx * k, cy: lens.cy * k, takenAt: ph.takenAt || null };
+}
+async function openAutoPlacement(ids) {
+  const set = (prop.cameraSets || []).find(s => Object.keys(s.sessions || {}).length);
+  if (!set) { toast('Import the Polycam cameras and LINE UP WITH THE MODEL first (SCAN CAMERAS, with nothing selected).', 'warn'); if (match) endMatch(); setSelection(null); return; }
+  if (!set.exportPath) { toast('Fill in the Polycam folder on this Mac under SCAN CAMERAS, so the helper can read the scan frames.', 'warn'); if (match) endMatch(); setSelection(null); return; }
+  const photos = ids.map(id => photoById(prop, id)).filter(p => p && p.kind === 'photo').slice(0, 50);
+  if (!photos.length) return;
+  const token = mountId;
+  try {
+    setHint('Preparing ' + photos.length + ' photo' + (photos.length === 1 ? '' : 's') + ' for automatic placement…');
+    const payload = [];
+    for (const ph of photos) { try { await ensureCameraFacts(ph); payload.push(await photoForHelper(ph)); } catch (e) { toast('Skipped "' + ph.name + '": ' + e.message, 'warn'); } }
+    const sessions = Object.fromEntries(Object.entries(set.sessions).map(([k, v]) => [k, v.matrix]));
+    const job = await placementApi('/jobs', { method: 'POST', body: JSON.stringify({ exportDir: set.exportPath, sessions, photos: payload, options: { stride: 4 } }) });
+    let state = job;
+    while (!['done', 'failed', 'cancelled'].includes(state.status)) {
+      await new Promise(r => setTimeout(r, 2000));
+      if (token !== mountId) return;
+      state = await placementApi('/jobs/' + encodeURIComponent(job.id));
+      const p = state.progress || {};
+      setHint('Automatic placement: ' + (p.stage || state.status) + (p.total ? ' (' + (p.done || 0) + ' of ' + p.total + ')' : '') + '…');
+    }
+    setHint('');
+    if (state.status !== 'done') throw new Error(state.error || 'the helper stopped');
+    autoUndo = [];
+    let ok = 0;
+    const failed = [];
+    for (const r of state.results || []) {
+      const ph = photoById(prop, r.id);
+      if (!ph) continue;
+      if (!r.ok) { failed.push(ph.name + ' (' + (r.reason || 'no match') + ')'); continue; }
+      const pose = poseFromMatrix(r.pose);
+      if (!pose) { failed.push(ph.name); continue; }
+      autoUndo.push({ id: ph.id, view: ph.view ? JSON.parse(JSON.stringify(ph.view)) : null });
+      ph.view = normalizeView({ ...viewFromPose(pose, hfovOfLens({ fx: r.fx, w: r.w })), from: 'auto', fit: { rmsPx: r.rmsPx, n: r.inliers } });
+      buildCameraGlyph(ph);
+      ok++;
+    }
+    touch(); renderInspector();
+    toast('Placed ' + ok + ' of ' + photos.length + ' photo' + (photos.length === 1 ? '' : 's') + ' automatically. Check each in PHOTO MODE.' + (failed.length ? ' Not placed: ' + failed.join('; ') + '.' : ''), ok ? 'ok' : 'warn', 15000);
+  } catch (e) {
+    setHint('');
+    toast('Automatic placement: ' + e.message, 'error', 12000);
+  }
+}
+function undoAutoPlacement() {
+  for (const u of autoUndo) { const ph = photoById(prop, u.id); if (!ph) continue; if (u.view) ph.view = u.view; else delete ph.view; buildCameraGlyph(ph); }
+  autoUndo = [];
+  touch(); renderInspector();
 }
 
 // ---------- notes ----------
@@ -1581,75 +2249,42 @@ function noteCanvas(note, selected) {
   lines.forEach((line, i) => ctx.fillText(line, x0 + NOTE_INSET, y0 + NOTE_INSET + NOTE_LINE * (i + 0.5)));
   return c;
 }
+// A note is a sticky note stuck flat on its surface, `size` metres wide (0.3 m unless set).
+function notePlacement(note, aspect) {
+  const width = note.size > 0 ? note.size : 0.3;
+  const long = aspect >= 1 ? width : width / aspect;
+  return sheetPlacement({ kind: 'note', w: aspect, h: 1, pin: { x: note.x, y: note.y, z: note.z, nx: note.nx, ny: note.ny, nz: note.nz, size: long, turn: note.turn, wall: note.wall } }, prop.walls);
+}
 function buildNote(note) {
   removeNote(note.id);
   const canvas = noteCanvas(note, !!(selection && selection.kind === 'note' && selection.id === note.id));
+  const aspect = canvas.width / canvas.height;
+  const place = notePlacement(note, aspect);
+  if (!place) return;
   const group = new THREE.Group();
   group.userData = { kind: 'note', id: note.id };
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  // The output pass tone-maps the whole frame; a little extra brightness keeps the paper yellow.
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, color: new THREE.Color(1.1, 1.1, 1.1), transparent: true, depthTest: true, toneMapped: false }));
-  sprite.userData = { kind: 'note', id: note.id };
-  sprite.material.userData.noClip = true;
-  group.add(sprite);
-  const lineGeo = new THREE.BufferGeometry();
-  lineGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(6), 3));
-  const line = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xf5d66a, transparent: true, opacity: 0.85, depthTest: false }));
-  line.renderOrder = 990;
-  line.raycast = () => {};   // decoration only, as on photo pins
-  group.add(line);
-  const dot = new THREE.Mesh(new THREE.CircleGeometry(0.03, 20), new THREE.MeshBasicMaterial({ color: 0xf2c33d, side: THREE.DoubleSide }));
-  dot.userData = { kind: 'note', id: note.id };
-  group.add(dot);
+  const sheet = sheetMesh(canvas, 'note', note.id);
+  sheet.material.transparent = true;   // the folded corner and the shadow are see-through
+  placeSheet(sheet, place);
+  group.add(sheet);
   noteRoot.add(group);
-  const rec = { group, sprite, line, dot, aspect: canvas.width / canvas.height };
-  noteObjs[note.id] = rec;
-  const n = new THREE.Vector3(note.nx || 0, note.ny == null ? 1 : note.ny, note.nz || 0).normalize();
-  rec.anchor = new THREE.Vector3(note.x, note.y, note.z);
-  rec.normal = n;
-  rec.dot.position.copy(rec.anchor).addScaledVector(n, 0.004);
-  rec.dot.lookAt(rec.anchor.clone().add(n));
-  rec.size = note.size || 0.45;
+  noteObjs[note.id] = { group, sprite: sheet, aspect, place,
+    anchor: new THREE.Vector3(place.centre.x, place.centre.y, place.centre.z), normal: new THREE.Vector3(place.normal.x, place.normal.y, place.normal.z) };
   requestRender(2);
 }
 function redrawNoteCard(id) {
   const note = noteRoot && noteById(id), rec = noteObjs[id];
   if (!note || !rec) return;
-  const canvas = noteCanvas(note, !!(selection && selection.kind === 'note' && selection.id === id));
-  rec.sprite.material.map.dispose();
-  const t = new THREE.CanvasTexture(canvas);
-  t.colorSpace = THREE.SRGBColorSpace;
-  rec.sprite.material.map = t; rec.sprite.material.needsUpdate = true;
-  rec.aspect = canvas.width / canvas.height;
-  requestRender(2);
+  buildNote(note);
 }
 function removeNote(id) {
   const rec = noteObjs[id];
   if (!rec) return;
   noteRoot.remove(rec.group);
-  rec.sprite.material.map.dispose(); rec.sprite.material.dispose();
-  rec.line.geometry.dispose(); rec.line.material.dispose();
-  rec.dot.geometry.dispose(); rec.dot.material.dispose();
+  rec.sprite.material.map.dispose(); rec.sprite.material.dispose(); rec.sprite.geometry.dispose();
   delete noteObjs[id];
 }
-function updateNotes() {
-  for (const id of Object.keys(noteObjs)) {
-    const r = noteObjs[id];
-    // The card is sized by its width, so a long note grows downwards, not wider. Far off it
-    // grows with the distance, which keeps its text about 12 px tall on screen.
-    const d = camera.position.distanceTo(r.anchor);
-    const w = THREE.MathUtils.clamp(Math.max(r.size, d * 0.1), 0.2, 3.2) * 1.5;
-    const h = w / r.aspect;
-    r.sprite.scale.set(w, h, 1);
-    r.sprite.position.copy(r.anchor).addScaledVector(r.normal, 0.12 + h * 0.55);
-    if (Math.abs(r.normal.y) < 0.5) r.sprite.position.y += h * 0.2;
-    const pos = r.line.geometry.getAttribute('position');
-    pos.setXYZ(0, r.anchor.x, r.anchor.y, r.anchor.z);
-    pos.setXYZ(1, r.sprite.position.x, r.sprite.position.y, r.sprite.position.z);
-    pos.needsUpdate = true;
-  }
-}
+function updateNotes() { /* flat notes sit still */ }
 function buildAllNotes() {
   for (const id of Object.keys(noteObjs)) removeNote(id);
   for (const n of prop.notePins) buildNote(n);
@@ -1673,6 +2308,7 @@ function placeNote(e) {
   if (!hit) { toast('Click a surface: a wall, floor, scan or the ground.', 'warn'); return; }
   const moving = movingNoteId && noteById(movingNoteId);
   if (moving) {
+    delete moving.wall; delete moving.turn;
     Object.assign(moving, anchorOf(hit));
     moving.roomId = ''; moving.elementIds = [];
     linkPinToPlan(moving, hit);
@@ -1687,7 +2323,11 @@ function placeNote(e) {
   openNoteEditor({ hit, at: { x: e.clientX, y: e.clientY } });
 }
 function anchorOf(hit) {
-  return { x: hit.point.x, y: hit.point.y, z: hit.point.z, nx: hit.normal.x, ny: hit.normal.y, nz: hit.normal.z };
+  const pin = surfacePin(hit, 0);
+  const out = { x: pin.x, y: pin.y, z: pin.z, nx: pin.nx, ny: pin.ny, nz: pin.nz, wall: pin.wall, turn: pin.turn };
+  if (!out.wall) delete out.wall;
+  if (out.turn === undefined) delete out.turn;
+  return out;
 }
 function addNote(hit, text) {
   const note = Object.assign({ id: uid('note'), text, roomId: '', elementIds: [], createdAt: new Date().toISOString() }, anchorOf(hit));
@@ -1815,6 +2455,8 @@ function markersShown(kind) { return prop.env[kind === 'notes' ? 'showNotes' : '
 function applyMarkerVisibility() {
   // The photo being matched must not be covered by its own pin card (or its neighbours').
   if (pinRoot) pinRoot.visible = markersShown('pins') && !match;
+  if (cameraRoot) cameraRoot.visible = markersShown('pins') && !match;
+  if (positionRoot) positionRoot.visible = markersShown('pins') && !match;
   if (noteRoot) noteRoot.visible = markersShown('notes');
   const sel = selection && (selection.kind === 'pin' || selection.kind === 'note') ? selectedObject() : null;
   if (sel && !isVisibleChain(sel)) setSelection(null);
@@ -1984,7 +2626,7 @@ function setHint(text) {
 function defaultHint() {
   if (mode === 'walk') return walkLocked ? 'WALK: WASD / arrows move, Shift runs, mouse looks. Esc releases the mouse.' : 'WALK: WASD / arrows move, Shift runs. Drag to look or click to capture the mouse. Esc exits.';
   if (tool === 'measure') return 'MEASURE: click two points on any surface.';
-  if (tool === 'pin') return 'PIN PHOTO: choose a photo, then click a surface.';
+  if (tool === 'pin') return 'PIN: choose a photo or document, then click the surface to hang it on.';
   if (tool === 'note') return noteHint();
   if (tool === 'move') return 'MOVE WALLS: select a wall, drag the gizmo arrow to slide it; connected walls follow on release.';
   if (section.on) return 'SECTION: slide the cut height in the mode bar to look inside.';
@@ -2280,12 +2922,12 @@ function bindPhotoLinks(root) {
 function pinsListHtml() {
   const pinned = prop.photos.filter(ph => ph.pin);
   if (!pinned.length) return '';
-  return `<h3 style="margin-top:14px">PHOTO PINS</h3>` + pinned.map(ph => `
+  return `<h3 style="margin-top:14px">PINNED PHOTOS AND DOCUMENTS</h3>` + pinned.map(ph => `
     <div class="v-pin-row">
       <img src="${escapeHtml(ph.thumb)}" alt="">
       <span class="v-pin-name">${escapeHtml(ph.name)}</span>
       <button class="btn small" data-locate="${escapeHtml(ph.id)}" title="Fly to pin">LOCATE</button>
-      ${ph.kind === 'pano' ? '' : `<button class="btn small" data-match="${escapeHtml(ph.id)}" title="View the model from where the photo was taken, with the photo over it">MATCH</button>`}
+      ${ph.kind === 'pano' || ph.kind === 'document' ? '' : `<button class="btn small" data-match="${escapeHtml(ph.id)}" title="Stand where the photo was taken, with the photo over the model">PHOTO</button>`}
       <button class="btn small danger" data-unpin="${escapeHtml(ph.id)}" title="Remove pin">&times;</button>
     </div>`).join('');
 }
@@ -2322,15 +2964,17 @@ function unpin(id) {
 function renderPinPanel() {
   const total = prop.photos.length, placed = prop.photos.filter(ph => ph.pin).length;
   const cur = pinPhotoId && photoById(prop, pinPhotoId);
-  inspEl.innerHTML = `<h3>PIN PHOTO</h3>
+  inspEl.innerHTML = `<h3>PIN A PHOTO OR DOCUMENT</h3>
     ${cur ? `<div class="v-thumb big active"><img src="${escapeHtml(cur.thumb)}" alt=""></div>
       <div class="stat-line"><span>Placing</span><b>${escapeHtml(cur.name)}</b></div>` : ''}
     ${total ? `<div class="stat-line"><span>Pinned</span><b>${placed} of ${total}</b></div>` : ''}
-    <div class="empty">Click the wall, floor or scan surface where the photo was taken. It links to the room and wall there${pinBatch ? ', then the next unpinned photo comes up' : ''}. Pick another photo below to place it instead.</div>
+    <div class="empty">Click the wall, floor or scan surface to hang it on. It lies flat there like a print you put up, links to the room and wall, and moves with the wall${pinBatch ? '; then the next unpinned one comes up' : ''}. Where a photo was taken from is set separately, in PHOTO MODE. Pick another below to place it instead.</div>
     <div class="v-thumbs">${prop.photos.map(ph => `<button class="v-thumb ${ph.id === pinPhotoId ? 'active' : ''}" data-pick="${escapeHtml(ph.id)}" title="${escapeHtml(ph.name)}"><img src="${escapeHtml(ph.thumb)}" alt="">${ph.pin ? '<i class="v-pinned">PINNED</i>' : ''}</button>`).join('')}</div>
     ${total ? '' : '<div class="empty" style="margin-top:8px">No photos on this property yet.</div>'}
     <button class="btn primary" data-add>ADD PHOTOS</button>
-    <input type="file" class="hidden-file" accept="image/*" multiple>
+    <input type="file" class="hidden-file" accept="image/*" multiple data-photo-file>
+    <button class="btn" data-add-doc title="Shop drawings, spec sheets, schedules: PDFs or images of sheets">ADD DOCUMENTS</button>
+    <input type="file" class="hidden-file" accept="application/pdf,.pdf,image/*" multiple data-doc-file>
     <button class="btn" data-cancel>${placed ? 'DONE' : 'CANCEL'}</button>`;
   inspEl.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => {
     pinPhotoId = b.dataset.pick;
@@ -2338,8 +2982,20 @@ function renderPinPanel() {
     pinBatch = !!(ph && !ph.pin);
     renderPinPanel(); setHint(pinHint());
   });
-  const file = inspEl.querySelector('input[type=file]');
+  const file = inspEl.querySelector('[data-photo-file]'), docFile = inspEl.querySelector('[data-doc-file]');
   inspEl.querySelector('[data-add]').onclick = () => file.click();
+  inspEl.querySelector('[data-add-doc]').onclick = () => docFile.click();
+  docFile.onchange = async () => {
+    const files = Array.from(docFile.files || []);
+    docFile.value = '';
+    let first = null;
+    for (const f of files) {
+      try { setHint('Reading ' + f.name + '…'); const rec = await addDocumentFromFile(prop, f); first = first || rec; }
+      catch (e) { toast('Could not add ' + f.name + ': ' + e.message, 'error'); }
+    }
+    if (first) { pinPhotoId = first.id; pinBatch = true; }
+    if (tool === 'pin') { renderPinPanel(); setHint(pinHint()); }
+  };
   file.onchange = async () => {
     const files = Array.from(file.files || []);
     file.value = '';
@@ -2380,9 +3036,16 @@ function renderInspector() {
         Click a wall, door, window or floor to inspect and edit it. The model regenerates from the plan; edits here write back to the same data. Right-click anywhere on the model to pin a note.</div>
       ${addFixtureHtml()}
       ${pinsListHtml()}
-      ${notesListHtml()}`;
+      ${positionsListHtml()}
+      ${notesListHtml()}
+      ${camerasPanelHtml()}
+      ${autoUndo.length ? `<button class="btn" data-auto-undo>UNDO AUTOMATIC PLACEMENT (${autoUndo.length})</button>` : ''}`;
     bindPinsList(inspEl);
+    bindPositionsList(inspEl);
     bindNotesList(inspEl);
+    bindCamerasPanel(inspEl);
+    const au = inspEl.querySelector('[data-auto-undo]');
+    if (au) au.onclick = undoAutoPlacement;
     inspEl.querySelector('[data-fx-add]').onclick = () => {
       const [kind, subtype] = inspEl.querySelector('[data-fx-kind]').value.split(':');
       const t = controls.target, lvl = levelAtHeight(t.y);
@@ -2508,29 +3171,92 @@ function renderInspector() {
   if (selection.kind === 'pin') {
     const ph = photoById(prop, selection.id);
     if (!ph || !ph.pin) { selection = null; return renderInspector(); }
-    inspEl.innerHTML = `<h3>PHOTO PIN</h3>
+    const isDoc = ph.kind === 'document';
+    const size = ph.pin.size;
+    const printOpts = PRINT_SIZES.map(x => `<option value="${x.long}" ${Math.abs(x.long - (size || DEFAULT_PRINT)) < 1e-3 ? 'selected' : ''}>${escapeHtml(x.label)}</option>`).join('');
+    const scaleOpts = [[0.5, 'Half size'], [1, 'True size'], [2, 'Twice true size'], [4, 'Four times true size']].map(([k, l]) => `<option value="${k}" ${Math.abs(k - (size || 1)) < 1e-3 ? 'selected' : ''}>${l}</option>`).join('');
+    const sheet = pinObjs[ph.id] && pinObjs[ph.id].place;
+    const pos = ph.positionId && (prop.photoPositions || []).find(x => x.id === ph.positionId);
+    inspEl.innerHTML = `<h3>${isDoc ? 'PINNED DOCUMENT' : 'PINNED PHOTO'}</h3>
       <button class="v-thumb big" data-open><img src="${escapeHtml(ph.thumb)}" alt=""></button>
-      <div class="stat-line"><span>${escapeHtml(ph.name)}</span><b>${finiteNum(ph.w, '?')} x ${finiteNum(ph.h, '?')}</b></div>
+      <div class="stat-line"><span>${escapeHtml(ph.name)}</span><b>${isDoc ? (ph.pageCount > 1 ? 'page ' + ph.page + ' of ' + ph.pageCount : '') : finiteNum(ph.w, '?') + ' x ' + finiteNum(ph.h, '?')}</b></div>
+      ${sheet ? `<div class="stat-line"><span>On the ${sheet.onWall ? 'wall' : 'surface'}</span><b>${escapeHtml(fmtLen(sheet.w))} x ${escapeHtml(fmtLen(sheet.h))}</b></div>` : ''}
+      ${isDoc ? `<div class="field"><label>Size</label><select data-scale>${scaleOpts}</select></div>
+        ${ph.pageCount > 1 ? `<div class="seg fill"><button class="seg-btn" data-page="-1" ${ph.page <= 1 ? 'disabled' : ''}>PREVIOUS PAGE</button><button class="seg-btn" data-page="1" ${ph.page >= ph.pageCount ? 'disabled' : ''}>NEXT PAGE</button></div>` : ''}`
+        : `<div class="field"><label>Print size</label><select data-print>${printOpts}</select></div>`}
       <div class="field"><label>Notes</label><textarea data-notes>${escapeHtml(ph.notes || '')}</textarea></div>
-      <div class="field"><label>Card size</label><input type="range" min="0.25" max="2.5" step="0.05" value="${finiteNum(ph.pin.size, 0.6)}" data-size></div>
-      <div class="stat-line"><span>Camera view</span><b>${viewLabel(ph)}</b></div>
-      <button class="btn" data-open2>OPEN FULL SIZE</button>
-      ${ph.kind === 'pano' ? '' : `<button class="btn primary" data-match title="View the model from where the photo was taken, with the photo over it">MATCH PHOTO</button>
-      <button class="btn" data-saveview title="Store the camera as it is now as the place this photo was taken from">SAVE VIEW FOR THIS PHOTO</button>`}
+      ${isDoc || ph.kind === 'pano' ? '' : `<div class="stat-line"><span>Camera</span><b>${escapeHtml(cameraLabel(ph))}</b></div>
+        ${pos ? `<div class="stat-line"><span>Numbered position</span><b>${escapeHtml(positionLabel(pos))}</b></div>` : ''}`}
+      ${isDoc ? `<button class="btn primary" data-read>READ IT</button><button class="btn" data-open2>OPEN ${isPdfDocument(ph) ? 'THE PDF' : 'FULL SIZE'}</button>`
+        : `<button class="btn" data-open2>OPEN FULL SIZE</button>
+      ${ph.kind === 'pano' ? '' : `<button class="btn primary" data-match title="Stand where the photo was taken and see the photo over the model">PHOTO MODE</button>
+      ${pos ? '' : `<button class="btn" data-makepos title="Keep this camera as a numbered position for before, rendering and after pictures"${cameraFound(ph) ? '' : ' disabled'}>MAKE NUMBERED POSITION</button>`}`}`}
+      <button class="btn" data-turn>TURN A QUARTER</button>
       <button class="btn" data-locate>LOCATE</button>
       <button class="btn" data-move>MOVE PIN</button>
       <button class="btn danger" data-unpin>REMOVE PIN</button>`;
-    inspEl.querySelector('[data-open]').onclick = () => openLightbox(ph.id);
-    inspEl.querySelector('[data-open2]').onclick = () => openLightbox(ph.id);
+    inspEl.querySelector('[data-open]').onclick = () => openPinned(ph);
+    inspEl.querySelector('[data-open2]').onclick = () => openPinned(ph);
     inspEl.querySelector('[data-notes]').onchange = e => { ph.notes = e.target.value; touch(); };
-    inspEl.querySelector('[data-size]').oninput = e => { ph.pin.size = parseFloat(e.target.value); const r = pinObjs[ph.id]; if (r) r.size = ph.pin.size; requestRender(2); };
-    inspEl.querySelector('[data-size]').onchange = () => touch();
+    const sel = inspEl.querySelector('[data-print]') || inspEl.querySelector('[data-scale]');
+    sel.onchange = () => { ph.pin.size = parseFloat(sel.value); touch(); buildPin(ph); renderInspector(); };
+    inspEl.querySelectorAll('[data-page]').forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      try { await setDocumentPage(ph, (ph.page || 1) + Number(b.dataset.page)); buildPin(ph); renderInspector(); }
+      catch (e) { toast('Could not show that page: ' + e.message, 'error'); }
+    });
+    inspEl.querySelector('[data-turn]').onclick = () => {
+      const floor = Math.abs(ph.pin.ny) > 0.5;
+      ph.pin.turn = floor ? ((ph.pin.turn || 0) + 90) % 360 : ((ph.pin.turn || 0) + 1) % 4;
+      touch(); buildPin(ph); requestRender(2);
+    };
+    const rd = inspEl.querySelector('[data-read]');
+    if (rd) rd.onclick = () => flyToSheet(ph.id);
     inspEl.querySelector('[data-locate]').onclick = () => flyToPin(ph.id);
     inspEl.querySelector('[data-move]').onclick = () => startPinMode(ph.id);
-    const mb = inspEl.querySelector('[data-match]'), sv = inspEl.querySelector('[data-saveview]');
+    const mb = inspEl.querySelector('[data-match]'), mp = inspEl.querySelector('[data-makepos]');
     if (mb) mb.onclick = () => startMatch(ph.id);
-    if (sv) sv.onclick = () => saveCurrentViewFor(ph.id);
+    if (mp) mp.onclick = () => makePositionFrom(ph.id);
     inspEl.querySelector('[data-unpin]').onclick = () => unpin(ph.id);
+    return;
+  }
+  if (selection.kind === 'position') {
+    const pos = (prop.photoPositions || []).find(x => x.id === selection.id);
+    if (!pos) { selection = null; return renderInspector(); }
+    const pics = picturesOf(prop, pos.id);
+    const strip = role => pics[role].length ? `<div class="field"><label>${ROLE_LABELS[role]} (${pics[role].length})</label><div class="v-thumbs small">${pics[role].map(ph =>
+      `<button class="v-thumb" data-open-photo="${escapeHtml(ph.id)}" title="${escapeHtml(ph.name)}"><img src="${escapeHtml(ph.thumb)}" alt=""></button>`).join('')}</div></div>` : '';
+    const room = pos.roomId && prop.rooms.find(r => r.id === pos.roomId);
+    inspEl.innerHTML = `<h3>PHOTO POSITION ${pos.number}</h3>
+      <div class="field"><label>Name</label><input type="text" data-name value="${escapeHtml(pos.name || '')}" placeholder="e.g. Kitchen from the door"></div>
+      ${room ? `<div class="stat-line"><span>Room</span><b>${escapeHtml(room.name || '')}</b></div>` : ''}
+      <div class="stat-line"><span>Lens</span><b>${Math.round(pos.view.fov)}&deg; across</b></div>
+      ${strip('before')}${strip('rendering')}${strip('after')}
+      ${pics.before.length + pics.rendering.length + pics.after.length ? '' : '<div class="empty">No pictures yet.</div>'}
+      <button class="btn primary" data-view>VIEW FROM HERE</button>
+      <button class="btn" data-render>RENDER THIS POSITION</button>
+      <button class="btn" data-after>ADD AFTER PHOTO</button>
+      <input type="file" class="hidden-file" accept="image/*" data-after-file>
+      <button class="btn danger" data-del>REMOVE POSITION</button>`;
+    inspEl.querySelector('[data-name]').onchange = e => { pos.name = e.target.value.trim(); touch(); buildPositionMarker(pos); };
+    inspEl.querySelector('[data-view]').onclick = () => viewFromPosition(pos.id);
+    inspEl.querySelector('[data-render]').onclick = () => renderPositions([pos.id]);
+    const af = inspEl.querySelector('[data-after-file]');
+    inspEl.querySelector('[data-after]').onclick = () => af.click();
+    af.onchange = async () => {
+      const f = af.files && af.files[0]; af.value = '';
+      if (!f) return;
+      try {
+        const rec = await addPhotoFromFile(prop, f, { positionId: pos.id, role: 'after', view: { ...pos.view, from: 'position' } });
+        buildCameraGlyph(rec); renderInspector();
+        toast('After photo added to position ' + pos.number + '. Use PHOTO MODE on it to check it lines up.', 'ok');
+      } catch (e) { toast('Could not add ' + f.name + ': ' + e.message, 'error'); }
+    };
+    inspEl.querySelector('[data-del]').onclick = () => {
+      removePosition(prop, pos.id); removePositionMarker(pos.id); touch(); setSelection(null);
+      toast('Position ' + pos.number + ' removed; its pictures stay in the photo library. Its number is not given out again.', 'ok');
+    };
+    bindPhotoLinks(inspEl);
     return;
   }
   if (selection.kind === 'note') {
@@ -2541,14 +3267,14 @@ function renderInspector() {
       <div class="field"><label>Text</label><textarea data-text rows="5" maxlength="2000">${escapeHtml(n.text || '')}</textarea></div>
       ${where ? `<div class="stat-line"><span>Room</span><b>${escapeHtml(where)}</b></div>` : ''}
       ${Number.isFinite(added.getTime()) && added.getTime() > 0 ? `<div class="stat-line"><span>Added</span><b>${escapeHtml(added.toLocaleDateString())}</b></div>` : ''}
-      <div class="field"><label>Card size</label><input type="range" min="0.2" max="2" step="0.05" value="${finiteNum(n.size, 0.45)}" data-size></div>
+      <div class="field"><label>Width <b data-sizev>${escapeHtml(fmtLen(n.size > 0 ? n.size : 0.3))}</b></label><input type="range" min="0.1" max="1.2" step="0.02" value="${n.size > 0 ? n.size : 0.3}" data-size></div>
       <button class="btn" data-locate>LOCATE</button>
       <button class="btn" data-move>MOVE NOTE</button>
       <button class="btn danger" data-del>DELETE NOTE</button>`;
     const text = inspEl.querySelector('[data-text]');
     text.oninput = () => { n.text = text.value; redrawNoteCard(n.id); };
     text.onchange = () => { n.text = text.value.trim(); n.updatedAt = new Date().toISOString(); touch(); redrawNoteCard(n.id); };
-    inspEl.querySelector('[data-size]').oninput = e => { n.size = parseFloat(e.target.value); const r = noteObjs[n.id]; if (r) r.size = n.size; requestRender(2); };
+    inspEl.querySelector('[data-size]').oninput = e => { n.size = parseFloat(e.target.value); inspEl.querySelector('[data-sizev]').textContent = fmtLen(n.size); buildNote(n); };
     inspEl.querySelector('[data-size]').onchange = () => touch();
     inspEl.querySelector('[data-locate]').onclick = () => flyToNote(n.id);
     inspEl.querySelector('[data-move]').onclick = () => startNoteMode(n.id);
@@ -2683,7 +3409,7 @@ function renderToolCol() {
     ${tb('move', 'move', 'MOVE WALLS', 'M', tool === 'move')}
     ${tb('measure', 'measure', 'MEASURE', 'D', tool === 'measure')}
     ${measures.length ? tb('clearm', 'close', 'CLEAR MEASURES') : ''}
-    ${tb('pin', 'pin', 'PIN PHOTO', 'P', tool === 'pin')}
+    ${tb('pin', 'pin', 'PIN', 'P', tool === 'pin')}
     ${tb('note', 'note', 'NOTE', 'N', tool === 'note')}
     ${tb('sketchup', 'external', 'EDIT IN SKETCHUP')}
     <div class="tool-sep"></div>
@@ -2934,7 +3660,7 @@ export function unmount() {
   closeContextMenu();
   closeNoteEditor();
   // Every disk save remounts the view (a saved view among them): the match carries on after it.
-  matchResume = match && camera && controls ? { at: performance.now(), id: match.id, hfov: match.hfov, position: camera.position.toArray(), target: (tween ? tween.t1 : controls.target).toArray() } : null;
+  matchResume = match && camera && controls ? { at: performance.now(), id: match.id, hfov: match.hfov, roll: match.roll, position: camera.position.toArray(), target: (tween ? tween.t1 : controls.target).toArray() } : null;
   if (tween && matchResume) matchResume.position = tween.p1.toArray();
   if (match) { match.el.remove(); match = null; }
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
@@ -2950,6 +3676,8 @@ export function unmount() {
   if (lightRoot) { lightRoot.traverse(o => { if (o.geometry) o.geometry.dispose(); }); lightRoot = null; }
   clearMeasures();
   for (const id of Object.keys(pinObjs)) removePin(id);
+  for (const id of Object.keys(cameraObjs)) removeCameraGlyph(id);
+  for (const id of Object.keys(positionObjs)) removePositionMarker(id);
   for (const id of Object.keys(noteObjs)) removeNote(id);
   for (const id of Object.keys(scanObjs)) { disposeScanObject(scanObjs[id]); delete scanObjs[id]; }
   for (const id of Object.keys(scanState)) delete scanState[id];
@@ -2970,7 +3698,7 @@ export function unmount() {
     renderer.clear();
   }
   scene = null; camera = null; skyScene = null; sun = null; hemi = null;
-  scanRoot = null; pinRoot = null; noteRoot = null; measureRoot = null;
+  scanRoot = null; pinRoot = null; noteRoot = null; measureRoot = null; cameraRoot = null; positionRoot = null;
   el = null; wrapEl = null; inspEl = null; hud = {};
   selection = null; hoverTarget = null; tween = null; pressed = null; dragLook = null; rightPress = null; movingNoteId = null;
 }

@@ -6,9 +6,13 @@
 // Photo record shape (see also store.js migrate):
 // { id, name, kind: 'photo' | 'pano', w, h, mime, thumb (dataURL <= 360px), createdAt,
 //   notes, roomId, elementIds: [], itemIds: [], pin: null | { x, y, z, nx, ny, nz, size },
-//   view?: { position: [x,y,z], target: [x,y,z], fov (horizontal deg), from? } (photo-match.js) }
+//   view?: { position: [x,y,z], target: [x,y,z], fov (horizontal deg), from?, roll?, fit?, pairs? } (photo-match.js),
+//   lens?: the camera's lens read from the file (photo-exif.js), takenAt?: when it was taken,
+//   kind 'document' records are PDFs and sheets pinned in the model (documents.js),
+//   positionId? / role?: a picture of a numbered photo position (positions.js) }
 
 import { uid, touch, putFile, getFile, deleteFile, storeThumb, deleteThumb } from './store.js';
+import { readExif, lensFromExif } from './photo-exif.js';
 
 const THUMB_MAX = 360;
 // Object URLs for full-resolution images. Each one pins a Blob copy of the IndexedDB buffer
@@ -65,10 +69,37 @@ export async function addPhotoFromFile(prop, file, opts) {
     w, h, mime, thumb, original: true, byteLength: buffer.byteLength,
     createdAt: new Date().toISOString(), notes: '', roomId: '', elementIds: [], itemIds: [], pin: null,
   };
+  Object.assign(rec, cameraFacts(buffer, w, h));
+  for (const k of ['source', 'positionId', 'role', 'renderedAt', 'view']) if (opts[k] !== undefined) rec[k] = opts[k];
   prop.photos = prop.photos || [];
   prop.photos.push(rec);
   touch();
   return rec;
+}
+
+// The lens and capture time a photo file records, for a photo shown at w x h: { lens?, takenAt? }.
+export function cameraFacts(buffer, w, h) {
+  const out = {};
+  let exif = null;
+  try { exif = readExif(buffer); } catch (e) { exif = null; }
+  if (!exif) return out;
+  const lens = lensFromExif(exif, w, h);
+  if (lens) out.lens = lens;
+  if (exif.takenAt) out.takenAt = exif.takenAt;
+  return out;
+}
+
+// Photos imported before Tiksi read lenses: read it now from the kept original. Returns true when
+// the record changed.
+export async function ensureCameraFacts(rec) {
+  if (!rec || rec.kind !== 'photo' || (rec.lens && rec.takenAt) || rec.source === 'rendering') return false;
+  const buf = await photoBytes(rec.id);
+  if (!buf) return false;
+  const facts = cameraFacts(buf, rec.w, rec.h);
+  let changed = false;
+  if (facts.lens && !rec.lens) { rec.lens = facts.lens; changed = true; }
+  if (facts.takenAt && !rec.takenAt) { rec.takenAt = facts.takenAt; changed = true; }
+  return changed;
 }
 
 // Object URL for the full-resolution image (cached; null if the bytes are gone).
