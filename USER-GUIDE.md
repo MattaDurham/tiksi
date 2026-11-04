@@ -225,9 +225,13 @@ Use the tool column for camera and inspection actions. The inspector follows the
 
 **Imported references.** Select a scan/model to inspect placement, scale and available materials. A reference remains separate from native plan elements.
 
-**Photos on surfaces.** Pinned photos stay attached to the model. Select a pin to open its reference image. PHOTOS in the mode bar hides or shows every pin.
+**Photos and documents on surfaces.** PIN (P) hangs a photo or a document flat on the wall, floor or scan surface you click, like a print put up by hand. A photo hangs at a print size (11 x 14 in unless you choose another); a PDF page or sheet image hangs at its true size, so a 24 x 36 in drawing is 24 x 36 in on the wall. A pin on a wall keeps its place on that wall and moves with it when the wall moves. Select a pinned document and choose READ IT to fly in front of it, or OPEN THE PDF. PHOTOS in the mode bar hides or shows every pin, camera and numbered position.
 
-**Match a photo.** MATCH PHOTO (on a selected pin, or MATCH in the PHOTO PINS list) moves the camera to where the photo was taken and lays the photo over the model, OVER with an opacity slider or SIDE BY SIDE. Orbit, pan, zoom and set the lens until the model lines up, then SAVE VIEW FOR THIS PHOTO; the photo keeps that view. Pinning records the camera at that moment as a first guess, and a photo with no view starts from its pin with a 72° phone lens. Anything that will not line up is where the model and the site differ. Esc or DONE ends.
+**Photo mode.** PHOTO MODE (on a selected pin, PHOTO in the pinned list, or an orange camera pyramid in the model) stands where the photo was taken and lays the photo over the model, OVER with an opacity slider or SIDE BY SIDE. The lens comes from the photo file (an iPhone ultra-wide photo is about 102° across), and a photo with no camera yet starts at the scan frame taken nearest in time, when scan cameras are imported. Line it up by eye, or choose FIT WITH POINTS and click a sharp corner in the photo, then the same spot in the model, four times or more: the camera is solved and the average error shown. A crooked photo is turned upright. SAVE CAMERA FOR THIS PHOTO keeps it, and the camera shows as a pyramid in the model. Anything that will not line up is where the model and the site differ. Esc or DONE ends.
+
+**Numbered photo positions.** MAKE NUMBERED POSITION turns a photo's found camera into a numbered position, marked like a section on a drawing in the model and on the plan. A position collects the before photo, a dated rendering of the current design from exactly that camera each time you choose RENDER ALL POSITIONS (or RENDER THIS POSITION), and the after photo (ADD AFTER PHOTO). VIEW FROM HERE stands at the position with its latest photo over the model. Numbers are never reused.
+
+**Scan cameras.** A Polycam raw data export (turn on Developer Mode in Polycam before scanning) records the camera of every scan frame. Under SCAN CAMERAS, with nothing selected, IMPORT POLYCAM CAMERAS reads them from the export folder, and LINE UP WITH THE MODEL fits each tracking session to the model from its depth maps, reporting how many points land within 5 cm. ADD SHARP FRAMES AS PHOTOS then adds scan frames as photos with their cameras already placed. PLACE PHOTOS AUTOMATICALLY sends photos to the placement helper on the Mac running Tiksi, which matches them against the scan frames; install it once with python3 tools/install-photo-placement.py and fill in the export folder path. Check each placed photo in PHOTO MODE; UNDO AUTOMATIC PLACEMENT puts the previous cameras back.
 
 **Notes anywhere.** Right-click a wall, floor, scan or the ground and choose ADD NOTE HERE, or use NOTE (N) and click. The note links to the room and wall under it. Right-click a note to edit, move or delete it; NOTES in the mode bar hides or shows them all. Both switches are kept with the property.
 
@@ -354,9 +358,9 @@ Open PHOTOS and select an unpinned reference card. Choose PIN IN 3D, then click 
 
 **Match in 3D.** MATCH IN 3D opens MODEL from where the photo was taken with the photo over the model, to check walls, openings and fixtures against the site. CAMERA VIEW in the details says whether a view is saved.
 
-**Find or move a pin.** In MODEL, clear the selection and use a PHOTO PINS → LOCATE button to fly to a pin. Select the pin for notes, card size, MOVE PIN or REMOVE PIN; removing a pin keeps the photo.
+**Find or move a pin.** In MODEL, clear the selection and use a PINNED PHOTOS AND DOCUMENTS → LOCATE button to fly to a pin. Select the pin for notes, print size, TURN A QUARTER, MOVE PIN or REMOVE PIN; removing a pin keeps the photo.
 
-> **Good to know:** Ordinary photos do not automatically supply reliable camera positions. Place their pins yourself unless a capture provides usable pose data. The sample images in this guide are illustrations.
+> **Good to know:** Where a photo hangs and where it was taken are separate. Its lens comes from the file; its camera comes from PHOTO MODE (by eye or four points), a Polycam scan frame, or automatic placement. The sample images in this guide are illustrations.
 
 <a id="measure"></a>
 

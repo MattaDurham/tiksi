@@ -3,8 +3,9 @@
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 // Fields whose parts only mean something together: a photo's camera view (position, target and
-// lens) merges whole, so two devices' views conflict instead of mixing into a third view.
-const WHOLE = new Set(['view']);
+// lens) merges whole, so two devices' views conflict instead of mixing into a third view. A pin
+// (its point and its wall place) and a lens are whole for the same reason.
+const WHOLE = new Set(['view', 'pin', 'lens', 'wall']);
 const keyed = v => Array.isArray(v) && v.every(r => object(r) && typeof r.id === 'string') && new Set(v.map(r => r.id)).size === v.length;
 
 export function mergeShared(base, local, remote) {

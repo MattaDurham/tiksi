@@ -51,7 +51,8 @@ function renderSelection() {
 }
 function renderGallery() {
   if (!root) return;
-  const gallery = (property.photos || []).filter(p => p.kind !== 'pano' && (PHOTO_EXT[p.mime] || TYPES.test(p.name || '')));
+  // Documents and renderings are not site photographs: they stay out of reconstruction.
+  const gallery = (property.photos || []).filter(p => p.kind === 'photo' && p.source !== 'rendering' && (PHOTO_EXT[p.mime] || TYPES.test(p.name || '')));
   root.querySelector('.rc-gallery').innerHTML = gallery.length ? gallery.map(p => `<label class="rc-photo">
     <input type="checkbox" value="${escapeHtml(p.id)}" ${galleryIds.has(p.id) ? 'checked' : ''} ${busy ? 'disabled' : ''}>
     <img src="${escapeHtml(p.thumb || '')}" alt="" loading="lazy"><span>${escapeHtml(p.name)}<small>${p.w} × ${p.h}${p.original ? ' · original' : ' · older saved copy'}</small></span></label>`).join('') : '<p>Add overlapping photographs here or in PHOTOS. Panoramas are reference images and are excluded from reconstruction.</p>';

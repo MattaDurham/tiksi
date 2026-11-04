@@ -154,10 +154,10 @@ try {
   const oldView = (await prop()).photos.find(ph => ph.id === 'ph-old').view;
   assert.equal(oldView.fov, 60); assert.ok(Math.abs(oldView.position[0] - 4.5) < 0.05, 'started 2.5 m in front of the pin: ' + oldView.position);
   await page.locator('[data-match-done]').click();
-  // From PHOTOS: MATCH IN 3D opens MODEL with the overlay.
+  // From PHOTOS: PHOTO MODE opens MODEL with the overlay.
   await page.locator('#rail [data-view=photos]').click();
   await page.locator('.ph-card[data-id=ph-view]').click();
-  assert.match(await page.locator('.ph-detail').textContent(), /Camera view\s*saved/);
+  assert.match(await page.locator('.ph-detail').textContent(), /Camera\s*lined up by eye/);
   await page.locator('.ph-detail [data-act=match]').click();
   await page.locator('.v-match-frame').waitFor();
   assert.equal(await page.evaluate(() => location.hash), '#/model', 'the deep link is consumed');

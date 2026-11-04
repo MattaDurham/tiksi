@@ -38,7 +38,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         if not self.valid_host():
             self.send_error(403, 'Host is not allowed')
             return True
-        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames'):
+        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement'):
             service = getattr(self.server, name, None)
             if service and service.dispatch(self): return True
         return False
@@ -65,7 +65,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         result = {key: metadata[key] for key in ('slug', 'branch', 'port', 'instanceId', 'head', 'live') if key in metadata}
         result.update({'pid': os.getpid(), 'port': self.server.server_port,
                        'live': metadata.get('live', self.server.server_port == 8642), 'activeJobs': 0})
-        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames'):
+        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement'):
             service = getattr(self.server, name, None)
             if service:
                 active = getattr(service, 'active_jobs', None)
@@ -155,6 +155,12 @@ def main():
             # Frames from walk-through videos (MEASURE); reports honestly when ffmpeg is absent.
             from server.video_frames import VideoFrameService
             server.video_frames = VideoFrameService(args.state_dir / 'video-frames')
+        server.photo_placement = None
+        if (ROOT / 'server/photo_placement.py').exists():
+            # Places site photos against a Polycam keyframe export; reports honestly when its runtime is absent.
+            from server.photo_placement import PhotoPlacementService
+            folders = lambda: [Path(p).parent for p in list(getattr(server.workspace, 'paths', {}).values())] + [server.workspace.projects_dir]
+            server.photo_placement = PhotoPlacementService(args.state_dir / 'photo-placement', projects_dir=args.projects_dir, project_folders=folders)
         def shutdown(signum, frame):
             threading.Thread(target=server.shutdown, daemon=True).start()
         signal.signal(signal.SIGTERM, shutdown)
@@ -162,7 +168,7 @@ def main():
         print(f'Tiksi listening on {args.host}:{server.server_port}', flush=True)
         try: server.serve_forever()
         finally:
-            for name in ('reconstruction', 'material_research', 'model_conversion', 'video_frames'):
+            for name in ('reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement'):
                 service = getattr(server, name, None)
                 if service: service.close()
 

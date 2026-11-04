@@ -606,6 +606,7 @@ function paint(w, h, exporting) {
   drawWalls();
   for (const o of curOpenings()) drawOpening(o);
   drawRoomLabels();
+  drawPhotoPositions();
   drawDims();
   if (numbersOn || exporting) drawOpeningTags();
   if (!exporting) {
@@ -804,6 +805,30 @@ function drawFixtures() {
     ctx.setLineDash(upper ? [4, 3] : []);
     ctx.stroke();
     ctx.setLineDash([]);
+  }
+}
+
+// Numbered photo positions on this level: a numbered circle at the camera with a wedge showing
+// what it sees, like a section or detail mark on a drawing (positions.js).
+function drawPhotoPositions() {
+  const L = lvl(), levels = (prop.levels || []).slice().sort((a, b) => a.elevation - b.elevation);
+  for (const pos of prop.photoPositions || []) {
+    const [x, y, z] = pos.view.position, [tx, , tz] = pos.view.target;
+    let on = levels[0];
+    for (const l of levels) if (y >= l.elevation - 0.1) on = l;
+    if (!on || on.id !== L.id) continue;
+    const s = w2s([x, z]);
+    const dir = Math.atan2(tz - z, tx - x), half = pos.view.fov * Math.PI / 360, reach = Math.max(28, 1.2 * vs.zoom);
+    ctx.beginPath(); ctx.moveTo(s[0], s[1]);
+    ctx.arc(s[0], s[1], reach, dir - half, dir + half); ctx.closePath();
+    ctx.fillStyle = 'rgba(31,111,209,0.16)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(31,111,209,0.7)'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.beginPath(); ctx.arc(s[0], s[1], 10, 0, Math.PI * 2);
+    ctx.fillStyle = '#1f6fd1'; ctx.fill();
+    ctx.lineWidth = 2; ctx.strokeStyle = '#ffffff'; ctx.stroke();
+    ctx.font = `700 11px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffffff'; ctx.fillText(String(pos.number), s[0], s[1] + 0.5);
+    ctx.textBaseline = 'alphabetic';
   }
 }
 
