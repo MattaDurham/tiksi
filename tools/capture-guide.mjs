@@ -24,6 +24,7 @@ await mkdir(target, { recursive: true });
 const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 const context = await browser.newContext({ viewport: { width: 1440, height: 960 }, deviceScaleFactor: 1 });
 const page = await context.newPage(), errors = [];
+await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
 page.on('pageerror', error => errors.push(error.message));
 page.setDefaultTimeout(30000);
 

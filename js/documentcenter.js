@@ -531,6 +531,7 @@ function vpInspector(v) {
         <button class="btn small" data-cam="last" ${lastCameraView(prop.id) ? '' : 'disabled title="Open MODEL, frame a view, then come back"'}>USE THE 3D VIEW'S CAMERA</button>
         ${['ne', 'nw', 'se', 'sw'].map(k => `<button class="btn small" data-cam="${k}">FROM ${k.toUpperCase()} CORNER</button>`).join('')}
       </div>
+      ${(prop.savedViews || []).length ? field('Saved view', `<select data-saved-view><option value="">Choose…</option>${prop.savedViews.map(sv => opt(sv.id, sv.name, '')).join('')}</select>`, 'its camera and tags') : ''}
       ${positions.length ? field('Photo position', `<select data-pos><option value="">Choose…</option>${positions.filter(p => p.view).map(p => opt(p.id, '#' + p.number + ' ' + (p.name || ''), '')).join('')}</select>`) : ''}
       <p class="faint">Double-click the view on the sheet to orbit it with the mouse.</p>`;
   } else if (v.kind === 'image') {
@@ -575,6 +576,16 @@ function bindVpInspector(host, v) {
     changed(true);
   });
   host.querySelector('[data-vtag-reset]')?.addEventListener('click', () => { v.tags = {}; changed(true); });
+  // A MODEL saved view: its camera, and its tags as this view's own (as a LayOut viewport takes a scene).
+  host.querySelector('[data-saved-view]')?.addEventListener('change', e => {
+    const sv = (prop.savedViews || []).find(x => x.id === e.target.value);
+    if (!sv) return;
+    v.camera = { position: sv.camera.position.slice(), target: sv.camera.target.slice(), fov: sv.camera.fov };
+    v.tags = { ...sv.tags };
+    v.title = sv.name;
+    renderLists();
+    changed(true);
+  });
   host.querySelectorAll('[data-f]').forEach(i => i.onchange = () => {
     const k = i.dataset.f;
     v[k] = k === 'scale' ? Number(i.value) : i.value;

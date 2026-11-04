@@ -54,6 +54,8 @@ import {
 } from './scans.js';
 import { attachSketchupNavigation } from './sketchup-nav.js';
 import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown } from './tags.js';
+import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags } from './saved-views.js';
+import { onScreen, setOnScreen, onScreenChange, setMenuProvider } from './tiksi-menu.js';
 import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility, partKeyForObject, partByKey, partName, planKeyOf } from './tags-scene.js';
 
 // ---------- persistent GPU state (one context for the life of the page) ----------
@@ -2451,6 +2453,11 @@ function openContextMenu(e) {
   items.push(null);
   items.push(['toggle-notes', (markersShown('notes') ? 'HIDE NOTES' : 'SHOW NOTES') + ' (' + nNotes + ')', () => toggleMarkers('notes')]);
   items.push(['toggle-pins', (markersShown('pins') ? 'HIDE PHOTO PINS' : 'SHOW PHOTO PINS') + ' (' + nPins + ')', () => toggleMarkers('pins')]);
+  popupMenu(at, items);
+}
+// A small menu at a screen point: items are [id, label, run] (no run: a line of text), or null for a rule.
+function popupMenu(at, items) {
+  closeContextMenu();
   const menu = document.createElement('div');
   menu.className = 'v-ctx';
   menu.setAttribute('role', 'menu');
@@ -3508,6 +3515,143 @@ function renderInspectorBody() {
   }
 }
 
+// ---------- saved views (tabs over the model, as SketchUp's scene tabs) ----------
+let activeViewId = null;       // the saved view last gone to, drawn as the current tab
+let offScreen = null, offMenu = null;
+function viewState() {
+  return {
+    camera: { position: camera.position.toArray(), target: controls.target.toArray(), fov: camera.fov },
+    mode: mode === 'top' ? 'top' : 'orbit', section: { on: section.on, height: section.height }, xray,
+    hiddenLevels: [...hiddenLevels()],
+  };
+}
+function addView() {
+  const v = addSavedView(prop, '', viewState());
+  activeViewId = v.id;
+  touch(); renderViews();
+  toast('Saved the view "' + v.name + '" with its camera and tags. Double-click its tab to rename it.', 'ok');
+  return v;
+}
+function goToView(id) {
+  const v = (prop.savedViews || []).find(x => x.id === id);
+  if (!v) return;
+  activeViewId = id;
+  if (match) endMatch();
+  if (v.mode === 'top' && mode !== 'top') setMode('top');
+  else if (v.mode !== 'top' && mode !== 'orbit') setMode('orbit');
+  const tagsMoved = applySavedTags(prop, v) > 0;
+  section.on = v.section.on; section.height = v.section.height;
+  if (xray !== v.xray) { xray = v.xray; applyXray(); }
+  const hidden = hiddenLevels();
+  hidden.clear(); for (const lid of v.hiddenLevels) if (prop.levels.some(l => l.id === lid)) hidden.add(lid);
+  const levels = modelGroup && modelGroup.userData.levels;
+  if (levels) for (const l of levels) l.group.visible = !hidden.has(l.id);
+  rebuildNightLights();
+  applyTagVisibility();
+  applySection();
+  if (camera.fov !== v.camera.fov) { camera.fov = v.camera.fov; camera.updateProjectionMatrix(); }
+  flyTo(new THREE.Vector3(...v.camera.position), new THREE.Vector3(...v.camera.target), 650);
+  const sel = selectedObject();
+  if (sel && !isVisibleChain(sel)) setSelection(null);
+  renderHud(); renderToolCol(); renderInspector(); renderViews();
+  if (tagsMoved) touch();
+}
+function stepView(by) {
+  const list = prop.savedViews || [];
+  if (!list.length) return;
+  const i = list.findIndex(v => v.id === activeViewId);
+  goToView(list[i < 0 ? (by > 0 ? 0 : list.length - 1) : (i + by + list.length) % list.length].id);
+}
+function renameView(id) {
+  const v = (prop.savedViews || []).find(x => x.id === id);
+  if (!v) return;
+  const name = prompt('Name of this view', v.name);
+  if (name && renameSavedView(prop, id, name)) { touch(); renderViews(); }
+}
+function renderViews() {
+  const strip = hud.views;
+  if (!strip) return;
+  const list = prop.savedViews || [];
+  strip.innerHTML = list.map(v => `<button class="v-view-tab ${v.id === activeViewId ? 'active' : ''}" role="tab" aria-selected="${v.id === activeViewId}" data-view-tab="${escapeHtml(v.id)}" title="${escapeHtml(v.name)}: click to go there (Page Up / Page Down step through views). Double-click to rename; right-click to update, move or delete.">${escapeHtml(v.name)}</button>`).join('') +
+    `<button class="v-view-add" data-view-add title="Save this camera, with the tags shown now, as a view" aria-label="Add a saved view">${icon('plus')}${list.length ? '' : '<span>SAVE VIEW</span>'}</button>`;
+  strip.querySelector('[data-view-add]').onclick = addView;
+  strip.querySelectorAll('[data-view-tab]').forEach(b => {
+    const id = b.dataset.viewTab;
+    b.onclick = () => goToView(id);
+    b.ondblclick = () => renameView(id);
+    b.oncontextmenu = e => {
+      e.preventDefault();
+      const i = list.findIndex(v => v.id === id);
+      popupMenu({ x: e.clientX, y: e.clientY }, [
+        ['view-update', 'UPDATE TO THIS CAMERA AND TAGS', () => { updateSavedView(prop, id, viewState()); activeViewId = id; touch(); renderViews(); toast('View updated.', 'ok'); }],
+        ['view-rename', 'RENAME', () => renameView(id)],
+        i > 0 ? ['view-left', 'MOVE LEFT', () => { moveSavedView(prop, id, -1); touch(); renderViews(); }] : null,
+        i < list.length - 1 ? ['view-right', 'MOVE RIGHT', () => { moveSavedView(prop, id, 1); touch(); renderViews(); }] : null,
+        null,
+        ['view-delete', 'DELETE VIEW', () => { if (!confirm('Delete the saved view "' + list[i].name + '"?')) return; deleteSavedView(prop, id); if (activeViewId === id) activeViewId = null; touch(); renderViews(); }],
+      ].filter((it, k, all) => it !== null || (k > 0 && all[k - 1] !== null)));
+    };
+  });
+}
+
+// ---------- what is on the screen, and the Tiksi menu ----------
+// The tool column's groups, the view bar, the compass and the view tabs show only when the
+// Tiksi menu has them ON SCREEN; everything is in the menu either way.
+function applyScreen() {
+  if (!hud.modes) return;
+  hud.modes.hidden = !onScreen('model.modes', false);
+  if (hud.compassBox) hud.compassBox.hidden = !onScreen('model.compass', true);
+  if (hud.views) hud.views.hidden = !onScreen('model.views', true);
+  wrapEl && wrapEl.classList.toggle('v-views-on', !hud.views.hidden);
+}
+function menuGroups() {
+  if (!prop || !scene) return [];
+  const g = (title, id, on, label, items) => ({ title, screen: { id, on: onScreen(id, on), label }, items });
+  const counts = tagCounts(prop);
+  return [
+    g('Saved views', 'model.views', true, 'Tabs over the model', [
+      ...(prop.savedViews || []).map(v => ({ label: v.name, active: v.id === activeViewId, run: () => goToView(v.id) })),
+      { label: 'Save this view', key: '+', run: addView },
+    ]),
+    g('View', 'model.view', false, 'FRAME, FRONT and ISO in the left column', [
+      { label: 'Frame the model', key: 'F', run: () => { if (mode !== 'orbit') setMode('orbit'); presetView('frame'); } },
+      { label: 'Front', run: () => { if (mode !== 'orbit') setMode('orbit'); presetView('front'); } },
+      { label: 'Iso', run: () => { if (mode !== 'orbit') setMode('orbit'); presetView('iso'); } },
+      { label: 'Orbit', key: 'O', active: mode === 'orbit', run: () => setMode('orbit') },
+      { label: 'Walk through', key: 'W', active: mode === 'walk', run: () => setMode('walk') },
+      { label: 'Top, north up', key: 'T', active: mode === 'top', run: () => setMode('top') },
+    ]),
+    g('Display', 'model.modes', false, 'The ORBIT to NOTES bar over the model', [
+      { label: 'Section cut', key: 'C', active: section.on, run: toggleSection },
+      { label: 'X-ray', key: 'X', active: xray, run: toggleXray },
+      { label: 'Sun and environment', run: () => { hud.env.hidden = false; hud.env.classList.add('open'); renderEnvPanel(); } },
+      { label: 'Photo pins', active: markersShown('pins'), run: () => toggleMarkers('pins') },
+      { label: 'Notes', active: markersShown('notes'), run: () => toggleMarkers('notes') },
+      { label: 'Render a still image', run: openStillDialog },
+    ]),
+    g('Tools', 'model.tools', false, 'The tools in the left column', [
+      { label: 'Select', key: 'V', active: tool === 'select', run: () => setTool('select') },
+      { label: 'Move walls', key: 'M', active: tool === 'move', run: () => setTool(tool === 'move' ? 'select' : 'move') },
+      { label: 'Measure', key: 'D', active: tool === 'measure', run: () => setTool(tool === 'measure' ? 'select' : 'measure') },
+      ...(measures.length ? [{ label: 'Clear measures', run: () => { clearMeasures(); renderToolCol(); } }] : []),
+      { label: 'Pin a photo', key: 'P', active: tool === 'pin', run: () => { if (tool === 'pin') setTool('select'); else startPinMode(null); } },
+      { label: 'Note', key: 'N', active: tool === 'note', run: () => { if (tool === 'note') setTool('select'); else startNoteMode(null); } },
+      { label: 'Edit in SketchUp', run: () => document.dispatchEvent(new CustomEvent('tiksi:edit-in-sketchup')) },
+    ]),
+    g('Tags', 'model.tags', false, 'Tag switches in the left column', [
+      ...prop.tags.map(t => ({ label: (t.visible !== false ? 'Hide ' : 'Show ') + t.name + ' (' + (counts.get(t.id) || 0) + ')', active: t.visible !== false, keep: true, run: () => toggleTag(t.id) })),
+      { label: 'Rename, recolour, add or delete tags', run: () => setSelection(null) },
+    ]),
+    g('Levels', 'model.levels', false, 'Level switches in the left column',
+      prop.levels.map(l => ({ label: (hiddenLevels().has(l.id) ? 'Show ' : 'Hide ') + l.name, active: !hiddenLevels().has(l.id), keep: true, run: () => toggleLevel(l.id) }))),
+    g('Models and scans', 'model.models', false, 'The list of imported models in the left column', [
+      ...prop.scans.map(sc => ({ label: sc.name, active: scanSelected(sc.id), run: () => setSelection({ kind: 'scan', id: sc.id }) })),
+      { label: 'Import and exchange models (FILE)', run: () => exchangeDialog() },
+    ]),
+    g('Compass', 'model.compass', true, 'The compass over the model', []),
+  ];
+}
+
 function exchangeDialog(selected) { document.dispatchEvent(new CustomEvent('tiksi:files',{detail:{tab:'exchange',selected}})); }
 
 // ---------- tool column ----------
@@ -3529,34 +3673,34 @@ function renderToolCol() {
   const tagRows = prop.tags.map(t => tagRow(t.id, t.name, t.color, t.visible !== false)).join('') +
     ((counts.get(UNTAGGED) || prop.tagUntaggedVisible === false) ? tagRow(UNTAGGED, UNTAGGED_LABEL, 'transparent', prop.tagUntaggedVisible !== false) : '');
   const levelRows = prop.levels.map(l => `<button class="tool-btn ${hidden.has(l.id) ? '' : 'active'}" data-level="${escapeHtml(l.id)}" title="${hidden.has(l.id) ? 'Show' : 'Hide'} ${escapeHtml(l.name)} (floor at ${escapeHtml(fmtLen(l.elevation))})">${icon(hidden.has(l.id) ? 'eye-off' : 'layers')}<span class="tb-text">${escapeHtml(l.name.length > 14 ? l.name.slice(0, 12) + '..' : l.name)}</span><kbd class="key">${escapeHtml(fmtLen(l.elevation, { short: true }))}</kbd></button>`).join('');
-  tc.innerHTML = `
-    <div class="tool-head">VIEW</div>
+  // Each group is on the screen only when the Tiksi menu says so; otherwise it lives in the menu.
+  const groups = [
+    onScreen('model.view', false) && `<div class="tool-head">VIEW</div>
     ${tb('frame', 'frame', 'FRAME', 'F')}
     ${tb('front', 'target', 'FRONT')}
-    ${tb('iso', 'model', 'ISO')}
-    <div class="tool-sep"></div>
-    <div class="tool-head">TOOLS</div>
+    ${tb('iso', 'model', 'ISO')}`,
+    onScreen('model.tools', false) && `<div class="tool-head">TOOLS</div>
     ${tb('select', 'select', 'SELECT', 'V', tool === 'select')}
     ${tb('move', 'move', 'MOVE WALLS', 'M', tool === 'move')}
     ${tb('measure', 'measure', 'MEASURE', 'D', tool === 'measure')}
     ${measures.length ? tb('clearm', 'close', 'CLEAR MEASURES') : ''}
     ${tb('pin', 'pin', 'PIN', 'P', tool === 'pin')}
     ${tb('note', 'note', 'NOTE', 'N', tool === 'note')}
-    ${tb('sketchup', 'external', 'EDIT IN SKETCHUP')}
-    <div class="tool-sep"></div>
-    <div class="tool-head" title="Show or hide each tag. With nothing selected, the panel on the right renames, recolours, adds and deletes tags.">TAGS</div>
-    ${tagRows}
-    <div class="tool-sep"></div>
-    <div class="tool-head">LEVELS</div>
-    ${levelRows}
-    <div class="tool-sep"></div>
-    <div class="tool-head">MODELS & SCANS</div>
+    ${tb('sketchup', 'external', 'EDIT IN SKETCHUP')}`,
+    onScreen('model.tags', false) && `<div class="tool-head" title="Show or hide each tag. With nothing selected, the panel on the right renames, recolours, adds and deletes tags.">TAGS</div>
+    ${tagRows}`,
+    onScreen('model.levels', false) && `<div class="tool-head">LEVELS</div>
+    ${levelRows}`,
+    onScreen('model.models', false) && `<div class="tool-head">MODELS & SCANS</div>
     ${prop.designComparison ? tb('before', 'scan', 'BEFORE', '', prop.designComparison.view === 'before') + tb('after', 'model', 'AFTER', '', prop.designComparison.view === 'after') : ''}
     ${scanRows}
     <div class="empty" style="padding:6px 8px; font-size:9.5px; color:var(--faint); font-family:var(--mono); line-height:1.5">
       PLY / PCD / XYZ / LAS point clouds, OBJ / GLB meshes, .splat / .spz / .ply Gaussian splats.</div>
     <div class="tool-sep"></div>
-<div class="empty">Import and exchange models in FILE.</div>`;
+<div class="empty">Import and exchange models in FILE.</div>`,
+  ].filter(Boolean);
+  tc.innerHTML = groups.join('<div class="tool-sep"></div>');
+  tc.closest('.v-layout')?.classList.toggle('v-no-tools', !groups.length);
   const on = (act, fn) => { const b = tc.querySelector(`[data-act=${act}]`); if (b) b.onclick = fn; };
   on('frame', () => { if (mode !== 'orbit') setMode('orbit'); presetView('frame'); });
   on('front', () => { if (mode !== 'orbit') setMode('orbit'); presetView('front'); });
@@ -3631,6 +3775,7 @@ function onKeyDown(e) {
     case 'KeyN': if (tool === 'note') setTool('select'); else startNoteMode(null); break;
     case 'KeyC': toggleSection(); break;
     case 'KeyX': toggleXray(); break;
+    case 'PageDown': case 'PageUp': stepView(e.code === 'PageDown' ? 1 : -1); break;
     case 'KeyG': toggleTag(CANON.scan.id); break;
     case 'KeyK': toggleTag(CANON.furniture.id); break;
     case 'Escape':
@@ -3669,6 +3814,7 @@ export function mount(root) {
     <div class="editor-layout v-layout">
       <div class="tool-col"></div>
       <div class="canvas-wrap v-wrap">
+        <div class="v-views" role="tablist" aria-label="Saved views"></div>
         <div class="v-modes"></div>
         <div class="v-compass" title="North"><div class="v-rose"><span class="n">N</span><span class="e">E</span><span class="s">S</span><span class="w">W</span><i></i></div></div>
         <div class="v-env"></div>
@@ -3683,7 +3829,9 @@ export function mount(root) {
   hud = {
     modes: wrapEl.querySelector('.v-modes'), compass: wrapEl.querySelector('.v-rose'), env: wrapEl.querySelector('.v-env'),
     progress: wrapEl.querySelector('.v-progress'), toast: wrapEl.querySelector('.v-toast'), hint: wrapEl.querySelector('.v-hint'),
+    views: wrapEl.querySelector('.v-views'), compassBox: wrapEl.querySelector('.v-compass'),
   };
+  activeViewId = null;
   mode = 'orbit'; tool = 'select'; selection = null; hoverTarget = null; tween = null; measureDraft = null; pinPhotoId = null; match = null;
   movingNoteId = null; rightPress = null; ctxMenu = null; noteEditor = null;
   panoNagged = false; panoPending = null; panoMissing = null;
@@ -3707,6 +3855,10 @@ export function mount(root) {
   hud.env.hidden=true;
   renderToolCol();
   renderInspector();
+  renderViews();
+  applyScreen();
+  offScreen = onScreenChange(() => { applyScreen(); renderToolCol(); });
+  offMenu = setMenuProvider(menuGroups);
   setHint('');
 
   const c = renderer.domElement;
@@ -3782,6 +3934,8 @@ function rememberView() {
 
 export function unmount() {
   try { rememberView(); } catch (e) { console.error(e); }
+  if (offScreen) { offScreen(); offScreen = null; }
+  if (offMenu) { offMenu(); offMenu = null; }
   if (exportDialog) exportDialog.close();
   if (renderer) renderer.setAnimationLoop(null);
   mountId++;
