@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from '../vendor/three.module.min.js';
-import { scanLayer, layerShown, setLayerShown, meshFootprints, footprintsOnLevel } from '../js/view-layers.js';
+import { scanLayer, meshFootprints, footprintsOnLevel } from '../js/view-layers.js';
 import { attachSketchupNavigation, pivotOnViewAxis } from '../js/sketchup-nav.js';
 
 test('scans fall into scan, furnishings and model layers; an explicit layer wins', () => {
@@ -14,23 +14,6 @@ test('scans fall into scan, furnishings and model layers; an explicit layer wins
   assert.equal(scanLayer({ name: 'Porch overhead', kind: 'mesh', layer: 'furnishings' }), 'furnishings');
   assert.equal(scanLayer({ name: 'Existing fixtures', kind: 'mesh', layer: 'model' }), 'model');
   assert.equal(scanLayer({ name: 'Existing fixtures', kind: 'mesh', layer: 'bogus' }), 'furnishings');
-});
-
-test('a layer toggle shows or hides every member and leaves other layers alone', () => {
-  const prop = { scans: [
-    { id: 'a', name: 'Polycam survey', kind: 'mesh', visible: false },
-    { id: 'b', name: 'Fixtures', kind: 'mesh', visible: true },
-    { id: 'c', name: 'Furniture', kind: 'mesh', visible: false },
-    { id: 'd', name: 'Porch', kind: 'mesh', visible: true },
-  ] };
-  assert.equal(layerShown(prop, 'scan'), false);
-  assert.equal(layerShown(prop, 'furnishings'), true);
-  assert.deepEqual(setLayerShown(prop, 'furnishings', false).map(s => s.id), ['b']);
-  assert.equal(layerShown(prop, 'furnishings'), false);
-  assert.deepEqual(setLayerShown(prop, 'furnishings', true).map(s => s.id), ['b', 'c']);
-  assert.deepEqual(setLayerShown(prop, 'scan', true).map(s => s.id), ['a']);
-  assert.equal(prop.scans[3].visible, true);
-  assert.equal(layerShown({ scans: [] }, 'scan'), false);
 });
 
 test('mesh footprints are world-space outlines with heights, specks dropped, filtered by storey', () => {

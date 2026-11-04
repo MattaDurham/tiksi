@@ -107,7 +107,7 @@ export const chapters = [
   {
     id: 'model', group: 'Design', title: 'Inspect and edit the 3D model', path: 'MODEL', route: 'model', image: 'model.png',
     intro: 'The 3D view combines the plan-generated building, imported captures and photo pins. It is also a place to edit model elements and inspect imported materials.',
-    caption: 'Use the tool column for camera and inspection actions. The inspector follows the selected wall, room surface or imported model.',
+    caption: 'Here every group is ON SCREEN (Tiksi menu); by default the tools live in the menu under the Tiksi logo. The inspector follows the selected wall, room surface or imported model.',
     steps: [
       'Open MODEL and use FRAME if the room is outside the camera. Drag or middle-drag to orbit about the point under the cursor, hold Shift to pan (even mid-drag), scroll to zoom, or use the TOP control for a plan-like view. On a trackpad, pinch also zooms.',
       'Click a wall, floor or ceiling to inspect it. Change the offered dimensions or material in the inspector.',
@@ -131,6 +131,27 @@ export const chapters = [
     ],
     note: 'Start with Low or Medium quality on a laptop and raise it when needed. A screenshot or exported render communicates appearance; it does not replace a dimensional site check.',
     related: ['exchange', 'materials', 'settings'],
+  },
+  {
+    id: 'tags', group: 'Design', title: 'Tags, saved views and the Tiksi menu', path: 'MODEL → TAGS', route: 'model', image: 'tags.png',
+    intro: 'Every part of the model sits on a tag, the way it does in SketchUp: walls, floors, ceilings, doors and windows, fixtures, and each part of an imported model. Hide a tag to look inside, save the view as a tab, and keep the screen clear by leaving the tools in the Tiksi menu.',
+    caption: 'The Tiksi menu is open over MODEL. Roof is hidden in the tag list on the right, so the room under the roof shows. The saved views are tabs at the top left of the model.',
+    steps: [
+      'Open MODEL. With nothing selected, the panel on the right lists the tags with how many objects each holds. Click an eye to hide or show a tag.',
+      'Click an object to see its tag in the panel and choose another. Shift-click more objects first to move them all at once; on an imported model, TAG EVERY PART OF THIS MODEL moves the whole model.',
+      'Rename a tag by typing over its name, change its colour with the swatch, add one with ADD TAG, or delete one with the X: its objects move to Untagged.',
+      'Choose the + at the top left of the model to save the current camera, with the tags shown now, as a view. Click a tab to go back to it; double-click to rename; right-click to update it, move it or delete it. Page Up and Page Down step through the tabs.',
+      'Click the Tiksi logo for every tool and view. Tick ON SCREEN on a group to keep it beside the model; untick it to put it back in the menu.',
+    ],
+    features: [
+      ['Automatic tags', 'An imported model is tagged the first time it loads. A SketchUp file keeps its own tags. Without them, part names decide (Roof anywhere in a name wins, otherwise the first building word: wall, door, floor, ceiling, cabinet, and so on), and then shape: up-facing or sloped faces above the storey are Roof, a thin slab at the floor is Floor, one at the top of the storey is Ceiling, tall vertical faces are Walls, and the rest is Furniture and fixtures. DETECT TAGS AGAIN on a selected model starts over.'],
+      ['Plan elements', 'Walls, floors, ceilings, doors and windows, built-in fixtures and loose furniture each start on their own tag. A new wall goes on the walls tag; one you moved stays where you put it.'],
+      ['Drawings follow the tags', 'DOCUMENTS draws plans, sections, elevations and 3D views with the model\'s tags. Each view also has its own TAGS list: leave a tag as the model has it, or show or hide it in that view only. A 3D view can start from a saved view, camera and tags together.'],
+      ['SketchUp', 'Exports to SketchUp, and the SketchUp mirror beside a project file, put each object on a SketchUp tag with the same name and visibility.'],
+      ['What stays on the screen', 'The ON SCREEN choices belong to this browser and apply to every project. Keyboard shortcuts work whether or not a group is on the screen.'],
+    ],
+    note: 'Tags only change what is shown. Hidden objects are still in the project, still counted in takeoffs, and still exported.',
+    related: ['model', 'documents', 'exchange'],
   },
   {
     id: 'exchange', group: 'Design', title: 'Edit elsewhere and compare before/after', path: 'FILE → 3D exchange', image: 'exchange.png',
@@ -413,7 +434,7 @@ export const chapters = [
       ['Save / open', 'Cmd/Ctrl+S: save. Cmd/Ctrl+Shift+S: save as. Cmd/Ctrl+O: open.'],
       ['Plan navigation', 'F: fit view. Drag empty canvas: pan. Scroll wheel or pinch: zoom. Space-drag or middle-drag: pan. G: scan underlay. K: furniture. [ and ]: step between levels.'],
       ['Plan drawing', 'V: select. W: wall. D: door. N: window. R: room. C: calibrate. With ROOM, a click inside closed walls floors that room and Alt-click starts an outline; click the first point or double-click to close an outline.'],
-      ['Model navigation', 'Drag or middle-drag: orbit. Shift+drag or right-drag: pan. Wheel or pinch: zoom. F: frame. O: orbit. W: walk. T: top. C: section. X: X-ray. G: scan. K: furniture. M: move walls. D: measure. P: pin photo. N: note. Right-click: note menu.'],
+      ['Model navigation', 'Drag or middle-drag: orbit. Shift+drag or right-drag: pan. Wheel or pinch: zoom. F: frame. O: orbit. W: walk. T: top. C: section. X: X-ray. G: the Scan capture tag. K: the Furniture and fixtures tag. Page Up / Page Down: previous or next saved view. M: move walls. D: measure. P: pin photo. N: note. Right-click: note menu.'],
       ['Geometry undo', 'Top-bar UNDO / REDO work in PLAN, MODEL and MEASURE (applied tape readings). Cmd/Ctrl+Z: undo. Cmd/Ctrl+Shift+Z or Ctrl+Y: redo. History is per project for the current session. Escape ends an active tool action.'],
       ['Move one wall', 'Alt/Option while dragging isolates that wall from the normal connected-wall behavior; floors stay where they are.'],
       ['Where is save/import?', 'Open FILE at the top. Project handles .tiksi files; Import handles captures and photos; 3D exchange handles editing in other applications.'],

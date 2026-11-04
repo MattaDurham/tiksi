@@ -63,6 +63,19 @@ class ConversionTests(unittest.TestCase):
         handler=Handler();self.assertTrue(self.service.dispatch(handler));self.assertEqual(handler.status,403)
         handler.headers={'Host':'localhost:8888'};handler.wfile=io.BytesIO();self.service.dispatch(handler);self.assertEqual(handler.status,403)
     @unittest.skipUnless(library_path(),'SketchUp SDK not installed')
+    def test_real_native_skp_carries_tags_into_glb_nodes(self):
+        tri=[0,0,0,2,0,0,0,3,0]
+        source=self.root/'tagged.json';source.write_text(json.dumps({'meshes':[
+            {'name':'Shed roof','tag':'Roof','positions':tri,'material':{'name':'Shingle','color':[.3,.3,.3,1]}},
+            {'name':'Back wall','tag':'Walls','positions':[v+5 for v in tri],'material':{'name':'Paint','color':[.9,.9,.9,1]}},
+            {'name':'Loose part','positions':[v+9 for v in tri],'material':{'name':'Paint','color':[.9,.9,.9,1]}}]}))
+        worker=Path(__file__).resolve().parent.parent/'server/sketchup_convert.py'
+        for a,b in [(source,self.root/'tagged.skp'),(self.root/'tagged.skp',self.root/'tagged.glb')]:
+            r=subprocess.run([sys.executable,str(worker),str(a),str(b)],capture_output=True,text=True,timeout=30);self.assertEqual(r.returncode,0,r.stderr)
+        data=(self.root/'tagged.glb').read_bytes();n=struct.unpack_from('<I',data,12)[0];doc=json.loads(data[20:20+n])
+        tags={node['name']:(node.get('extras') or {}).get('sketchupTag') for node in doc['nodes']}
+        self.assertEqual(tags,{'Shed roof':'Roof','Back wall':'Walls','Loose part':None})
+    @unittest.skipUnless(library_path(),'SketchUp SDK not installed')
     def test_real_native_skp_round_trip(self):
         source=self.root/'mesh.json';source.write_text(json.dumps({'meshes':[{'name':'Test wall','positions':[0,0,0,2,0,0,0,3,0],'material':{'name':'Test paint','color':[.8,.1,.2,1]}}]}))
         worker=Path(__file__).resolve().parent.parent/'server/sketchup_convert.py'

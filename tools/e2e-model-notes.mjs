@@ -38,6 +38,7 @@ const menuItems = page => page.locator('.v-ctx button').allInnerTexts();
 
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto(url); await page.locator('[data-prop-name]').waitFor();
   await page.evaluate(async () => {
