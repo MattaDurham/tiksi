@@ -16,6 +16,7 @@ import { connectDiskWorkspace, diskWorkspace } from './disk-workspace.js';
 import { editHistoryState, onEditHistoryChange } from './edit-history.js';
 import { icon } from './icons.js';
 import { initPaneResize } from './pane-resize.js';
+import { initField, fieldRouted, phoneLayout } from './field.js';
 import * as plan2d from './plan2d.js';
 import * as viewer3d from './viewer3d.js';
 import * as materialsview from './materialsview.js';
@@ -74,6 +75,7 @@ async function boot() {
   await whenHydrated();
 
   bindTopbar();
+  initField();
   initPaneResize(document.getElementById('view'));
   bindHistoryControls();
   refreshTopbar();
@@ -152,7 +154,8 @@ function unmountCurrent() {
 
 function route() {
   // Views may carry a query (#/model?pin=<photoId>); the view reads it from location.hash itself.
-  const name = (location.hash.replace(/^#\//, '').split('?')[0] || 'plan');
+  // Phones open on the model: it is what gets shown on site.
+  const name = (location.hash.replace(/^#\//, '').split('?')[0] || (phoneLayout() ? 'model' : 'plan'));
   const head = name.split('/')[0];
   if ((head === 'import' || head === 'new') && importFromHash()) { if (!currentView) route(); return; }
   if (head === 'open' && openFromHash()) { if (!currentView) route(); return; }
@@ -169,6 +172,7 @@ function route() {
   root.innerHTML = '';
   view.mount(root);
   refreshHistoryControls();
+  fieldRouted(currentName);
 }
 
 function remountView() {
@@ -177,6 +181,7 @@ function remountView() {
   root.innerHTML = '';
   currentView.mount(root);
   refreshHistoryControls();
+  fieldRouted(currentName);
 }
 
 // Called after the whole workspace was swapped out: drop GPU/material caches and object URLs

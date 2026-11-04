@@ -35,7 +35,11 @@ async function waitUntil(predicate, message, timeoutMs = 30_000) {
 async function navigateToView(page, view) {
   // These links change the hash and mount a view in the current document. Waiting
   // for a full navigation after the click stalled the Linux CI browser check.
-  await page.locator(`#rail a[data-view="${view}"]`).click({ noWaitAfter: true });
+  // The phone layout hides the rail; its pages are in the side panel.
+  if (await page.evaluate(() => document.documentElement.classList.contains('phone'))) {
+    await page.locator('.fd-menu').click();
+    await page.locator(`.fd-panel a[href="#/${view}"]`).click({ noWaitAfter: true });
+  } else await page.locator(`#rail a[data-view="${view}"]`).click({ noWaitAfter: true });
   await page.waitForFunction(({ view, marker }) => {
     const root = document.querySelector('#view');
     const link = document.querySelector(`#rail a[data-view="${view}"]`);
@@ -45,7 +49,8 @@ async function navigateToView(page, view) {
   // Allow layout to settle for the actual viewport measurements below.
   await page.evaluate(() => new Promise(resolve =>
     requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  assert.ok(await page.locator('#view').innerText(), `${view} mounts`);
+  // On a phone the model is the canvas alone, with no text on screen.
+  assert.ok(await page.locator('#view').innerText() || view === 'model' && await page.locator('canvas.v-canvas').isVisible(), `${view} mounts`);
 }
 try {
   const page = await browser.newPage({ viewport: { width:1280, height:900 } });
@@ -207,7 +212,8 @@ try {
   // Real mobile layout at load; this is not a desktop page resized after startup.
   const mobile = await browser.newPage({viewport:{width:402,height:874},isMobile:true,hasTouch:true,deviceScaleFactor:2});
   mobile.on('pageerror', e => errors.push(e.message));
-  await mobile.goto(url); await mobile.locator('[data-prop-name]').waitFor();
+  // A phone opens on the model.
+  await mobile.goto(url); await mobile.locator('canvas.v-canvas').waitFor();
   for(const view of ['plan','model','materials','photos','projects','products','budget','schedule','sheets']) {
     await navigateToView(mobile, view);
     console.log('mobile route checked:', view);

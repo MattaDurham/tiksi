@@ -134,7 +134,7 @@ try {
   assert.equal(await page.evaluate(async()=>(await import('/js/store.js')).activeProperty().modelSourceId),beforeId,'late focus does not change the visible comparison');
   console.log('PASS comparison selection survives delayed scan loading');
   assert.equal(await page.locator('#btn-save').count(),0,'only one File entry point');
-  await page.setViewportSize({width:390,height:844});await page.locator('#btn-file').click();
+  await page.setViewportSize({width:390,height:844});await page.locator('.fd-menu').click();await page.locator('.fd-panel [data-file]').click();
   assert.ok(await page.evaluate(()=>document.querySelector('[data-file-dialog]').scrollWidth<=document.querySelector('[data-file-dialog]').clientWidth),'file UI fits mobile width');
   await page.locator('[data-close-file]').click();assert.deepEqual(errors,[]);
   console.log('PASS exchange dialog, native engine status, download and handoff history');
