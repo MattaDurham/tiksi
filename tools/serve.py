@@ -8,6 +8,7 @@ import json
 import os
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import faulthandler
 import signal
 import sys
 import threading
@@ -173,6 +174,8 @@ def main():
             server.photo_placement = PhotoPlacementService(args.state_dir / 'photo-placement', projects_dir=args.projects_dir, project_folders=folders)
         def shutdown(signum, frame):
             threading.Thread(target=server.shutdown, daemon=True).start()
+        # A hung test asks for every thread's stack with SIGUSR1 (written to stderr).
+        if hasattr(signal, 'SIGUSR1'): faulthandler.register(signal.SIGUSR1, all_threads=True)
         signal.signal(signal.SIGTERM, shutdown)
         signal.signal(signal.SIGINT, shutdown)
         print(f'Tiksi listening on {args.host}:{server.server_port}', flush=True)

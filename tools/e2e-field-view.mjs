@@ -16,7 +16,9 @@ await new Promise(resolve => socket.close(resolve));
 const child = spawn('python3', ['tools/serve.py', '--port', String(port), '--state-dir', state], { stdio: ['ignore', 'pipe', 'pipe'] });
 // Read the server's output: an unread pipe fills after about 64 KB of request log lines on Linux,
 // and then every server thread stops at its next log line and the pages hang.
-child.stdout.resume(); child.stderr.resume();
+child.stdout.resume();
+// Keep the last server error lines: a hung reload prints them with the server's thread stacks.
+const serverErr = []; child.stderr.on('data', d => { serverErr.push(...String(d).split('\n')); serverErr.splice(0, Math.max(0, serverErr.length - 400)); });
 const url = 'http://127.0.0.1:' + port;
 let browser;
 const shown = (page, sel) => page.locator(sel).first().evaluate(e => getComputedStyle(e).display !== 'none' && getComputedStyle(e).visibility !== 'hidden' && !!e.getClientRects().length);
@@ -32,6 +34,10 @@ try {
   const { defaultBrowserType, ...iphone } = devices['iPhone 13'];
   const phone = await browser.newContext(iphone);
   const page = await phone.newPage();
+  // Every request the page has open, so a hung reload can say what was holding the server.
+  const pending = new Map();
+  page.on('request', r => pending.set(r, performance.now()));
+  for (const done of ['requestfinished', 'requestfailed']) page.on(done, r => pending.delete(r));
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(url);
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
@@ -125,17 +131,16 @@ try {
   const leave = dialog => { if (dialog.type() === 'beforeunload') dialog.accept(); };
   page.on('dialog', leave);
   // Wait for the document, not for every image and module: the topbar check below is what
-  // proves the reload. On a timeout, print what the page was still waiting for.
-  const pending = new Map();
-  const track = r => pending.set(r, performance.now()), untrack = r => pending.delete(r);
-  page.on('request', track); page.on('requestfinished', untrack); page.on('requestfailed', untrack);
+  // proves the reload. On a timeout, print what the page and the server were doing.
   try { await page.reload({ waitUntil: 'domcontentloaded' }); }
   catch (error) {
-    console.error('Reload still waiting on:', [...pending].map(([r, t]) => r.method() + ' ' + r.url() + ' (' + Math.round(performance.now() - t) + ' ms)'));
+    console.error('Requests still open:', [...pending].map(([r, t]) => r.method() + ' ' + r.url() + ' (' + Math.round(performance.now() - t) + ' ms)'));
     console.error('Page:', await page.evaluate(() => ({ url: location.href, ready: document.readyState, status: document.querySelector('#save-status')?.textContent })).catch(e => String(e)));
+    console.error('Server answers directly:', await fetch(url + '/api/instance', { signal: AbortSignal.timeout(5000) }).then(r => r.status).catch(e => String(e)));
+    serverErr.length = 0; child.kill('SIGUSR1'); await new Promise(r => setTimeout(r, 1500));
+    console.error('Server threads:\n' + serverErr.join('\n'));
     throw error;
   }
-  page.off('request', track); page.off('requestfinished', untrack); page.off('requestfailed', untrack);
   page.off('dialog', leave);
   await page.locator('#topbar').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('phone')), false, 'desktop layout survives a reload');

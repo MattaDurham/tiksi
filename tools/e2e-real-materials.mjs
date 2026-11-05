@@ -16,6 +16,9 @@ import { chromium } from 'playwright';
 const root = resolve(new URL('..', import.meta.url).pathname), state = await mkdtemp(tmpdir() + '/tiksi-real-materials-');
 const socket = net.createServer(); await new Promise(r => socket.listen(Number(process.env.E2E_APP_PORT) || 0, '127.0.0.1', r)); const port = socket.address().port; await new Promise(r => socket.close(r));
 const child = spawn('python3', ['tools/serve.py', '--port', String(port), '--state-dir', state], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
+// Read the server's output: an unread pipe fills after about 64 KB of request log lines on Linux,
+// and then every server thread stops at its next log line and the page hangs.
+child.stdout.resume(); child.stderr.resume();
 const url = 'http://127.0.0.1:' + port;
 let browser;
 async function waitUntil(predicate, message, timeoutMs = 60_000) {
