@@ -105,13 +105,23 @@ try {
     await since(0);
   };
   const putAfter = start => page.waitForFunction(() => true).then(async () => { while (!traffic.some(r => r.at >= start && r.method === 'PUT' && r.path === '/api/workspace' && r.done)) await new Promise(r => setTimeout(r, 50)); });
-  await page.goto(url); await saved();
+  // The first visit: for a workspace saved by an older version this is the one-time move
+  // of its pictures into files.
+  const firstStart = Date.now(), firstMark = 0;
+  await page.goto(url); await saved(); await page.waitForTimeout(3000); await saved();
+  {
+    const tasks = await page.evaluate(m => window.__longtasks.filter(t => t.start >= m), firstMark);
+    result.firstLoad = { ms: Date.now() - firstStart, note: 'includes a 3 s settle', longTasks: tasks.length, longTaskMs: Math.round(tasks.reduce((n, t) => n + t.duration, 0)), longestMs: Math.round(Math.max(0, ...tasks.map(t => t.duration))), ...sum(await since(firstStart)) };
+  }
   const has = await page.evaluate(async () => (await import('/js/store.js')).ws.data.properties.some(p => p.id === 'prop-synth-0'));
   if (!has) { result.seed = await page.evaluate(buildSynthetic); await saved(); }
   // A normal load of the saved workspace, then a settle period before editing.
   const loadStart = Date.now();
   await page.reload(); await page.waitForTimeout(500); await saved(); await page.waitForTimeout(3000); await saved();
-  result.load = { ms: Date.now() - loadStart, note: 'includes the save the app makes on every start, and a 3.5 s settle', ...sum(await since(loadStart)) };
+  {
+    const tasks = await page.evaluate(() => window.__longtasks);
+    result.load = { ms: Date.now() - loadStart, note: 'a reload; includes the save the app makes on every start, and a 3.5 s settle', longTasks: tasks.length, longTaskMs: Math.round(tasks.reduce((n, t) => n + t.duration, 0)), longestMs: Math.round(Math.max(0, ...tasks.map(t => t.duration))), ...sum(await since(loadStart)) };
+  }
   // Edits are measured with the SketchUp mirror off, so its poll does not mix in.
   if (await page.evaluate(async () => { const s = await import('/js/store.js'); if (s.ws.data.settings.sketchupMirror === false) return false; s.ws.data.settings.sketchupMirror = false; s.touch(); return true; })) await saved();
   await page.waitForTimeout(3000);
