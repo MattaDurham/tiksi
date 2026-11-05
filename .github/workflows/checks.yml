@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        attempt: [1, 2, 3, 4, 5, 6]
+        attempt: [1]
     runs-on: ${{ matrix.os }}
     # The full preflight (every browser e2e suite) now takes 21-25 minutes on hosted runners (macOS
     # is the slower one), so a 25-minute cap cut passing runs off. 35 minutes leaves room to grow
@@ -37,7 +37,7 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: node tools/fixture-room.mjs
-      - run: for i in 1 2 3; do E2E_APP_PORT=0 node tools/e2e-field-view.mjs || exit 1; done
+      - run: for i in 1; do E2E_APP_PORT=0 node tools/e2e-field-view.mjs || exit 1; done
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

@@ -143,6 +143,8 @@ try {
     throw error;
   }
   console.log('PROBE reload ok after', at(), 'ms; requests', seen.filter(l => l.includes(' req ')).length);
+  for (const line of seen) if (!/ (req|done) \/(vendor|js|css)\//.test(line)) console.log('PROBE', line);
+  { const last = seen.filter(l => / (req|done) /.test(l)); console.log('PROBE first', last.slice(0, 3).join(' | '), 'last', last.slice(-3).join(' | ')); }
   page.off('dialog', leave);
   await page.locator('#topbar').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('phone')), false, 'desktop layout survives a reload');
