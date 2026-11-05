@@ -10,6 +10,9 @@ const state = await mkdtemp(tmpdir() + '/tiksi-disk-test-');
 const socket = net.createServer(); await new Promise(r => socket.listen(0, '127.0.0.1', r));
 const port = socket.address().port; await new Promise(r => socket.close(r));
 const child = spawn('python3', ['tools/serve.py', '--host', '0.0.0.0', '--port', String(port), '--state-dir', state, '--projects-dir', state + '/projects'], { stdio: ['ignore', 'pipe', 'pipe'] });
+// Read the server's output: an unread pipe fills after about 64 KB of request log lines on Linux,
+// and then every server thread stops at its next log line and the pages hang.
+let serverLog = ''; child.stdout.resume(); child.stderr.on('data', d => { serverLog = (serverLog + d).slice(-8000); });
 let browser, releaseDownload;
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch('http://127.0.0.1:' + port)).ok) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
@@ -168,6 +171,13 @@ try {
   assert.equal(recovered, '[3, 1, 4, 1, 5]');
   assert.equal(await legacy.evaluate(async () => (await import('/js/store.js')).ws.data.properties.length), 4);
   const damaged = await (await browser.newContext()).newPage();
+  damaged.on('console', message => { if (message.type() === 'error' || message.type() === 'warning') console.error('Damaged browser:', message.text()); });
+  // Requests the damaged page is still waiting on, printed if its load times out.
+  const damagedPending = new Map();
+  damaged.on('request', r => damagedPending.set(r, performance.now()));
+  for (const done of ['requestfinished', 'requestfailed']) damaged.on(done, r => damagedPending.delete(r));
+  globalThis.damagedReport = async () => ({ pending: [...damagedPending].map(([r, t]) => r.method() + ' ' + r.url() + ' (' + Math.round(performance.now() - t) + ' ms)'),
+    page: await damaged.evaluate(() => ({ url: location.href, ready: document.readyState, status: document.querySelector('#save-status')?.textContent })).catch(e => String(e)) });
   await damaged.goto('http://127.0.0.1:' + port + '/app-icon.svg');
   await damaged.evaluate(async () => {
     const s = await import('/js/store.js');
@@ -190,6 +200,18 @@ try {
   assert.deepEqual(errors, []);
   console.log('ok   two origins share project files and originals; no browser persistence; stale edits reviewed; clean browser recovers all projects');
 } catch (error) {
+  // The failure first: a browser that will not close must not hide it.
+  console.error(error);
+  console.error('Server log (last lines):\n' + serverLog.split('\n').slice(-15).join('\n'));
+  if (globalThis.damagedReport) console.error('Damaged page:', JSON.stringify(await globalThis.damagedReport().catch(e => String(e)), null, 1));
   if (browser) console.error('Disk client state:', await Promise.all(browser.contexts().flatMap(context => context.pages()).map(page => page.evaluate(() => ({ url: location.href, status: document.querySelector('#save-status')?.textContent, review: !!document.querySelector('dialog[open]'), error: document.querySelector('#save-status')?.textContent === 'PROJECT FILES UNAVAILABLE' ? document.querySelector('#view')?.textContent : null })).catch(() => null))));
   throw error;
-} finally { releaseDownload?.(); if (browser) await browser.close(); child.kill(); await new Promise(r => child.once('exit', r)); await rm(state, { recursive: true, force: true }); }
+} finally {
+  // Bounded clean-up: a stuck page or server fails this suite in seconds, not at the CI job limit.
+  const bounded = (promise, ms) => Promise.race([promise, new Promise(r => setTimeout(r, ms))]);
+  releaseDownload?.();
+  if (browser) await bounded(browser.close(), 20000);
+  const exited = child.exitCode !== null ? Promise.resolve() : new Promise(r => child.once('exit', r));
+  child.kill(); await bounded(exited, 10000); if (child.exitCode === null) child.kill('SIGKILL');
+  await rm(state, { recursive: true, force: true });
+}

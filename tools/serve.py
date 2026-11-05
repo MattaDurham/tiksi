@@ -118,6 +118,10 @@ class AppHandler(SimpleHTTPRequestHandler):
 class AppServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    # A page opens a burst of module requests while other tabs and phones keep syncing. With
+    # Python's default backlog of 5, Linux drops the extra connections and the browser retries
+    # them only after 1, 2, 4, 8 and 16 seconds, so a page can sit half-loaded for 30 seconds.
+    request_queue_size = 128
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
