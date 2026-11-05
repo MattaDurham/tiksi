@@ -118,10 +118,14 @@ try {
   await page.locator('.fd-menu').click();
   await page.locator('.fd-desktop').click();
   assert.equal(await shown(page, '#topbar'), true, 'desktop layout brings the topbar back');
-  // Reload only once the save has finished: while one is running the page asks "Leave site?",
-  // Playwright answers "stay", and the reload never happens.
+  // While a save is running the page asks "Leave site?" and Playwright answers "stay", so the
+  // reload never happens. Waiting for SAVED TO DISK is not enough: a save can start after the
+  // wait passes. The layout choice lives in this browser, not the project, so leaving is safe.
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
+  const leave = dialog => { if (dialog.type() === 'beforeunload') dialog.accept(); };
+  page.on('dialog', leave);
   await page.reload();
+  page.off('dialog', leave);
   await page.locator('#topbar').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('phone')), false, 'desktop layout survives a reload');
   await page.locator('[data-field-layout=phone]').evaluate(a => a.click());
