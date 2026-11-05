@@ -1,0 +1,26 @@
+/* MAINTENANCE: due this month, appointments, the service list and house systems. */
+.maint .maint-notice { font-family: var(--mono); font-size: 11px; color: var(--cyan); margin: -6px 0 14px; }
+.maint .maint-acts { white-space: nowrap; text-align: right; }
+.maint .maint-acts .btn + .btn { margin-left: 6px; }
+.maint tr.maint-past td { color: var(--dim); }
+.maint tr.maint-off td { opacity: 0.5; }
+.maint .maint-from { font-size: 10px; margin-top: 2px; }
+.maint table.grid input[type="date"] {
+  background: transparent; color: var(--ink); border: 1px solid transparent; border-radius: 4px;
+  font-family: var(--mono); font-size: 11.5px; padding: 2px 4px; color-scheme: dark;
+}
+.maint table.grid input[type="date"]:hover, .maint table.grid input[type="date"]:focus { border-color: var(--line-2); }
+.maint .maint-draft { max-width: 760px; margin: 0 0 22px; padding: 14px 16px; }
+.maint .maint-draft input[type="time"] { color-scheme: dark; }
+.maint .maint-draft-acts { display: flex; gap: 8px; }
+.maint .maint-systems { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.maint .maint-sys { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; padding: 3px 6px 3px 10px; }
+.maint .maint-sys-del { background: none; border: 0; padding: 0; color: var(--faint); cursor: pointer; display: inline-flex; }
+.maint .maint-sys-del:hover { color: var(--red); }
+.maint .maint-sys-del .ic { width: 11px; height: 11px; }
+.maint .maint-add-sys { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.maint .maint-add-sys input[type="text"] {
+  background: var(--panel); border: 1px solid var(--line-2); border-radius: 6px; color: var(--ink);
+  font-size: 12px; padding: 4px 8px; min-width: 240px;
+}
+.maint table.maint-appts select { min-width: 320px; }

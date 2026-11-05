@@ -24,6 +24,7 @@ Open **GUIDE** at the top of Tiksi for chapter search, expandable screenshots an
 - [Keep specifications and ordering links](#products)
 - [Compare scope against the budget](#budget)
 - [Sequence the work](#schedule)
+- [Keep up with maintenance](#maintenance)
 - [Print a useful specification sheet](#sheets)
 - [Make a drawing set from the model](#documents)
 - [Settings, backups and storage](#settings)
@@ -55,6 +56,7 @@ The same sample property appears throughout this guide. The left rail changes vi
 | PRODUCTS | Keep specifications, vendor links and selected product prices. |
 | BUDGET | Compare low, likely and high costs against a budget cap. |
 | SCHEDULE | See durations, task dependencies and the critical path. |
+| MAINTENANCE | See what each fixture and house system needs serviced this month, and record when it was done. |
 | CUT SHEETS | Print a specification sheet for a scope item or product. |
 | DOCUMENTS | Lay out live plans, sections, elevations, 3D views and schedules on drawing sheets; keep saved PDFs. |
 
@@ -632,6 +634,34 @@ The Gantt view connects tasks with dependency arrows and distinguishes critical 
 **Calendar days.** Durations use calendar days, with weekends shaded. Items at zero days are budget-only and are omitted. Dependencies and critical paths are calculated within each selected project.
 
 > **Good to know:** The schedule is calculated from the entered durations and dependencies. It does not automatically resolve crew capacity, delivery dates or permit constraints; include those in your planning.
+
+<a id="maintenance"></a>
+
+## Keep up with maintenance
+
+**Where:** MAINTENANCE
+
+MAINTENANCE turns what Tiksi knows about the home into a service list. Every appliance, bath fixture and fitting found at onboarding or drawn in PLAN brings its typical service, and the house systems you add (chimney, HVAC, gutters, piano and others) bring theirs. Each service has an interval and a last-done date, and the top of the page lists what is due this month.
+
+### Try it
+
+1. Open MAINTENANCE. The service list shows each fixture with the room it stands in and the typical interval for its service.
+2. Under HOUSE SYSTEMS, add the systems this home has: CHIMNEY, HVAC, GUTTERS, PIANO, ROOF, SMOKE AND CO ALARMS, or type another name.
+3. Type a last-done date for each service you know. Change the months if this home needs a different interval, or tick Skip for a service that does not apply.
+4. Choose ADD APPOINTMENT for a booked visit: type the date, the times and a name such as "chimney sweep"; the service is picked from the name and can be changed.
+5. Choose IMPORT CALENDAR (.ICS) to bring visits in from a calendar file. Only events whose names match a service at this home are added.
+
+### Other features here
+
+**Due this month.** Lists overdue services first, then the ones due this month. DONE TODAY records today; BOOK opens an appointment for that service.
+
+**Appointments fill in dates.** A booked visit takes its service off the due list. Once the date has passed, it counts as done: the last-done date becomes the appointment date and the next due date counts from it. A date typed later than the appointment wins.
+
+**Built from the model.** The list is read from the fixtures each time. Delete a fixture and its service goes with it; a brand and model read at onboarding shows next to the fixture.
+
+**In the project file.** House systems, typed dates, intervals and appointments are saved with the property and travel in its .tiksi file.
+
+> **Good to know:** Intervals are typical starting points, not a manufacturer schedule. Check the manual for your model and adjust the months.
 
 <a id="sheets"></a>
 

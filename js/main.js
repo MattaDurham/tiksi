@@ -30,6 +30,7 @@ import * as projects from './projects.js';
 import * as products from './products.js';
 import * as budget from './budget.js';
 import * as schedule from './schedule.js';
+import * as maintenance from './maintenanceview.js';
 import * as cutsheets from './cutsheets.js';
 import * as documentcenter from './documentcenter.js';
 import * as guide from './guide.js';
@@ -54,6 +55,7 @@ const VIEWS = {
   products,
   budget,
   schedule,
+  maintenance,
   sheets: cutsheets,
   documents: documentcenter,
   guide,

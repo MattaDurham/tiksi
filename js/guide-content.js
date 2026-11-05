@@ -13,6 +13,7 @@ export const viewMap = [
   { label: 'PRODUCTS', route: 'products', purpose: 'Keep specifications, vendor links and selected product prices.' },
   { label: 'BUDGET', route: 'budget', purpose: 'Compare low, likely and high costs against a budget cap.' },
   { label: 'SCHEDULE', route: 'schedule', purpose: 'See durations, task dependencies and the critical path.' },
+  { label: 'MAINTENANCE', route: 'maintenance', purpose: 'See what each fixture and house system needs serviced this month, and record when it was done.' },
   { label: 'CUT SHEETS', route: 'sheets', purpose: 'Print a specification sheet for a scope item or product.' },
   { label: 'DOCUMENTS', route: 'documents', purpose: 'Lay out live plans, sections, elevations, 3D views and schedules on drawing sheets; keep saved PDFs.' },
 ];
@@ -367,6 +368,25 @@ export const chapters = [
     ],
     note: 'The schedule is calculated from the entered durations and dependencies. It does not automatically resolve crew capacity, delivery dates or permit constraints; include those in your planning.',
     related: ['projects', 'budget'],
+  },
+  {
+    id: 'maintenance', group: 'Project work', title: 'Keep up with maintenance', path: 'MAINTENANCE', route: 'maintenance',
+    intro: 'MAINTENANCE turns what Tiksi knows about the home into a service list. Every appliance, bath fixture and fitting found at onboarding or drawn in PLAN brings its typical service, and the house systems you add (chimney, HVAC, gutters, piano and others) bring theirs. Each service has an interval and a last-done date, and the top of the page lists what is due this month.',
+    steps: [
+      'Open MAINTENANCE. The service list shows each fixture with the room it stands in and the typical interval for its service.',
+      'Under HOUSE SYSTEMS, add the systems this home has: CHIMNEY, HVAC, GUTTERS, PIANO, ROOF, SMOKE AND CO ALARMS, or type another name.',
+      'Type a last-done date for each service you know. Change the months if this home needs a different interval, or tick Skip for a service that does not apply.',
+      'Choose ADD APPOINTMENT for a booked visit: type the date, the times and a name such as "chimney sweep"; the service is picked from the name and can be changed.',
+      'Choose IMPORT CALENDAR (.ICS) to bring visits in from a calendar file. Only events whose names match a service at this home are added.',
+    ],
+    features: [
+      ['Due this month', 'Lists overdue services first, then the ones due this month. DONE TODAY records today; BOOK opens an appointment for that service.'],
+      ['Appointments fill in dates', 'A booked visit takes its service off the due list. Once the date has passed, it counts as done: the last-done date becomes the appointment date and the next due date counts from it. A date typed later than the appointment wins.'],
+      ['Built from the model', 'The list is read from the fixtures each time. Delete a fixture and its service goes with it; a brand and model read at onboarding shows next to the fixture.'],
+      ['In the project file', 'House systems, typed dates, intervals and appointments are saved with the property and travel in its .tiksi file.'],
+    ],
+    note: 'Intervals are typical starting points, not a manufacturer schedule. Check the manual for your model and adjust the months.',
+    related: ['plan', 'projects'],
   },
   {
     id: 'sheets', group: 'Project work', title: 'Print a useful specification sheet', path: 'CUT SHEETS', route: 'sheets', workspace: 'CUT SHEETS', image: 'sheets.png',

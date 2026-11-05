@@ -5,6 +5,7 @@ import { normalizeView } from './photo-match.js';
 import { normalizePositions } from './positions.js';
 import { normalizePin, normalizeLens, normalizeCameraSets, normalizeWallAnchor } from './pin-records.js';
 import { normaliseFixtures } from './fixtures.js';
+import { normaliseMaintenance } from './maintenance.js';
 import { normalizeDocSets } from './doc-sets.js';
 import { normalizeTags } from './tags.js';
 import { normalizeSavedViews } from './saved-views.js';
@@ -363,6 +364,7 @@ export function propertyTemplate(name) {
     levels: [levelTemplate('lvl-0', 'Main level', 0, 2.44)], activeLevelId: 'lvl-0',
     walls: [], openings: [], rooms: [], fixtures: [], scans: [], photos: [], notePins: [], videos: [], measurements: [], env: defaultEnv(), source: null,
     photoPositions: [], positionCounter: 0, cameraSets: [], docSets: [], savedViews: [],
+    maintenance: normaliseMaintenance(null),
   });
 }
 
@@ -591,6 +593,8 @@ function migrate(d) {
     ensureLevels(p);
     // Fixtures (fixtures.js): counter runs, cabinets, appliances, furniture on a level.
     p.fixtures = normaliseFixtures(p.fixtures, p);
+    // Maintenance (maintenance.js): house systems, service intervals, last-done dates, appointments.
+    p.maintenance = normaliseMaintenance(p.maintenance);
     // v2: photos, environment, richer scan and room records. Merge over whatever is there
     // so partially filled objects from hand-edited or older exports keep their values.
     p.photos = p.photos || [];
