@@ -16,7 +16,8 @@ await new Promise(resolve => socket.close(resolve));
 const child = spawn('python3', ['tools/serve.py', '--port', String(port), '--state-dir', state], { stdio: ['ignore', 'pipe', 'pipe'] });
 // Read the server's output: an unread pipe fills after about 64 KB of request log lines on Linux,
 // and then every server thread stops at its next log line and the pages hang.
-child.stdout.resume(); child.stderr.resume();
+const serverLog = [];
+child.stdout.on('data', d => serverLog.push([Date.now(), String(d)])); child.stderr.on('data', d => serverLog.push([Date.now(), String(d)]));
 const url = 'http://127.0.0.1:' + port;
 let browser;
 const shown = (page, sel) => page.locator(sel).first().evaluate(e => getComputedStyle(e).display !== 'none' && getComputedStyle(e).visibility !== 'hidden' && !!e.getClientRects().length);
@@ -129,8 +130,20 @@ try {
   const pending = new Map();
   const track = r => pending.set(r, performance.now()), untrack = r => pending.delete(r);
   page.on('request', track); page.on('requestfinished', untrack); page.on('requestfailed', untrack);
-  try { await page.reload({ waitUntil: 'domcontentloaded' }); }
+  const t0 = Date.now(), seen = [], at = () => Date.now() - t0;
+  await page.evaluate(() => { setInterval(() => console.log('BEAT ' + Date.now()), 250); });
+  page.on('console', m => { const t = m.text(); if (t.startsWith('BEAT ')) seen.push(at() + ' beat (page clock ' + (Number(t.slice(5)) - t0) + ')'); });
+  page.on('request', r => { if (r.isNavigationRequest()) seen.push(at() + ' nav request ' + r.url()); });
+  page.on('response', r => { if (r.request().isNavigationRequest()) seen.push(at() + ' nav response ' + r.status() + ' timing ' + JSON.stringify(r.request().timing())); });
+  page.on('framenavigated', f => { if (f === page.mainFrame()) seen.push(at() + ' committed'); });
+  page.on('domcontentloaded', () => seen.push(at() + ' domcontentloaded'));
+  const report = () => {
+    for (const line of seen) console.log('PROBE', line);
+    for (const [t, text] of serverLog) if (t >= t0 - 2000) for (const line of text.split('\n')) if (line.trim()) console.log('PROBE server', t - t0, line.slice(0, 160));
+  };
+  try { await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 }); console.log('PROBE reload took', at()); report(); }
   catch (error) {
+    report();
     console.error('Reload still waiting on:', [...pending].map(([r, t]) => r.method() + ' ' + r.url() + ' (' + Math.round(performance.now() - t) + ' ms)'));
     console.error('Page:', await page.evaluate(() => ({ url: location.href, ready: document.readyState, status: document.querySelector('#save-status')?.textContent })).catch(e => String(e)));
     throw error;

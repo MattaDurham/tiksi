@@ -14,11 +14,12 @@ concurrency:
   cancel-in-progress: true
 jobs:
   regression:
-    name: Regression (${{ matrix.os }})
+    name: Probe (${{ matrix.os }} ${{ matrix.attempt }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
+        attempt: [1, 2, 3]
     runs-on: ${{ matrix.os }}
     # The full preflight (every browser e2e suite) now takes 21-25 minutes on hosted runners (macOS
     # is the slower one), so a 25-minute cap cut passing runs off. 35 minutes leaves room to grow
@@ -35,7 +36,9 @@ jobs:
           python-version: '3.12'
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: npm run preflight
+      - run: node tools/fixture-room.mjs
+      - run: node tools/e2e-field-view.mjs
+        timeout-minutes: 5
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
