@@ -92,9 +92,9 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     }
     return out;
   }
-  async function apply(data, { remount = true } = {}) {
+  async function apply(data) {
     applying = true;
-    try { replaceWorkspace(data, { source: 'shared' }); await whenHydrated(); if (remount) onRemote?.(); }
+    try { replaceWorkspace(data, { source: 'shared' }); await whenHydrated(); onRemote?.(); }
     finally { applying = false; }
   }
   async function resolveMerge(ancestor, local, remote) {
@@ -174,9 +174,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     for (const [id, buffer] of uploadedFiles) if ((await getCachedFile(id))?.buffer === buffer) changedFiles.delete(id);
     const after = mergeShared(sentData, ws.data, accepted.data);
     pending = JSON.stringify(after.value) !== JSON.stringify(accepted.data) || listAllFileIds(after.value).some(id => changedFiles.has(id));
-    // Always take the saved copy as the workspace, but a save that brought nothing new back
-    // does not remount the view: MODEL would load every imported model again after each click.
-    await apply(after.value, { remount: JSON.stringify(after.value) !== JSON.stringify(ws.data) });
+    await apply(after.value);
     paths = (await (await request()).json()).paths || {};
     if (migration) {
       // All originals must be on disk before removing their last browser copy.
