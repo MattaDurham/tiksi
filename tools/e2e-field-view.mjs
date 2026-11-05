@@ -16,7 +16,8 @@ await new Promise(resolve => socket.close(resolve));
 const child = spawn('python3', ['tools/serve.py', '--port', String(port), '--state-dir', state], { stdio: ['ignore', 'pipe', 'pipe'] });
 // Read the server's output: an unread pipe fills after about 64 KB of request log lines on Linux,
 // and then every server thread stops at its next log line and the pages hang.
-child.stdout.resume(); child.stderr.resume();
+const serverLog = [];
+child.stdout.on('data', d => serverLog.push([Date.now(), String(d)])); child.stderr.on('data', d => serverLog.push([Date.now(), String(d)]));
 const url = 'http://127.0.0.1:' + port;
 let browser;
 const shown = (page, sel) => page.locator(sel).first().evaluate(e => getComputedStyle(e).display !== 'none' && getComputedStyle(e).visibility !== 'hidden' && !!e.getClientRects().length);
@@ -33,6 +34,8 @@ try {
   const phone = await browser.newContext(iphone);
   const page = await phone.newPage();
   page.on('pageerror', error => errors.push(error.message));
+  const open = new Map();
+  page.on('request', r => open.set(r, Date.now())); page.on('requestfinished', r => open.delete(r)); page.on('requestfailed', r => open.delete(r));
   await page.goto(url);
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('phone')), true, 'a phone gets the phone layout');
@@ -124,10 +127,11 @@ try {
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   const leave = dialog => { console.log('PROBE dialog', dialog.type(), Date.now()); if (dialog.type() === 'beforeunload') dialog.accept(); };
   page.on('dialog', leave);
+  for (const [r, t] of open) console.log('PROBE open before reload', Date.now() - t, 'ms', r.method(), r.url().replace(url, ''));
   const inflight = new Map(), seen = [];
   const t0 = Date.now(), at = () => Date.now() - t0;
   page.on('request', r => { inflight.set(r, at()); seen.push(at() + ' req ' + r.method() + ' ' + r.url().replace(url, '')); });
-  page.on('requestfinished', r => { inflight.delete(r); seen.push(at() + ' done ' + r.url().replace(url, '')); });
+  page.on('requestfinished', r => { inflight.delete(r); seen.push(at() + ' done ' + r.url().replace(url, '') + (r.isNavigationRequest() ? ' timing ' + JSON.stringify(r.timing()) : '')); });
   page.on('requestfailed', r => { inflight.delete(r); seen.push(at() + ' fail ' + r.url().replace(url, '') + ' ' + r.failure()?.errorText); });
   page.on('framenavigated', f => { if (f === page.mainFrame()) seen.push(at() + ' navigated ' + f.url()); });
   page.on('domcontentloaded', () => seen.push(at() + ' domcontentloaded'));
@@ -143,6 +147,8 @@ try {
     throw error;
   }
   console.log('PROBE reload ok after', at(), 'ms; requests', seen.filter(l => l.includes(' req ')).length);
+  { const doc = (await page.mainFrame().url()) && seen; }
+  for (const [t, text] of serverLog) if (t >= t0 - 3000) for (const line of text.split('\n')) if (line.trim()) console.log('PROBE server', t - t0, line.slice(0, 200));
   for (const line of seen) if (!/ (req|done) \/(vendor|js|css)\//.test(line)) console.log('PROBE', line);
   { const last = seen.filter(l => / (req|done) /.test(l)); console.log('PROBE first', last.slice(0, 3).join(' | '), 'last', last.slice(-3).join(' | ')); }
   page.off('dialog', leave);
