@@ -118,6 +118,9 @@ try {
   await page.locator('.fd-menu').click();
   await page.locator('.fd-desktop').click();
   assert.equal(await shown(page, '#topbar'), true, 'desktop layout brings the topbar back');
+  // Reload only once the save has finished: while one is running the page asks "Leave site?",
+  // Playwright answers "stay", and the reload never happens.
+  await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   await page.reload();
   await page.locator('#topbar').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('phone')), false, 'desktop layout survives a reload');
