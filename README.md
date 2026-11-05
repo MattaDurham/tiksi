@@ -155,6 +155,11 @@ review. Keep the Mac reachable until `SAVED TO DISK` appears. Offline edits are
 unsaved working changes, and closing the page warns before losing them.
 Conflict review saves both reviewed variants as complete `.tiksi` recovery bundles
 in `<state-dir>/workspace/history/`, including a draft declined in favor of the Mac.
+Pictures (photo and video thumbnails, plan underlays, uploaded product images)
+are saved once each as files beside the originals and inside each project's
+`.tiksi`; the saved records hold a reference, so each save sends only the records
+that changed. A workspace saved before this moves its pictures on first load,
+byte for byte. A tab still running an older Tiksi is refused until it is reloaded.
 The static GitHub Pages edition retains its portable browser mode and is separate
 from the Mac's private files.
 

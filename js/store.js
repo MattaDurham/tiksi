@@ -8,6 +8,7 @@ import { normaliseFixtures } from './fixtures.js';
 import { normalizeDocSets } from './doc-sets.js';
 import { normalizeTags } from './tags.js';
 import { normalizeSavedViews } from './saved-views.js';
+import { isPictureRef, inlineBundlePictures } from './picture-assets.js';
 
 const LS_KEY = 'tiksi.workspace.v1';   // storage slot, not the schema version (see migrate)
 const SCHEMA_VERSION = 2;
@@ -628,8 +629,9 @@ function migrate(d) {
       if (ph.lens !== undefined) { const l = normalizeLens(ph.lens); if (l) ph.lens = l; else delete ph.lens; }
       if (ph.takenAt !== undefined && (typeof ph.takenAt !== 'string' || !ph.takenAt)) delete ph.takenAt;
       if (!ph.createdAt) ph.createdAt = new Date(0).toISOString();
-      // '' is the slim localStorage form (thumbnail lives in IndexedDB, see persistable).
-      if (typeof ph.thumb !== 'string' || (ph.thumb && !THUMB_RE.test(ph.thumb))) ph.thumb = '';
+      // '' is the slim localStorage form (thumbnail lives in IndexedDB, see persistable). A
+      // picture reference whose file could not be read is kept, never erased (picture-assets.js).
+      if (typeof ph.thumb !== 'string' || (ph.thumb && !THUMB_RE.test(ph.thumb) && !isPictureRef(ph.thumb))) ph.thumb = '';
     }
     // Walk-through videos and the tape readings taken from their frames (MEASURE). Values are
     // metres or null; element is { kind: 'opening'|'wall', id, dim } or null (unassigned / note).
@@ -638,7 +640,7 @@ function migrate(d) {
       if (typeof v.name !== 'string') v.name = 'Video';
       if (typeof v.notes !== 'string') v.notes = '';
       if (!v.createdAt) v.createdAt = new Date(0).toISOString();
-      if (typeof v.thumb !== 'string' || (v.thumb && !THUMB_RE.test(v.thumb))) v.thumb = '';
+      if (typeof v.thumb !== 'string' || (v.thumb && !THUMB_RE.test(v.thumb) && !isPictureRef(v.thumb))) v.thumb = '';
       if (v.analysis !== null && (typeof v.analysis !== 'object' || Array.isArray(v.analysis))) v.analysis = null;
       if (v.analysis && !Array.isArray(v.analysis.candidates)) v.analysis.candidates = [];
     }
@@ -1268,6 +1270,10 @@ export async function readBundle(file) {
     try { manifest = JSON.parse(strFromU8(zipped['manifest.json'])); } catch (e) { manifest = null; }
     if (manifest && !Array.isArray(manifest.files)) manifest = null;
   }
+  // Project files saved by the Mac keep pictures as files (picture-assets.js); the opened
+  // records get them back inline, byte for byte, so they work without the Mac too.
+  const pictureEntries = new Map((manifest ? manifest.files : []).filter(m => m && typeof m.id === 'string' && m.id.startsWith('pic-') && typeof m.path === 'string').map(m => [m.id, m.path]));
+  const missingPictures = await inlineBundlePictures(data, id => pictureEntries.has(id) && zipped[pictureEntries.get(id)] || null);
   // Without a manifest, fall back to naming: files/<id>.<ext>, image extensions are photos.
   const list = manifest ? manifest.files : Object.keys(zipped).filter(k => k.startsWith('files/') && !k.endsWith('/')).map(path => {
     const base = path.slice(6);
@@ -1293,6 +1299,7 @@ export async function readBundle(file) {
       : { name: m.name || m.id, format: m.format || ext };
     files.push({ id: m.id, buffer: u8Buffer(u8), meta });
   }
+  missing.push(...missingPictures);
   return { data, files, manifest, missing };
 }
 

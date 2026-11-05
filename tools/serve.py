@@ -109,8 +109,14 @@ class AppHandler(SimpleHTTPRequestHandler):
     def list_directory(self, path):
         self.send_error(404); return None
 
+    def send_header(self, keyword, value):
+        if keyword.lower() == 'cache-control': self.cache_policy_sent = True
+        super().send_header(keyword, value)
+
     def end_headers(self):
-        self.send_header('Cache-Control', 'no-cache')
+        # Revalidate by default; a response that sets its own policy (stored pictures) keeps it.
+        if not getattr(self, 'cache_policy_sent', False): self.send_header('Cache-Control', 'no-cache')
+        self.cache_policy_sent = False
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Referrer-Policy', 'same-origin')
         super().end_headers()
@@ -118,6 +124,10 @@ class AppHandler(SimpleHTTPRequestHandler):
 class AppServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    # A page opens a burst of module requests while other tabs and phones keep syncing. With
+    # Python's default backlog of 5, Linux drops the extra connections and the browser retries
+    # them only after 1, 2, 4, 8 and 16 seconds, so a page can sit half-loaded for 30 seconds.
+    request_queue_size = 128
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

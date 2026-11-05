@@ -1,6 +1,35 @@
 // Three-way merge of JSON workspace records. Conflicting edits are reported;
 // stale browsers never silently replace a newer revision.
-const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// Equal as JSON (what is saved), compared in place: no serialization, shared objects
+// short-circuit, and the first difference ends the walk. Key order does not matter;
+// undefined fields are absent and non-finite numbers are null, as in JSON.
+export function sameJson(a, b) {
+  if (a === b) return true;
+  const ta = typeof a, tb = typeof b;
+  if (ta === 'number' && tb === 'number') return !Number.isFinite(a) && !Number.isFinite(b);
+  if (ta === 'number' && !Number.isFinite(a)) return b === null;
+  if (tb === 'number' && !Number.isFinite(b)) return a === null;
+  if (ta !== 'object' || tb !== 'object' || a === null || b === null) return false;
+  if (typeof a.toJSON === 'function' || typeof b.toJSON === 'function') return JSON.stringify(a) === JSON.stringify(b);
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!sameJson(slot(a[i]), slot(b[i]))) return false;
+    return true;
+  }
+  if (Array.isArray(b)) return false;
+  let count = 0;
+  for (const k in a) {
+    const v = a[k];
+    if (v === undefined || typeof v === 'function') continue;
+    count++;
+    if (!sameJson(v, field(b, k))) return false;
+  }
+  for (const k in b) { const v = b[k]; if (v !== undefined && typeof v !== 'function') count--; }
+  return count === 0;
+}
+const slot = v => v === undefined || typeof v === 'function' ? null : v;
+const field = (o, k) => { const v = Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined; return typeof v === 'function' ? undefined : v; };
+const equal = (a, b) => a === undefined || b === undefined ? a === b : sameJson(a, b);
 const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 // Fields whose parts only mean something together: a photo's camera view (position, target and
 // lens) merges whole, so two devices' views conflict instead of mixing into a third view. A pin

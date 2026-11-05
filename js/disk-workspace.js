@@ -1,19 +1,25 @@
 // The Mac's project files are authoritative. Browser state is an in-memory working
 // copy; legacy browser stores are read once and removed only after a disk save.
 import { ws, emptyWorkspace, replaceWorkspace, onChange, touch, whenHydrated, projectSlice, listAllFileIds, storedFileIds, getCachedFile, cacheFile, setFileBackend, useDiskPersistence, finishBrowserMigration, setSaveStatus } from './store.js';
-import { mergeShared } from './workspace-merge.js';
-import { syncMirror, mirrorCapabilities } from './sketchup-mirror.js';
+import { mergeShared, sameJson } from './workspace-merge.js';
+import { syncMirror, mirrorCapabilities, mirrorSpec, specSignature, mirrorFileName } from './sketchup-mirror.js';
+import { pictureFiles, pictureRefs, mapStrings } from './picture-assets.js';
 
 export let diskWorkspace = null;
-const copy = value => JSON.parse(JSON.stringify(value));
+// A JSON-shaped copy whose objects are all new; strings are immutable and shared.
+const copy = value => mapStrings(value, s => s);
 
+// Saved records never share objects with `data`: only properties that gain photos are new.
 export function prepareDiskProjects(data) {
-  const prepared = copy(data);
   // Portable project files carry the photos needed by their custom materials,
   // including a source sampled in another project. Make that evidence explicit
   // in the shared records too, so disk reload and connected clients agree.
-  for (const prop of prepared.properties) prop.photos = projectSlice(prop.id, prepared).properties[0].photos;
-  return { data: prepared, projectData: Object.fromEntries(prepared.properties.map(p => [p.id, projectSlice(p.id, prepared)])) };
+  const properties = data.properties.map(p => {
+    const photos = projectSlice(p.id, data).properties[0].photos;
+    return photos === p.photos ? p : { ...p, photos };
+  });
+  const prepared = { ...data, properties };
+  return { data: prepared, projectData: Object.fromEntries(properties.map(p => [p.id, projectSlice(p.id, prepared)])) };
 }
 
 export async function connectDiskWorkspace({ hadLocal, onRemote }) {
@@ -34,10 +40,15 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     else { probedIds = await storedFileIds(); hasLegacyDatabase = probedIds.length > 0; }
   } catch (ignored) {}
   const needsMigration = hadLocal || rawLegacy !== null || hasLegacyDatabase;
-  let applying = false, pending = false, running = null, timer, base, revision = 0, paths = {}, assets = {}, migration = needsMigration, cleanupNotice = false;
+  let applying = false, pending = false, running = null, timer, base, revision = 0, paths = {}, assets = {}, migration = needsMigration, cleanupNotice = false, edits = 0;
   const changedFiles = new Set(), inFlightFiles = new Map();
+  // What a newer server can do: keep pictures as files, take only the project files and
+  // property records that changed, and answer a save with the project paths.
+  const features = new Set(Array.isArray(cap.features) ? cap.features : []);
+  // The project files last acknowledged, as sent: { revision, json: { id: text } }.
+  let savedSlices = { revision: -1, json: {} };
   async function request(path = '', options = {}) {
-    const r = await fetch('/api/workspace' + path, { ...options, headers: { ...headers, ...(options.headers || {}) }, cache: 'no-store', signal: AbortSignal.timeout(120000) });
+    const r = await fetch('/api/workspace' + path, { ...options, headers: { ...headers, ...(options.headers || {}) }, cache: options.cache || 'no-store', signal: AbortSignal.timeout(120000) });
     if (r.status === 403) {
       const refreshed = await fetch('/api/workspace/capabilities', { headers: { 'X-Tiksi-Workspace': '1' }, cache: 'no-store', signal: AbortSignal.timeout(10000) });
       if (!refreshed.ok) throw new Error('Project-file server unavailable');
@@ -45,14 +56,25 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       const error = new Error('Reconnected to project files; retrying'); error.status = 403; throw error;
     }
     if (!r.ok) {
-      let message = 'Project-file request failed (' + r.status + ')';
-      try { message = (await r.json()).error || message; } catch (ignored) {}
-      const error = new Error(message); error.status = r.status; throw error;
+      let message = 'Project-file request failed (' + r.status + ')', code;
+      try { const body = await r.json(); message = body.error || message; code = body.code; } catch (ignored) {}
+      const error = new Error(message); error.status = r.status; error.code = code; throw error;
     }
     return r;
   }
+  // Pictures are stored once by content; a stored picture never changes, so the
+  // browser's own cache answers a repeat download (see the server's blob headers).
+  const pictures = features.has('picture-files') ? pictureFiles({
+    upload: async bytes => (await request('/blobs', { method: 'POST', body: bytes })).json(),
+    download: async hash => (await request('/blobs/' + hash, { cache: 'default' })).arrayBuffer(),
+  }) : null;
+  // The open workspace in its saved form, synchronously: known pictures as references,
+  // new ones still inline (the next save stores them).
+  const savedFormNow = () => pictures ? pictures.slim(ws.data).data : copy(ws.data);
+  const pictureAssets = data => pictures ? pictures.assetsFor(pictureRefs(data).keys()) : {};
   function status(text, busy = false) { setSaveStatus(text, busy); }
   function changed() {
+    edits++;
     if (applying) return;
     pending = true; status('SAVING TO DISK', true);
     clearTimeout(timer); timer = setTimeout(() => sync().catch(failed), 700);
@@ -92,7 +114,12 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     }
     return out;
   }
-  async function apply(data) {
+  // Download any pictures `saved` references, before computing what to show: the
+  // replacement itself then happens without a pause in which an edit could slip by.
+  async function fetchPictures(saved, manifest) { if (pictures) await pictures.fetchMissing(saved, manifest); }
+  // Show saved records. They become a fresh open copy, so `base` is never changed.
+  async function apply(saved) {
+    const data = pictures ? pictures.inflate(saved) : copy(saved);
     applying = true;
     try { replaceWorkspace(data, { source: 'shared' }); await whenHydrated(); onRemote?.(); }
     finally { applying = false; }
@@ -106,9 +133,9 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     for (const value of [local, remote]) {
       let recovery = value;
       if (!value.data || !value.assets) {
-        const data = copy(ws.data);
-        data.properties = data.properties.map(p => p.id === value.id ? copy(value) : p);
-        recovery = { data, assets: await fileManifest(data, assets) };
+        const data = savedFormNow();
+        data.properties = data.properties.map(p => p.id === value.id ? (pictures ? pictures.slim(value).data : copy(value)) : p);
+        recovery = { data, assets: { ...await fileManifest(data, assets), ...pictureAssets(data) } };
       }
       await request('/recovery', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(recovery) });
     }
@@ -139,45 +166,92 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       }
       return;
     }
-    const remote = await (await request()).json();
-    paths = remote.paths || {};
-    if (!pending && remote.data) {
-      revision = remote.revision; assets = remote.assets; base = { data: copy(remote.data), assets: copy(assets) };
-      await apply(remote.data); status('SAVED TO DISK'); return;
+    // The full workspace is read only when another device or an outside edit saved since
+    // the last revision this client knows; otherwise that revision is `base` itself.
+    let remote = null;
+    if (head.revision !== revision || !base) {
+      remote = await (await request()).json();
+      paths = remote.paths || {};
+      if (!pending && remote.data) {
+        await fetchPictures(remote.data, remote.assets);
+        if (!pending) {
+          revision = remote.revision; assets = remote.assets; base = { data: remote.data, assets };
+          await apply(remote.data); status('SAVED TO DISK'); return;
+        }
+      }
     }
-    const sentData = copy(ws.data);
+    const remoteRevision = remote ? remote.revision : revision;
+    const saved = pictures ? await pictures.slimStored(() => ws.data) : { data: copy(ws.data) };
+    const sentData = saved.data;
     const uploadedFiles = new Map();
-    const sentAssets = await fileManifest(sentData, assets, listAllFileIds(sentData), uploadedFiles);
+    const sentAssets = { ...await fileManifest(sentData, assets, listAllFileIds(sentData), uploadedFiles), ...pictureAssets(sentData) };
     if (migration && !migrationPack) migrationPack = { data: legacyRecovery, assets: await fileManifest(legacyRecovery, {}, legacyIds) };
     const local = { data: sentData, assets: sentAssets };
-    const accepted = remote.data ? await resolveMerge(base, local, { data: remote.data, assets: remote.assets }) : local;
+    // Compare like with like: a picture this client already stored reads as its reference on
+    // every side, so a copy saved before pictures were files never looks like an edit to them.
+    const known = state => state && pictures ? { ...state, data: pictures.slim(state.data).data } : state;
+    const accepted = remote && remote.data ? await resolveMerge(known(base), local, known({ data: remote.data, assets: remote.assets })) : local;
     const prepared = prepareDiskProjects(accepted.data);
     accepted.data = prepared.data;
-    const projectData = prepared.projectData;
-    let saved;
+    if (!remote && !migration && base && sameJson(accepted.data, base.data) && sameJson(accepted.assets, base.assets)) {
+      // Nothing differs from the revision on disk: no new version to write.
+      pending = listAllFileIds(accepted.data).some(id => changedFiles.has(id)) || !sameJson(savedFormNow(), sentData);
+      status(pending ? 'SAVING TO DISK' : 'SAVED TO DISK', pending);
+      return;
+    }
+    // Each project file is serialized once: the text is both what is sent and what the
+    // next save compares with. Unchanged files are named, not sent, when the server is
+    // still at the revision they were acknowledged in.
+    const partial = features.has('partial-projects') && savedSlices.revision === remoteRevision;
+    const sliceJson = {}, sent = [], unchanged = [];
+    for (const [id, slice] of Object.entries(prepared.projectData)) {
+      const json = sliceJson[id] = JSON.stringify(slice);
+      if (partial && savedSlices.json[id] === json) unchanged.push(id); else sent.push(JSON.stringify(id) + ':' + json);
+    }
+    // Likewise a property record equal to the one on disk at that revision is named only.
+    const onDisk = remote ? remote.data : base?.data;
+    let dataJson = null, order = '';
+    if (features.has('partial-properties') && Array.isArray(onDisk?.properties)) {
+      const held = new Map(onDisk.properties.map(p => [p.id, p]));
+      dataJson = JSON.stringify({ ...accepted.data, properties: accepted.data.properties.filter(p => !held.has(p.id) || !sameJson(p, held.get(p.id))) });
+      order = ',"propertyOrder":' + JSON.stringify(accepted.data.properties.map(p => p.id));
+    }
+    const body = '{"revision":' + JSON.stringify(remoteRevision) + ',"data":' + (dataJson ?? JSON.stringify(accepted.data)) + order + ',"assets":' + JSON.stringify(accepted.assets) +
+      ',"projectData":{' + sent.join(',') + '}' + (features.has('partial-projects') ? ',"unchangedProjects":' + JSON.stringify(unchanged) : '') +
+      (pictures ? ',"pictureFiles":true' : '') + (migrationPack ? ',"migration":' + JSON.stringify(migrationPack) : '') + '}';
+    let reply;
     try {
-      saved = await (await request('', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ revision: remote.revision, ...accepted, projectData, migration: migrationPack }) })).json();
+      reply = await (await request('', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body })).json();
     } catch (error) {
+      savedSlices = { revision: -1, json: {} };
+      if (error.code === 'resend-projects') throw error;   // retried at once with every project file
       if ([403, 409].includes(error.status)) {
         // Carry the reviewed choice into the retry. Re-ask only if the remote
         // value changed again, rather than replaying the same migration dialog.
-        base = copy({ data: remote.data, assets: remote.assets }); assets = accepted.assets;
+        const remoteState = remote && remote.data ? { data: remote.data, assets: remote.assets } : base;
+        base = remoteState; assets = accepted.assets;
         for (const [id, buffer] of uploadedFiles) if (accepted.assets[id]?.hash !== sentAssets[id]?.hash && (await getCachedFile(id))?.buffer === buffer) changedFiles.delete(id);
-        await apply(mergeShared(sentData, ws.data, accepted.data).value);
+        await fetchPictures(accepted.data, accepted.assets);
+        const current = savedFormNow(), retry = mergeShared(sentData, current, accepted.data).value;
+        if (!sameJson(retry, current)) await apply(retry);
         status('SAVING TO DISK', true);
       }
       throw error;
     }
-    revision = saved.revision; assets = accepted.assets; base = copy(accepted);
+    revision = reply.revision; assets = accepted.assets; base = accepted;
+    savedSlices = { revision, json: sliceJson };
+    paths = reply.paths || (await (await request()).json()).paths || {};
     // Blob upload alone is not a save acknowledgment. Keep replacements dirty
     // across revision retries, while preserving any still-newer in-flight edit.
     for (const [id, buffer] of uploadedFiles) if ((await getCachedFile(id))?.buffer === buffer) changedFiles.delete(id);
-    const after = mergeShared(sentData, ws.data, accepted.data);
-    pending = JSON.stringify(after.value) !== JSON.stringify(accepted.data) || listAllFileIds(after.value).some(id => changedFiles.has(id));
+    await fetchPictures(accepted.data, accepted.assets);
+    const current = savedFormNow();
+    const after = mergeShared(sentData, current, accepted.data);
+    pending = !sameJson(after.value, accepted.data) || listAllFileIds(after.value).some(id => changedFiles.has(id));
     // A save that brought nothing new back leaves the open view alone: replacing the workspace
     // remounts it, and MODEL would load every imported model again after each click.
-    if (JSON.stringify(after.value) !== JSON.stringify(ws.data)) await apply(after.value);
-    paths = (await (await request()).json()).paths || {};
+    if (!sameJson(after.value, current)) await apply(after.value);
+    if (pictures) pictures.forget(new Set([...pictureRefs(accepted.data).keys(), ...pictureRefs(current).keys()]));
     if (migration) {
       // All originals must be on disk before removing their last browser copy.
       migration = false; migrationPack = null;
@@ -211,12 +285,31 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   if (hadLocal) { try { legacyFolderMap = JSON.parse(localStorage.getItem('tiksi.folder.v1') || '{}'); } catch (ignored) {} }
   useDiskPersistence({ changed });
   setFileBackend({ read, changed(id) { changedFiles.add(id); changed(); } });
-  async function mirror(prop) {
+  // A poll whose .skp and project are as they were at the last quiet poll does nothing:
+  // no copies, no reads of the model and no write of the mirror state.
+  const quietMirrors = new Map();
+  function mirrorUpToDate(prop, info, entry) {
+    const ms = entry.mirror;
+    if (!ms || !info.exists || ms.file !== mirrorFileName(info.file) || ms.mtime !== Number(info.mtime) / 1e6 || ms.size !== info.size) return false;
+    const spec = mirrorSpec(prop, ws.data.materials);
+    return specSignature(spec) === ms.sig && spec.underlays.every(u => (ms.underlays || {})[u.level] === u.sig);
+  }
+  async function mirror(prop, polling = false) {
+    const endpoint = '/mirror/' + encodeURIComponent(prop.id);
+    let info, entry;
+    if (polling) {
+      const live = ws.data.properties.find(p => p.id === prop.id) || prop;
+      info = await (await request(endpoint + '/info')).json();
+      const key = [edits, info.exists, info.mtime, info.size, info.file].join('|');
+      if (quietMirrors.get(prop.id) === key) return;
+      entry = await (await request(endpoint + '/state')).json();
+      if (mirrorUpToDate(live, info, entry)) { quietMirrors.set(prop.id, key); return; }
+    }
+    quietMirrors.delete(prop.id);
     const before = copy(ws.data.properties.find(p => p.id === prop.id) || prop);
     const working = copy(before);
-    const endpoint = '/mirror/' + encodeURIComponent(prop.id);
-    const info = await (await request(endpoint + '/info')).json();
-    const entry = await (await request(endpoint + '/state')).json();
+    if (!info) info = await (await request(endpoint + '/info')).json();
+    if (!entry) entry = await (await request(endpoint + '/state')).json();
     entry.file = info.file;
     if (!entry.mirror && legacyFolderMap[prop.id]?.mirror) entry.mirror = legacyFolderMap[prop.id].mirror;
     let version = info.mtime;
@@ -245,11 +338,11 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     const available = await mirrorCapabilities();
     if (!available.openSketchUp) return; // one desktop owns authoring; phones read the same results
     mirrorRunning = true;
-    try { for (const prop of ws.data.properties) if (paths[prop.id]) await mirror(prop); }
+    try { for (const prop of ws.data.properties) if (paths[prop.id]) await mirror(prop, true); }
     catch (error) { console.warn('disk mirror:', error.message); }
     finally { mirrorRunning = false; }
   }
-  diskWorkspace = { sync, changed, syncSketchUp: mirror, async openSketchUp(prop) {
+  diskWorkspace = { sync, changed, syncSketchUp: prop => mirror(prop), async openSketchUp(prop) {
     await sync();
     const deadline = Date.now() + 120000;
     while (mirrorRunning) { if (Date.now() > deadline) throw new Error('SketchUp sync is still busy; try again after it finishes.'); await new Promise(r => setTimeout(r, 100)); }
@@ -261,13 +354,14 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   }, get paths() { return paths; }, get folder() { return cap.projectsFolder; }, get pending() { return pending; } };
   const initial = await (await request()).json();
   revision = initial.revision; paths = initial.paths || {}; assets = initial.assets || {};
+  if (initial.data) await fetchPictures(initial.data, assets);
   if (needsMigration) {
     // Stage a legacy migration as a merge; never seed an empty phone over the Mac.
     if (!hadLocal && initial.data) await apply(initial.data);
     pending = true;
     await sync();
   } else if (initial.data) {
-    base = { data: copy(initial.data), assets: copy(assets) };
+    base = { data: initial.data, assets };
     await apply(initial.data);
     await finishBrowserMigration({ clearFiles: false });
     status('SAVED TO DISK');

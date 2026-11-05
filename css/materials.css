@@ -162,3 +162,25 @@
   .mv-editor { width: var(--side-w, 380px); }
   .mv-grid { grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); }
 }
+
+/* What a material is in the real world (material-identity.js), on cards and in the editor. */
+.mv-real { display: flex; flex-direction: column; gap: 1px; margin-top: 2px; font-size: 10.5px; line-height: 1.3; min-height: 0; }
+.mv-real span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mv-real-main { color: var(--dim); }
+.mv-real-sub { color: var(--faint); }
+.mv-identity .field-row { flex-wrap: wrap; }
+.mv-sub-kicker { margin-top: 10px; }
+
+/* MODEL inspector: an imported model's materials and components (model-panel.js). */
+.model-panel .mp-row label { display: flex; align-items: center; gap: 6px; }
+.model-panel .mp-swatch { flex: none; width: 12px; height: 12px; border-radius: 2px; border: 1px solid var(--line-2); }
+.model-panel .mp-facts { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: 10.5px; color: var(--dim); margin: 2px 0 4px; }
+.model-panel .mp-amount { color: var(--accent); }
+.model-panel .mp-comp { border-top: 1px solid var(--line); padding: 6px 0; }
+.model-panel .mp-comp-head { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.model-panel .mp-comp-head b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-panel .mp-count { font-family: var(--mono); color: var(--accent); flex: none; }
+.model-panel .mp-link summary, .model-panel .mp-all summary { cursor: pointer; font-family: var(--mono); font-size: 10px; letter-spacing: .06em; color: var(--dim); margin: 2px 0; }
+.model-panel .mp-table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+.model-panel .mp-table th, .model-panel .mp-table td { text-align: left; padding: 2px 4px; border-bottom: 1px solid var(--line); }
+.model-panel .mp-part { border: 1px solid var(--line-2); border-radius: 4px; padding: 4px 6px; margin: 4px 0 8px; }

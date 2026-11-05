@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { ws, touch, activeProperty, escapeHtml, fmtLen, parseLen } from './store.js';
+import { ws, uid, touch, activeProperty, escapeHtml, fmtLen, parseLen } from './store.js';
 import {
   KINDS, PATTERNS, PATTERN_LABELS, builtinById, normalizeMaterial, newMaterial, duplicateMaterial,
   deleteMaterial, resetBuiltin, materialUsage,
@@ -13,6 +13,8 @@ import {
 import { materialFor, whenMaterialReady, swatchUrl, pendingTextureJobs } from './textures.js';
 import { addPhotoFromFile, photoById } from './photos-store.js';
 import { openResearch } from './research.js';
+import { CATEGORIES, CATEGORY_LABELS, TYPE_SUGGESTIONS, COVERAGE_UNITS, patternForCategory, identityLine, colourLine, productLine, identityWords,
+  normalizeProduct, linkMaterialProduct, unlinkMaterialProduct } from './material-identity.js';
 
 const FILTERS = ['all', 'wall', 'floor', 'ceiling', 'trim', 'any'];
 const CARD_SWATCH = 160;
@@ -99,7 +101,7 @@ function filtered() {
   return ws.data.materials.filter(m => {
     if (kindFilter !== 'all' && m.kind !== kindFilter) return false;
     if (!q) return true;
-    return [m.name, m.kind, m.pattern, PATTERN_LABELS[m.pattern] || '', m.custom ? 'custom' : 'built-in'].join(' ').toLowerCase().includes(q);
+    return [m.name, m.kind, m.pattern, PATTERN_LABELS[m.pattern] || '', m.custom ? 'custom' : 'built-in', identityWords(m, ws.data.products)].join(' ').toLowerCase().includes(q);
   });
 }
 
@@ -129,9 +131,16 @@ function cardHtml(m, uses) {
     <div class="mv-chip" style="background:${escapeHtml(m.color)}"><img alt="" hidden><i class="mv-hole"></i></div>
     <div class="mv-card-body">
       <div class="mv-name">${escapeHtml(m.name)}</div>
+      <div class="mv-real">${realHtml(m)}</div>
       <div class="mv-meta">${cardMetaHtml(m, uses)}</div>
     </div>
   </div>`;
+}
+
+// What the material is in the real world, for the card: "Wood · White oak", its colour, its product.
+function realHtml(m) {
+  const lines = [identityLine(m), colourLine(m), productLine(m, ws.data.products)].filter(Boolean);
+  return lines.map((l, i) => `<span class="${i ? 'mv-real-sub' : 'mv-real-main'}">${escapeHtml(l)}</span>`).join('');
 }
 
 function cardMetaHtml(m, uses) {
@@ -163,6 +172,8 @@ function refreshCard(m, withSwatch) {
   card.title = m.name;
   card.querySelector('.mv-chip').style.background = m.color;
   card.querySelector('.mv-name').textContent = m.name;
+  const real = card.querySelector('.mv-real');
+  if (real) real.innerHTML = realHtml(m);
   card.querySelector('.mv-meta').innerHTML = cardMetaHtml(m, counts[m.id] || 0);
   if (withSwatch) loadSwatch(card, m);
 }
@@ -223,6 +234,41 @@ function renderEditor() {
     <div class="mv-preview"><canvas></canvas><div class="mv-preview-hint">LIVE PREVIEW · drag to orbit · scroll to zoom</div></div>
     ${notice ? `<div class="mv-notice">${escapeHtml(notice)}</div>` : ''}
     <div class="mv-fields">
+      <div class="mv-section mv-identity">
+        <div class="kicker">WHAT IT IS</div>
+        <div class="field-row">
+          <div class="field"><label>Material</label>
+            <select data-f="category">${CATEGORIES.map(c => `<option value="${c}" ${c === m.category ? 'selected' : ''}>${escapeHtml(CATEGORY_LABELS[c])}</option>`).join('')}</select></div>
+          <div class="field"><label>Type</label>
+            <input type="text" data-ident="type" value="${escapeHtml(m.type || '')}" list="mv-type-list" placeholder="${escapeHtml((TYPE_SUGGESTIONS[m.category] || [])[0] || 'e.g. Lime plaster')}" spellcheck="false">
+            <datalist id="mv-type-list">${(TYPE_SUGGESTIONS[m.category] || []).map(t => `<option value="${escapeHtml(t)}">`).join('')}</datalist></div>
+        </div>
+        <div class="kicker mv-sub-kicker">COLOUR</div>
+        <div class="field-row">
+          <div class="field"><label>Colour name</label><input type="text" data-ident="colorName" value="${escapeHtml(m.colorName || '')}" placeholder="e.g. White Dove"></div>
+          <div class="field"><label>Code</label><input type="text" data-ident="colorCode" value="${escapeHtml(m.colorCode || '')}" placeholder="e.g. OC-17"></div>
+          <div class="field"><label>Maker</label><input type="text" data-ident="colorBrand" value="${escapeHtml(m.colorBrand || '')}" placeholder="e.g. Benjamin Moore"></div>
+        </div>
+        <div class="kicker mv-sub-kicker">PRODUCT</div>
+        <div class="field"><label>From the products list</label>
+          <select data-product-link><option value="">(none: type it below)</option>${ws.data.products.map(p => `<option value="${escapeHtml(p.id)}" ${m.product && m.product.productId === p.id ? 'selected' : ''}>${escapeHtml([p.name, p.model].filter(Boolean).join(' · '))}</option>`).join('')}</select></div>
+        <div class="field-row">
+          <div class="field"><label>Maker</label><input type="text" data-p="brand" value="${escapeHtml(m.product?.brand || '')}" placeholder="e.g. Kohler"></div>
+          <div class="field"><label>Product number</label><input type="text" data-p="model" value="${escapeHtml(m.product?.model || '')}" placeholder="e.g. K-14406-4-BN"></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Product name</label><input type="text" data-p="name" value="${escapeHtml(m.product?.name || '')}"></div>
+          <div class="field"><label>Link</label><input type="url" data-p="url" value="${escapeHtml(m.product?.url || '')}" placeholder="https://"></div>
+        </div>
+        ${m.product && !m.product.productId && m.product.brand && m.product.model ? '<button type="button" class="btn" data-product-add>ADD TO PRODUCTS</button>' : ''}
+        <div class="kicker mv-sub-kicker">COVERAGE <span class="faint">(for amounts estimated from area)</span></div>
+        <div class="field-row">
+          <div class="field"><label>Sq ft per unit, per coat</label><input type="number" min="0" step="1" data-cov="area" value="${m.coverage ? Math.round(m.coverage.areaM2 / 0.09290304) : ''}" placeholder="e.g. 400"></div>
+          <div class="field"><label>Unit</label><select data-cov="unit">${COVERAGE_UNITS.map(u => `<option value="${u}" ${(m.coverage?.unit || 'gal') === u ? 'selected' : ''}>${u}</option>`).join('')}</select></div>
+          <div class="field"><label>Coats</label><input type="number" min="1" max="10" step="1" data-cov="coats" value="${m.coverage ? m.coverage.coats : 2}"></div>
+        </div>
+      </div>
+      <div class="kicker mv-sub-kicker">HOW IT RENDERS</div>
       <div class="field-row">
         <div class="field"><label>Kind</label>
           <select data-f="kind">${KINDS.map(k => `<option value="${k}" ${k === m.kind ? 'selected' : ''}>${k}</option>`).join('')}</select></div>
@@ -294,8 +340,9 @@ function refreshDirty(m) {
 }
 
 function stripped(m) {
-  const { id, name, kind, color, pattern, tile, roughness, metalness, normalScale, accent, photoId } = m;
-  return { id, name, kind, color, pattern, tile, roughness, metalness, normalScale, accent: accent || null, photoId: photoId || null };
+  const { id, name, kind, color, pattern, tile, roughness, metalness, normalScale, accent, photoId, category, type, product, colorName, colorCode, colorBrand, coverage } = m;
+  return { id, name, kind, color, pattern, tile, roughness, metalness, normalScale, accent: accent || null, photoId: photoId || null,
+    category, type: type || '', product: product || null, colorName: colorName || '', colorCode: colorCode || '', colorBrand: colorBrand || '', coverage: coverage || null };
 }
 
 function autoAccent(hex) {
@@ -327,7 +374,7 @@ function tileHint(m) {
 
 function bindEditor(m) {
   const q = s => edEl.querySelector(s);
-  q('[data-research]').onclick = () => openResearch({ kind: 'material', id: m.id, materialId: m.id, name: m.name, category: m.kind, material: m.name, finish: [m.color, m.pattern].filter(Boolean).join(' / ') });
+  q('[data-research]').onclick = () => openResearch({ kind: 'material', id: m.id, materialId: m.id, name: m.name, category: m.kind, material: [identityLine(m), m.name].filter(Boolean).join(' — '), finish: [colourLine(m), m.color, m.pattern].filter(Boolean).join(' / ') });
   // Text updates land at once; the texture set, swatch and preview are minted on the debounced
   // timer, because a slider fires per pixel and each distinct value is a fresh synthesis job.
   const changed = (rebuild) => {
@@ -343,6 +390,37 @@ function bindEditor(m) {
     if (card) card.textContent = e.target.value;
   };
   q('[data-f=kind]').onchange = e => { m.kind = e.target.value; changed(true); };
+  // A new category brings its own render texture, unless the texture was chosen apart from it.
+  q('[data-f=category]').onchange = e => {
+    if (m.pattern === patternForCategory(m.category)) m.pattern = patternForCategory(e.target.value);
+    m.category = e.target.value;
+    changed(true);
+  };
+  edEl.querySelectorAll("[data-ident]").forEach(inp => inp.onchange = () => { m[inp.dataset.ident] = inp.value; changed(false); refreshCard(m, false); });
+  edEl.querySelectorAll('[data-p]').forEach(inp => inp.onchange = () => {
+    const before = m.product && m.product.productId;
+    m.product = normalizeProduct(Object.assign({}, m.product || {}, { [inp.dataset.p]: inp.value }));
+    // Typing another maker or number is another product: the old link goes.
+    if (before && (inp.dataset.p === 'brand' || inp.dataset.p === 'model')) { m.product = Object.assign(m.product || {}, { productId: before }); unlinkMaterialProduct(ws.data, m); }
+    changed(true);
+  });
+  const link = q('[data-product-link]');
+  link.onchange = () => {
+    if (link.value) linkMaterialProduct(ws.data, m, { productId: link.value }, uid);
+    else unlinkMaterialProduct(ws.data, m);
+    changed(true);
+  };
+  const add = q('[data-product-add]');
+  if (add) add.onclick = () => {
+    const r = linkMaterialProduct(ws.data, m, { propertyId: activeProperty()?.id }, uid);
+    notice = r ? (r.created ? 'Added ' + r.record.name + ' to Products. Add its price there.' : 'Linked to ' + r.record.name + ' in Products.') : '';
+    changed(true);
+  };
+  edEl.querySelectorAll('[data-cov]').forEach(inp => inp.onchange = () => {
+    const sf = parseFloat(q('[data-cov=area]').value), coats = parseInt(q('[data-cov=coats]').value, 10) || 1;
+    m.coverage = sf > 0 ? { areaM2: sf * 0.09290304, unit: q('[data-cov=unit]').value, coats } : null;
+    changed(false);
+  });
   q('[data-f=pattern]').onchange = e => {
     m.pattern = e.target.value;
     if (m.pattern !== 'photo') m.photoId = m.photoId || null;

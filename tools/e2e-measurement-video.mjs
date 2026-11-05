@@ -19,7 +19,11 @@ async function freePort(preferred) {
   const port = s.address().port; await new Promise(r => s.close(r)); return port;
 }
 function serve(port, dir, env) {
-  return spawn(python, ['tools/serve.py', '--port', String(port), '--state-dir', dir], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } });
+  const child = spawn(python, ['tools/serve.py', '--port', String(port), '--state-dir', dir], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } });
+  // Read the server's output: an unread pipe fills after about 64 KB of request log lines on Linux,
+  // and then every server thread stops at its next log line and the pages hang.
+  child.stdout.resume(); child.stderr.resume();
+  return child;
 }
 async function ready(url) { for (let i = 0; i < 200; i++) { try { if ((await fetch(url)).ok) return; } catch {} await new Promise(r => setTimeout(r, 50)); } throw new Error('server did not start'); }
 

@@ -14,6 +14,9 @@ await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve));
 const port = socket.address().port;
 await new Promise(resolve => socket.close(resolve));
 const child = spawn('python3', ['tools/serve.py', '--port', String(port), '--state-dir', state], { stdio: ['ignore', 'pipe', 'pipe'] });
+// Read the server's output: an unread pipe fills after about 64 KB of request log lines on Linux,
+// and then every server thread stops at its next log line and the pages hang.
+child.stdout.resume(); child.stderr.resume();
 const url = 'http://127.0.0.1:' + port;
 let browser;
 const shown = (page, sel) => page.locator(sel).first().evaluate(e => getComputedStyle(e).display !== 'none' && getComputedStyle(e).visibility !== 'hidden' && !!e.getClientRects().length);
@@ -115,6 +118,9 @@ try {
   await page.locator('.fd-menu').click();
   await page.locator('.fd-desktop').click();
   assert.equal(await shown(page, '#topbar'), true, 'desktop layout brings the topbar back');
+  // Reload only once the save has finished: while one is running the page asks "Leave site?",
+  // Playwright answers "stay", and the reload never happens.
+  await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   await page.reload();
   await page.locator('#topbar').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('phone')), false, 'desktop layout survives a reload');
