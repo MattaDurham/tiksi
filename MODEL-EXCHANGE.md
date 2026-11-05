@@ -15,8 +15,13 @@ Cmd+S and Cmd+O remain available. File drops use the same import dispatcher.
 3. Bring back the file, select its prior model (or Tiksi floorplan), and preserve
    the drawing origin. The before model stays saved. BEFORE / AFTER switches the
    3D design while pinned photos and project work remain in the same property.
-4. Select the model, inspect surface names/areas, and map finishes to Tiksi's
-   material catalog. Original material IDs and exact unique names are recognized
+4. Select the model, inspect its materials (each listed once, with the parts that use it
+   and their area) and its components (each definition once, counted through nesting), and
+   map finishes to Tiksi's material catalog: one choice changes every part using that material.
+   Link a component to a product (maker, model number) from the products list; CREATE
+   COMPONENT ESTIMATE puts one scope item per definition, priced each, into the budget. A
+   SketchUp import converted before components were kept can be converted again from its
+   stored original SKP; material choices and tags carry over. Original material IDs and exact unique names are recognized
    without replacing the original shader. Explicit material choices change the
    appearance and stay saved in the project.
 5. CREATE FINISH ESTIMATE creates scope items from the mapped triangle surface
@@ -36,7 +41,7 @@ Codex or Claude. Delete server copies separately in the File panel.
 
 | Format / application | Into Tiksi | Out of Tiksi | Preservation / interpretation boundary |
 | --- | --- | --- | --- |
-| SketchUp SKP | Installed C API → GLB | C API → native SKP | Faces including holes, nested placements, names, tags (each mesh keeps its SketchUp tag, or the innermost tagged group's, as `sketchupTag` in its GLB node extras; Tiksi turns them into its own tags), diffuse textures/UVs, colours, metre conversion. Native output is grouped editable triangle faces, each group on a SketchUp tag named after its Tiksi tag. Scenes, guides, dynamic components and PBR extensions remain in original SKP. Front-face materials drive the mesh. |
+| SketchUp SKP | Installed C API → GLB | C API → native SKP | Faces including holes, names, tags (each mesh keeps its SketchUp tag, or the innermost tagged group's or instance's, as `sketchupTag` in its GLB node extras; Tiksi turns them into its own tags), diffuse textures/UVs, colours, metre conversion. One glTF material per SketchUp material. Each component definition's geometry is written once, in its own coordinates, and shared by every instance; each instance is a node with its transform and extras naming the definition (`sketchupComponent`, `sketchupDefinitionId` = the definition GUID, `sketchupInstance`, `sketchupDescription`); nested instances stay nodes under nodes. Default-material faces take the instance's material, so a definition's shared meshes are keyed by definition and inherited material. Groups are placed in their parent's frame. Native output is grouped editable triangle faces on Tiksi tags, plus component definitions and (nested) instances for models that carry them. Scenes, guides, dynamic components and PBR extensions remain in original SKP. Front-face materials drive the mesh. |
 | Blender BLEND | Installed Blender → GLB | GLB → packed native BLEND | Evaluated geometry/PBR materials; automatic script execution disabled. Linked libraries must be made local. Pack images or include relative resources in one ZIP. Procedural history remains in original BLEND. |
 | GLB / glTF 2.0 | Browser; ZIP embeds external buffers/images | Self-contained GLB | Mesh hierarchy, PBR maps, UVs, transforms and recognized Tiksi/IFC/Rhino IDs. Compression uses local Blender when needed. Static design editing; source animations/rigs are retained in original bytes. |
 | COLLADA DAE | Browser converter, ZIP for textures | DAE + texture ZIP | Metres from declared units, Y/Z-up, static triangles, diffuse colours/textures and names. Other shading is reduced; X-up needs reinterpretation. |

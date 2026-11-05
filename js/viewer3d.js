@@ -7,7 +7,7 @@
 import { environmentSun, dayOfYear, dateForDay, daysInYear, validTimeZone } from './solar.js';
 import { setModelXray } from './model-xray.js';
 import * as THREE from 'three';
-import { modelTakeoff, createModelEstimate } from './model-takeoff.js';
+import { modelPanelHtml, bindModelPanel, partComponentName } from './model-panel.js';
 import { beginGeometryEdit, restoreGeometryEdit } from './edit-history.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
@@ -53,6 +53,7 @@ import {
   scanStats, dropScanToFloor, centerScanOnModel, releaseSplatRenderer, splatDrawables, splatBusy,
 } from './scans.js';
 import { attachSketchupNavigation } from './sketchup-nav.js';
+import { ModelBatches } from './model-batch.js';
 import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown } from './tags.js';
 import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags } from './saved-views.js';
 import { onScreen, setOnScreen, onScreenChange, setMenuProvider } from './tiksi-menu.js';
@@ -78,6 +79,18 @@ let xray = false;
 let section = { on: false, height: 1.2 };
 const clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 1.2);
 let framesLeft = 0, lastT = 0, tween = null, resizeObs = null;
+// Imported models drawn grouped by look (model-batch.js); built lazily as models arrive.
+let batches = null;
+// While the camera moves the frame skips ambient occlusion (and SMAA where MSAA already smooths
+// edges); the full frame follows once it has been still this long.
+const SETTLE_MS = 150;
+let lastMotion = -Infinity, lastFrameFast = false, aoWanted = true;
+const frameCounts = { fastFrames: 0, fullFrames: 0, shadowRefreshes: 0 };
+function markMotion() { lastMotion = performance.now(); }
+const moving = () => performance.now() - lastMotion < SETTLE_MS;
+// The sun's shadow map is drawn only when something it depends on changed (the sun, the
+// model, what is shown, the section); camera moves never need it, since it covers the model.
+function invalidateShadows() { if (renderer) renderer.shadowMap.needsUpdate = true; }
 let pinPhotoId = null;         // photo being placed by the PIN PHOTO tool
 let pinBatch = false;          // placing unpinned photos one after another
 let match = null;              // MATCH PHOTO: {id, aspect, hfov, el} while a photo is laid over the view
@@ -163,6 +176,7 @@ function ensureRenderer() {
   // PCF with a wide sample radius (set on the sun): soft, alias-free shadow edges at grazing
   // sun angles. r185 has retired PCFSoftShadowMap in favour of this kernel.
   renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.shadowMap.autoUpdate = false;
   renderer.localClippingEnabled = true;
   renderer.domElement.className = 'v-canvas';
   pmrem = new THREE.PMREMGenerator(renderer);
@@ -205,6 +219,9 @@ function setupScene() {
   cameraRoot = new THREE.Group(); cameraRoot.name = 'photo cameras'; scene.add(cameraRoot);
   positionRoot = new THREE.Group(); positionRoot.name = 'photo positions'; scene.add(positionRoot);
   measureRoot = new THREE.Group(); measureRoot.name = 'measures'; scene.add(measureRoot);
+  batches = new ModelBatches();
+  scene.add(batches.root);
+  invalidateShadows();
 
   controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
@@ -212,18 +229,18 @@ function setupScene() {
   controls.maxPolarAngle = Math.PI * 0.495;
   controls.minDistance = 0.05;   // close enough to read a pinned sheet; the wheel aims at the surface under the cursor
   controls.maxDistance = 400;
-  controls.addEventListener('change', () => requestRender(2));
+  controls.addEventListener('change', () => { markMotion(); requestRender(2); });
   nav = attachSketchupNavigation(controls, {
     pickPoint: e => { if (!scene || !modelGroup) return null; const hit = pick(e, { pins: false, notes: false, ground: true }); return hit ? hit.point : null; },
     canOrbit: () => mode !== 'top',
-    onChange: () => requestRender(2),
+    onChange: () => { markMotion(); requestRender(2); },
   });
 
   walk = new PointerLockControls(camera, renderer.domElement);
   walk.disconnect();
   walk.addEventListener('lock', () => { walkLocked = true; setHint(''); });
   walk.addEventListener('unlock', () => { walkLocked = false; setHint(''); });
-  walk.addEventListener('change', () => requestRender(2));
+  walk.addEventListener('change', () => { markMotion(); requestRender(2); });
 
   gizmo = new TransformControls(camera, renderer.domElement);
   gizmo.setMode('translate');
@@ -232,7 +249,7 @@ function setupScene() {
     controls.enabled = !e.value && mode !== 'walk';
     if (!e.value) commitGizmoMove();
   });
-  gizmo.addEventListener('change', () => requestRender(2));
+  gizmo.addEventListener('change', () => { if (gizmo.dragging) invalidateShadows(); requestRender(2); });
   scene.add(gizmo.getHelper());
 }
 
@@ -286,7 +303,11 @@ function setupComposer() {
   passes.hover.enabled = false;
   for (const p of [passes.outline, passes.hover]) {
     const orig = p.render.bind(p);
-    p.render = (...args) => { const hidden = hideSplats(); orig(...args); hidden.forEach(o => { o.visible = true; }); };
+    p.render = (...args) => {
+      const hidden = hideSplats();
+      const restore = batches ? batches.beginOutline(p) : () => {};
+      try { orig(...args); } finally { restore(); hidden.forEach(o => { o.visible = true; }); }
+    };
     enableMaskClipping(p.prepareMaskMaterial);
   }
 
@@ -333,6 +354,7 @@ function applyQuality() {
 
 function configureRenderQuality(name, forExport = false) {
   const q = qualityProfile(name);
+  aoWanted = q.ao;
   passes.gtao.enabled = q.ao;
   passes.gtao.updateGtaoMaterial({ samples: q.aoSamples });
   passes.bloom.enabled = q.bloom;
@@ -348,6 +370,7 @@ function configureRenderQuality(name, forExport = false) {
   if (sun.shadow.mapSize.x !== size) {
     sun.shadow.mapSize.set(size, size);
     if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
+    invalidateShadows();
   }
 }
 
@@ -357,6 +380,7 @@ function rebuildModel() {
   modelGroup = buildPropertyGroup(prop, { xray, xrayOpacity: prop.env.xrayOpacity, hiddenLevels: hiddenLevels() });
   modelGroup.visible = !prop.modelSourceId;
   scene.add(modelGroup);
+  invalidateShadows();
   rebuildNightLights();
   applySection();
   fitShadow();
@@ -370,6 +394,7 @@ function rebuildGround() {
   groundGroup = buildGround(prop, { showGrid: prop.env.showGrid, studio: prop.env.sky === 'studio' });
   groundGroup.visible = prop.env.showGround !== false;
   scene.add(groundGroup);
+  invalidateShadows();
   requestRender(2);
 }
 
@@ -413,6 +438,7 @@ function fitShadow() {
   c.updateProjectionMatrix();
   sun.userData.radius = R;
   sunDirty = true;
+  invalidateShadows();
 }
 
 // ---------- environment: sun, sky, IBL, night ----------
@@ -464,6 +490,7 @@ function applyEnvironment() {
   // Sun by day (warm and low near the horizon, white overhead); once it has set the same light
   // becomes a cool moon that brightens through twilight. Key stays about 4:1 against the fill.
   const R = sun.userData.radius || 10;
+  const sunWas = sun.position.clone();
   if (sunUp > 0) {
     sun.color.setHex(0xfff1dc).lerp(new THREE.Color(0xffa860), 1 - dusk);
     sun.intensity = sunUp * (0.6 + 2.6 * Math.pow(Math.sin(THREE.MathUtils.degToRad(Math.max(el, 0.5))), 0.6));
@@ -522,6 +549,8 @@ function applyEnvironment() {
     scheduleEnvMap(120);
   }
   envDirty = false;
+  // The shadow map depends on where the sun is, not on its colour or the exposure.
+  if (!sun.position.equals(sunWas)) invalidateShadows();
   requestRender(3);
 }
 
@@ -585,6 +614,7 @@ async function loadPano(id) {
 
 function updateSun() {
   sunDirty = false;
+  invalidateShadows();
   sun.shadow.camera.updateProjectionMatrix();
 }
 
@@ -631,6 +661,7 @@ function applySection() {
   // GTAO's normal/depth prepass and the outline masks re-render the geometry with their own
   // materials; without the plane they would shade and outline the part that was cut away.
   for (const m of passClipMaterials()) { m.clippingPlanes = planes; m.needsUpdate = true; }
+  invalidateShadows();
   requestRender(2);
 }
 // Anything above the cut is not on screen and must not be picked, unless its material is
@@ -790,7 +821,10 @@ function tick(time) {
   if (tween) { stepTween(); active = true; }
   else if (mode === 'walk') { if (stepWalk(dt)) active = true; }
   else if (controls.update(dt)) active = true;
+  if (active || dragLook) markMotion();
   if (active || splatBusy()) requestRender(2);
+  // The camera has come to rest after fast frames: draw the full-quality one.
+  if (lastFrameFast && !moving()) requestRender(1);
   // Procedural textures attach to shared materials asynchronously (textures.js synthesises them in
   // idle slices). Redraw at a gentle cadence while that is happening, and a few frames once it is
   // done, so surfaces do not stay flat until the next interaction.
@@ -802,6 +836,7 @@ function tick(time) {
     // New maps mean new shader variants; compile the lit and unlit ones here rather than on
     // the first step into a room.
     warmPrograms();
+    invalidateShadows();
     requestRender(3);
   }
   if (framesLeft > 0) {
@@ -840,19 +875,32 @@ function pointInPolygon(px, py, pts) {
   return hit;
 }
 
-function renderFrame() {
+// `still`: a frame that must be complete whatever the camera is doing (image export).
+function renderFrame(still = false) {
   if (sunDirty) updateSun();
   updateInteriorFill();
   // Each level's ceilings show only while the camera is below that level's top (or walking),
   // so orbiting above the house reads as a dollhouse and stepping inside closes the lid.
   const levels = modelGroup && modelGroup.userData.levels;
-  if (levels) for (const l of levels) l.ceilings.visible = prop.env.showCeilings !== false && (mode === 'walk' || camera.position.y < l.top - 0.05);
+  if (levels) for (const l of levels) {
+    const shown = prop.env.showCeilings !== false && (mode === 'walk' || camera.position.y < l.top - 0.05);
+    if (l.ceilings.visible !== shown) { l.ceilings.visible = shown; invalidateShadows(); }
+  }
   updatePins();
   updateNotes();
   updateMatchMarkers();
   updateMeasureLabels();
   updateCompass();
-  composer.render();
+  // Fast frames while the camera moves: the passes are switched, never resized or reallocated.
+  const fast = !still && moving();
+  passes.gtao.enabled = aoWanted && !fast;
+  passes.smaa.enabled = !(fast && composer.renderTarget1.samples > 0);
+  lastFrameFast = fast;
+  frameCounts[fast ? 'fastFrames' : 'fullFrames']++;
+  if (batches.beginFrame(scanObjs)) invalidateShadows();
+  if (renderer.shadowMap.needsUpdate) frameCounts.shadowRefreshes++;
+  try { composer.render(); }
+  finally { batches.endFrame(); }
 }
 
 function resize() {
@@ -978,7 +1026,8 @@ async function renderStillBlob(options) {
     }
     camera.updateProjectionMatrix();
     for (const m of measures) m.line.material.resolution.set(width, height);
-    renderFrame();
+    invalidateShadows();
+    renderFrame(true);
     // Snapshot synchronously before WebGL's non-preserved default framebuffer is cleared.
     const snapshot = document.createElement('canvas');
     snapshot.width = width; snapshot.height = height;
@@ -2765,6 +2814,7 @@ function applyXray() {
   const opacity = xray ? prop.env.xrayOpacity : null;
   setModelXray(modelGroup, opacity);
   for (const obj of Object.values(scanObjs)) setModelXray(obj, opacity);
+  invalidateShadows();
   applySection();
   requestRender(3);
 }
@@ -2773,6 +2823,7 @@ function toggleXray() { xray = !xray; applyXray(); renderHud(); renderToolCol();
 function applyTagVisibility() {
   if (modelGroup) applyPlanTagVisibility(prop, modelGroup);
   for (const s of prop.scans) if (scanObjs[s.id]) applyModelTagVisibility(prop, s, scanObjs[s.id]);
+  invalidateShadows();
   fitShadow(); applyEnvironment(); updateOutlineTargets();
   requestRender(3);
 }
@@ -3098,7 +3149,8 @@ function tagPickHtml() {
   const mixed = new Set(ids).size > 1;
   const one = tagPicks.length === 1 ? tagPicks[0] : null;
   const part = one && s && scanObjs[s.id] ? partByKey(scanObjs[s.id], one) : null;
-  const what = tagPicks.length > 1 ? tagPicks.length + ' objects selected' : part ? 'Part: ' + partName(part) : '';
+  const comp = part ? partComponentName(scanObjs[s.id], part.object) : '';
+  const what = tagPicks.length > 1 ? tagPicks.length + ' objects selected' : part ? 'Part: ' + partName(part) + (comp && comp !== partName(part) ? ' (component ' + comp + ')' : '') : '';
   return `${what ? `<div class="stat-line"><span>${escapeHtml(what)}</span><b></b></div>` : ''}
     ${tagPicks.length ? `<div class="field"><label>Tag${tagPicks.length > 1 ? ' (moves all ' + tagPicks.length + ')' : ''}</label><select data-tag-pick title="Shift-click more objects to move several at once">${tagOptions(ids[0], { mixed })}</select></div>` : ''}
     ${s && scanObjs[s.id] ? `<button class="btn" data-tag-detect title="Give every part of this model its automatic tag again: the file's own tags, then part names, then shape. Parts you moved to a tag yourself are moved back.">DETECT TAGS AGAIN</button>` : ''}
@@ -3441,7 +3493,8 @@ function renderInspectorBody() {
     const isPts = s.kind === 'points', isSplat = s.kind === 'splat';
     // Nothing to frame, drop or centre until the object exists; deleting mid-parse would race the loader.
     const dis = obj ? '' : 'disabled', disDel = state === 'loading' ? 'disabled' : '';
-    const materialSlots = s.kind === 'mesh' && obj ? modelTakeoff(obj) : [];
+    const panelCtx = { prop, scan: s, obj, picks: tagPicks, models: prop.scans.map(x => ({ scan: x, root: scanObjs[x.id] && scanObjs[x.id].userData.inner })).filter(x => x.root),
+      reload: () => addScanToScene(s), rerender: renderInspector, select: keys => setSelection({ kind: 'scan', id: s.id, tagKey: keys[0] }, keys), toast };
     inspEl.innerHTML = `<h3>${s.kind === 'mesh' ? 'MODEL' : 'SCAN'}</h3>
       <div class="stat-line"><span>File</span><b title="${escapeHtml(s.name)}">${escapeHtml(s.name.length > 22 ? s.name.slice(0, 20) + '...' : s.name)}</b></div>
       <div class="stat-line"><span>Kind</span><b>${escapeHtml(s.kind || '?')} &middot; ${escapeHtml((s.format || '').toUpperCase())}</b></div>
@@ -3470,18 +3523,11 @@ function renderInspectorBody() {
       ${s.source && s.source.url ? `<a class="btn" href="${escapeHtml(s.source.url)}" target="_blank" rel="noopener" style="display:flex; text-decoration:none; justify-content:center">${icon('link')}OPEN ON POLYCAM</a>` : ''}
       ${s.importWarnings?.length ? `<p class="empty">${s.importWarnings.map(escapeHtml).join('<br>')}</p>` : ''}
       ${s.kind === 'mesh' ? `<button class="btn" data-exchange ${dis}>EDIT / BRING BACK</button>
-      <h3>MATERIALS</h3><p class="empty">Match exported surface names to known Tiksi materials. Names and colours do not establish a product identity.</p>
-      ${materialSlots.map(slot=>`<div class="field"><label title="${escapeHtml(slot.name)}">${escapeHtml(slot.name)} · ${escapeHtml(fmtArea(slot.areaM2))}</label><select data-model-material="${slot.key}"><option value="">Original surface${s.materialIdentities?.[slot.key] ? ' · '+escapeHtml(materialById(s.materialIdentities[slot.key])?.name || ''):''}</option>${ws.data.materials.map(m=>`<option value="${escapeHtml(m.id)}" ${s.materialBindings?.[slot.key]===m.id?'selected':''}>${escapeHtml(m.name)}</option>`).join('')}</select></div>`).join('')}<button class="btn" data-estimate ${dis}>CREATE FINISH ESTIMATE</button><p class="empty">Measured triangle surface areas. Map only finish surfaces to include; review overlaps and waste in Scope before ordering.</p>` : ''}
+      ${modelPanelHtml(panelCtx)}` : ''}
       <button class="btn danger" data-del ${disDel} title="${disDel ? 'Wait for the scan to finish loading' : ''}">DELETE SCAN</button>`;
-    const estimate = inspEl.querySelector('[data-estimate]');
-    if(estimate) estimate.onclick = () => {try {const pr=createModelEstimate(prop,s,obj);toast('Created '+pr.name+'. Review quantities and prices in Scope / Budget.','ok');}catch(e){toast(e.message,'warn');}};
+    bindModelPanel(inspEl, panelCtx);
     const exchange = inspEl.querySelector('[data-exchange]');
     if(exchange) exchange.onclick = () => exchangeDialog(s.id);
-    inspEl.querySelectorAll('[data-model-material]').forEach(input => input.onchange = async () => {
-      s.materialBindings = s.materialBindings || {};
-      if(input.value) s.materialBindings[input.dataset.modelMaterial]=input.value; else delete s.materialBindings[input.dataset.modelMaterial];
-      touch(); try { await addScanToScene(s); } catch(e) {toast(e.message,'error');}
-    });
     const upd = () => { applyScanTransform(s, obj); fitShadow(); applyEnvironment(); touch(); requestRender(3); };
     inspEl.querySelectorAll('[data-p]').forEach(i => i.onchange = () => { s.pos[+i.dataset.p] = parseFloat(i.value) || 0; upd(); });
     inspEl.querySelectorAll('[data-r]').forEach(i => i.onchange = () => {
@@ -3931,6 +3977,33 @@ function warmPrograms() {
   if (hadScans) scene.add(scanRoot);
 }
 
+// Diagnostics for the browser checks: draw one full-quality frame now and return the renderer's
+// counts for the whole frame (every pass) and how the imported models are grouped. `grouped`
+// switches grouped drawing off or on first, so a check can compare the two.
+export function drawStats({ grouped } = {}) {
+  if (!scene || !composer || !batches) return null;
+  if (grouped !== undefined) batches.setEnabled(grouped);
+  const info = renderer.info, auto = info.autoReset;
+  info.autoReset = false; info.reset();
+  try { renderFrame(true); } finally { info.autoReset = auto; }
+  return { calls: info.render.calls, triangles: Math.round(info.render.triangles), groups: batches.stats(),
+    camera: { projection: camera.projectionMatrix.toArray(), inverse: camera.matrixWorldInverse.toArray() } };
+}
+// Whether the last frame was a fast one (camera moving), whether a shadow refresh is pending, and
+// how many fast frames, full frames and shadow refreshes this view has drawn.
+export function frameState() {
+  return scene && renderer ? { fast: lastFrameFast, shadowRefreshPending: renderer.shadowMap.needsUpdate, ...frameCounts } : null;
+}
+// Whether MODEL currently draws this part of a loaded model (tag key from tags.js); null when the
+// key names no loaded part. Grouped parts answer for their proxy, others for their own mesh.
+export function partDrawn(key) {
+  const m = /^node:([^#]+)#/.exec(key || '');
+  const w = m && scanObjs[m[1]], part = w && partByKey(w, key);
+  if (!part) return null;
+  const grouped = batches && batches.drawsPart(part.object);
+  return grouped !== null && grouped !== undefined ? grouped : isVisibleChain(part.object);
+}
+
 // The camera the 3D view last showed, per property, so DOCUMENTS can place a 3D view from it.
 let lastView = null;
 export function lastCameraView(propId) { return lastView && lastView.propId === propId ? lastView : null; }
@@ -3985,6 +4058,7 @@ export function unmount() {
   for (const id of Object.keys(cameraObjs)) removeCameraGlyph(id);
   for (const id of Object.keys(positionObjs)) removePositionMarker(id);
   for (const id of Object.keys(noteObjs)) removeNote(id);
+  if (batches) { batches.dispose(); batches = null; }
   for (const id of Object.keys(scanObjs)) { disposeScanObject(scanObjs[id]); delete scanObjs[id]; }
   for (const id of Object.keys(scanState)) delete scanState[id];
   releaseSplatRenderer();
