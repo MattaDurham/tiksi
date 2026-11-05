@@ -122,9 +122,27 @@ try {
   // reload never happens. Waiting for SAVED TO DISK is not enough: a save can start after the
   // wait passes. The layout choice lives in this browser, not the project, so leaving is safe.
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
-  const leave = dialog => { if (dialog.type() === 'beforeunload') dialog.accept(); };
+  const leave = dialog => { console.log('PROBE dialog', dialog.type(), Date.now()); if (dialog.type() === 'beforeunload') dialog.accept(); };
   page.on('dialog', leave);
-  await page.reload();
+  const inflight = new Map(), seen = [];
+  const t0 = Date.now(), at = () => Date.now() - t0;
+  page.on('request', r => { inflight.set(r, at()); seen.push(at() + ' req ' + r.method() + ' ' + r.url().replace(url, '')); });
+  page.on('requestfinished', r => { inflight.delete(r); seen.push(at() + ' done ' + r.url().replace(url, '')); });
+  page.on('requestfailed', r => { inflight.delete(r); seen.push(at() + ' fail ' + r.url().replace(url, '') + ' ' + r.failure()?.errorText); });
+  page.on('framenavigated', f => { if (f === page.mainFrame()) seen.push(at() + ' navigated ' + f.url()); });
+  page.on('domcontentloaded', () => seen.push(at() + ' domcontentloaded'));
+  page.on('load', () => seen.push(at() + ' load'));
+  page.on('console', m => seen.push(at() + ' console ' + m.type() + ' ' + m.text().slice(0, 200)));
+  try { await page.reload({ timeout: 45000 }); }
+  catch (error) {
+    console.log('PROBE reload failed after', at(), 'ms');
+    for (const line of seen) console.log('PROBE', line);
+    for (const [r, t] of inflight) console.log('PROBE still in flight since', t, r.method(), r.url().replace(url, ''));
+    try { console.log('PROBE readyState', await Promise.race([page.evaluate(() => document.readyState + ' ' + location.href + ' ' + document.querySelector('#save-status')?.textContent), new Promise((_, j) => setTimeout(() => j(new Error('evaluate hung')), 5000))])); }
+    catch (e) { console.log('PROBE', e.message); }
+    throw error;
+  }
+  console.log('PROBE reload ok after', at(), 'ms; requests', seen.filter(l => l.includes(' req ')).length);
   page.off('dialog', leave);
   await page.locator('#topbar').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('phone')), false, 'desktop layout survives a reload');
