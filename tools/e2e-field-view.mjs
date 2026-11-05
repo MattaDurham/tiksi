@@ -131,8 +131,10 @@ try {
   const track = r => pending.set(r, performance.now()), untrack = r => pending.delete(r);
   page.on('request', track); page.on('requestfinished', untrack); page.on('requestfailed', untrack);
   const t0 = Date.now(), seen = [], at = () => Date.now() - t0;
-  await page.evaluate(() => { setInterval(() => console.log('BEAT ' + Date.now()), 250); });
-  page.on('console', m => { const t = m.text(); if (t.startsWith('BEAT ')) seen.push(at() + ' beat (page clock ' + (Number(t.slice(5)) - t0) + ')'); });
+  page.on('console', m => { const t = m.text(); if (t.startsWith('BEAT ')) seen.push(at() + ' beat'); });
+  await page.evaluate(() => { setInterval(() => console.log('BEAT ' + Date.now()), 1000); });
+  await page.waitForTimeout(2500);
+  await browser.startTracing(page, { categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'disabled-by-default-devtools.timeline.stack', 'v8.execute', 'blink', 'loading', 'navigation', 'toplevel', 'gpu', 'benchmark'] });
   page.on('request', r => { if (r.isNavigationRequest()) seen.push(at() + ' nav request ' + r.url()); });
   page.on('response', r => { if (r.request().isNavigationRequest()) seen.push(at() + ' nav response ' + r.status() + ' timing ' + JSON.stringify(r.request().timing())); });
   page.on('framenavigated', f => { if (f === page.mainFrame()) seen.push(at() + ' committed'); });
@@ -141,7 +143,19 @@ try {
     for (const line of seen) console.log('PROBE', line);
     for (const [t, text] of serverLog) if (t >= t0 - 2000) for (const line of text.split('\n')) if (line.trim()) console.log('PROBE server', t - t0, line.slice(0, 160));
   };
-  try { await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 }); console.log('PROBE reload took', at()); report(); }
+  const t1 = Date.now();
+  try { await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 }); console.log('PROBE reload took', at()); report();
+    const trace = JSON.parse(String(await browser.stopTracing())).traceEvents;
+    const names = new Map(trace.filter(e => e.name === 'thread_name').map(e => [e.pid + ':' + e.tid, e.args.name]));
+    const procs = new Map(trace.filter(e => e.name === 'process_name').map(e => [e.pid, e.args.name]));
+    const long = trace.filter(e => e.ph === 'X' && e.dur > 300000).sort((a, b) => b.dur - a.dur).slice(0, 40);
+    for (const e of long) console.log('PROBE long', Math.round(e.dur / 1000), 'ms', procs.get(e.pid), names.get(e.pid + ':' + e.tid), e.cat, e.name, JSON.stringify(e.args).slice(0, 300));
+    // What the long tasks on renderer main threads were made of.
+    for (const top of long.filter(e => names.get(e.pid + ':' + e.tid) === 'CrRendererMain').slice(0, 4)) {
+      const inside = trace.filter(e => e.pid === top.pid && e.tid === top.tid && e.ph === 'X' && e.ts >= top.ts && e.ts + (e.dur || 0) <= top.ts + top.dur && e !== top && e.dur > 50000).sort((a, b) => b.dur - a.dur).slice(0, 15);
+      for (const e of inside) console.log('PROBE   inside', Math.round(e.dur / 1000), 'ms', e.name, JSON.stringify(e.args?.data || e.args || {}).slice(0, 300));
+    }
+  }
   catch (error) {
     report();
     console.error('Reload still waiting on:', [...pending].map(([r, t]) => r.method() + ' ' + r.url() + ' (' + Math.round(performance.now() - t) + ' ms)'));
