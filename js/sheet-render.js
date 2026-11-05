@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { buildPropertyGroup, wallCapRects, disposeBuilt, roomInteriorPoint } from './geometry.js';
 import { loadScanObject, applyScanTransform, disposeScanObject } from './scans.js';
+import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility } from './tags-scene.js';
 import { pendingTextureJobs } from './textures.js';
 import { wallsOn, roomsOn, openingsOn, levelHeight, polyArea, fmtLen, fmtArea, escapeHtml } from './store.js';
 import { orthoFrame, sectionPlane, lineFrame } from './doc-sets.js';
@@ -57,6 +58,18 @@ async function scanObject(scan) {
   return scanCache.get(scan.id);
 }
 
+// What decides which parts a view shows: the tags, every assignment and the view's own overrides.
+export function tagSignature(prop, v) {
+  return JSON.stringify([prop.tags, prop.tagOf, prop.tagDefaults, prop.tagUntaggedVisible, (v && v.tags) || null]);
+}
+// Show or hide the built model's parts for one view (the group is shared between views).
+function applyViewTags(prop, group, overrides) {
+  for (const c of group.children) {
+    if (c.userData.planGroup) applyPlanTagVisibility(prop, c, overrides);
+    else if (c.userData.tagScan) applyModelTagVisibility(prop, c.userData.tagScan, c, overrides);
+  }
+}
+
 // Build (or reuse) the model for this property: the traced plan plus visible mesh models.
 async function modelFor(prop) {
   const sig = geometrySignature(prop);
@@ -71,7 +84,10 @@ async function modelFor(prop) {
     const obj = await scanObject(s);
     if (!obj) continue;
     applyScanTransform(s, obj);
+    // A model never opened in MODEL gets its tags here, the same way (tags-scene.js).
+    detectModelTags(prop, s, obj);
     obj.visible = true;
+    obj.userData.tagScan = s;
     group.add(obj);
   }
   // Scans no longer in the property are dropped from the cache.
@@ -192,6 +208,7 @@ async function renderNow(prop, v, width, height) {
   if (v.kind === 'plan' && v.layers && !v.layers.model) return null;
   const group = await modelFor(prop);
   await settled();
+  applyViewTags(prop, group, v.tags || null);
   group.updateMatrixWorld(true);
   const box = modelBox(group);
   const size = box.getSize(new THREE.Vector3()), mid = box.getCenter(new THREE.Vector3());

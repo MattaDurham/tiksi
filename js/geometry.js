@@ -20,7 +20,7 @@ import { materialById, ensureLevels, levelHeight, levelOfRoom, wallsOn, roomsOn,
 import { materialFor } from './textures.js';
 import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, pointInPoly, doorLeaves } from './wall-solids.js';
 import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
-import { fixtureShown } from './view-layers.js';
+import { applyPlanTagVisibility } from './tags-scene.js';
 
 const FALLBACK_WALL = '#d8d4cc';
 const FALLBACK_FLOOR = '#97999b';
@@ -735,7 +735,7 @@ export function buildPropertyGroup(property, opts) {
     view.walls.forEach((wall, index) => {
       lg.add(buildWallGroup(wall, openings, view, Object.assign({ index }, ctx)));
     });
-    for (const f of fixturesOn(property, lvl.id)) if (fixtureShown(property, f)) lg.add(buildFixtureGroup(f, ctx));
+    for (const f of fixturesOn(property, lvl.id)) lg.add(buildFixtureGroup(f, ctx));
     const ceilings = new THREE.Group();
     ceilings.name = 'ceilings';
     ceilings.userData = { ceilings: true, level: lvl.id };
@@ -750,6 +750,9 @@ export function buildPropertyGroup(property, opts) {
     levels.push({ id: lvl.id, name: lvl.name, group: lg, ceilings, elevation: lvl.elevation, top: lvl.elevation + H });
   }
   root.userData = { levels, glass };
+  // Hidden tags hide their elements (tags.js); `opts.tags` is a viewport's own visibility, and
+  // false builds everything shown (exports carry hidden tags too).
+  if (opts.tags !== false && Array.isArray(property.tags)) applyPlanTagVisibility(property, root, opts.tags || null);
   if (opts.xray) setModelXray(root, opts.xrayOpacity ?? 0.35);
   return root;
 }

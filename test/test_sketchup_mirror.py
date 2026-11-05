@@ -108,6 +108,28 @@ class NativeMirrorTests(unittest.TestCase):
         self.run_worker('read', job)
         return json.loads((job / 'mirror-read.json').read_text())
 
+    def test_elements_go_on_their_tiksi_tags(self):
+        spec = copy.deepcopy(SPEC)
+        spec['tags'] = [{'name': 'Walls', 'visible': True}, {'name': 'Doors and windows', 'visible': False}, {'name': 'Floor', 'visible': True}]
+        for w in spec['walls']:
+            w['tag'] = 'Walls' if w['id'] != 'w-w' else ''
+            for h in w['holes']:
+                h['tag'] = 'Doors and windows'
+        spec['rooms'][0]['tag'] = 'Floor'
+        skp = self.write(spec)
+        on, shown = group_tags(skp)
+        self.assertEqual(on, {'w-s': 'Walls', 'w-e': 'Walls', 'w-n': 'Walls', 'w-w': 'Tiksi: Main level',
+                              'o-door': 'Doors and windows', 'o-win': 'Doors and windows', 'r-1': 'Floor'})
+        self.assertEqual((shown['Walls'], shown['Doors and windows'], shown['Floor']), (True, False, True))
+        # A rewrite reuses the tags by name and follows Tiksi's visibility.
+        spec['tags'][1]['visible'] = True
+        on2, shown2 = group_tags(self.write(spec, skp))
+        self.assertEqual(on2, on)
+        self.assertTrue(shown2['Doors and windows'])
+        self.assertEqual(sorted(shown2), sorted(shown), 'no second copy of any tag')
+        # The read-back is unchanged by tags.
+        self.assertEqual(sorted(w['id'] for w in self.read(skp)['walls']), ['w-e', 'w-n', 'w-s', 'w-w'])
+
     def test_round_trip_reads_back_what_was_written(self):
         got = self.read(self.write(SPEC))
         self.assertEqual(got['model']['propertyId'], 'prop-synthetic')
@@ -502,6 +524,33 @@ def painted_faces(source):
         api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
         walk(api.ref('SUModelGetEntities', model), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], None)
         return out
+    finally:
+        if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
+
+
+def group_tags(source):
+    """{Tiksi id: SketchUp tag name} of every Tiksi group, and {tag name: visible} of every tag."""
+    from server.sketchup_convert import API, Ref
+    from server.sketchup_mirror import get_data, to_ref
+    api = API(); model = Ref(); out = {}
+    def walk(entities):
+        for g in api.collection(entities, 'Groups'):
+            data = get_data(api, to_ref(api, 'SUGroupToEntity', g))
+            layer = Ref(); api.call('SUDrawingElementGetLayer', to_ref(api, 'SUGroupToDrawingElement', g), C.byref(layer))
+            if data and data.get('id'): out[data['id']] = api.text('SULayerGetName', layer)
+            walk(api.ref('SUGroupGetEntities', g))
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
+        walk(api.ref('SUModelGetEntities', model))
+        count = C.c_size_t(); api.call('SUModelGetNumLayers', model, C.byref(count))
+        refs = (Ref * max(1, count.value))()
+        if count.value: api.call('SUModelGetLayers', model, count, refs, C.byref(count))
+        shown, names = {}, []
+        for ref in refs[:count.value]:
+            v = C.c_bool(); api.call('SULayerGetVisibility', ref, C.byref(v)); names.append(api.text('SULayerGetName', ref)); shown[names[-1]] = v.value
+        assert len(names) == len(set(names)), names
+        return out, shown
     finally:
         if model.ptr: api.call('SUModelRelease', C.byref(model))
         api.lib.SUTerminate()

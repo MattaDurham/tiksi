@@ -371,7 +371,33 @@ def level_layers(api, model, levels):
     return out
 
 
-def write_wall(api, entities, wall, layer, materials):
+def tag_layers(api, model, tags):
+    """A SketchUp tag per Tiksi tag, by name, reusing one already in the model; its visibility follows Tiksi."""
+    count = C.c_size_t()
+    api.call('SUModelGetNumLayers', model, C.byref(count))
+    existing = {}
+    if count.value:
+        refs = (Ref * count.value)()
+        api.call('SUModelGetLayers', model, count, refs, C.byref(count))
+        for ref in refs[:count.value]:
+            existing[api.text('SULayerGetName', ref)] = ref
+    out = {}
+    for tag in tags or []:
+        name = str(tag.get('name') or '').strip()[:120] if isinstance(tag, dict) else ''
+        if not name or name in out:
+            continue
+        if name not in existing:
+            layer = Ref()
+            api.call('SULayerCreate', C.byref(layer))
+            api.call('SULayerSetName', layer, name.encode('utf-8'))
+            api.call('SUModelAddLayers', model, C.c_size_t(1), (Ref * 1)(layer))
+            existing[name] = layer
+        api.call('SULayerSetVisibility', existing[name], C.c_bool(tag.get('visible') is not False), optional=True)
+        out[name] = existing[name]
+    return out
+
+
+def write_wall(api, entities, wall, layer, materials, tags=None):
     ax, ay, bx, by = wall['ax'], wall['ay'], wall['bx'], wall['by']
     L = math.hypot(bx - ax, by - ay)
     if L < 0.01:
@@ -399,7 +425,7 @@ def write_wall(api, entities, wall, layer, materials):
         if w <= 0.001 or hh <= 0.001:
             continue
         og = new_group(api, inner, 'Window' if h.get('type') == 'window' else 'Door', translation(h['s0'] * IN, 0, h['v0'] * IN))
-        set_layer(api, og, layer)
+        set_layer(api, og, (tags or {}).get(h.get('tag')) or layer)
         pane = api.ref('SUGroupGetEntities', og)
         fill(api, pane, [[0, 0, 0], [w * IN, 0, 0], [w * IN, 0, hh * IN], [0, 0, hh * IN]], [([0, 1, 2, 3], [])])
         mat = materials.get(h.get('material'))
@@ -526,13 +552,17 @@ def write_mirror(folder):
         if erase:
             api.call('SUEntitiesErase', entities, C.c_size_t(len(erase)), (Ref * len(erase))(*erase))
         layers = level_layers(api, model, spec.get('levels', []))
+        tags = tag_layers(api, model, spec.get('tags', []))
+        # An element goes on its Tiksi tag; one with none (Untagged) on its level's tag.
+        def layer_of(element):
+            return tags.get(element.get('tag')) or layers.get(element['level'])
         materials = Materials(api, model, warnings)
         for wall in spec.get('walls', []):
-            write_wall(api, entities, wall, layers.get(wall['level']), materials)
+            write_wall(api, entities, wall, layer_of(wall), materials, tags)
         for room in spec.get('rooms', []):
-            write_room(api, entities, room, layers.get(room['level']), materials)
+            write_room(api, entities, room, layer_of(room), materials)
         for fixture in spec.get('fixtures', []):
-            write_fixture(api, entities, fixture, layers.get(fixture['level']), materials)
+            write_fixture(api, entities, fixture, layer_of(fixture), materials)
         for level, underlay in underlays.items():
             if level in kept_underlays:
                 continue

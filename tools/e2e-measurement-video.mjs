@@ -66,6 +66,7 @@ try {
     const port = await freePort(process.env.E2E_APP_PORT), url = 'http://127.0.0.1:' + port;
     children.push(serve(port, state + '/with-ffmpeg')); await ready(url);
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
     const errors = [], dialogs = []; page.on('pageerror', e => errors.push(e.message));
     page.on('dialog', d => { dialogs.push(d.message()); d.accept(); });
     await page.goto(url); await kitchen(page);
@@ -139,6 +140,7 @@ try {
   const port = await freePort(process.env.E2E_MOCK_PORT), url = 'http://127.0.0.1:' + port;
   children.push(serve(port, state + '/without-ffmpeg', { TIKSI_FFMPEG: '', TIKSI_FFPROBE: '' })); await ready(url);
   const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+  await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   const errors = []; page.on('pageerror', e => errors.push(e.message)); page.on('dialog', d => d.accept());
   await page.goto(url); await kitchen(page);
   await page.waitForFunction(() => /needs ffmpeg/.test(document.querySelector('[data-service]').textContent));

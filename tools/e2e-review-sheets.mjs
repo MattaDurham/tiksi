@@ -26,6 +26,7 @@ try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch('http://127.0.0.1:' + port)).ok) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
   browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   page = await browser.newPage({ viewport: { width: 1400, height: 900 }, acceptDownloads: true });
+  await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   page.on('pageerror', e => errors.push(e.message));
   page.setDefaultTimeout(120000);   // MODEL under software GL on a CI runner is slow
   await page.goto('http://127.0.0.1:' + port + '/#/plan');

@@ -156,8 +156,17 @@ export function normalizeViewport(v) {
     out.text = str(v.text).slice(0, 20000);
     out.fontSize = fin(v.fontSize) ? clamp(num(v.fontSize), 5, 72) : 9;
   }
+  // A model view's own tag visibility, as in a LayOut scene: { tagId | '_untagged': shown }.
+  // A tag not listed follows the model's current visibility.
+  if (MODEL_KINDS.includes(v.kind)) {
+    out.tags = {};
+    if (v.tags && typeof v.tags === 'object' && !Array.isArray(v.tags)) {
+      for (const [k, on] of Object.entries(v.tags).slice(0, 500)) if (ID_RE.test(k) && typeof on === 'boolean') out.tags[k] = on;
+    }
+  }
   return out;
 }
+const MODEL_KINDS = ['plan', 'section', 'elevation', 'view3d'];
 
 export function normalizeSet(s) {
   if (!s || typeof s !== 'object') return null;

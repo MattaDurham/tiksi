@@ -55,6 +55,7 @@ let browser;
 try {
   browser = await chromium.launch({ headless: true, ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}) });
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+  await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto('http://localhost:' + server.address().port + '/harness');
   await page.waitForFunction(() => window.ready);

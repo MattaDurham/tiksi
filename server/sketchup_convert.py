@@ -79,14 +79,25 @@ def read_skp(source, output):
                 path = Path(output).parent / ('texture-' + str(len(material_cache)) + '.png')
                 api.call('SUTextureWriteToFile',tex,os.fsencode(path)); spec['texture']=str(path)
             material_cache[ref.ptr]=spec; return spec
-        def walk(entities, matrix, name, inherited=Ref(), depth=0):
+        # Each face batch carries the SketchUp tag it is drawn on, so Tiksi can rebuild the
+        # file's tags: a face's own tag, else the tag of the innermost tagged group around it.
+        untagged_layer = api.ref('SUModelGetDefaultLayer',model); layer_names = {}
+        def tag_of(element, inherited_tag):
+            layer = Ref()
+            if api.call('SUDrawingElementGetLayer',element,C.byref(layer),optional=True) or not layer.ptr or layer.ptr == untagged_layer.ptr: return inherited_tag
+            if layer.ptr not in layer_names:
+                layer_names[layer.ptr] = api.text('SULayerGetDisplayName' if hasattr(api.lib,'SULayerGetDisplayName') else 'SULayerGetName', layer).strip() or None
+            return layer_names[layer.ptr] or inherited_tag
+        face_element = api.lib.SUFaceToDrawingElement; face_element.restype = Ref
+        def walk(entities, matrix, name, inherited=Ref(), depth=0, tag=None):
             if depth > 64 or len(meshes) > 2000000: raise ValueError('SKP hierarchy limit exceeded')
             faces = api.collection(entities,'Faces')
             batches = {}
             for face in faces:
                 mat = Ref(); api.call('SUFaceGetFrontMaterial',face,C.byref(mat),optional=True)
                 if not mat.ptr: mat=inherited
-                batch = batches.setdefault(mat.ptr,{'name':name,'positions':[],'uv':[],'indices':[],'material':material(mat)})
+                face_tag = tag_of(face_element(face), tag)
+                batch = batches.setdefault((mat.ptr, face_tag),{'name':name,'positions':[],'uv':[],'indices':[],'material':material(mat),'extras':{'sketchupTag':face_tag} if face_tag else None})
                 mesh=Ref();api.call('SUMeshHelperCreate',C.byref(mesh),face)
                 try:
                     count=C.c_size_t();api.call('SUMeshHelperGetNumVertices',mesh,C.byref(count));verts=(Point*count.value)();stq=(Point*count.value)()
@@ -117,12 +128,12 @@ def read_skp(source, output):
                     t=Transform();api.call('SUComponentInstanceGetTransform',instance,C.byref(t))
                     mat=Ref();get=api.lib.SUComponentInstanceToDrawingElement;get.restype=Ref
                     api.call('SUDrawingElementGetMaterial',get(instance),C.byref(mat),optional=True)
-                    walk(nested,multiply(matrix,list(t.values)),child_name or name,mat if mat.ptr else inherited,depth+1)
+                    walk(nested,multiply(matrix,list(t.values)),child_name or name,mat if mat.ptr else inherited,depth+1,tag_of(get(instance),tag))
             for suffix in ['Images','Texts','Dimensions','SectionPlanes']:
                 count=C.c_size_t();api.call('SUEntitiesGetNum'+suffix,entities,C.byref(count))
                 if count.value:warnings.append(f'{count.value} {suffix.lower()} retained in original SKP; not represented in mesh')
         walk(entities,IDENTITY,'SketchUp model');write_glb(meshes,output)
-        return {'warnings': sorted(set(warnings))+['Native SKP faces, holes, component placements, names, diffuse textures and colours converted. Scenes, guides, dynamic component logic and PBR extensions remain in the source SKP.']}
+        return {'warnings': sorted(set(warnings))+['Native SKP faces, holes, component placements, names, tags, diffuse textures and colours converted. Scenes, guides, dynamic component logic and PBR extensions remain in the source SKP.']}
     finally:
         if model.ptr:api.call('SUModelRelease',C.byref(model))
         api.lib.SUTerminate()
@@ -133,8 +144,19 @@ def write_skp(source, output):
     api=API();model=Ref();data=json.loads(Path(source).read_text(encoding='utf-8'))
     try:
         api.call('SUModelCreate',C.byref(model));entities=api.ref('SUModelGetEntities',model)
+        # A part may name its Tiksi tag; it becomes a SketchUp tag of the same name and visibility.
+        layers={};to_drawing=api.lib.SUGroupToDrawingElement;to_drawing.restype=Ref
+        def layer_for(name, visible):
+            if name not in layers:
+                layer=Ref();api.call('SULayerCreate',C.byref(layer));api.call('SULayerSetName',layer,name.encode('utf-8'))
+                api.call('SULayerSetVisibility',layer,C.c_bool(bool(visible)),optional=True)
+                api.call('SUModelAddLayers',model,C.c_size_t(1),(Ref*1)(layer));layers[name]=layer
+            return layers[name]
         for part in data['meshes']:
             group=Ref();api.call('SUGroupCreate',C.byref(group));api.call('SUGroupSetName',group,part['name'].encode());api.call('SUEntitiesAddGroup',entities,group)
+            tag=part.get('tag')
+            if isinstance(tag,str) and tag.strip():
+                api.call('SUDrawingElementSetLayer',to_drawing(group),layer_for(tag.strip()[:120],part.get('tagVisible',True) is not False))
             target=api.ref('SUGroupGetEntities',group)
             mat=Ref();api.call('SUMaterialCreate',C.byref(mat));spec=part.get('material',{})
             api.call('SUMaterialSetName',mat,spec.get('name','Surface').encode())
@@ -161,7 +183,7 @@ def write_skp(source, output):
                     api.call('SUFacePositionMaterial',face,C.c_bool(True),C.byref(mapping))
                     api.call('SUFacePositionMaterial',face,C.c_bool(False),C.byref(mapping))
         api.call('SUModelSaveToFile',model,os.fsencode(output))
-        return {'warnings':['Native SKP contains editable grouped triangle faces, diffuse textures and colours. Use GLB for PBR map fidelity.']}
+        return {'warnings':['Native SKP contains editable grouped triangle faces on their Tiksi tags, diffuse textures and colours. Use GLB for PBR map fidelity.']}
     finally:
         if model.ptr:api.call('SUModelRelease',C.byref(model))
         api.lib.SUTerminate()
