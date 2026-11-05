@@ -3,14 +3,24 @@
 This repository is public. Project files, photos, scans, databases, credentials,
 and machine configuration are private and never belong in git.
 
-Before drawing or generating a product, appliance, furniture item or fixture,
-read [PRODUCT-MODEL-SOURCES.md](PRODUCT-MODEL-SOURCES.md). Search its manufacturer
-and library sources for the exact brand/model first, then import or convert a
-suitable existing model instead of rebuilding it by hand. Verify identity,
-dimensions, configuration and permitted use against the manufacturer's current
-specification. Build custom geometry only after recording why available models
-are missing or unsuitable; label approximations and preserve their build code.
-Keep downloaded models, specifications and project sourcing notes private.
+Tiksi designs real spaces with real products and buildable assemblies. Ground
+products and materials in identifiable manufacturer models, product lines or
+specifications that can be sourced for the project. For observed spaces, identify
+the actual product where possible; otherwise label the closest purchasable match
+as a proposed match, with its evidence and uncertainty. For new work, follow the
+owner's brand, price tier, finish, performance and other specification preferences.
+Choose products for the space and brief, independently of whether a 3D file exists.
+
+Use [PRODUCT-MODEL-SOURCES.md](PRODUCT-MODEL-SOURCES.md) for its whole-space
+checklist, product sources and specification workflow. This applies to electrical
+fixtures, outlet covers, light bulbs, trim, windows, siding, roofing and flooring
+as well as appliances, plumbing, hardware, furniture and the other listed systems.
+Use a suitable existing model of the selected product when available. When
+drawing custom geometry, obtain the real product's specifications and details
+and model its dimensions, profiles, finishes and installation interfaces accurately.
+Keep product identity and specification evidence whether the geometry is imported
+or custom-built; distinguish documented facts from inferred details. Preserve
+custom build code and keep downloads and project sourcing records private.
 
 Before changing code, read `AGENTS.local.md`. If it is missing, seed a private
 copy from `AGENTS.local.example.md` with `python3 scripts/agents-local.py seed`.

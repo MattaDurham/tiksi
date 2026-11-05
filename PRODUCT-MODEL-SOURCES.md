@@ -1,14 +1,29 @@
 # Product model source index
 
-Use this index before drawing an appliance, plumbing fixture, furniture item or
-other manufactured product. Start with an existing model of the exact product,
-verify it against the manufacturer's specification, and import or convert it.
-Custom modelling is the fallback when the available geometry is missing,
-inaccurate, incompatible or unsuitable for the permitted use.
+Tiksi designs real spaces with real products, materials and buildable assemblies.
+Use this index to identify and specify what belongs in the space, then represent
+it accurately. An appliance, light bulb, outlet cover, moulding profile or roof
+finish should connect to a real product or documented construction detail that
+can be sourced for the project.
 
-Initial research: **3 November 2026**. Compiled: **5 November 2026**. Counts and
-release dates below are research snapshots, not live totals. Peppermodern's
-repository and the ABO registry were revisited during compilation. An entry
+For an observed space, identify the actual product when the evidence supports
+it. Otherwise select the closest purchasable match that fits the observations
+and project needs, and label it as a proposed match. Preserve the observed facts
+and uncertainty; a replacement choice is not proof of what was originally there.
+For new designs, select products against the owner's specification preferences,
+including brand, price tier, finish, performance and market availability.
+
+Use a suitable existing model of the selected product when available. When
+custom geometry is needed, obtain the real specifications and details and draw
+the product accurately. Product identity, physical fit and specification evidence
+matter whichever route produces the geometry. The available model library should
+not determine the design's product choices.
+
+Initial research: **3 November 2026**. Compiled and expanded to whole-space
+specification: **5 November 2026**. Counts and release dates below are research
+snapshots, not live totals. Peppermodern's repository and the ABO registry were
+revisited during compilation. The electrical, lighting, trim and building-envelope
+sources below were added during the expansion. An entry
 marked **lead** was discovered but needs further inspection before relying on its
 coverage or licensing. A source listing is not certification of its geometry.
 
@@ -17,6 +32,68 @@ using Claude-generated SketchUp models. Large open datasets also exist. The
 remaining opportunity is a maintained catalogue combining current product IDs,
 reliable installation information, clear asset rights and reproducible builds.
 Do not infer that a missing search result proves that a model does not exist.
+
+## Whole-space specification checklist
+
+Use the relevant rows when surveying an existing space or developing a design.
+Each selected product needs an identity, physical fit, finish/configuration and
+source appropriate to that category. Standard materials and bespoke work may be
+specified by a material standard, measured profile or fabrication detail rather
+than a retail SKU. Carry them as explicit specifications.
+
+| Category | Include | Product and detail checks |
+| --- | --- | --- |
+| Electrical fixtures and lighting | Pendants, chandeliers, sconces, recessed housings/trims, track, under-cabinet and exterior lights | Manufacturer/model, size, mounting/cutout, canopy, suspension, finish, source/driver and light distribution; fixture appearance and illumination both follow the selection |
+| Light bulbs and replaceable lamps | LED bulbs, decorative lamps, reflectors, tubes and specialty lamps | Exact lamp/order code, base, envelope size, lumens, colour temperature, colour rendering, beam angle, dimmability, voltage and fixture compatibility |
+| Outlets and electrical devices | Receptacles, USB outlets, floor boxes, switches, dimmers and sensors | Device family/model, configuration, rating, colour, dimensions and mounting position; distinguish observed visible devices from unknown concealed wiring |
+| Outlet covers and faceplates | Wall plates, multi-gang combinations, screwless, oversized, wet-location and floor-box covers | Manufacturer/series, gang count, opening pattern, outer size, thickness, material, finish and compatibility with the actual devices |
+| Electrical systems and low voltage | Panels/enclosures, visible conduit/raceway, data/media plates, doorbells, cameras and smart-home devices | Equipment identity, dimensions, mounting, visible routing and documented connection/control requirements; keep unobserved routes unresolved |
+| Plumbing fixtures and faucets | Sinks, kitchen/bath faucets, toilets, tubs, shower bases, showerheads and hand showers | Model, finish, bowl/body dimensions, reach/height, mounting holes, cutouts, handing and installation/connection requirements |
+| Plumbing fittings and accessories | Valves, drains, traps, strainers, disposals, flush plates, carriers, grab bars and bath accessories | Compatible rough-in and finish parts, connection sizes, locations, visible dimensions, access and mounting |
+| Appliances and laundry | Ranges, ovens, cooktops, refrigerators, dishwashers, hoods, microwaves, washers and dryers | SKU/market, capacity/configuration, body and handle projection, panels, cutout, swing, ventilation and service connections |
+| Cabinetry, casework and storage | Cabinet boxes, doors/fronts, drawers, vanities, shelves, closets and built-ins | Product line or fabrication schedule, module sizes, actual reveals/profiles, finish, toe kicks, fillers, hinges/slides, hardware and appliance interfaces |
+| Countertops and work surfaces | Stone/slab products, solid surface, laminate, wood, edges and backsplashes | Product/colour or slab selection, thickness, edge profile, seams, overhangs, supports and sink/appliance cutouts |
+| Flooring | Wood, engineered boards, vinyl, laminate, carpet, tile, stone and stair finishes | Manufacturer/collection/colour, actual unit sizes and thickness, laying direction/pattern, joints/grout, underlay, transitions and installed floor levels |
+| Tile and wet-area finishes | Wall/floor tile, mosaics, stone, niches, curbs and shower assemblies | Product and actual module size, layout, grout width/colour, edge trims, substrate and waterproofing interfaces |
+| Interior trim and millwork | Baseboards, casing, crown, chair/picture rails, panel moulds, stools, aprons and wainscot | Catalogue profile/stock code or measured custom section, actual width/thickness, material, finish, reveals, returns and junctions |
+| Interior walls and ceilings | Board/plaster systems, panelling, acoustic treatments, suspended ceilings, beams and access panels | Material/system identity, layer thicknesses, module/joint layout, finished surfaces, openings and visible edge details |
+| Paint, coatings and wallcoverings | Wall/ceiling/trim paint, stain, sealers, wallpaper and decorative finishes | Manufacturer/product line, colour code, sheen/finish, substrate and pattern/repeat/scale where applicable |
+| Windows and skylights | Fixed/operable windows, combinations, skylights, screens and storm units | Manufacturer/series/configuration, frame versus rough-opening dimensions, handing, frame/sash sections, glazing, grids, finish and sill/flashing interfaces |
+| Doors, frames and hardware | Interior/exterior/patio/garage doors, jambs, thresholds, handles, hinges, locks and closers | Leaf and frame sizes, swing/handing, panel/profile, finish, glass, hardware set, clearances and threshold details |
+| Window treatments and shading | Blinds, shades, shutters, curtain tracks/rods and exterior shading | Product/fabric, mount, size, stack/roll housing, clearance, finish and controls |
+| Stairs, railings and guards | Treads, risers, nosings, stringers, newels, balusters, handrails and guard systems | Product/system or fabrication details, measured geometry, profiles, spacing, connections and finishes |
+| Siding, cladding and masonry | Lap siding, shingles, panels, board-and-batten, brick, stone and stucco systems | Manufacturer/product, actual dimensions, thickness and exposure/module; texture, colour, courses, corners, joints, openings and supporting assembly |
+| Roofing | Shingles, metal, tile/slate, membranes, roof windows and roof accessories | Product/system, colour, pitch suitability, thickness, exposure/panel seams, ridges, valleys, eaves, penetrations and compatible assembly layers |
+| Exterior trim and rainwater goods | Fascia, soffits, frieze, corner boards, gutters, downspouts and flashings | Actual profiles/sizes, material/product, finish, joints, slopes, outlets and interfaces with roof/cladding/openings |
+| Structure and substrates | Foundations, framing, sheathing, subfloors and supports relevant to the design | Documented material/grade/system, dimensions and connection details; observed conditions and proposed assemblies remain distinct |
+| Insulation and envelope layers | Insulation, air/vapour/water barriers, rainscreens, membranes, sealants and waterproofing | Product/material specification, thickness, continuity and compatible interfaces; retain necessary layers in details even when hidden in a render |
+| Heating, cooling and ventilation | Heat pumps, indoor/outdoor units, radiators, fans, grilles/registers, thermostats and exhausts | Product/model, size, finish, mounting, service space, visible ducts/pipes and documented equipment/control compatibility |
+| Water heating and utility equipment | Water heaters, pumps, filters, softeners, meters and utility-room equipment | Equipment/configuration, dimensions, service connections, maintenance access and enclosure/ventilation details |
+| Safety and accessibility products | Smoke/CO alarms, visible fire equipment, access controls, grab/support fittings and accessibility fixtures | Product identity, dimensions, mounting and compatibility with the design; a visual match alone does not establish performance |
+| Furniture and loose equipment | Tables, seating, beds, desks, storage, rugs and freestanding accessories | Manufacturer/model or fabrication specification, dimensions, materials/finish, upholstery and operating/usage clearances |
+| Exterior spaces and site products | Decking, pavers, fences/gates, site lighting, planters, outdoor kitchens and irrigation equipment | Product/material, module/profile, finish, layout, supports, drainage and interfaces with the building and landscape |
+
+Geometric detail should suit the task and view, while preserving the selected
+product's identity, dimensions and important profiles/interfaces. A bulb can
+have a simple mesh and still specify a real compatible lamp. A siding surface
+can use a correctly scaled material and still specify the actual product,
+exposure, corners and wall assembly. Neither needs invented microscopic detail.
+
+## Design brief and product status
+
+Carry the owner's preferences into selection: preferred/excluded brands, price
+tier or allowance, region, style, colours/finishes, performance and compatibility
+requirements, maintenance priorities and any existing products to retain. Apply
+project-wide defaults and explicit room/item exceptions. These are selection
+instructions; a future specification interface can store them without changing
+the principle. Do not invent an owner's brand or budget preference.
+
+Record each item's status as appropriate: **observed and identified**, **observed
+with a proposed product match**, **proposed for new work**, or **genuinely bespoke**.
+Keep an existing discontinued product's identity when known, and identify any
+current replacement separately. Confirm that proposed purchases can be sourced
+in the project's market, with a dated manufacturer/supplier reference; do not
+equate an old model download with current availability.
 
 ## Choose a source
 
@@ -27,6 +104,14 @@ Do not infer that a missing search result proves that a model does not exist.
 | Miele appliance | [Manufacturer CAD and BIM resources](#miele) | Peppermodern, the regional Miele catalogue |
 | Brizo faucet or shower | [Brizo design files](#brizo) | BIMsmith, Peppermodern |
 | Kohler plumbing fixture | [Kohler product and CAD libraries](#kohler) | Peppermodern, BIMobject |
+| Lighting fixture and its light output | [Acuity lighting resources](#acuity-lighting-fixtures) | Manufacturer product page, BIMobject, BIMsmith |
+| Light bulb or dimmer compatibility | [Philips lamp specifications](#philips-light-bulbs-and-lamps), [Lutron](#lutron-controls-and-lamp-compatibility) | Exact fixture/driver/lamp product documents |
+| Outlet, switch or faceplate | [Legrand device and wall-plate resources](#legrand-devices-and-outlet-covers) | Manufacturer series/product page, BIMsmith |
+| Trim or moulding profile | [Metrie regional catalogues](#metrie-trim-and-moulding) | Measured existing profile or documented custom fabrication detail |
+| Window, skylight or exterior door | [Andersen professional resources](#andersen-windows-and-doors) | Manufacturer sizing/installation documents, NBS Source, BIMobject |
+| Siding and exterior trim | [James Hardie architectural resources](#james-hardie-siding-and-exterior-trim) | Manufacturer details, ARCAT, BIMobject |
+| Roofing and roof-system details | [GAF architectural resources](#gaf-roofing) | Manufacturer system documents, ARCAT, NBS Source |
+| Flooring and transitions | [Shaw Contract technical resources](#shaw-contract-flooring) | Selected manufacturer's product/installation data; verify physical module and finish |
 | Other exact appliance or fixture | Manufacturer trade/specification page | [BIMobject](#bimobject), [BIMsmith](#bimsmith), [Archiproducts](#bimarchiproducts), [AEC-DATA](#aec-data) |
 | Australian plumbing or building product | [BIMcontent](#bimcontent), [RubySketch](#rubysketch) | Manufacturer site, NBS Source |
 | MEP equipment | [MEPcontent](#mepcontent), manufacturer site | BIMobject, [TiSoft](#tisoft-equipment-library) |
@@ -35,46 +120,59 @@ Do not infer that a missing search result proves that a model does not exist.
 | Generic lightweight interior object | [Sweet Home 3D](#sweet-home-3d) | CadCraft, appropriately licensed Objaverse assets |
 | IKEA furniture | [IKEA import tools](#ikea-import-tools) | Check availability and permitted use for the individual asset |
 
-## Reuse workflow
+## Product selection and accurate modelling workflow
 
-1. Establish the manufacturer, exact model number, country/market, revision,
-   size, finish, handing and installation configuration. Search the model number
-   both with and without spaces, hyphens and finish suffixes. A product family
-   name alone is insufficient to establish an exact match.
-2. Search the manufacturer's product page and trade portal for **CAD**, **BIM**,
-   **design files**, **technical resources** or **downloads**. Search the relevant
-   aggregators below if that route fails. Check their brand pages and regional
-   filters as well as general web search.
-3. Download a suitable existing model and its specification into the private
-   project folder. Retain original bytes, the source URL, download date, licence,
-   product identity and any conversion report. A public index of links does not
-   make third-party assets suitable for committing to this public repository.
-4. Check units, orientation, origin, bounding dimensions and configuration.
+1. Establish what the evidence shows and what the design brief requires. For an
+   existing space, use photos, measurements and identifying details to find the
+   actual product or a clearly labelled closest purchasable match. For new work,
+   choose a real product/material against the owner's preferences and the space's
+   requirements. The easiest downloadable mesh is not a selection criterion.
+2. Establish the manufacturer, model/stock code or material/fabrication
+   specification, market, revision, size, finish, handing and configuration.
+   Confirm proposed products can be sourced. Search model numbers with and
+   without spaces, hyphens and finish suffixes. Record match confidence and
+   distinguish substitutions from identified existing products.
+3. Obtain the product's specification, profile/section drawings, installation
+   details and material/finish data. Search manufacturer pages for **CAD**,
+   **BIM**, **design files**, **technical resources** or **downloads**, using
+   the catalogue sources below to help. A documented 2D profile or assembly
+   detail may be the right basis for accurate custom geometry.
+4. Use a suitable existing model of the selected product when available and
+   permitted. Otherwise construct it from the real specifications and details.
+   Keep specifications, original assets, source URLs, dates, licences and
+   conversions/build code with the private project. A public source index does
+   not make third-party assets suitable for this public repository.
+5. Check units, orientation, origin, bounding dimensions and configuration.
    Distinguish the physical body, handle projection, adjustable feet, cabinet
    cutout, ventilation space, service space and door swing. Derive installation
-   requirements from the current specification, not the model's bounding box.
-5. Import or convert through the routes in [MODEL-EXCHANGE.md](MODEL-EXCHANGE.md).
+   requirements from the specification, and check the category-specific details
+   in the whole-space checklist. Document any mismatch or inference.
+6. Import or convert existing geometry through [MODEL-EXCHANGE.md](MODEL-EXCHANGE.md).
    Tiksi supports browser mesh imports and local routes for SKP, IFC and other
    CAD formats when the corresponding engines are installed. An RFA listing may
    require its authoring application or an alternative format. If the current
    tool cannot import the file, try a conversion or authoring bridge first.
-6. Prefer a correctly simplified existing model over a newly invented likeness.
-   Preserve the source and record any transformations or simplifications. Do not
-   stretch a product non-uniformly to conceal a mismatch with its specification.
-7. If a custom build is necessary, record the sources searched and the concrete
-   reason each candidate is unsuitable. Identify which dimensions are documented
-   and which details are inferred. Label generic placeholders as generic; do not
-   present a similar product as the specified SKU. Preserve builder code under
+7. Verify custom-built and imported geometry to the same product standard:
+   dimensions, characteristic shape/profile, finish and installation interfaces.
+   Preserve transformations and simplifications. Do not stretch a product to
+   conceal a specification mismatch. Keep visual materials at the actual scale
+   and pattern of the selected flooring, siding, roofing or other finish.
+8. Keep product identity and the specification record attached to the model or
+   schedule, including for a simple representation. Label temporary generic
+   placeholders explicitly. For bespoke work, retain dimensions, materials,
+   joinery/assembly and fabrication details. Preserve custom builder code under
    the SketchUp archive rule in [AGENTS.md](AGENTS.md).
 
-### Record for each reused asset
+### Record for each product, material or assembly
 
 Keep this with the private project, not in the public source index:
 
 | Field | Record |
 | --- | --- |
 | Identity | Manufacturer, model/SKU, market, finish, handing and configuration |
+| Selection | Observed/identified, proposed match, new proposal or bespoke; relevant owner preferences and match confidence |
 | Source | Product page, asset download URL, retrieval date and asset revision |
+| Procurement | Manufacturer/supplier reference, region, availability check date and price/allowance when relevant |
 | Rights | Licence/terms URL, attribution and any redistribution restrictions |
 | Geometry | Original format, units, dimensions checked, origin and orientation |
 | Installation | Specification revision, cutout, clearances and connection references |
@@ -82,6 +180,103 @@ Keep this with the private project, not in the public source index:
 | Confidence | Verified dimensions, unresolved discrepancies and inferred details |
 
 ## Manufacturer libraries
+
+### Acuity lighting fixtures
+
+- **Access:** [BIM models](https://www.acuitybrands.com/resources/technical-resources/bim-downloads),
+  [BIM and IES downloads by brand](https://www.acuitybrands.com/resources/technical-resources/bim-ies-downloads-by-brand).
+- **Resources:** Revit models by brand and on selected product pages, plus IES
+  photometric files. Match the actual fixture, housing/trim and output option.
+- **Use:** Source both visible fixture geometry and light-distribution evidence.
+  A model does not establish lamp/driver/dimmer compatibility or current supply;
+  check the selected product documentation. IES data is not a substitute for
+  product geometry or a claim that Tiksi supports photometric simulation.
+
+### Philips light bulbs and lamps
+
+- **Access:** [Bulb catalogue](https://www.usa.lighting.philips.com/consumer/choose-a-bulb),
+  [example product specification](https://www.usa.lighting.philips.com/consumer/p/led-bulb/046677586867/specifications).
+- **Resources:** Product identifiers and lamp specifications such as base,
+  dimmability, lumens, colour temperature, beam angle and colour rendering.
+- **Use:** Specify the actual compatible lamp even when no 3D file is available.
+  Use its dimension drawing for geometry and distinguish actual electrical
+  wattage from an incandescent-equivalent marketing label. Recheck the precise
+  lamp and regional variant before selecting it.
+
+### Legrand devices and outlet covers
+
+- **Access:** [Wall plates](https://www.legrand.us/wiring-devices/wall-plates),
+  [CAD resource directory](https://www.legrand.us/resources/cad-drawings).
+- **Resources:** Real plate families with materials, opening configurations and
+  gang sizes; CAD resources can be filtered by product category. Availability
+  of a particular plate/device model must be checked individually.
+- **Use:** Select a matching device and plate combination, including exact
+  series, finish, openings and size. When drawing from specifications, reproduce
+  the actual faceplate profile and device placement rather than a generic cover.
+
+### Lutron controls and lamp compatibility
+
+- **Access:** [Dimmers and switches](https://www.lutron.com/us/en/controls/dimmers-switches),
+  [LED compatibility tool](https://webtools.lutron.com/compatibility/us/en/dimmers).
+- **Resources:** Model-specific control selection and tested lamp/dimmer
+  compatibility information.
+- **Use:** Carry the selected switch/dimmer identity and its compatible lighting
+  configuration into the design. Similar appearance or a generic dimmable label
+  does not establish a tested combination.
+
+### Metrie trim and moulding
+
+- **Access:** [Regional catalogues](https://www.metrie.com/resources/catalogs),
+  [product range](https://www.metrie.com/products).
+- **Resources:** Real moulding/trim families, regional profiles and stock choices.
+  These are specification/profile sources; no universal 3D download coverage
+  was established in this inspection.
+- **Use:** Select the actual profile/stock code, material, dimensions and finish.
+  If no model exists, draw the documented section and construct its real joins,
+  returns and reveals. Verify actual dimensions where a catalogue gives nominal
+  sizes, and confirm regional supply. Preserve genuinely bespoke profiles as
+  measured/fabrication details rather than inventing a retail SKU.
+
+### Andersen windows and doors
+
+- **Access:** [Professional resources](https://www.andersenwindows.com/for-professionals),
+  [architect resources](https://www.andersenwindows.com/for-professionals/architect).
+- **Resources:** CAD/BIM/CSI tools, sizing and rough-opening documents, product
+  guides, specifications and installation resources.
+- **Use:** Select the series and actual configuration. Check frame dimensions,
+  rough opening, handing, sash/frame profiles, glazing/grids, finish and joining
+  or sill details. A rectangular opening is only a simple representation until
+  those product choices have been established.
+
+### James Hardie siding and exterior trim
+
+- **Access:** [Architectural resources](https://www.jameshardie.com/architect-design-resources/),
+  [manufacturer's ARCAT BIM catalogue](https://www.arcat.com/company/james-hardie-building-products-inc-33418/bim).
+- **Resources:** Product information, CAD/Revit details, specifications and
+  installation guides. The ARCAT catalogue lists siding, soffit and trim systems.
+- **Use:** Select the real product, dimensions, exposure, finish and corner/joint
+  treatment; coordinate its supporting wall assembly. Match render texture scale
+  to that selection. A 3D surface alone does not establish the installed assembly.
+
+### GAF roofing
+
+- **Access:** [Architect/design resources](https://www.gaf.com/en-us/for-pros/architect-design-resources),
+  [interactive roofing details](https://www.gaf.com/en-us/resources/interactive-details).
+- **Resources:** Roof-system specifications, architectural details and editable
+  detail documents; the architect page identifies 2D/3D DWG resources.
+- **Use:** Specify the actual roof product/system and its layers, edge and
+  penetration details. Check the selected system's pitch, substrate and assembly
+  requirements; a shingle or membrane texture is only its visible representation.
+
+### Shaw Contract flooring
+
+- **Access:** [Technical resource centre](https://www.shawcontract.com/en-us/technical/technical-resource-page).
+- **Resources:** Flooring, transition and installation details, with technical
+  drawings and application guidance. Individual collection, colour and size
+  selection still requires the actual product page/documents.
+- **Use:** Keep product identity, physical module/thickness, pattern, seams,
+  transitions and substrate/installation information together. Verify rendering
+  scale and installed floor levels against the selected product and assembly.
 
 ### Sub-Zero, Wolf and Cove
 

@@ -393,9 +393,12 @@ Public instructions live in `AGENTS.md` and `AGENTS.local.example.md`; the
 owner's `AGENTS.local.md` is seeded once and never overwritten by template
 updates. `python3 scripts/agents-local.py diff` supports deliberate review.
 
-Before modelling manufactured products, consult
-[Product model sources](PRODUCT-MODEL-SOURCES.md) for manufacturer downloads,
-BIM catalogues, open datasets and the workflow for reusing exact product models.
+Tiksi designs real spaces with identifiable products, materials and buildable
+assemblies. [Product model sources](PRODUCT-MODEL-SOURCES.md) provides a
+whole-space checklist and manufacturer/specification sources: identify observed
+products or label the closest purchasable match, select new products against the
+owner's preferences, and represent them accurately using existing geometry or
+custom builds grounded in real specifications and details.
 
 ### SketchUp cloud builds
 
