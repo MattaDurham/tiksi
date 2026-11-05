@@ -1063,6 +1063,10 @@ function ndcFromEvent(e) {
 }
 function pick(e, opts) {
   opts = opts || {};
+  // Objects added since the last drawn frame (a note just pinned, a moved pin) have no world
+  // position until the renderer updates it; on a slow GPU the next click can come first.
+  scene.updateMatrixWorld();
+  camera.updateMatrixWorld();
   raycaster.setFromCamera(ndcFromEvent(e), camera);
   const targets = [];
   if (modelGroup) targets.push(modelGroup);
