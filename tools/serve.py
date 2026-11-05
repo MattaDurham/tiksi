@@ -109,8 +109,14 @@ class AppHandler(SimpleHTTPRequestHandler):
     def list_directory(self, path):
         self.send_error(404); return None
 
+    def send_header(self, keyword, value):
+        if keyword.lower() == 'cache-control': self.cache_policy_sent = True
+        super().send_header(keyword, value)
+
     def end_headers(self):
-        self.send_header('Cache-Control', 'no-cache')
+        # Revalidate by default; a response that sets its own policy (stored pictures) keeps it.
+        if not getattr(self, 'cache_policy_sent', False): self.send_header('Cache-Control', 'no-cache')
+        self.cache_policy_sent = False
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Referrer-Policy', 'same-origin')
         super().end_headers()

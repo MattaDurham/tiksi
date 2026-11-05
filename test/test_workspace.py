@@ -220,3 +220,118 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(self.service.active_jobs(), 0)
         handler.client_address = ('192.168.1.2', 1234)
         self.service.dispatch(handler); self.assertEqual(handler.status, 403)
+
+
+def picture(payload, mime='image/png'):
+    """A stored picture's reference, as js/picture-assets.js writes it."""
+    import hashlib
+    return 'tiksi-picture:' + mime + ':pic-' + hashlib.sha256(payload).hexdigest()
+
+
+class PictureFileTests(unittest.TestCase):
+    """Pictures saved as files: references in the records, the bytes beside the originals."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.service = WorkspaceService(self.root / 'runtime', self.root / 'projects')
+
+    def tearDown(self): self.temp.cleanup()
+
+    def commit(self, data, revision=None, slices=None, **extra):
+        revision = self.service.snapshot()['revision'] if revision is None else revision
+        slices = slices if slices is not None else {p['id']: {**data, 'properties': [p]} for p in data['properties']}
+        # As over HTTP: the server gets its own copy, never the test's live objects.
+        return self.service.commit(json.loads(json.dumps({'revision': revision, 'data': data, 'assets': {}, 'projectData': slices, 'pictureFiles': True, **extra})))
+
+    def store(self, payload):
+        self.service.store_blob(io.BytesIO(payload))
+        return picture(payload)
+
+    def test_pictures_travel_in_the_project_bundle_and_return_after_losing_the_transport_cache(self):
+        thumb, plan = b'\x89PNG synthetic thumbnail ' * 40, b'\x89PNG synthetic floor plan ' * 4000
+        data = workspace(); prop = data['properties'][0]
+        prop['photos'] = [{'id': 'ph-a', 'thumb': self.store(thumb)}]
+        prop['levels'] = [{'id': 'lvl-0', 'plan': {'img': self.store(plan), 'imgW': 10, 'imgH': 10}}]
+        self.commit(data)
+        saved = self.service.snapshot()
+        self.assertEqual({a['kind'] for a in saved['assets'].values()}, {'picture'}, 'the server lists every referenced picture')
+        with zipfile.ZipFile(self.service.paths['prop-a']) as archive:
+            files = {item['id']: archive.read(item['path']) for item in json.loads(archive.read('manifest.json'))['files']}
+            self.assertEqual(json.loads(archive.read('workspace.json'))['properties'], data['properties'])
+        self.assertEqual(sorted(files.values()), sorted([thumb, plan]), 'the project file holds both pictures byte for byte')
+        import shutil
+        shutil.rmtree(self.root / 'runtime')
+        restored = WorkspaceService(self.root / 'runtime', self.root / 'projects')
+        for identifier, payload in (('pic-' + prop['photos'][0]['thumb'][-64:], thumb), ('pic-' + prop['levels'][0]['plan']['img'][-64:], plan)):
+            self.assertEqual((restored.root / 'blobs' / identifier[4:]).read_bytes(), payload)
+        self.assertEqual(restored.snapshot()['data']['properties'], data['properties'])
+
+    def test_a_reference_without_its_file_is_refused(self):
+        data = workspace(); data['properties'][0]['photos'] = [{'id': 'ph-a', 'thumb': picture(b'never uploaded')}]
+        with self.assertRaises(WorkspaceError) as caught: self.commit(data)
+        self.assertIn('picture', str(caught.exception))
+        self.assertEqual(self.service.snapshot()['revision'], 0)
+
+    def test_an_older_tab_cannot_save_over_picture_references(self):
+        data = workspace(); data['properties'][0]['photos'] = [{'id': 'ph-a', 'thumb': self.store(b'synthetic picture' * 80)}]
+        self.commit(data)
+        blank = workspace(); blank['properties'][0]['photos'] = [{'id': 'ph-a', 'thumb': ''}]
+        revision = self.service.snapshot()['revision']
+        with self.assertRaises(WorkspaceError) as caught:
+            self.service.commit({'revision': revision, 'data': blank, 'assets': {}, 'projectData': {'prop-a': blank}})
+        self.assertEqual(caught.exception.status, 426)
+        self.assertEqual(self.service.snapshot()['data']['properties'][0]['photos'][0]['thumb'], data['properties'][0]['photos'][0]['thumb'])
+        # Before any picture is a file, an older tab still saves as it always did.
+        fresh = WorkspaceService(self.root / 'other', self.root / 'other-projects')
+        inline = workspace(); inline['properties'][0]['photos'] = [{'id': 'ph-a', 'thumb': 'data:image/png;base64,' + 'A' * 2000}]
+        self.assertEqual(fresh.commit({'revision': 0, 'data': inline, 'assets': {}, 'projectData': {'prop-a': inline}}), 1)
+
+    def test_unchanged_project_files_are_named_not_sent(self):
+        data = workspace(); data['properties'].append({'id': 'prop-b', 'name': 'B', 'scans': [], 'photos': []})
+        self.commit(data)
+        files = {i: Path(p).stat().st_mtime_ns for i, p in self.service.paths.items()}
+        data['properties'][1]['name'] = 'B revised'
+        b = data['properties'][1]
+        self.commit(data, slices={'prop-b': {**data, 'properties': [b]}}, unchangedProjects=['prop-a'])
+        self.assertEqual(Path(self.service.paths['prop-a']).stat().st_mtime_ns, files['prop-a'], 'the unchanged project file is not rewritten')
+        with zipfile.ZipFile(self.service.paths['prop-b']) as archive:
+            self.assertEqual(json.loads(archive.read('workspace.json'))['properties'][0]['name'], 'B revised')
+        # A project named as unchanged that differs from the held file is sent again.
+        data['properties'][0]['name'] = 'A changed without its file'
+        with self.assertRaises(WorkspaceError) as caught:
+            self.commit(data, slices={'prop-b': {**data, 'properties': [b]}}, unchangedProjects=['prop-a'])
+        self.assertEqual((caught.exception.status, caught.exception.code), (409, 'resend-projects'))
+        # Every project must still be either sent or named.
+        with self.assertRaises(WorkspaceError): self.commit(data, slices={'prop-b': {**data, 'properties': [b]}})
+        with self.assertRaises(WorkspaceError): self.commit(data, slices={'prop-a': {**data, 'properties': [data['properties'][0]]}, 'prop-b': {**data, 'properties': [b]}}, unchangedProjects=['prop-a'])
+
+    def handler(self, path, command='GET', body=b'', headers=None):
+        service = self.service
+        class Handler:
+            client_address = ('127.0.0.1', 1234); connection = Mock()
+            def __init__(self):
+                self.path, self.command = path, command
+                self.headers = {'Host': 'localhost:8888', 'X-Tiksi-Workspace': '1', 'X-Tiksi-Token': service.token, 'Content-Length': str(len(body)), **(headers or {})}
+                self.rfile, self.wfile, self.sent = io.BytesIO(body), io.BytesIO(), {}
+            def send_response(self, status): self.status = status
+            def send_header(self, key, value): self.sent[key] = value
+            def end_headers(self): pass
+        h = Handler(); service.dispatch(h)
+        return h
+
+    def test_http_save_answers_with_paths_and_pictures_are_cached_by_the_browser(self):
+        payload = b'synthetic picture bytes' * 100
+        data = workspace(); data['properties'][0]['photos'] = [{'id': 'ph-a', 'thumb': self.store(payload)}]
+        caps = json.loads(self.handler('/api/workspace/capabilities').wfile.getvalue())
+        self.assertIn('picture-files', caps['features'])
+        body = json.dumps({'revision': 0, 'data': data, 'assets': {}, 'projectData': {'prop-a': data}, 'pictureFiles': True}).encode()
+        saved = self.handler('/api/workspace', 'PUT', body)
+        reply = json.loads(saved.wfile.getvalue())
+        self.assertEqual(saved.status, 200, reply)
+        self.assertEqual(reply['paths'], self.service.paths, 'a save answers with the project paths, so no second read is needed')
+        digest = data['properties'][0]['photos'][0]['thumb'][-64:]
+        first = self.handler('/api/workspace/blobs/' + digest)
+        self.assertEqual((first.status, first.wfile.getvalue()), (200, payload))
+        self.assertIn('immutable', first.sent['Cache-Control'])
+        again = self.handler('/api/workspace/blobs/' + digest, headers={'If-None-Match': first.sent['ETag']})
+        self.assertEqual((again.status, again.wfile.getvalue()), (304, b''))
