@@ -42,8 +42,8 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   const needsMigration = hadLocal || rawLegacy !== null || hasLegacyDatabase;
   let applying = false, pending = false, running = null, timer, base, revision = 0, paths = {}, assets = {}, migration = needsMigration, cleanupNotice = false, edits = 0;
   const changedFiles = new Set(), inFlightFiles = new Map();
-  // What a newer server can do: keep pictures as files, take only the project files that
-  // changed, and answer a save with the project paths.
+  // What a newer server can do: keep pictures as files, take only the project files and
+  // property records that changed, and answer a save with the project paths.
   const features = new Set(Array.isArray(cap.features) ? cap.features : []);
   // The project files last acknowledged, as sent: { revision, json: { id: text } }.
   let savedSlices = { revision: -1, json: {} };
@@ -208,7 +208,15 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       const json = sliceJson[id] = JSON.stringify(slice);
       if (partial && savedSlices.json[id] === json) unchanged.push(id); else sent.push(JSON.stringify(id) + ':' + json);
     }
-    const body = '{"revision":' + JSON.stringify(remoteRevision) + ',"data":' + JSON.stringify(accepted.data) + ',"assets":' + JSON.stringify(accepted.assets) +
+    // Likewise a property record equal to the one on disk at that revision is named only.
+    const onDisk = remote ? remote.data : base?.data;
+    let dataJson = null, order = '';
+    if (features.has('partial-properties') && Array.isArray(onDisk?.properties)) {
+      const held = new Map(onDisk.properties.map(p => [p.id, p]));
+      dataJson = JSON.stringify({ ...accepted.data, properties: accepted.data.properties.filter(p => !held.has(p.id) || !sameJson(p, held.get(p.id))) });
+      order = ',"propertyOrder":' + JSON.stringify(accepted.data.properties.map(p => p.id));
+    }
+    const body = '{"revision":' + JSON.stringify(remoteRevision) + ',"data":' + (dataJson ?? JSON.stringify(accepted.data)) + order + ',"assets":' + JSON.stringify(accepted.assets) +
       ',"projectData":{' + sent.join(',') + '}' + (features.has('partial-projects') ? ',"unchangedProjects":' + JSON.stringify(unchanged) : '') +
       (pictures ? ',"pictureFiles":true' : '') + (migrationPack ? ',"migration":' + JSON.stringify(migrationPack) : '') + '}';
     let reply;

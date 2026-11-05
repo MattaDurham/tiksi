@@ -24,7 +24,7 @@ HASH = re.compile(r'^[a-f0-9]{64}$')
 PICTURE_PREFIX = 'tiksi-picture:'
 PICTURE_REF = re.compile(r'^tiksi-picture:([a-z0-9.+-]+/[a-z0-9.+-]+):pic-([a-f0-9]{64})$')
 # What this server does beyond the original protocol; clients use only what is listed.
-FEATURES = ('picture-files', 'partial-projects', 'commit-paths')
+FEATURES = ('picture-files', 'partial-projects', 'partial-properties', 'commit-paths')
 
 
 def picture_refs(value):
@@ -226,16 +226,16 @@ class WorkspaceService:
             self.refresh()
             return {k: json.loads(json.dumps(self.state.get(k))) for k in ('revision', 'data', 'assets', 'paths')}
 
-    def commit(self, request):
-        if not isinstance(request, dict) or type(request.get('revision')) is not int:
-            raise WorkspaceError('A base revision is required')
-        data, assets = request.get('data'), request.get('assets')
+    @staticmethod
+    def check_records(data):
         if not isinstance(data, dict) or not all(isinstance(data.get(k), list) for k in ('properties', 'projects', 'materials', 'products')) or not isinstance(data.get('settings'), dict):
             raise WorkspaceError('Invalid workspace')
         for key in ('properties', 'projects', 'materials', 'products'):
             records = data[key]
             if any(not isinstance(p, dict) or not isinstance(p.get('id'), str) or not 0 < len(p['id']) <= 160 for p in records) or len({p['id'] for p in records}) != len(records):
                 raise WorkspaceError('Workspace records need unique valid identities')
+
+    def check_assets(self, data, assets):
         if not isinstance(assets, dict) or len(assets) > 100000:
             raise WorkspaceError('Invalid asset manifest')
         pictures = self.picture_assets(data, assets)
@@ -246,10 +246,35 @@ class WorkspaceService:
             path = self.root / 'blobs' / asset['hash']
             if not path.is_file() or asset.get('size') != path.stat().st_size:
                 raise WorkspaceError('Upload every referenced asset before saving')
+        return pictures, assets
+
+    @staticmethod
+    def resend(message):
+        error = WorkspaceError(message + '; sending them again', 409)
+        error.code = 'resend-projects'
+        return error
+
+    def commit(self, request):
+        if not isinstance(request, dict) or type(request.get('revision')) is not int:
+            raise WorkspaceError('A base revision is required')
+        data, assets = request.get('data'), request.get('assets')
+        self.check_records(data)
+        order = request.get('propertyOrder')
+        if order is not None and (not isinstance(order, list) or not all(isinstance(i, str) for i in order) or len(set(order)) != len(order) or not {p['id'] for p in data['properties']} <= set(order)):
+            raise WorkspaceError('Invalid property order')
         with self.lock:
             self.refresh()
             if request['revision'] != self.state['revision']:
                 raise WorkspaceError('Workspace changed on another device', 409)
+            if order is not None:
+                # Properties the client did not change since this revision are named, not
+                # sent: the revision check above makes the held record exactly the client's.
+                held = {p['id']: p for p in (self.state.get('data') or {}).get('properties', [])}
+                sent = {p['id']: p for p in data['properties']}
+                if any(i not in sent and i not in held for i in order): raise self.resend('Projects changed on disk')
+                data = {**data, 'properties': [sent.get(i) or held[i] for i in order]}
+                self.check_records(data)
+            pictures, assets = self.check_assets(data, assets)
             # A tab running an older Tiksi would read picture references as broken images
             # and save them blank. It must reload before it can write.
             if (pictures or self.has_pictures) and request.get('pictureFiles') is not True:
@@ -271,9 +296,7 @@ class WorkspaceService:
             for identifier in unchanged:
                 held = self.parts.get(identifier)
                 if not isinstance(held, dict) or held.get('properties') != [by_id[identifier]]:
-                    error = WorkspaceError('Project files changed on disk; sending them again', 409)
-                    error.code = 'resend-projects'
-                    raise error
+                    raise self.resend('Project files changed on disk')
             slices = {**{i: self.parts[i] for i in unchanged}, **slices}
             migration = request.get('migration')
             if migration:

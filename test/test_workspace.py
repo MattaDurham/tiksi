@@ -335,3 +335,20 @@ class PictureFileTests(unittest.TestCase):
         self.assertIn('immutable', first.sent['Cache-Control'])
         again = self.handler('/api/workspace/blobs/' + digest, headers={'If-None-Match': first.sent['ETag']})
         self.assertEqual((again.status, again.wfile.getvalue()), (304, b''))
+
+    def test_unchanged_property_records_are_named_not_sent(self):
+        data = workspace(); data['properties'].append({'id': 'prop-b', 'name': 'B', 'scans': [], 'photos': [{'id': 'ph-b', 'thumb': self.store(b'synthetic picture' * 90)}]})
+        self.commit(data)
+        a, b = data['properties']
+        changed = {**data, 'properties': [{**a, 'name': 'A revised'}]}
+        self.commit(changed, slices={'prop-a': {**data, 'properties': [changed['properties'][0]]}}, unchangedProjects=['prop-b'], propertyOrder=['prop-a', 'prop-b'])
+        saved = self.service.snapshot()['data']['properties']
+        self.assertEqual(saved, [{**a, 'name': 'A revised'}, b], 'the named property is kept exactly, in order')
+        self.assertIn('pic-' + b['photos'][0]['thumb'][-64:], self.service.snapshot()['assets'], 'its pictures stay listed')
+        # A name the server does not hold is sent again, and nothing is written.
+        revision = self.service.snapshot()['revision']
+        with self.assertRaises(WorkspaceError) as caught:
+            self.commit({**data, 'properties': []}, slices={}, unchangedProjects=['prop-a', 'prop-b', 'prop-c'], propertyOrder=['prop-a', 'prop-b', 'prop-c'])
+        self.assertEqual(caught.exception.code, 'resend-projects')
+        self.assertEqual(self.service.snapshot()['revision'], revision)
+        with self.assertRaises(WorkspaceError): self.commit(changed, propertyOrder=['prop-b'])

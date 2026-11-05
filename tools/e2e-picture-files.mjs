@@ -121,10 +121,13 @@ try {
   assert(!puts[0].body.includes('data:image'), 'no picture bytes in the save');
   assert.deepEqual(Object.keys(body.projectData), ['prop-b']);
   assert.deepEqual(body.unchangedProjects, ['prop-a']);
+  assert.deepEqual(body.data.properties.map(p => p.id), ['prop-b'], 'the unchanged property record is named, not sent');
+  assert.deepEqual(body.propertyOrder, ['prop-a', 'prop-b']);
   assert(puts[0].body.length < pictureChars / 10, 'the save is a fraction of the pictures (' + puts[0].body.length + ' characters)');
   assert.equal(requests.filter(r => r.method === 'GET' && r.path === '/api/workspace').length, 0, 'no full read before or after the save');
   assert.equal(requests.filter(r => r.path.startsWith('/api/workspace/blobs')).length, 0, 'no picture is uploaded again');
-  assert.equal((await catalog()).data.properties[1].notes, 'Edited after migration');
+  assert.deepEqual((await catalog()).data.properties.map(p => [p.id, p.notes]), [['prop-a', ''], ['prop-b', 'Edited after migration']], 'the server keeps the named property as it was');
+  assert.equal(JSON.stringify((await catalog()).data.properties[0]), JSON.stringify(migrated.data.properties[0]));
 
   // A new picture is stored as a file before the save that first references it.
   const added = png(50, 40);
