@@ -3,6 +3,15 @@
 This repository is public. Project files, photos, scans, databases, credentials,
 and machine configuration are private and never belong in git.
 
+Before drawing or generating a product, appliance, furniture item or fixture,
+read [PRODUCT-MODEL-SOURCES.md](PRODUCT-MODEL-SOURCES.md). Search its manufacturer
+and library sources for the exact brand/model first, then import or convert a
+suitable existing model instead of rebuilding it by hand. Verify identity,
+dimensions, configuration and permitted use against the manufacturer's current
+specification. Build custom geometry only after recording why available models
+are missing or unsuitable; label approximations and preserve their build code.
+Keep downloaded models, specifications and project sourcing notes private.
+
 Before changing code, read `AGENTS.local.md`. If it is missing, seed a private
 copy from `AGENTS.local.example.md` with `python3 scripts/agents-local.py seed`.
 Instructions live in these AGENTS files; do not add model-specific rule files.

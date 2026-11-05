@@ -393,6 +393,10 @@ Public instructions live in `AGENTS.md` and `AGENTS.local.example.md`; the
 owner's `AGENTS.local.md` is seeded once and never overwritten by template
 updates. `python3 scripts/agents-local.py diff` supports deliberate review.
 
+Before modelling manufactured products, consult
+[Product model sources](PRODUCT-MODEL-SOURCES.md) for manufacturer downloads,
+BIM catalogues, open datasets and the workflow for reusing exact product models.
+
 ### SketchUp cloud builds
 
 Agents design rooms with the SketchUp cloud MCP, which builds a model only by
