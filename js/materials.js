@@ -2,13 +2,17 @@
 // data and user models can reference them. The 13 original builtin ids are sacred.
 //
 // Record: { id, name, kind: 'wall'|'floor'|'ceiling'|'trim'|'any', color, pattern, tile: [w, h] (m),
-//           roughness, metalness, normalScale, accent|null, photoId|null, custom, propertyIds? }
+//           roughness, metalness, normalScale, accent|null, photoId|null, custom, propertyIds?,
+//           category, type, product|null, colorName, colorCode, colorBrand, coverage|null }
+// `kind` is where it is used and `pattern` how it renders; `category`, `type`, `product` and the
+// colour fields say what the real thing is (material-identity.js documents them).
 // `propertyIds` (custom only) names the properties whose project files keep the material even
 // while nothing uses it: the file it was opened with, or the property open when it was made.
 // `color` is always present: the 2D plan and cut sheets use it; the 3D textures bake it as the tint.
 
 import { ws, uid, touch, escapeHtml, fmtLen, activeProperty } from './store.js';
 import { swatchUrl } from './textures.js';
+import { CATEGORIES, normalizeIdentity, patternForCategory, identityLine, colourLine } from './material-identity.js';
 
 export const KINDS = ['wall', 'floor', 'ceiling', 'trim', 'any'];
 export const PATTERNS = ['flat', 'drywall', 'plaster', 'brick', 'cmu', 'stone', 'wood', 'tile', 'concrete', 'carpet', 'siding', 'board', 'marble', 'metal', 'glass', 'photo'];
@@ -97,6 +101,32 @@ export const BUILTIN_MATERIALS = [
   M('mat-clapboard', 'Painted clapboard',        'wall',  '#d8d1bf', 'siding',   [2.4, 0.5],    0.6,  0, 0.9),
 ];
 
+// What each built-in is in the real world: [category, type]. Colours and products stay empty:
+// a built-in is a generic finish until someone names the actual paint or product.
+const BUILTIN_IDENTITY = {
+  'mat-drywall': ['paint', 'Latex paint on gypsum board'], 'mat-plaster': ['plaster', 'Lime plaster'], 'mat-brick': ['brick', 'Red clay brick'],
+  'mat-cmu': ['concrete', 'Concrete block (CMU)'], 'mat-cedar': ['wood', 'Western red cedar lap siding'], 'mat-fiber': ['concrete', 'Fiber cement lap siding'],
+  'mat-tile-w': ['tile', 'Ceramic subway tile, 3x6, gloss'], 'mat-oak': ['wood', 'White oak'], 'mat-walnut': ['wood', 'Black walnut'],
+  'mat-tile-f': ['tile', 'Porcelain tile, 12x24'], 'mat-concrete': ['concrete', 'Poured concrete, broom finish'], 'mat-carpet': ['fabric', 'Loop pile carpet'],
+  'mat-lvp': ['vinyl', 'Luxury vinyl plank'], 'mat-ceiling': ['paint', 'Flat ceiling paint on gypsum board'], 'mat-shiplap': ['wood', 'Painted pine shiplap'],
+  'mat-trim': ['paint', 'Semi-gloss enamel on wood trim'], 'mat-trim-oak': ['wood', 'Clear-finished oak trim'],
+  'mat-paint-white': ['paint', 'Latex paint, eggshell'], 'mat-paint-greige': ['paint', 'Latex paint, eggshell'], 'mat-paint-sage': ['paint', 'Latex paint, eggshell'],
+  'mat-paint-navy': ['paint', 'Latex paint, eggshell'], 'mat-paint-charcoal': ['paint', 'Latex paint, eggshell'], 'mat-paint-terra': ['paint', 'Latex paint, eggshell'],
+  'mat-brick-white': ['brick', 'Whitewashed clay brick'], 'mat-fieldstone': ['stone', 'Fieldstone'], 'mat-limestone': ['stone', 'Limestone ashlar'],
+  'mat-maple': ['wood', 'Hard maple'], 'mat-hickory': ['wood', 'Hickory'], 'mat-pine': ['wood', 'Heart pine, wide plank'], 'mat-barn': ['wood', 'Reclaimed barn wood'],
+  'mat-hex': ['tile', 'Porcelain hex mosaic'], 'mat-zellige': ['tile', 'Zellige'], 'mat-terrazzo': ['stone', 'Terrazzo'], 'mat-slate': ['stone', 'Slate tile'],
+  'mat-concrete-pol': ['concrete', 'Polished concrete'], 'mat-carpet-wool': ['fabric', 'Wool carpet'], 'mat-marble': ['stone', 'Carrara marble'],
+  'mat-quartz': ['stone', 'Engineered quartz'], 'mat-stainless': ['metal', 'Stainless steel, brushed'], 'mat-steel-black': ['metal', 'Blackened steel'],
+  'mat-roof-seam': ['metal', 'Standing-seam steel roofing'], 'mat-glass': ['glass', 'Clear float glass'], 'mat-batten': ['wood', 'Painted board and batten'],
+  'mat-clapboard': ['wood', 'Painted wood clapboard'],
+};
+for (const m of BUILTIN_MATERIALS) {
+  const [category, type] = BUILTIN_IDENTITY[m.id] || ['other', ''];
+  Object.assign(m, { category, type, product: null, colorName: '', colorCode: '', colorBrand: '', coverage: null });
+}
+// Paints cover about 37 m2 (400 sf) per US gallon per coat, the figure on most can labels; two coats.
+for (const m of BUILTIN_MATERIALS) if (m.category === 'paint') m.coverage = { areaM2: 37.16, unit: 'gal', coats: 2 };
+
 const BUILTIN_BY_ID = new Map(BUILTIN_MATERIALS.map(m => [m.id, m]));
 export function builtinById(id) { return BUILTIN_BY_ID.get(id) || null; }
 
@@ -132,7 +162,8 @@ export function normalizeMaterial(m) {
   if (!m || typeof m !== 'object') return m;
   if (!KINDS.includes(m.kind)) m.kind = 'any';
   if (!isHex(m.color)) m.color = '#c9c2b6';
-  if (!PATTERNS.includes(m.pattern)) m.pattern = inferPattern(m.name, m.kind);
+  // The render texture: its own, else what its real-world category looks like, else its name's.
+  if (!PATTERNS.includes(m.pattern)) m.pattern = CATEGORIES.includes(m.category) ? patternForCategory(m.category) : inferPattern(m.name, m.kind);
   const d = PATTERN_DEFAULTS[m.pattern];
   if (!Array.isArray(m.tile) || m.tile.length !== 2 || !(numOr(m.tile[0], 0) > 0) || !(numOr(m.tile[1], 0) > 0)) m.tile = d.tile.slice();
   else m.tile = [+m.tile[0], +m.tile[1]];
@@ -143,6 +174,7 @@ export function normalizeMaterial(m) {
   if (typeof m.photoId !== 'string' || !m.photoId) m.photoId = null;
   if (m.custom !== true) m.custom = !BUILTIN_BY_ID.has(m.id);
   if (typeof m.name !== 'string' || !m.name.trim()) m.name = 'Material';
+  normalizeIdentity(m);
   return m;
 }
 
@@ -183,6 +215,9 @@ export function ensureBuiltinMaterials() {
       const color = isHex(m.color) ? m.color : b.color;
       Object.assign(m, clone(b), { color });
     }
+    // A built-in saved before records said what they are takes the built-in's category and type
+    // (its id, name and look are untouched; nothing it already says is replaced).
+    if (b && !CATEGORIES.includes(m.category)) { m.category = b.category; if (!m.type) m.type = b.type; if (m.coverage === undefined) m.coverage = clone(b).coverage; }
     normalizeMaterial(m);
   }
   const have = new Set(list.map(m => m.id));
@@ -292,10 +327,14 @@ function optionLabel(m, kind) {
   const off = kind && m.kind !== kind && m.kind !== 'any';
   return escapeHtml(m.name) + (off ? ' (' + escapeHtml(m.kind) + ')' : '');
 }
+// What the material is, for a hover title: "Wood · White oak · Benjamin Moore White Dove OC-17".
+export function materialTitle(m) {
+  return [m.name, identityLine(m), colourLine(m)].filter(Boolean).join(' · ');
+}
 
 export function materialSelectHtml(kind, selectedId, attrs) {
   const opts = pickerList(kind, selectedId).map(m =>
-    `<option value="${escapeHtml(m.id)}" ${m.id === selectedId ? 'selected' : ''}>${optionLabel(m, kind)}</option>`
+    `<option value="${escapeHtml(m.id)}" title="${escapeHtml(materialTitle(m))}" ${m.id === selectedId ? 'selected' : ''}>${optionLabel(m, kind)}</option>`
   ).join('');
   return `<select ${attrs || ''}><option value="">(none)</option>${opts}</select>`;
 }
@@ -304,7 +343,7 @@ export function materialSelectHtml(kind, selectedId, attrs) {
 // control updates the other; swatches render lazily (flat colour first, lit chip when ready).
 export function materialPickerHtml(kind, selectedId, attrs) {
   const chips = pickerList(kind, selectedId).map(m =>
-    `<button type="button" class="mat-pick ${m.id === selectedId ? 'active' : ''}" data-mat-pick="${escapeHtml(m.id)}" title="${escapeHtml(m.name)}" style="background:${escapeHtml(m.color)}"><img alt="" hidden></button>`
+    `<button type="button" class="mat-pick ${m.id === selectedId ? 'active' : ''}" data-mat-pick="${escapeHtml(m.id)}" title="${escapeHtml(materialTitle(m))}" style="background:${escapeHtml(m.color)}"><img alt="" hidden></button>`
   ).join('');
   return `<div class="mat-picker" data-kind="${escapeHtml(kind || '')}">${materialSelectHtml(kind, selectedId, attrs)}<div class="mat-picker-strip">${chips}</div></div>`;
 }
