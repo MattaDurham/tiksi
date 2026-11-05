@@ -124,7 +124,18 @@ try {
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   const leave = dialog => { if (dialog.type() === 'beforeunload') dialog.accept(); };
   page.on('dialog', leave);
-  await page.reload();
+  // Wait for the document, not for every image and module: the topbar check below is what
+  // proves the reload. On a timeout, print what the page was still waiting for.
+  const pending = new Map();
+  const track = r => pending.set(r, performance.now()), untrack = r => pending.delete(r);
+  page.on('request', track); page.on('requestfinished', untrack); page.on('requestfailed', untrack);
+  try { await page.reload({ waitUntil: 'domcontentloaded' }); }
+  catch (error) {
+    console.error('Reload still waiting on:', [...pending].map(([r, t]) => r.method() + ' ' + r.url() + ' (' + Math.round(performance.now() - t) + ' ms)'));
+    console.error('Page:', await page.evaluate(() => ({ url: location.href, ready: document.readyState, status: document.querySelector('#save-status')?.textContent })).catch(e => String(e)));
+    throw error;
+  }
+  page.off('request', track); page.off('requestfinished', untrack); page.off('requestfailed', untrack);
   page.off('dialog', leave);
   await page.locator('#topbar').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('phone')), false, 'desktop layout survives a reload');
