@@ -7,7 +7,7 @@
 import { environmentSun, dayOfYear, dateForDay, daysInYear, validTimeZone } from './solar.js';
 import { setModelXray } from './model-xray.js';
 import * as THREE from 'three';
-import { modelTakeoff, createModelEstimate } from './model-takeoff.js';
+import { modelPanelHtml, bindModelPanel, partComponentName } from './model-panel.js';
 import { beginGeometryEdit, restoreGeometryEdit } from './edit-history.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
@@ -3098,7 +3098,8 @@ function tagPickHtml() {
   const mixed = new Set(ids).size > 1;
   const one = tagPicks.length === 1 ? tagPicks[0] : null;
   const part = one && s && scanObjs[s.id] ? partByKey(scanObjs[s.id], one) : null;
-  const what = tagPicks.length > 1 ? tagPicks.length + ' objects selected' : part ? 'Part: ' + partName(part) : '';
+  const comp = part ? partComponentName(scanObjs[s.id], part.object) : '';
+  const what = tagPicks.length > 1 ? tagPicks.length + ' objects selected' : part ? 'Part: ' + partName(part) + (comp && comp !== partName(part) ? ' (component ' + comp + ')' : '') : '';
   return `${what ? `<div class="stat-line"><span>${escapeHtml(what)}</span><b></b></div>` : ''}
     ${tagPicks.length ? `<div class="field"><label>Tag${tagPicks.length > 1 ? ' (moves all ' + tagPicks.length + ')' : ''}</label><select data-tag-pick title="Shift-click more objects to move several at once">${tagOptions(ids[0], { mixed })}</select></div>` : ''}
     ${s && scanObjs[s.id] ? `<button class="btn" data-tag-detect title="Give every part of this model its automatic tag again: the file's own tags, then part names, then shape. Parts you moved to a tag yourself are moved back.">DETECT TAGS AGAIN</button>` : ''}
@@ -3441,7 +3442,8 @@ function renderInspectorBody() {
     const isPts = s.kind === 'points', isSplat = s.kind === 'splat';
     // Nothing to frame, drop or centre until the object exists; deleting mid-parse would race the loader.
     const dis = obj ? '' : 'disabled', disDel = state === 'loading' ? 'disabled' : '';
-    const materialSlots = s.kind === 'mesh' && obj ? modelTakeoff(obj) : [];
+    const panelCtx = { prop, scan: s, obj, picks: tagPicks, models: prop.scans.map(x => ({ scan: x, root: scanObjs[x.id] && scanObjs[x.id].userData.inner })).filter(x => x.root),
+      reload: () => addScanToScene(s), rerender: renderInspector, select: keys => setSelection({ kind: 'scan', id: s.id, tagKey: keys[0] }, keys), toast };
     inspEl.innerHTML = `<h3>${s.kind === 'mesh' ? 'MODEL' : 'SCAN'}</h3>
       <div class="stat-line"><span>File</span><b title="${escapeHtml(s.name)}">${escapeHtml(s.name.length > 22 ? s.name.slice(0, 20) + '...' : s.name)}</b></div>
       <div class="stat-line"><span>Kind</span><b>${escapeHtml(s.kind || '?')} &middot; ${escapeHtml((s.format || '').toUpperCase())}</b></div>
@@ -3470,18 +3472,11 @@ function renderInspectorBody() {
       ${s.source && s.source.url ? `<a class="btn" href="${escapeHtml(s.source.url)}" target="_blank" rel="noopener" style="display:flex; text-decoration:none; justify-content:center">${icon('link')}OPEN ON POLYCAM</a>` : ''}
       ${s.importWarnings?.length ? `<p class="empty">${s.importWarnings.map(escapeHtml).join('<br>')}</p>` : ''}
       ${s.kind === 'mesh' ? `<button class="btn" data-exchange ${dis}>EDIT / BRING BACK</button>
-      <h3>MATERIALS</h3><p class="empty">Match exported surface names to known Tiksi materials. Names and colours do not establish a product identity.</p>
-      ${materialSlots.map(slot=>`<div class="field"><label title="${escapeHtml(slot.name)}">${escapeHtml(slot.name)} · ${escapeHtml(fmtArea(slot.areaM2))}</label><select data-model-material="${slot.key}"><option value="">Original surface${s.materialIdentities?.[slot.key] ? ' · '+escapeHtml(materialById(s.materialIdentities[slot.key])?.name || ''):''}</option>${ws.data.materials.map(m=>`<option value="${escapeHtml(m.id)}" ${s.materialBindings?.[slot.key]===m.id?'selected':''}>${escapeHtml(m.name)}</option>`).join('')}</select></div>`).join('')}<button class="btn" data-estimate ${dis}>CREATE FINISH ESTIMATE</button><p class="empty">Measured triangle surface areas. Map only finish surfaces to include; review overlaps and waste in Scope before ordering.</p>` : ''}
+      ${modelPanelHtml(panelCtx)}` : ''}
       <button class="btn danger" data-del ${disDel} title="${disDel ? 'Wait for the scan to finish loading' : ''}">DELETE SCAN</button>`;
-    const estimate = inspEl.querySelector('[data-estimate]');
-    if(estimate) estimate.onclick = () => {try {const pr=createModelEstimate(prop,s,obj);toast('Created '+pr.name+'. Review quantities and prices in Scope / Budget.','ok');}catch(e){toast(e.message,'warn');}};
+    bindModelPanel(inspEl, panelCtx);
     const exchange = inspEl.querySelector('[data-exchange]');
     if(exchange) exchange.onclick = () => exchangeDialog(s.id);
-    inspEl.querySelectorAll('[data-model-material]').forEach(input => input.onchange = async () => {
-      s.materialBindings = s.materialBindings || {};
-      if(input.value) s.materialBindings[input.dataset.modelMaterial]=input.value; else delete s.materialBindings[input.dataset.modelMaterial];
-      touch(); try { await addScanToScene(s); } catch(e) {toast(e.message,'error');}
-    });
     const upd = () => { applyScanTransform(s, obj); fitShadow(); applyEnvironment(); touch(); requestRender(3); };
     inspEl.querySelectorAll('[data-p]').forEach(i => i.onchange = () => { s.pos[+i.dataset.p] = parseFloat(i.value) || 0; upd(); });
     inspEl.querySelectorAll('[data-r]').forEach(i => i.onchange = () => {
