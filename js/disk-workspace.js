@@ -175,8 +175,9 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     const after = mergeShared(sentData, ws.data, accepted.data);
     pending = JSON.stringify(after.value) !== JSON.stringify(accepted.data) || listAllFileIds(after.value).some(id => changedFiles.has(id));
     // A save that brought nothing new back leaves the open view alone: replacing the workspace
-    // remounts it, and MODEL would load every imported model again after each click.
-    if (JSON.stringify(after.value) !== JSON.stringify(ws.data)) await apply(after.value);
+    // remounts it, and MODEL would load every imported model again after each click. A browser
+    // still migrating its old storage always takes the saved copy, as it did before.
+    if (migration || JSON.stringify(after.value) !== JSON.stringify(ws.data)) await apply(after.value);
     paths = (await (await request()).json()).paths || {};
     if (migration) {
       // All originals must be on disk before removing their last browser copy.

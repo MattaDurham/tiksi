@@ -168,6 +168,7 @@ try {
   assert.equal(recovered, '[3, 1, 4, 1, 5]');
   assert.equal(await legacy.evaluate(async () => (await import('/js/store.js')).ws.data.properties.length), 4);
   const damaged = await (await browser.newContext()).newPage();
+  damaged.on('console', message => { if (message.type() === 'error' || message.type() === 'warning') console.error('Damaged browser:', message.text()); });
   await damaged.goto('http://127.0.0.1:' + port + '/app-icon.svg');
   await damaged.evaluate(async () => {
     const s = await import('/js/store.js');
@@ -190,6 +191,16 @@ try {
   assert.deepEqual(errors, []);
   console.log('ok   two origins share project files and originals; no browser persistence; stale edits reviewed; clean browser recovers all projects');
 } catch (error) {
+  // The failure first: a browser that will not close must not hide it.
+  console.error(error);
   if (browser) console.error('Disk client state:', await Promise.all(browser.contexts().flatMap(context => context.pages()).map(page => page.evaluate(() => ({ url: location.href, status: document.querySelector('#save-status')?.textContent, review: !!document.querySelector('dialog[open]'), error: document.querySelector('#save-status')?.textContent === 'PROJECT FILES UNAVAILABLE' ? document.querySelector('#view')?.textContent : null })).catch(() => null))));
   throw error;
-} finally { releaseDownload?.(); if (browser) await browser.close(); child.kill(); await new Promise(r => child.once('exit', r)); await rm(state, { recursive: true, force: true }); }
+} finally {
+  // Bounded clean-up: a stuck page or server fails this suite in seconds, not at the CI job limit.
+  const bounded = (promise, ms) => Promise.race([promise, new Promise(r => setTimeout(r, ms))]);
+  releaseDownload?.();
+  if (browser) await bounded(browser.close(), 20000);
+  const exited = child.exitCode !== null ? Promise.resolve() : new Promise(r => child.once('exit', r));
+  child.kill(); await bounded(exited, 10000); if (child.exitCode === null) child.kill('SIGKILL');
+  await rm(state, { recursive: true, force: true });
+}
