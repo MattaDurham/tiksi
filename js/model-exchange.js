@@ -11,6 +11,9 @@ import { applyModelMaterials } from './model-materials.js';
 import { stampTags, partKeyForObject } from './tags-scene.js';
 import { pendingTextureJobs } from './textures.js';
 
+// Metadata that travels with exported nodes. SketchUp component extras let a GLB or SKP round trip
+// keep its components; a node's sketchupTag does not travel (its Tiksi tag, tiksiTag, does).
+const KEEP = ['ifcGlobalId','ifcClass','ifcProperties','rhinoObjectId','tiksiElementId','tiksiElementKind','tiksiTag','tiksiTagVisible','sketchupComponent','sketchupDefinitionId','sketchupInstance','sketchupInstanceName','sketchupDescription'];
 const xml = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
 export const EXCHANGE_FORMATS = [
   ['glb', 'GLB — Blender / current SketchUp / Rhino', 'Meshes, hierarchy, UVs and PBR textures; metres, Y-up. Best choice.'],
@@ -54,19 +57,23 @@ function cleanExport(root) {
     let copy;
     source.userData = {};
     try { copy = source.clone(false); } finally { source.userData = data; }
-    copy.userData = { kind: data.kind, id: data.id, ...Object.fromEntries(['ifcGlobalId','ifcClass','ifcProperties','rhinoObjectId','tiksiElementId','tiksiElementKind','tiksiTag','tiksiTagVisible'].filter(key=>data[key]!=null).map(key=>[key,data[key]])) };
+    copy.userData = { kind: data.kind, id: data.id, ...Object.fromEntries(KEEP.filter(key=>data[key]!=null).map(key=>[key,data[key]])) };
     for (const child of source.children) copy.add(copyNode(child));
     return copy;
   };
-  const clone = copyNode(root);
+  const clone = copyNode(root), exported = new Map();
   clone.traverse(o => {
     const data = o.userData;
     if (data.kind && data.id) o.name = data.kind + ':' + data.id;
-    const metadata=Object.fromEntries(['ifcGlobalId','ifcClass','ifcProperties','rhinoObjectId','tiksiElementId','tiksiElementKind','tiksiTag','tiksiTagVisible'].filter(key=>data[key]!=null).map(key=>[key,data[key]]));
+    const metadata=Object.fromEntries(KEEP.filter(key=>data[key]!=null).map(key=>[key,data[key]]));
     o.userData = { ...metadata, ...(data.kind && data.id ? { tiksiElementId: data.id, tiksiElementKind: data.kind } : {}) };
     if (o.isMesh) {
+      // One export material per source material, so parts that share a material (and the
+      // instances of a component, which share geometry too) stay shared in the GLB.
       const material = m => {
+        if (exported.has(m)) return exported.get(m);
         const copy = m.clone(), record = materialById(m.userData.materialId || m.userData.tiksiMaterialId);
+        exported.set(m, copy);
         copy.name = record ? record.name + ' [' + record.id + ']' : m.name || 'Surface';
         for(const key of Object.keys(copy))if(copy[key]?.isTexture)copy[key]=textureForExport(copy[key]);
         copy.userData = record ? { tiksiMaterialId: record.id } : {};
@@ -107,14 +114,24 @@ export async function exportModel(prop, { format = 'glb', source = 'design', sca
       return {name:base+'.blend',blob:new Blob([converted.buffer]),warnings:converted.warnings};
     }
     if(format==='skp' || format==='ifc') {
-      const meshes=[];
-      for(const part of triangles(clone)) {
+      const textures=new Map();
+      const toJson=async part=>{
         const c=part.m.color.clone().convertLinearToSRGB();
         const material={name:part.m.name,color:[c.r,c.g,c.b,part.m.opacity ?? 1]};
-        if(format==='skp' && part.m.map) {const bytes=await textureBytes(part.m.map);let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));material.texture=btoa(binary);}
-        meshes.push({name:part.name,positions:part.p,uv:part.t,material,extras:part.extras,tag:part.extras?.tiksiTag,tagVisible:part.extras?.tiksiTagVisible});
-      }
-      const converted=await nativeConvert(new TextEncoder().encode(JSON.stringify({meshes})),'.json',format);
+        if(format==='skp' && part.m.map) {
+          if(!textures.has(part.m.map)){const bytes=await textureBytes(part.m.map);let binary='';for(let i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode(...bytes.subarray(i,i+32768));textures.set(part.m.map,btoa(binary));}
+          material.texture=textures.get(part.m.map);
+        }
+        return {name:part.name,positions:part.p,uv:part.t,material,extras:part.extras,tag:part.extras?.tiksiTag,tagVisible:part.extras?.tiksiTagVisible};
+      };
+      // SketchUp gets the model's components back as components: each definition once, in its
+      // own coordinates, and an instance per placement. IFC gets plain world-space parts.
+      const split=format==='skp'?componentsForExport(clone):{components:[],instances:[]};
+      const meshes=[];for(const part of triangles(clone,{skip:split.inside}))meshes.push(await toJson(part));
+      const components=[];
+      for(const d of split.components){const parts=[];for(const part of triangles(d.node,{frame:d.frame,only:d.own}))parts.push(await toJson(part));components.push({id:d.id,name:d.name,description:d.description,instances:d.instances,meshes:parts.map(({tag,tagVisible,...p})=>!tag||tag===d.tag?p:{...p,tag,tagVisible})});}
+      const payload={meshes};if(components.length){payload.components=components;payload.instances=split.instances;}
+      const converted=await nativeConvert(new TextEncoder().encode(JSON.stringify(payload)),'.json',format);
       return {name:base+'.'+format,blob:new Blob([converted.buffer]),warnings:converted.warnings};
     }
     if (format === 'glb') return { name: base + '.glb', blob: new Blob([await new GLTFExporter().parseAsync(clone, { binary: true, maxTextureSize: Infinity })], {type:'model/gltf-binary'}) };
@@ -127,12 +144,61 @@ export async function exportModel(prop, { format = 'glb', source = 'design', sca
   }
 }
 
-// Expanded, world-space triangles keep group materials and baked texture UV transforms.
-function triangles(root) {
+// The component instances of an export (nodes the SketchUp converter marked), as SketchUp
+// definitions and placements, nesting kept: a definition holds its own parts (in its own
+// coordinates) and placements of the components inside it. Instances whose parts share geometry
+// and materials, and whose nested placements match, share one definition. Parts inside any
+// instance are left out of the loose world-space meshes (`inside`).
+function componentsForExport(root) {
+  root.updateMatrixWorld(true);
+  const isInstance = o => { const u = o.userData || {}; return typeof u.sketchupComponent === 'string' && !!u.sketchupComponent; };
+  // The meshes an instance draws itself, and the instances directly inside it.
+  const contents = node => {
+    const own = [], nested = [];
+    const walk = o => { for (const c of o.children) { if (!c.visible) continue; if (isInstance(c)) nested.push(c); else { if (c.isMesh) own.push(c); walk(c); } } };
+    walk(node);
+    return { own, nested };
+  };
+  const tagOf = meshes => {
+    const counts = new Map(); for (const m of meshes) { const t = m.userData.tiksiTag || ''; counts.set(t, (counts.get(t) || 0) + 1); }
+    return counts.size ? [...counts].sort((a, b) => b[1] - a[1])[0][0] : '';
+  };
+  const allMeshes = node => { const out = []; node.traverseVisible(m => { if (m.isMesh) out.push(m); }); return out; };
+  const inside = new Set(), byKey = new Map(), components = [], round = v => Math.round(v * 1e5) / 1e5;
+  const placement = (node, frame, parentTag) => {
+    const meshes = allMeshes(node);
+    if (!meshes.length) return null;
+    meshes.forEach(m => inside.add(m));
+    const u = node.userData, { own, nested } = contents(node), tag = tagOf(meshes);
+    const local = node.matrixWorld.clone().invert();
+    const kids = nested.map(n => placement(n, local, tag)).filter(Boolean);
+    const sig = [u.sketchupDefinitionId || u.sketchupComponent, ...own.map(m => m.geometry.uuid + ':' + [].concat(m.material).map(x => x && x.name).join(',')).sort(),
+      ...kids.map(k => k.component + '@' + k.matrix.map(round).join(',')).sort()].join('|');
+    let d = byKey.get(sig);
+    if (!d) {
+      const same = components.filter(c => c.base === u.sketchupComponent).length;
+      d = { id: 'c' + components.length, base: u.sketchupComponent, name: u.sketchupComponent + (same ? ' #' + (same + 1) : ''), description: u.sketchupDescription || '',
+        node, own: new Set(own), frame: local, tag, instances: kids.map(({ parentTag: _, ...k }) => k) };
+      byKey.set(sig, d); components.push(d);
+    }
+    const matrix = frame ? new THREE.Matrix4().multiplyMatrices(frame, node.matrixWorld).elements.slice() : node.matrixWorld.elements.slice();
+    const out = { component: d.id, name: u.sketchupInstanceName || '', matrix };
+    if (tag && tag !== parentTag) { out.tag = tag; out.tagVisible = meshes[0].userData.tiksiTagVisible !== false; }
+    return out;
+  };
+  const instances = [];
+  const walk = o => { for (const c of o.children) { if (!c.visible) continue; if (isInstance(c)) { const p = placement(c, null, ''); if (p) instances.push(p); } else walk(c); } };
+  walk(root);
+  return { inside, components, instances };
+}
+
+// Expanded triangles keep group materials and baked texture UV transforms. World space, or the
+// frame `frame` (a definition's own coordinates); parts in `skip` are left out.
+function triangles(root, { frame = null, skip = null, only = null } = {}) {
   root.updateMatrixWorld(true);
   const parts = [];
   root.traverseVisible(o => {
-    if (!o.isMesh) return;
+    if (!o.isMesh || (skip && skip.has(o)) || (only && !only.has(o))) return;
     if (o.isSkinnedMesh || o.morphTargetInfluences?.some(v => v !== 0)) throw new Error('Bake skinning/morphs in the source editor before static export. GLB can preserve the rig.');
     const g = o.geometry, pos = g.getAttribute('position'), uv = g.getAttribute('uv'), normal = g.getAttribute('normal'), idx = g.index;
     const mats = Array.isArray(o.material) ? o.material : [o.material];
@@ -140,11 +206,12 @@ function triangles(root) {
     for (const group of groups) {
       const m = mats[group.materialIndex || 0]; if (!m) continue;
       m.map?.updateMatrix();
-      const p = [], n = [], t = [], norm = new THREE.Matrix3().getNormalMatrix(o.matrixWorld);
+      const placed = frame ? new THREE.Matrix4().multiplyMatrices(frame, o.matrixWorld) : o.matrixWorld;
+      const p = [], n = [], t = [], norm = new THREE.Matrix3().getNormalMatrix(placed);
       const start = Math.max(group.start, g.drawRange.start), end = Math.min(group.start + group.count, g.drawRange.start + g.drawRange.count, idx?.count || pos.count);
       for (let i = start; i + 2 < end; i += 3) {
-        const order = o.matrixWorld.determinant() < 0 ? [i, i + 2, i + 1] : [i, i + 1, i + 2];
-        const coords = order.map(j => new THREE.Vector3().fromBufferAttribute(pos, idx ? idx.getX(j) : j).applyMatrix4(o.matrixWorld));
+        const order = placed.determinant() < 0 ? [i, i + 2, i + 1] : [i, i + 1, i + 2];
+        const coords = order.map(j => new THREE.Vector3().fromBufferAttribute(pos, idx ? idx.getX(j) : j).applyMatrix4(placed));
         const face = new THREE.Vector3().subVectors(coords[1],coords[0]).cross(new THREE.Vector3().subVectors(coords[2],coords[0])).normalize();
         order.forEach((j,k) => {
           const v = idx ? idx.getX(j) : j;

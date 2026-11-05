@@ -19,6 +19,26 @@ MAX_JSON = 32 * 1024 * 1024
 MAX_WORKSPACE_REQUEST = 4 * MAX_JSON
 MAX_BLOB = 600 * 1024 * 1024
 HASH = re.compile(r'^[a-f0-9]{64}$')
+# Pictures saved as files (js/picture-assets.js): a record holds
+# `tiksi-picture:<mime>:pic-<sha256>` and the bytes are the blob with that hash.
+PICTURE_PREFIX = 'tiksi-picture:'
+PICTURE_REF = re.compile(r'^tiksi-picture:([a-z0-9.+-]+/[a-z0-9.+-]+):pic-([a-f0-9]{64})$')
+# What this server does beyond the original protocol; clients use only what is listed.
+FEATURES = ('picture-files', 'partial-projects', 'partial-properties', 'commit-paths')
+
+
+def picture_refs(value):
+    """Every picture reference in a JSON value: asset id -> mime."""
+    found, stack = {}, [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            if item.startswith(PICTURE_PREFIX):
+                match = PICTURE_REF.match(item)
+                if match: found['pic-' + match[2]] = match[1]
+        elif isinstance(item, dict): stack.extend(item.values())
+        elif isinstance(item, list): stack.extend(item)
+    return found
 
 
 class WorkspaceError(ValueError):
@@ -64,6 +84,7 @@ class WorkspaceService:
         # A damaged store must fail visibly, never become an empty workspace.
         self.state = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {'revision': 0, 'data': None, 'assets': {}}
         self.paths = self.state.get('paths', {})
+        self.has_pictures = bool(picture_refs(self.state.get('data')))
         self.stamps = {}
         self.parts = {}
         self.part_assets = {}
@@ -154,6 +175,7 @@ class WorkspaceService:
             changed = True
         if changed:
             self.state['revision'] += 1
+            self.has_pictures = bool(picture_refs(self.state['data']))
             self.persist_catalog()
 
     def persist_catalog(self):
@@ -187,33 +209,76 @@ class WorkspaceService:
         finally:
             if temp is not None and temp.exists(): temp.unlink()
 
+    def picture_assets(self, data, assets):
+        """Manifest entries for every picture `data` references; each file must be stored."""
+        entries = {}
+        for identifier, mime in picture_refs(data).items():
+            digest = identifier.removeprefix('pic-')
+            path = self.root / 'blobs' / digest
+            if not path.is_file(): raise WorkspaceError('Upload every referenced picture before saving')
+            given = assets.get(identifier)
+            if given is not None and (not isinstance(given, dict) or given.get('hash') != digest): raise WorkspaceError('Invalid picture reference')
+            entries[identifier] = {'mime': mime, 'kind': 'picture', **(given or {}), 'hash': digest, 'size': path.stat().st_size}
+        return entries
+
     def snapshot(self):
         with self.lock:
             self.refresh()
             return {k: json.loads(json.dumps(self.state.get(k))) for k in ('revision', 'data', 'assets', 'paths')}
 
-    def commit(self, request):
-        if not isinstance(request, dict) or type(request.get('revision')) is not int:
-            raise WorkspaceError('A base revision is required')
-        data, assets = request.get('data'), request.get('assets')
+    @staticmethod
+    def check_records(data):
         if not isinstance(data, dict) or not all(isinstance(data.get(k), list) for k in ('properties', 'projects', 'materials', 'products')) or not isinstance(data.get('settings'), dict):
             raise WorkspaceError('Invalid workspace')
         for key in ('properties', 'projects', 'materials', 'products'):
             records = data[key]
             if any(not isinstance(p, dict) or not isinstance(p.get('id'), str) or not 0 < len(p['id']) <= 160 for p in records) or len({p['id'] for p in records}) != len(records):
                 raise WorkspaceError('Workspace records need unique valid identities')
+
+    def check_assets(self, data, assets):
         if not isinstance(assets, dict) or len(assets) > 100000:
             raise WorkspaceError('Invalid asset manifest')
+        pictures = self.picture_assets(data, assets)
+        assets = {**assets, **pictures}
         for identifier, asset in assets.items():
             if not isinstance(identifier, str) or not 0 < len(identifier) <= 160 or not isinstance(asset, dict) or not HASH.fullmatch(str(asset.get('hash', ''))):
                 raise WorkspaceError('Invalid asset reference')
             path = self.root / 'blobs' / asset['hash']
             if not path.is_file() or asset.get('size') != path.stat().st_size:
                 raise WorkspaceError('Upload every referenced asset before saving')
+        return pictures, assets
+
+    @staticmethod
+    def resend(message):
+        error = WorkspaceError(message + '; sending them again', 409)
+        error.code = 'resend-projects'
+        return error
+
+    def commit(self, request):
+        if not isinstance(request, dict) or type(request.get('revision')) is not int:
+            raise WorkspaceError('A base revision is required')
+        data, assets = request.get('data'), request.get('assets')
+        self.check_records(data)
+        order = request.get('propertyOrder')
+        if order is not None and (not isinstance(order, list) or not all(isinstance(i, str) for i in order) or len(set(order)) != len(order) or not {p['id'] for p in data['properties']} <= set(order)):
+            raise WorkspaceError('Invalid property order')
         with self.lock:
             self.refresh()
             if request['revision'] != self.state['revision']:
                 raise WorkspaceError('Workspace changed on another device', 409)
+            if order is not None:
+                # Properties the client did not change since this revision are named, not
+                # sent: the revision check above makes the held record exactly the client's.
+                held = {p['id']: p for p in (self.state.get('data') or {}).get('properties', [])}
+                sent = {p['id']: p for p in data['properties']}
+                if any(i not in sent and i not in held for i in order): raise self.resend('Projects changed on disk')
+                data = {**data, 'properties': [sent.get(i) or held[i] for i in order]}
+                self.check_records(data)
+            pictures, assets = self.check_assets(data, assets)
+            # A tab running an older Tiksi would read picture references as broken images
+            # and save them blank. It must reload before it can write.
+            if (pictures or self.has_pictures) and request.get('pictureFiles') is not True:
+                raise WorkspaceError('This Tiksi tab is out of date; reload it to keep saving', 426)
             value = {'revision': self.state['revision'] + 1, 'data': data, 'assets': assets}
             encoded = json.dumps(value, ensure_ascii=False).encode('utf-8')
             if len(encoded) > MAX_JSON: raise WorkspaceError('Workspace metadata exceeds 32 MB', 413)
@@ -222,8 +287,17 @@ class WorkspaceService:
                 history = self.root / 'history' / (str(self.state['revision']) + '.json')
                 if not history.exists(): history.write_bytes(self.path.read_bytes())
             slices = request.get('projectData')
-            if not isinstance(slices, dict) or set(slices) != {p.get('id') for p in data['properties']}:
+            # A project file the client did not change since the revision it saved against
+            # is named instead of sent; the server already holds exactly that file.
+            unchanged = request.get('unchangedProjects', [])
+            if not isinstance(slices, dict) or not isinstance(unchanged, list) or not all(isinstance(i, str) for i in unchanged) or set(slices) & set(unchanged) or len(set(unchanged)) != len(unchanged) or set(slices) | set(unchanged) != {p.get('id') for p in data['properties']}:
                 raise WorkspaceError('Every project must have a complete project file')
+            by_id = {p['id']: p for p in data['properties']}
+            for identifier in unchanged:
+                held = self.parts.get(identifier)
+                if not isinstance(held, dict) or held.get('properties') != [by_id[identifier]]:
+                    raise self.resend('Project files changed on disk')
+            slices = {**{i: self.parts[i] for i in unchanged}, **slices}
             migration = request.get('migration')
             if migration:
                 self.archive_copy(migration, 'browser-migration')
@@ -263,6 +337,7 @@ class WorkspaceService:
                     os.replace(temp, dest)
                     self.stamps[str(dest)] = (dest.stat().st_mtime_ns, dest.stat().st_size)
                 self.state, self.paths = value, value['paths']
+                self.has_pictures = bool(pictures)
                 self.parts = slices
                 self.part_assets = {i: {k: assets[k] for k in self.referenced(part) if k in assets} for i, part in slices.items()}
                 self.persist_catalog()
@@ -277,6 +352,7 @@ class WorkspaceService:
         with self.lock:
             if not isinstance(record, dict) or not isinstance(record.get('data'), dict) or not isinstance(record.get('assets'), dict): raise WorkspaceError('Invalid recovery copy')
             if len(json.dumps(record['data'], ensure_ascii=False).encode()) > MAX_JSON: raise WorkspaceError('Recovery metadata exceeds 32 MB', 413)
+            record = {**record, 'assets': {**record['assets'], **self.picture_assets(record['data'], record['assets'])}}
             for asset in record['assets'].values():
                 if not isinstance(asset, dict) or not HASH.fullmatch(str(asset.get('hash', ''))): raise WorkspaceError('Invalid recovery asset')
                 path = self.root / 'blobs' / asset['hash']
@@ -311,6 +387,8 @@ class WorkspaceService:
             # Walk-through videos and the frames saved with tape readings are originals too.
             ids.update(v['id'] for v in prop.get('videos', []) if isinstance(v, dict) and isinstance(v.get('id'), str))
             ids.update(m['frameAssetId'] for m in prop.get('measurements', []) if isinstance(m, dict) and isinstance(m.get('frameAssetId'), str))
+        # Pictures anywhere in the project's records (thumbnails, plan underlays, product images).
+        ids.update(picture_refs(data))
         return ids
 
     @staticmethod
@@ -333,7 +411,7 @@ class WorkspaceService:
             # seed private state, including when fetch metadata is absent on HTTP origins.
             if h.headers.get('X-Tiksi-Workspace') != '1': raise WorkspaceError('Use the Tiksi workspace client', 403)
             if path == '/api/workspace/capabilities' and h.command == 'GET':
-                self.reply(h, 200, {'instanceId': self.identity, 'token': self.token, 'storage': 'project-files', 'projectsFolder': str(self.projects_dir)})
+                self.reply(h, 200, {'instanceId': self.identity, 'token': self.token, 'storage': 'project-files', 'projectsFolder': str(self.projects_dir), 'features': list(FEATURES)})
                 return True
             if not secrets.compare_digest(h.headers.get('X-Tiksi-Token', ''), self.token): raise WorkspaceError('Reconnect to the workspace server', 403)
             if path == '/api/workspace/head' and h.command == 'GET':
@@ -347,7 +425,9 @@ class WorkspaceService:
                 payload = self.read(h, MAX_WORKSPACE_REQUEST)
                 try: request = json.loads(payload)
                 except (ValueError, UnicodeDecodeError): raise WorkspaceError('Workspace must be JSON')
-                self.reply(h, 200, {'revision': self.commit(request)})
+                revision = self.commit(request)
+                with self.lock: paths = dict(self.paths)
+                self.reply(h, 200, {'revision': revision, 'paths': paths})
             elif path == '/api/workspace/recovery' and h.command == 'POST':
                 payload = self.read(h, MAX_WORKSPACE_REQUEST)
                 try: record = json.loads(payload)
@@ -420,17 +500,26 @@ class WorkspaceService:
                 if not HASH.fullmatch(digest): raise WorkspaceError('Asset not found', 404)
                 dest = self.root / 'blobs' / digest
                 if not dest.is_file(): raise WorkspaceError('Asset not found', 404)
+                # A blob is named by its content and never changes: this browser may keep it.
+                tag = '"' + digest + '"'
+                if tag in [t.strip() for t in h.headers.get('If-None-Match', '').split(',')]:
+                    h.send_response(304)
+                    h.send_header('ETag', tag)
+                    h.send_header('Cache-Control', 'private, max-age=31536000, immutable')
+                    h.end_headers()
+                    return True
                 h.send_response(200)
                 h.send_header('Content-Type', 'application/octet-stream')
                 h.send_header('Content-Length', str(dest.stat().st_size))
-                h.send_header('Cache-Control', 'no-store')
+                h.send_header('ETag', tag)
+                h.send_header('Cache-Control', 'private, max-age=31536000, immutable')
                 h.end_headers()
                 with dest.open('rb') as source:
                     while chunk := source.read(1024 * 1024): h.wfile.write(chunk)
             else: raise WorkspaceError('Workspace endpoint not found', 404)
         except WorkspaceError as error:
             h.close_connection = True
-            self.reply(h, error.status, {'error': str(error)})
+            self.reply(h, error.status, {'error': str(error), **({'code': error.code} if getattr(error, 'code', None) else {})})
         except (OSError, ValueError, TypeError, KeyError):
             h.close_connection = True
             self.reply(h, 500, {'error': 'Project files could not be updated. Existing copies and recovery data have been preserved.'})
