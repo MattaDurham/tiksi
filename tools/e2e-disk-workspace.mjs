@@ -169,6 +169,12 @@ try {
   assert.equal(await legacy.evaluate(async () => (await import('/js/store.js')).ws.data.properties.length), 4);
   const damaged = await (await browser.newContext()).newPage();
   damaged.on('console', message => { if (message.type() === 'error' || message.type() === 'warning') console.error('Damaged browser:', message.text()); });
+  // Requests the damaged page is still waiting on, printed if its load times out.
+  const damagedPending = new Map();
+  damaged.on('request', r => damagedPending.set(r, performance.now()));
+  for (const done of ['requestfinished', 'requestfailed']) damaged.on(done, r => damagedPending.delete(r));
+  globalThis.damagedReport = async () => ({ pending: [...damagedPending].map(([r, t]) => r.method() + ' ' + r.url() + ' (' + Math.round(performance.now() - t) + ' ms)'),
+    page: await damaged.evaluate(() => ({ url: location.href, ready: document.readyState, status: document.querySelector('#save-status')?.textContent })).catch(e => String(e)) });
   await damaged.goto('http://127.0.0.1:' + port + '/app-icon.svg');
   await damaged.evaluate(async () => {
     const s = await import('/js/store.js');
@@ -193,6 +199,7 @@ try {
 } catch (error) {
   // The failure first: a browser that will not close must not hide it.
   console.error(error);
+  if (globalThis.damagedReport) console.error('Damaged page:', JSON.stringify(await globalThis.damagedReport().catch(e => String(e)), null, 1));
   if (browser) console.error('Disk client state:', await Promise.all(browser.contexts().flatMap(context => context.pages()).map(page => page.evaluate(() => ({ url: location.href, status: document.querySelector('#save-status')?.textContent, review: !!document.querySelector('dialog[open]'), error: document.querySelector('#save-status')?.textContent === 'PROJECT FILES UNAVAILABLE' ? document.querySelector('#view')?.textContent : null })).catch(() => null))));
   throw error;
 } finally {
