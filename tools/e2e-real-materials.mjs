@@ -169,7 +169,11 @@ try {
   }
   // MATERIALS: say what a material is, its colour and its product; the card shows it.
   await page.locator('#rail a[data-view=materials]').click();
-  await page.locator('.mv-card[data-id="mat-owner-plaster"]').click();
+  // Building the page synthesises textures and draws every swatch; on a slow software-GL
+  // runner that blocks input for many seconds. Wait until it has settled, then click.
+  await page.waitForFunction(async () => (await import('/js/textures.js')).pendingTextureJobs() === 0
+    && [...document.querySelectorAll('.mv-card img')].every(img => !img.hidden && img.complete), null, { timeout: 180_000, polling: 500 });
+  await page.locator('.mv-card[data-id="mat-owner-plaster"]').click({ timeout: 120_000 });
   assert.equal(await page.locator('.mv-editor [data-f=category]').inputValue(), 'plaster', 'the owner\'s painted plaster was migrated as plaster');
   await page.locator('.mv-editor [data-ident=type]').fill('Lime plaster'); await page.locator('.mv-editor [data-ident=type]').press('Tab');
   await page.locator('.mv-editor [data-ident=colorName]').fill('White Dove'); await page.locator('.mv-editor [data-ident=colorName]').press('Tab');
