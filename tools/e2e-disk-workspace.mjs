@@ -10,6 +10,9 @@ const state = await mkdtemp(tmpdir() + '/tiksi-disk-test-');
 const socket = net.createServer(); await new Promise(r => socket.listen(0, '127.0.0.1', r));
 const port = socket.address().port; await new Promise(r => socket.close(r));
 const child = spawn('python3', ['tools/serve.py', '--host', '0.0.0.0', '--port', String(port), '--state-dir', state, '--projects-dir', state + '/projects'], { stdio: ['ignore', 'pipe', 'pipe'] });
+// Read the server's output: an unread pipe fills after about 64 KB of request log lines on Linux,
+// and then every server thread stops at its next log line and the pages hang.
+let serverLog = ''; child.stdout.resume(); child.stderr.on('data', d => { serverLog = (serverLog + d).slice(-8000); });
 let browser, releaseDownload;
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch('http://127.0.0.1:' + port)).ok) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
@@ -199,6 +202,7 @@ try {
 } catch (error) {
   // The failure first: a browser that will not close must not hide it.
   console.error(error);
+  console.error('Server log (last lines):\n' + serverLog.split('\n').slice(-15).join('\n'));
   if (globalThis.damagedReport) console.error('Damaged page:', JSON.stringify(await globalThis.damagedReport().catch(e => String(e)), null, 1));
   if (browser) console.error('Disk client state:', await Promise.all(browser.contexts().flatMap(context => context.pages()).map(page => page.evaluate(() => ({ url: location.href, status: document.querySelector('#save-status')?.textContent, review: !!document.querySelector('dialog[open]'), error: document.querySelector('#save-status')?.textContent === 'PROJECT FILES UNAVAILABLE' ? document.querySelector('#view')?.textContent : null })).catch(() => null))));
   throw error;
