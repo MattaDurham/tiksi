@@ -134,9 +134,15 @@ try {
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   const leave = dialog => { if (dialog.type() === 'beforeunload') dialog.accept(); };
   page.on('dialog', leave);
-  // Wait for the document, not for every image and module: the topbar check below is what
-  // proves the reload. On a timeout, print what the page and the server were doing.
-  try { await page.reload({ waitUntil: 'domcontentloaded' }); }
+  // The reload is done once the new document arrives ('commit'). Waiting for DOMContentLoaded
+  // also waits for every module to load and run, which is the whole app starting with the
+  // desktop layout on a 3x phone screen: 22-30 seconds on the Linux CI runner's software
+  // graphics, against Playwright's 30-second limit (measured 2026-11-06, five fresh-page loads
+  // at 22-26 s and reloads at 29.8 s and over 30 s). That made this check pass or fail by a
+  // fraction of a second. The topbar and field-bar waits below prove the reload, with room for
+  // the slow start. On a timeout, print what the page and the server were doing.
+  const BOOT_MS = 120000;
+  try { await page.reload({ waitUntil: 'commit', timeout: BOOT_MS }); }
   catch (error) {
     console.error('Requests still open:', [...pending].map(([r, t]) => r.method() + ' ' + r.url() + ' (' + Math.round(performance.now() - t) + ' ms)'));
     console.error('Page:', await page.evaluate(() => ({ url: location.href, ready: document.readyState, status: document.querySelector('#save-status')?.textContent })).catch(e => String(e)));
@@ -146,14 +152,15 @@ try {
     throw error;
   }
   page.off('dialog', leave);
-  await page.locator('#topbar').waitFor();
-  assert.equal(await page.evaluate(() => document.documentElement.classList.contains('phone')), false, 'desktop layout survives a reload');
+  await page.locator('#topbar').waitFor({ timeout: BOOT_MS });
   // The topbar is in the page before the app has booted. FIELD VIEW only works once the field
   // module has built its bar (after the project files are connected), so wait for that bar: a
-  // click before it is just a link to the model, and the phone layout never comes.
-  await page.locator('.fd-bar').waitFor({ state: 'attached' });
+  // click before it is just a link to the model, and the phone layout never comes. The layout
+  // is only decided by then too, so check it after the bar, not after the topbar.
+  await page.locator('.fd-bar').waitFor({ state: 'attached', timeout: BOOT_MS });
+  assert.equal(await page.evaluate(() => document.documentElement.classList.contains('phone')), false, 'desktop layout survives a reload');
   await page.locator('[data-field-layout=phone]').evaluate(a => a.click());
-  await page.waitForFunction(() => document.documentElement.classList.contains('phone') && location.hash === '#/model');
+  await page.waitForFunction(() => document.documentElement.classList.contains('phone') && location.hash === '#/model', null, { timeout: BOOT_MS });
   assert.equal(await page.evaluate(() => localStorage.getItem('tiksi.layout')), null, 'back to following the screen');
   await phone.close();
 
