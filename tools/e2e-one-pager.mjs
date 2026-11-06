@@ -28,7 +28,9 @@ const page = await (await browser.newContext({ viewport: { width: 1500, height: 
 page.setDefaultTimeout(60000);
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));
-page.on('dialog', d => d.accept());
+// The browser's own Leave site? question (a real close) is answered Cancel, as a person who stays would.
+const dialogs = [];
+page.on('dialog', d => { if (d.type() === 'beforeunload') { dialogs.push('beforeunload'); d.dismiss(); } else d.accept(); });
 const check = (ok, label) => { assert.ok(ok, label); console.log('  ok   ' + label); };
 const prop = fn => page.evaluate(async src => { const s = await import('/js/store.js'); const AsyncFunction = (async () => {}).constructor; return new AsyncFunction('s', 'p', src)(s, s.activeProperty()); }, fn);
 const state = () => prop("const op = await import('/js/one-pager.js'); return op.onePagerState(p, s.projectSlice(p.id));");
@@ -194,6 +196,19 @@ try {
   const kept = await prop("return { headline: p.onePager.headline, customized: p.onePager.customized, docs: p.photos.filter(x => x.kind === 'document').length }");
   check(v.join() === '1,2,3' && (await state()) === 'current' && kept.headline === 'A brighter kitchen' && kept.customized === true && kept.docs === 3, 'after a reload the versions, the current state, the PDFs and the hand-written text are still there');
   check((await fireClose()) === false && !(await promptShown()), 'and closing still asks nothing');
+
+  // ---- a real close: the browser's own question first, then Tiksi's ----
+  await prop("p.address = '3 Synthetic Way'; s.touch();");
+  await page.click('#rail a[data-view="plan"]');   // Chrome asks only after the person used the page
+  await page.close({ runBeforeUnload: true });
+  await page.locator('.op-prompt').waitFor({ timeout: 5000 });
+  check(dialogs.length === 1 && /Save version 4 before you close\?/.test(await page.locator('[data-op-prompt-text]').textContent()), 'a real close shows the browser\'s Leave site? question; staying brings up Tiksi\'s');
+  await page.click('[data-op-later]');
+  await page.locator('.op-prompt').waitFor({ state: 'detached' });
+  const closed = page.waitForEvent('close', { timeout: 5000 });
+  await page.close({ runBeforeUnload: true });
+  await closed;
+  check(page.isClosed() && dialogs.length === 1, 'after NOT NOW the next close goes through with no question at all');
 
   check(errors.length === 0, 'no page errors (' + errors.join(' | ') + ')');
   console.log('\nONE-PAGER: all checks passed');
