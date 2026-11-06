@@ -144,6 +144,10 @@ try {
   page.off('dialog', leave);
   await page.locator('#topbar').waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('phone')), false, 'desktop layout survives a reload');
+  // The topbar is in the page before the app has booted. FIELD VIEW only works once the field
+  // module has built its bar (after the project files are connected), so wait for that bar: a
+  // click before it is just a link to the model, and the phone layout never comes.
+  await page.locator('.fd-bar').waitFor({ state: 'attached' });
   await page.locator('[data-field-layout=phone]').evaluate(a => a.click());
   await page.waitForFunction(() => document.documentElement.classList.contains('phone') && location.hash === '#/model');
   assert.equal(await page.evaluate(() => localStorage.getItem('tiksi.layout')), null, 'back to following the screen');
