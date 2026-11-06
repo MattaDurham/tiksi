@@ -38,9 +38,26 @@ async function waitUntil(predicate, message, timeoutMs = 30_000) {
 async function viewerSettled(page, ms = 240000) {
   const end = Date.now() + ms;
   while (!(await page.evaluate(async () => (await import('/js/viewer3d.js')).viewerIdle()))) {
-    assert.ok(Date.now() < end, 'MODEL did not settle in ' + ms / 1000 + ' s: ' + JSON.stringify(await page.evaluate(async () => (await import('/js/viewer3d.js')).viewerIdleState())));
+    if (Date.now() >= end) assert.fail('MODEL did not settle in ' + ms / 1000 + ' s: ' + JSON.stringify(await unsettledReport(page)));
     await page.waitForTimeout(250);
   }
+}
+// What kept MODEL from settling: 40 samples over 10 seconds, how many times each part was not
+// settled, and how many frames were drawn meanwhile (a part that flips back and forth looks
+// settled in any one sample).
+async function unsettledReport(page) {
+  return page.evaluate(async () => {
+    const viewer = await import('/js/viewer3d.js'), textures = await import('/js/textures.js');
+    const before = viewer.frameState(), busy = {};
+    for (let i = 0; i < 40; i++) {
+      for (const [part, ok] of Object.entries(viewer.viewerIdleState())) if (!ok) busy[part] = (busy[part] || 0) + 1;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    const after = viewer.frameState();
+    const drawn = before && after ? Object.fromEntries(Object.keys(after).filter(k => typeof after[k] === 'number').map(k => [k, after[k] - before[k]])) : null;
+    return { notSettledOutOf40: busy, drawnIn10s: drawn, now: viewer.viewerIdleState(),
+      texturesNotReady: textures.textureStats().filter(t => t.status !== 'ready') };
+  });
 }
 async function navigateToView(page, view) {
   // These links change the hash and mount a view in the current document. Waiting

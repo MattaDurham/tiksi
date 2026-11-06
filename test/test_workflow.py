@@ -69,7 +69,7 @@ class WorkflowTests(unittest.TestCase):
                 'headRefOid': self.git('rev-parse', 'HEAD', cwd=target),
                 'url': 'https://example.com/pr/1', 'statusCheckRollup': [
                     {'name': name, 'status': 'COMPLETED', 'conclusion': 'SUCCESS'}
-                    for name in ['Regression (ubuntu-latest)', 'Regression (macos-latest)']]}
+                    for name in ['Quick checks (ubuntu-latest)', 'Regression (macos-latest, group 1 of 4)', 'Regression']]}
 
     def test_start_isolated_from_live_and_adopt_idempotent(self):
         target = self.start()
@@ -147,20 +147,22 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(branch.WorkflowError, 'owner'):
             self.workflow.merge('feature')
         for changes in [{'baseRefName': 'codex/baseline'}, {'isDraft': True}, {'headRefOid': '0' * 40},
-                        {'statusCheckRollup': [{'name': 'Regression (macos-latest)', 'status': 'COMPLETED', 'conclusion': 'FAILURE'}]},
-                        {'statusCheckRollup': [{'name': 'Regression (macos-latest)', 'status': 'COMPLETED', 'conclusion': 'CANCELLED'}]},
+                        {'statusCheckRollup': [{'name': 'Regression (macos-latest, group 3 of 4)', 'status': 'COMPLETED', 'conclusion': 'FAILURE'}]},
+                        {'statusCheckRollup': [{'name': 'Regression (macos-latest, group 3 of 4)', 'status': 'COMPLETED', 'conclusion': 'CANCELLED'}]},
+                        {'statusCheckRollup': [{'name': 'Regression', 'status': 'COMPLETED', 'conclusion': 'FAILURE'}]},
                         {'statusCheckRollup': [{'context': 'lint', 'state': 'ERROR'}]}]:
             with self.subTest(changes=changes), self.assertRaises(branch.WorkflowError):
                 self.workflow.gate('feature', {**info, **changes})
         # A check still running, or not started yet, is no verdict: the merge goes ahead without waiting.
-        running = [{'name': 'Regression (ubuntu-latest)', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'},
-                   {'name': 'Regression (macos-latest)', 'status': 'IN_PROGRESS', 'conclusion': None}]
+        # The summary check appears only once every group has finished, so until then it counts as running.
+        running = [{'name': 'Quick checks (ubuntu-latest)', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'},
+                   {'name': 'Regression (macos-latest, group 2 of 4)', 'status': 'IN_PROGRESS', 'conclusion': None}]
         self.assertEqual(self.workflow.gate('feature', {**info, 'statusCheckRollup': running}), target)
-        self.assertEqual(self.workflow.verdict(running), ['Regression (macos-latest)'])
+        self.assertEqual(self.workflow.verdict(running), ['Regression', 'Regression (macos-latest, group 2 of 4)'])
         self.assertEqual(self.workflow.verdict([]), list(branch.Workflow.REQUIRED_CHECKS))
         self.assertEqual(self.workflow.verdict(info['statusCheckRollup']), [])
         # The owner can skip the checks altogether, even a failed one.
-        failed = [{'name': 'Regression (macos-latest)', 'status': 'COMPLETED', 'conclusion': 'FAILURE'}]
+        failed = [{'name': 'Regression', 'status': 'COMPLETED', 'conclusion': 'FAILURE'}]
         self.assertEqual(self.workflow.gate('feature', {**info, 'statusCheckRollup': failed}, skip_checks=True), target)
         (target / 'dirty.txt').write_text('preserve me', encoding='utf-8')
         with self.assertRaisesRegex(branch.WorkflowError, 'dirty'):
