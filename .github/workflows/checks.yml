@@ -9,21 +9,27 @@ on:
   pull_request:
 permissions:
   contents: read
+# A new push to a pull request replaces that pull request's older run. Every merge into main gets
+# a run of its own that nothing cancels: between 2026-11-05 and 11-06, back-to-back merges cut
+# off 22 of main's runs before they finished, so main went two days without a complete result.
 concurrency:
-  group: checks-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: checks-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || 'pr' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   regression:
-    name: Regression (${{ matrix.os }})
+    # The browser suites take 35-45 minutes one after another, so they run as four groups of about
+    # equal length side by side (scripts/e2e-groups.mjs balances them from scripts/e2e-durations.json).
+    # Group 1 also runs the syntax, private-state and unit checks.
+    name: Regression (${{ matrix.os }}, group ${{ matrix.group }} of 4)
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+        group: [1, 2, 3, 4]
     runs-on: ${{ matrix.os }}
-    # The full preflight (every browser e2e suite) takes 21-25 minutes on hosted runners when they
-    # are quick, and a slow macOS runner has taken over 35 (one ran out of its cap at the 29th of 30
-    # suites on 2026-11-06). 60 minutes leaves room for a slow runner and still stops a hang.
-    timeout-minutes: 60
+    # A group takes about 10-15 minutes. A suite that hangs is stopped at 12 minutes and tried once
+    # more, so 40 minutes leaves room for one stopped suite on a slow runner.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -35,12 +41,25 @@ jobs:
           python-version: '3.12'
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: npm run preflight
+      - if: matrix.group == 1
+        run: npm run check && npm test
+      - run: node scripts/e2e.mjs --group ${{ matrix.group }}/4
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: browser-artifacts-${{ matrix.os }}
+          name: browser-artifacts-${{ matrix.os }}-group-${{ matrix.group }}
           path: |
             tools/fixtures/**/*.png
             test-results/
           if-no-files-found: ignore
+  # One result for the whole run, for the merge tool: it passes only when every group on both
+  # systems passed.
+  summary:
+    name: Regression
+    needs: regression
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "Browser groups: ${{ needs.regression.result }}"
+          test "${{ needs.regression.result }}" = success

@@ -323,7 +323,8 @@ class Workflow:
         if not skip_checks: self.verdict(info.get('statusCheckRollup') or [])
         return target
 
-    REQUIRED_CHECKS = ('Regression (ubuntu-latest)', 'Regression (macos-latest)')
+    # The CI run's summary job; it passes only when every browser group on both systems passed.
+    REQUIRED_CHECKS = ('Regression',)
 
     def verdict(self, checks):
         """Refuse a check that finished without passing; return the ones still running.
