@@ -16,18 +16,37 @@ concurrency:
   group: checks-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || 'pr' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  quick:
+    # Syntax, private-state and unit checks on Linux. They take a few minutes and need no browser.
+    name: Quick checks (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: npm run check && npm test
   regression:
-    # The browser suites take 35-45 minutes one after another, so they run as four groups of about
-    # equal length side by side (scripts/e2e-groups.mjs balances them from scripts/e2e-durations.json).
+    # The browser suites run on macOS only. Tiksi runs on Macs and phones, not Linux, and the Linux
+    # runner has no GPU: MODEL draws through software GL there, and nearly every browser failure from
+    # 2026-11-04 to 11-06 was that slowness, not a fault in the app. With this setup macOS passed all
+    # 12 of its group runs on 2026-11-06.
+    # The suites take 35-45 minutes one after another, so they run as four groups of about equal
+    # length side by side (scripts/e2e-groups.mjs balances them from scripts/e2e-durations.json).
     # Group 1 also runs the syntax, private-state and unit checks.
-    name: Regression (${{ matrix.os }}, group ${{ matrix.group }} of 4)
+    name: Regression (macos-latest, group ${{ matrix.group }} of 4)
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
         group: [1, 2, 3, 4]
-    runs-on: ${{ matrix.os }}
-    # A group takes about 10-15 minutes. A suite that hangs is stopped at 12 minutes and tried once
+    runs-on: macos-latest
+    # A group takes about 5-13 minutes. A suite that hangs is stopped at 12 minutes and tried once
     # more, so 40 minutes leaves room for one stopped suite on a slow runner.
     timeout-minutes: 40
     steps:
@@ -47,19 +66,19 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: browser-artifacts-${{ matrix.os }}-group-${{ matrix.group }}
+          name: browser-artifacts-macos-group-${{ matrix.group }}
           path: |
             tools/fixtures/**/*.png
             test-results/
           if-no-files-found: ignore
-  # One result for the whole run, for the merge tool: it passes only when every group on both
-  # systems passed.
+  # One result for the whole run, for the merge tool: it passes only when the Linux quick checks
+  # and every macOS browser group passed.
   summary:
     name: Regression
-    needs: regression
+    needs: [quick, regression]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - run: |
-          echo "Browser groups: ${{ needs.regression.result }}"
-          test "${{ needs.regression.result }}" = success
+          echo "Quick checks: ${{ needs.quick.result }}; browser groups: ${{ needs.regression.result }}"
+          test "${{ needs.quick.result }}" = success && test "${{ needs.regression.result }}" = success

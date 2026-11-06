@@ -69,7 +69,7 @@ class WorkflowTests(unittest.TestCase):
                 'headRefOid': self.git('rev-parse', 'HEAD', cwd=target),
                 'url': 'https://example.com/pr/1', 'statusCheckRollup': [
                     {'name': name, 'status': 'COMPLETED', 'conclusion': 'SUCCESS'}
-                    for name in ['Regression (ubuntu-latest, group 1 of 4)', 'Regression (macos-latest, group 1 of 4)', 'Regression']]}
+                    for name in ['Quick checks (ubuntu-latest)', 'Regression (macos-latest, group 1 of 4)', 'Regression']]}
 
     def test_start_isolated_from_live_and_adopt_idempotent(self):
         target = self.start()
@@ -155,7 +155,7 @@ class WorkflowTests(unittest.TestCase):
                 self.workflow.gate('feature', {**info, **changes})
         # A check still running, or not started yet, is no verdict: the merge goes ahead without waiting.
         # The summary check appears only once every group has finished, so until then it counts as running.
-        running = [{'name': 'Regression (ubuntu-latest, group 1 of 4)', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'},
+        running = [{'name': 'Quick checks (ubuntu-latest)', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'},
                    {'name': 'Regression (macos-latest, group 2 of 4)', 'status': 'IN_PROGRESS', 'conclusion': None}]
         self.assertEqual(self.workflow.gate('feature', {**info, 'statusCheckRollup': running}), target)
         self.assertEqual(self.workflow.verdict(running), ['Regression', 'Regression (macos-latest, group 2 of 4)'])
