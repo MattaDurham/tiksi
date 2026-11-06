@@ -38,7 +38,7 @@ async function waitUntil(predicate, message, timeoutMs = 30_000) {
 async function viewerSettled(page, ms = 240000) {
   const end = Date.now() + ms;
   while (!(await page.evaluate(async () => (await import('/js/viewer3d.js')).viewerIdle()))) {
-    assert.ok(Date.now() < end, 'MODEL did not settle in ' + ms / 1000 + ' s: ' + JSON.stringify(await page.evaluate(async () => (await import('/js/viewer3d.js')).viewerIdleState())));
+    assert.ok(Date.now() < end, 'MODEL did not settle in ' + ms / 1000 + ' s: ' + JSON.stringify(await page.evaluate(async () => ({ ...(await import('/js/viewer3d.js')).viewerIdleState(), textures: (await import('/js/textures.js')).textureStats().filter(t => t.status !== 'ready') }))));
     await page.waitForTimeout(250);
   }
 }

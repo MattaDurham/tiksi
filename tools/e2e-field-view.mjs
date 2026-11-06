@@ -24,7 +24,7 @@ let browser;
 const shown = (page, sel) => page.locator(sel).first().evaluate(e => getComputedStyle(e).display !== 'none' && getComputedStyle(e).visibility !== 'hidden' && !!e.getClientRects().length);
 // Wait for MODEL to settle (first frame, models, textures and shader warm-up) before tapping it:
 // on a software GL the warm-up blocks the page for a long time and a tap lands only after it.
-const settled = async (pg, ms = 240000) => { const end = Date.now() + ms; while (!(await pg.evaluate(async () => (await import('/js/viewer3d.js')).viewerIdle()))) { assert.ok(Date.now() < end, 'MODEL did not settle: ' + JSON.stringify(await pg.evaluate(async () => (await import('/js/viewer3d.js')).viewerIdleState()))); await pg.waitForTimeout(250); } };
+const settled = async (pg, ms = 240000) => { const end = Date.now() + ms; while (!(await pg.evaluate(async () => (await import('/js/viewer3d.js')).viewerIdle()))) { assert.ok(Date.now() < end, 'MODEL did not settle: ' + JSON.stringify(await pg.evaluate(async () => ({ ...(await import('/js/viewer3d.js')).viewerIdleState(), textures: (await import('/js/textures.js')).textureStats().filter(t => t.status !== 'ready') })))); await pg.waitForTimeout(250); } };
 try {
   for (let i = 0; i < 100; i++) {
     try { if ((await fetch(url)).ok) break; } catch {}

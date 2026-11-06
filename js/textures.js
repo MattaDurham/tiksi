@@ -815,23 +815,34 @@ async function photoJob(mat, res, entry) {
     if (bytes) bmp = await createImageBitmap(new Blob([bytes]));
   } catch (e) { bmp = null; }
   if (entry.cancelled) { if (bmp && bmp.close) bmp.close(); return; }
-  if (!bmp) {
-    // Photo gone: leave the material on its flat tint (status 'ready' with no maps).
-    entry.maps = null; entry.status = 'ready';
-    const ws = entry.waiters; entry.waiters = [];
-    for (const w of ws) w(entry);
-    return;
-  }
-  const N = res;
-  const c = document.createElement('canvas');
-  c.width = N; c.height = N;
-  const g = c.getContext('2d', { willReadFrequently: true });
-  // Flip vertically: DataTexture rows start at v = 0 (bottom), canvases at the top.
-  g.translate(0, N); g.scale(1, -1);
-  g.drawImage(bmp, 0, 0, N, N);
-  if (bmp.close) bmp.close();
-  const col = new Uint8Array(g.getImageData(0, 0, N, N).data.buffer);
-  enqueue(photoMapsJob(mat, N, col, entry), entry);
+  // Photo gone: leave the material on its flat tint.
+  if (!bmp) { finishFlat(entry); return; }
+  let col;
+  try {
+    const N = res;
+    const c = document.createElement('canvas');
+    c.width = N; c.height = N;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    // Flip vertically: DataTexture rows start at v = 0 (bottom), canvases at the top.
+    g.translate(0, N); g.scale(1, -1);
+    g.drawImage(bmp, 0, 0, N, N);
+    col = new Uint8Array(g.getImageData(0, 0, N, N).data.buffer);
+  } catch (e) {
+    console.error('photo texture failed for ' + entry.key, e);
+    finishFlat(entry); return;
+  } finally { if (bmp.close) bmp.close(); }
+  enqueue(photoMapsJob(mat, res, col, entry), entry);
+}
+
+// A texture set that cannot be made (photo gone, or its synthesis threw) settles on the material's
+// flat tint: status 'ready' with no maps. It must not stay pending: MODEL redraws every 400 ms while
+// any set is pending and counts as settled only once none are, so one failed set kept the model
+// redrawing for as long as it was open, and the browser checks waited for it until they gave up.
+function finishFlat(entry) {
+  if (entry.status === 'ready') return;
+  entry.maps = null; entry.status = 'ready';
+  const ws = entry.waiters; entry.waiters = [];
+  for (const w of ws) { try { w(entry); } catch (e) { console.error(e); } }
 }
 
 // Derive roughness + normals from the photo's luminance, in scheduler slices like the synth jobs.
@@ -885,7 +896,12 @@ function tick(deadline) {
     const j = jobs[0];
     const s = performance.now();
     let r;
-    try { r = j.next(); } catch (e) { console.error('texture synthesis failed for ' + (j.entry ? j.entry.key : '?'), e); r = { done: true }; }
+    try { r = j.next(); }
+    catch (e) {
+      console.error('texture synthesis failed for ' + (j.entry ? j.entry.key : '?'), e);
+      r = { done: true };
+      if (j.entry && !j.entry.cancelled) finishFlat(j.entry);
+    }
     if (j.entry) j.entry.cpuMs = (j.entry.cpuMs || 0) + performance.now() - s;
     if (r.done) jobs.shift();
   }
