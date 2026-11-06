@@ -36,7 +36,7 @@ try {
   // ---------- phone, no property yet ----------
   const { defaultBrowserType, ...iphone } = devices['iPhone 13'];
   const phone = await browser.newContext(iphone);
-  const page = await phone.newPage();
+  let page = await phone.newPage();
   // Every request the page has open, so a hung reload can say what was holding the server.
   const pending = new Map();
   page.on('request', r => pending.set(r, performance.now()));
@@ -136,8 +136,18 @@ try {
   page.on('dialog', leave);
   // Wait for the document, not for every image and module: the topbar check below is what
   // proves the reload. On a timeout, print what the page and the server were doing.
-  try { await page.reload({ waitUntil: 'domcontentloaded' }); }
+  const reloadStarted = Date.now();
+  try {
+    if (process.env.FIELD_RELOAD_MODE === 'reopen') {
+      await page.close();
+      page = await phone.newPage();
+      page.on('pageerror', error => errors.push(error.message));
+      await page.goto(url + '/#/plan', { waitUntil: 'domcontentloaded' });
+    } else await page.reload({ waitUntil: 'domcontentloaded' });
+    console.log('PROBE reload mode=' + (process.env.FIELD_RELOAD_MODE || 'reload') + ' ms=' + (Date.now() - reloadStarted));
+  }
   catch (error) {
+    console.log('PROBE reload mode=' + (process.env.FIELD_RELOAD_MODE || 'reload') + ' HUNG ms=' + (Date.now() - reloadStarted));
     console.error('Requests still open:', [...pending].map(([r, t]) => r.method() + ' ' + r.url() + ' (' + Math.round(performance.now() - t) + ' ms)'));
     console.error('Page:', await page.evaluate(() => ({ url: location.href, ready: document.readyState, status: document.querySelector('#save-status')?.textContent })).catch(e => String(e)));
     console.error('Server answers directly:', await fetch(url + '/api/instance', { signal: AbortSignal.timeout(5000) }).then(r => r.status).catch(e => String(e)));
