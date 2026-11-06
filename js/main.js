@@ -3,7 +3,7 @@
 import {
   ws, load, save, touch, onChange, activeProperty, replaceWorkspace, mergeWorkspace,
   exportBundle, importBundle, listAllFileIds, orphanFiles, deleteFiles, whenHydrated,
-  setSaveStatus, fmtBytes, escapeHtml,
+  setSaveStatus, fmtBytes, escapeHtml, projectSlice,
 } from './store.js';
 import { openExchangeDialog } from './exchange-dialog.js';
 import { SCAN_ACCEPT, importScanFile } from './scans.js';
@@ -34,6 +34,8 @@ import * as cutsheets from './cutsheets.js';
 import * as documentcenter from './documentcenter.js';
 import * as guide from './guide.js';
 import { initNewProperty, openNewPropertyDialog, dialogOpen } from './newproperty.js';
+import { initOnePager, openOnePagerEditor, promptMode } from './one-pager-dialog.js';
+import { draftOnePager, onePagerStatus, PROMPT_MODES } from './one-pager.js';
 import { parseCaptureUrl } from './polycam.js';
 import {
   initFiles, bindFileIntake, saveProject, openProjectPicker, openFromFile, openFromUrl, linkFolder, unlinkFolder, reconnectFolder,
@@ -70,6 +72,9 @@ async function boot() {
     replaceWorkspace(demoWorkspace());
   }
   ensureBuiltinMaterials();
+  // Every property has a one-pager: draft the text of any that has none, and keep the text of
+  // the ones never edited by hand in step with their project.
+  if (ws.data.properties.map(p => draftOnePager(p, ws.data)).some(Boolean)) touch();
   if (diskWorkspace) diskWorkspace.changed();
   save();
   // Photo thumbnails come back from IndexedDB asynchronously; the first render waits for them.
@@ -89,7 +94,8 @@ async function boot() {
   onFilesChange(refreshSaveButton);
   reconnectFolder(false).then(refreshSaveButton).catch(() => refreshSaveButton());
   refreshSaveButton();
-  initNewProperty({ remount: remountView, refresh: refreshTopbar });
+  initNewProperty({ remount: remountView, refresh: refreshTopbar, toast: showToast });
+  initOnePager({ remount: remountView, refresh: refreshTopbar, toast: showToast });
   bindLinkIntake();
 
   window.addEventListener('hashchange', route);
@@ -261,6 +267,7 @@ function bindTopbar() {
 
   document.addEventListener('tiksi:files',e=>openFileMenu(e.detail?.tab || 'project',e.detail?.selected));
   document.addEventListener('tiksi:edit-in-sketchup',()=>openInSketchUp());
+  document.addEventListener('tiksi:one-pager',()=>openOnePagerEditor(activeProperty()));
 
   const fileBtn = document.getElementById('btn-file');
   fileBtn.onclick = () => openFileMenu();
@@ -296,11 +303,14 @@ function openFileMenu(initialTab = 'project', selected) {
     <nav class="file-tabs" aria-label="File actions">${[['project','Project'],['capture','Import'],['exchange','3D exchange'],['settings','Settings']].map(([id,label])=>`<button class="btn" data-file-tab="${id}">${label}</button>`).join('')}</nav>
     <section data-file-panel="project"><h3>Save your project</h3><p>A .tiksi file keeps your plan, models, original captures, pinned photos, materials and project work together.</p>
       <div class="file-actions"><button class="btn primary" data-project-save>SAVE PROJECT</button><button class="btn" data-project-as>SAVE AS…</button><button class="btn" data-project-open>OPEN / IMPORT…</button></div><p data-file-target></p>
-      <button class="btn" data-new-property>NEW PROPERTY</button></section>
+      <button class="btn" data-new-property>NEW PROPERTY</button>
+      <h3>One-pager</h3><p>A one-page teaser of this property for its client: the picture, the pitch, the scope, the budget and the schedule. Every saved version is a PDF among the property's documents; the newest is the one to send.</p>
+      <p class="op-file-status" data-op-file-status></p><div class="file-actions"><button class="btn primary" data-one-pager>OPEN ONE-PAGER</button></div></section>
     <section data-file-panel="capture" hidden><h3>Bring your room into Tiksi</h3><p>Choose photos, a walk-through video, a scan, a 3D model or a saved project. Imported projects add or update properties here.</p><button class="btn primary" data-capture-open>CHOOSE FILES…</button><button class="btn" data-polycam>POLYCAM LINK</button><button class="btn" data-photo3d>PHOTOS → 3D</button></section>
     <section data-file-panel="exchange" hidden data-file-exchange></section>
     <section data-file-panel="settings" hidden><h3>Display</h3><label>Units <select data-file-units><option value="imperial">Feet / square feet</option><option value="metric">Metres / square metres</option></select></label><details><summary>Model environment</summary><div data-file-env></div></details><h3>Where this project is kept</h3><p data-own-folder-label></p><div class="file-actions"><button class="btn primary" data-own-folder-link>CHOOSE FOLDER</button><button class="btn" data-folder-open>OPEN FROM FOLDER</button><button class="btn" data-own-folder-unlink>STOP KEEPING IT IN A FOLDER</button></div>
       <label>Keep a SketchUp mirror (.skp) beside each project <input type="checkbox" data-mirror-on></label><p data-mirror-label></p>
+      <h3>One-pager</h3><label>Ask to update the one-pager when Tiksi closes <select data-op-prompt>${PROMPT_MODES.map(([id,label])=>`<option value="${id}">${escapeHtml(label)}</option>`).join('')}</select></label><p>Closing Tiksi first shows the browser's own Leave site? question. Choose Cancel to stay and Tiksi asks whether to save the next version; choose Leave to close without it.</p>
       <details><summary>Workspace backup & maintenance</summary><h3>Projects without their own folder</h3><p data-folder-label></p><div class="file-actions"><button class="btn" data-folder-link>KEEP THEM IN ONE FOLDER</button><button class="btn" data-folder-unlink>UNLINK</button></div><p>Project saves are usually enough. A workspace backup carries every property.</p><button class="btn" data-workspace-save>SAVE WORKSPACE BACKUP</button><button class="btn" data-demo>ADD DEMO PROJECTS</button><button class="btn" data-storage>CLEAN UNUSED STORAGE</button><p>Replace workspace is available only when you intentionally want to restore a full backup.</p><button class="btn" data-workspace-replace>REPLACE FROM BACKUP…</button></details></section>
     <p role="status" data-file-status></p><input type="file" data-any-file hidden multiple accept=".tiksi,.json,${SCAN_ACCEPT},.c4d,.max,.ma,.mb,.rfa,.dwf,.mtl,.bin,.tga,.jpg,.jpeg,.png,.webp,.heic,.heif,.tif,.tiff,.avif,.mp4,.mov,.m4v"><input type="file" data-replace-file hidden accept=".json,.zip,.tiksi">`;
   document.body.append(dialog);dialog.showModal();dialog.addEventListener('close',()=>dialog.remove());
@@ -322,6 +332,7 @@ function openFileMenu(initialTab = 'project', selected) {
     const sharedLink=dialog.querySelector('[data-folder-link]');sharedLink.textContent=st.folderNeedsPermission?'RECONNECT':'KEEP THEM IN ONE FOLDER';
     dialog.querySelector('[data-folder-link]').disabled=!FSA_DIR;dialog.querySelector('[data-folder-open]').disabled=!st.folder&&!(own&&own.permitted);dialog.querySelector('[data-folder-unlink]').disabled=!st.folder && !st.folderNeedsPermission;
     dialog.querySelector('[data-mirror-on]').checked=ws.data.settings.sketchupMirror!==false;dialog.querySelector('[data-mirror-label]').textContent=prop?mirrorStatus(prop.id):'';
+    const opStatus=dialog.querySelector('[data-op-file-status]');if(prop){const st=onePagerStatus(prop,projectSlice(prop.id));opStatus.textContent=st.text;opStatus.dataset.state=st.state;}else opStatus.textContent='Open a property to see its one-pager.';dialog.querySelector('[data-one-pager]').disabled=!prop;
     if (diskWorkspace) {
       dialog.querySelector('[data-own-folder-label]').textContent = prop ? (diskWorkspace.paths[prop.id] || 'A project folder is created on its first save.') : diskWorkspace.folder;
       dialog.querySelector('[data-folder-label]').textContent = 'All projects are files on this Mac. Desktop and Tailscale clients use the same project folders. Browser storage is not used.';
@@ -347,6 +358,9 @@ function openFileMenu(initialTab = 'project', selected) {
       type=await importAnyFile(new File([zipSync(entries)],models[0].name+'.zip'));
     } else for(const file of files)type=await importAnyFile(file);ensureBuiltinMaterials();refreshTopbar();if(type==='model'&&currentName!=='model')location.hash='#/model';else if(type==='photo'&&currentName!=='photos')location.hash='#/photos';else if(type==='measure'&&currentName!=='measure')location.hash='#/measure';else remountView();dialog.close();});
   on('[data-new-property]',()=>{dialog.close();openNewPropertyDialog();});
+  on('[data-one-pager]',()=>{dialog.close();openOnePagerEditor(prop);});
+  dialog.querySelector('[data-op-prompt]').value=promptMode();
+  dialog.querySelector('[data-op-prompt]').onchange=e=>{ws.data.settings.onePagerPrompt=e.target.value;touch();};
   on('[data-polycam]',()=>{dialog.close();openNewPropertyDialog({into:prop?.id});});
   on('[data-photo3d]',()=>{dialog.close();location.hash='#/reconstruct';});
   dialog.querySelector('[data-file-units]').value=ws.data.settings.units;

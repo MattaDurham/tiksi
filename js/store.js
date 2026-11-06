@@ -9,6 +9,7 @@ import { normalizeDocSets } from './doc-sets.js';
 import { normalizeTags } from './tags.js';
 import { normalizeSavedViews } from './saved-views.js';
 import { isPictureRef, inlineBundlePictures } from './picture-assets.js';
+import { normalizeOnePager, emptyOnePager } from './one-pager-record.js';
 
 const LS_KEY = 'tiksi.workspace.v1';   // storage slot, not the schema version (see migrate)
 const SCHEMA_VERSION = 2;
@@ -363,7 +364,7 @@ export function propertyTemplate(name) {
     id: uid('prop'), name: name || 'New property', notes: '', wallHeight: 2.44,
     levels: [levelTemplate('lvl-0', 'Main level', 0, 2.44)], activeLevelId: 'lvl-0',
     walls: [], openings: [], rooms: [], fixtures: [], scans: [], photos: [], notePins: [], videos: [], measurements: [], env: defaultEnv(), source: null,
-    photoPositions: [], positionCounter: 0, cameraSets: [], docSets: [], savedViews: [],
+    photoPositions: [], positionCounter: 0, cameraSets: [], docSets: [], savedViews: [], onePager: emptyOnePager(),
   });
 }
 
@@ -576,7 +577,8 @@ function validateWorkspace(d) {
 function migrate(d) {
   validateWorkspace(d);
   if (!d.version) d.version = 1;
-  d.settings = Object.assign({ units: 'imperial', budgetCap: 150000, programStart: isoToday(), activePropertyId: null }, d.settings || {});
+  d.settings = Object.assign({ units: 'imperial', budgetCap: 150000, programStart: isoToday(), activePropertyId: null, onePagerPrompt: 'changed' }, d.settings || {});
+  if (!['changed', 'always', 'never'].includes(d.settings.onePagerPrompt)) d.settings.onePagerPrompt = 'changed';
   d.properties = d.properties || [];
   d.materials = d.materials || [];   // material records are normalised by materials.js
   d.products = d.products || [];
@@ -666,6 +668,8 @@ function migrate(d) {
     normalizeTags(p);
     // Saved views (saved-views.js): MODEL's tabs, each a camera with its tags.
     normalizeSavedViews(p);
+    // The one-pager (one-pager.js): the client teaser's text, picture choice and saved versions.
+    normalizeOnePager(p);
     // Notes pinned to a point in the model (MODEL, right-click). `notes` on the property is
     // its own free text; these are separate.
     const num = v => typeof v === 'number' || (typeof v === 'string' && v.trim()) ? Number(v) : NaN;

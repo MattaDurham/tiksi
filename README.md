@@ -103,6 +103,11 @@ Program side:
   site photos, specified products, budget line) and per product
 - Run the current-budget report: select and deselect projects against a budget
   cap, roll up by project and category, print it
+- Keep a one-page teaser of every property for its client: a picture, the pitch, the
+  scope, the budget range and the schedule on one Letter page. Its text is drafted
+  from the project, every saved version is a PDF among the property's documents, a
+  new property starts with version 1, and closing Tiksi asks to save the next version
+  when the project changed since the last one.
 - Generate a schedule: critical-path method over each project's dependencies,
   rendered as a Gantt chart with float, dependency arrows and a today line
 

@@ -21,9 +21,28 @@ PUBLIC_DIRS = {'css', 'js', 'vendor'}
 class AppHandler(SimpleHTTPRequestHandler):
     extensions_map = {**SimpleHTTPRequestHandler.extensions_map,
                       '.js': 'text/javascript', '.webmanifest': 'application/manifest+json'}
+    # Persistent connections. Python's server speaks HTTP/1.0 unless told otherwise, which closes
+    # the connection after every answer: a page opening with two hundred modules, pictures and
+    # fonts made two hundred TCP connections, and every poll and save made one more. Under that
+    # churn Linux drops connection attempts now and then, and the browser retries them only
+    # after 1, 2, 4, 8 and 16 seconds, so a reload could sit for half a minute (the field-view
+    # browser check hit this about half the time). With HTTP/1.1 a browser keeps a handful of
+    # connections and sends every request down them, so there is nothing to drop.
+    protocol_version = 'HTTP/1.1'
+    # An idle connection gives its thread back; browsers close theirs long before this.
+    timeout = 600
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(ROOT), **kwargs)
+
+    def send_response(self, code, message=None):
+        self.response_status = code
+        super().send_response(code, message)
+
+    def log_error(self, format, *args):
+        # An idle connection timing out is the normal end of a persistent connection, not an error.
+        if format.startswith('Request timed out'): return
+        super().log_error(format, *args)
 
     def valid_host(self):
         # Refuse DNS rebinding through arbitrary Host names. Numeric LAN and
@@ -52,6 +71,9 @@ class AppHandler(SimpleHTTPRequestHandler):
         else: super().do_HEAD()
 
     def do_POST(self):
+        # A request with a body closes its connection afterwards: a service that refuses an
+        # upload may leave part of the body unread, and the next request must not read it.
+        self.close_connection = True
         if not self.dispatch(): self.send_error(404)
 
     do_PUT = do_POST
@@ -111,7 +133,9 @@ class AppHandler(SimpleHTTPRequestHandler):
         self.send_error(404); return None
 
     def send_header(self, keyword, value):
-        if keyword.lower() == 'cache-control': self.cache_policy_sent = True
+        key = keyword.lower()
+        if key == 'cache-control': self.cache_policy_sent = True
+        if key in ('content-length', 'transfer-encoding'): self.body_framed = True
         super().send_header(keyword, value)
 
     def end_headers(self):
@@ -120,6 +144,12 @@ class AppHandler(SimpleHTTPRequestHandler):
         self.cache_policy_sent = False
         self.send_header('X-Content-Type-Options', 'nosniff')
         self.send_header('Referrer-Policy', 'same-origin')
+        # On a persistent connection the browser must be able to see where a body ends. A
+        # response with a body but no Content-Length (and not chunked) ends it by closing.
+        status = getattr(self, 'response_status', 200)
+        if not getattr(self, 'body_framed', False) and status >= 200 and status not in (204, 304) and self.command != 'HEAD':
+            self.send_header('Connection', 'close')
+        self.body_framed = False
         super().end_headers()
 
 class AppServer(ThreadingHTTPServer):

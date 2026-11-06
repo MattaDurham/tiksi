@@ -222,7 +222,8 @@ try {
   let ws = await workspace();
   let prop = findProp(ws);
   assertPlan(prop, 'open');
-  check(prop && prop.photos.length === 1, 'open: cover photo kept');
+  check(prop && prop.photos.filter(p => p.kind === 'photo').length === 1, 'open: cover photo kept');
+  check(prop && prop.onePager && prop.onePager.versions.length === 1 && prop.photos.some(p => p.kind === 'document' && /one-pager v1/.test(p.name)), 'open: the first one-pager was made with the property (version 1, a PDF among its documents)');
   check(ws.projects.some(p => prop && p.propertyId === prop.id && p.items.length >= 3), 'open: starter project seeded with takeoffs');
   check(!mock.hits.includes('/relay'), 'open: no relay used');
 

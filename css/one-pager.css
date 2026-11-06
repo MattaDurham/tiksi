@@ -1,0 +1,51 @@
+/* ---------- the one-pager: editor dialog, closing prompt, panels ---------- */
+.op-dialog {
+  width: min(1240px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); margin: auto; padding: 0; overflow: hidden;
+  display: flex; flex-direction: column; color: var(--ink);
+  background: linear-gradient(180deg, var(--panel-2), var(--panel)); border: 1px solid var(--line-2); border-radius: var(--radius-lg);
+  box-shadow: var(--lift), var(--shadow-2), 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+.op-dialog:not([open]) { display: none; }
+.op-dialog::backdrop { background: rgba(5, 7, 10, 0.72); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.op-dlg-head { display: flex; align-items: center; gap: 12px; padding: 12px 14px 10px 18px; border-bottom: 1px solid var(--line); }
+.op-dlg-head h2 { display: flex; align-items: center; gap: 9px; margin: 0; font-family: var(--mono); font-size: 12px; letter-spacing: 0.2em; color: var(--accent); font-weight: 700; white-space: nowrap; }
+.op-dlg-name { font-family: var(--sans); font-size: 13px; letter-spacing: 0; color: var(--ink); font-weight: 600; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+.op-dlg-status { flex: 1; min-width: 0; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.op-dlg-status[data-state="behind"] { color: var(--accent); }
+.op-dlg-status[data-state="current"] { color: var(--green); }
+.op-dlg-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 360px minmax(0, 1fr); gap: 0; overflow: hidden; }
+.op-form { overflow: auto; padding: 14px 18px 10px; border-right: 1px solid var(--line); }
+.op-form .field { margin-bottom: 9px; }
+.op-form textarea { min-height: 54px; }
+.op-form .faint { color: var(--faint); font-weight: 400; letter-spacing: 0; text-transform: none; }
+.op-show { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+.op-show .tool-check { padding: 4px 6px; margin: 0 -6px; }
+.op-draft-row { display: flex; flex-direction: column; gap: 6px; padding: 8px 0 10px; border-top: 1px solid var(--line); margin-top: 4px; }
+.op-versions { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 6px; }
+.op-versions .link-btn { background: none; border: 0; padding: 0; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.04em; color: var(--dim); cursor: pointer; }
+.op-versions .link-btn:hover { color: var(--accent); text-decoration: underline; }
+.op-preview-wrap { overflow: auto; padding: 18px; background: #0a0d10; }
+.op-preview { position: relative; width: 100%; max-width: 816px; margin: 0 auto; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6); background: #fff; overflow: hidden; }
+.op-preview-page { transform-origin: 0 0; width: 816px; }
+.op-dlg-foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px 14px; border-top: 1px solid var(--line); }
+.op-dlg-foot .btn { display: inline-flex; align-items: center; gap: 6px; }
+.op-dlg-foot .np-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46%; }
+@media (max-width: 900px) {
+  .op-dlg-body { grid-template-columns: 1fr; overflow: auto; }
+  .op-form { border-right: 0; border-bottom: 1px solid var(--line); overflow: visible; }
+  .op-dlg-name { display: none; }
+}
+
+/* the question when Tiksi closes */
+.op-dialog.op-prompt { width: min(560px, calc(100vw - 32px)); }
+.op-prompt-body { padding: 16px 18px 8px; }
+.op-prompt-body p { font-size: 13.5px; line-height: 1.5; color: var(--ink); margin: 0 0 10px; }
+.op-prompt-body p b { font-weight: 600; }
+.op-prompt-body .np-small { margin-top: 0; }
+
+/* FILE > Project and DOCUMENTS panels */
+.op-file-status { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.06em; color: var(--dim); }
+.op-file-status[data-state="behind"] { color: var(--accent); }
+.op-file-status[data-state="current"] { color: var(--green); }
+.dc-onepager { display: flex; flex-direction: column; gap: 6px; }
+.dc-onepager .dc-row span { white-space: normal; }
