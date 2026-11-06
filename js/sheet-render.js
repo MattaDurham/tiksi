@@ -143,8 +143,10 @@ function edgeLines(group) {
 
 // Ceilings belong in sections and 3D views but would cover a plan seen from above; a plan's
 // cut takes them away anyway, so they are only hidden for an uncut view from above.
+// Only the ceilings groups themselves: a level group carries a reference to its ceilings in
+// userData too, and hiding the level would hide the whole floor.
 function setCeilings(group, on) {
-  group.traverse(o => { if (o.userData && o.userData.ceilings) o.visible = on; });
+  group.traverse(o => { if (o.userData && o.userData.ceilings === true) o.visible = on; });
 }
 
 // Render one camera to a canvas: { camera, clip (THREE.Plane[]), style, width, height }.
@@ -214,7 +216,7 @@ async function renderNow(prop, v, width, height) {
   const size = box.getSize(new THREE.Vector3()), mid = box.getCenter(new THREE.Vector3());
   const reach = Math.max(size.length(), 10) * 2;
   let camera, clip = [];
-  setCeilings(group, true);
+  setCeilings(group, v.ceilings !== false);
   if (v.kind === 'view3d') {
     const c = v.camera;
     camera = new THREE.PerspectiveCamera(c.fov, width / height, 0.05, reach * 4);

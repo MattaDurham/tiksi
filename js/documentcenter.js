@@ -22,6 +22,8 @@ import { modelBounds } from './geometry.js';
 import { photoBytes } from './photos-store.js';
 import { renderPdfPage, addDocumentFromFile } from './documents.js';
 import { lastCameraView } from './viewer3d.js';
+import { openOnePagerEditor } from './one-pager-dialog.js';
+import { onePagerStatus, latestVersion } from './one-pager.js';
 
 const PT = 72;
 const EXPORT_DPI = 150;
@@ -73,6 +75,7 @@ function render() {
   el.innerHTML = `<div class="dc-layout">
     <aside class="dc-side">
       <div class="dc-side-scroll">
+        <section><div class="dc-h"><span class="kicker">ONE-PAGER</span><button class="btn small" data-one-pager title="The one-page teaser for the client: edit it and save the next version">${icon('edit', { size: 11 })}OPEN</button></div><div class="dc-onepager" data-onepager></div></section>
         <section><div class="dc-h"><span class="kicker">DRAWING SETS</span><button class="btn small" data-new-set>${icon('plus', { size: 11 })}NEW SET</button></div><div data-sets></div></section>
         <section data-sheets-box><div class="dc-h"><span class="kicker">SHEETS</span><button class="btn small" data-new-sheet>${icon('plus', { size: 11 })}ADD SHEET</button></div><div data-sheets></div></section>
         <section><div class="dc-h"><span class="kicker">SAVED DOCUMENTS</span><label class="btn small" title="Add a PDF or an image to this property's documents">${icon('upload', { size: 11 })}ADD<input type="file" accept="application/pdf,image/*" data-add-doc hidden></label></div><div data-saved></div></section>
@@ -91,6 +94,7 @@ function render() {
     touch(); render();
   };
   el.querySelector('[data-new-sheet]').onclick = () => addSheet();
+  el.querySelector('[data-one-pager]').onclick = () => openOnePagerEditor(prop, { onSaved: () => { if (el) renderLists(); } });
   el.querySelector('[data-add-doc]').onchange = async e => {
     const f = e.target.files[0];
     if (!f) return;
@@ -105,6 +109,7 @@ function render() {
 
 function renderLists() {
   if (!el) return;
+  renderOnePager();
   const sets = prop.docSets;
   el.querySelector('[data-sets]').innerHTML = sets.length ? sets.map(s => `<button class="dc-row ${s.id === setId && !viewing ? 'active' : ''}" data-set="${esc(s.id)}">
       <b>${esc(s.name)}</b><span>${s.sheets.length} sheet${s.sheets.length === 1 ? '' : 's'} · ${esc(paperOf(s).label.split(',')[0])}${s.revisions.length ? ' · rev ' + s.revisions[s.revisions.length - 1].n : ''}</span></button>`).join('')
@@ -143,6 +148,17 @@ function renderLists() {
     try { const r = await diskWorkspace.openProjectPath(prop, p.documents[+i].path); setStatus('Opened ' + (r.path || p.documents[+i].path) + ' on this Mac.'); }
     catch (e) { setStatus(e.message || 'Could not open the file.'); }
   });
+}
+
+// The newest one-pager version opens in the middle like any saved document.
+function renderOnePager() {
+  const host = el.querySelector('[data-onepager]');
+  if (!host) return;
+  const st = onePagerStatus(prop, projectSlice(prop.id)), v = latestVersion(prop);
+  const doc = v && (prop.photos || []).find(p => p.id === v.documentId);
+  host.innerHTML = `<p class="op-file-status" data-state="${esc(st.state)}">${esc(st.text)}</p>` +
+    (doc ? `<button class="dc-row ${viewing && viewing.id === doc.id ? 'active' : ''}" data-onepager-doc="${esc(doc.id)}"><b>Version ${v.n}</b><span>${esc(doc.name)}</span></button>` : '');
+  host.querySelectorAll('[data-onepager-doc]').forEach(b => b.onclick = () => { viewing = { kind: 'doc', id: b.dataset.onepagerDoc, page: 1 }; selectedId = ''; adjustId = ''; render(); });
 }
 
 function renderToolbar() {

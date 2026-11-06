@@ -26,6 +26,7 @@ Open **GUIDE** at the top of Tiksi for chapter search, expandable screenshots an
 - [Sequence the work](#schedule)
 - [Print a useful specification sheet](#sheets)
 - [Make a drawing set from the model](#documents)
+- [Send the client a one-pager](#one-pager)
 - [Settings, backups and storage](#settings)
 - [Shortcuts and common questions](#shortcuts)
 
@@ -43,7 +44,7 @@ The same sample property appears throughout this guide. The left rail changes vi
 
 | Workspace | Use it for |
 | --- | --- |
-| FILE | Open, import, save, exchange models and change settings. |
+| FILE | Open, import, save, exchange models, edit the one-pager and change settings. |
 | PLAN | Trace and measure the room; edit walls, openings and levels. |
 | MODEL | Inspect the 3D design, imported scans, photo pins and before/after. |
 | MATERIALS | Choose and tune finishes or make a material from a photo. |
@@ -693,6 +694,34 @@ A sheet with a floor plan cut at 3'-11", a section through the plan, a 3D view a
 **Revisions.** Each saved PDF becomes the next revision in the title block and a document of the property, so it travels in the project file.
 
 > **Good to know:** Views are rendered images of the model at the chosen scale; check dimensions on site before ordering or cutting. PDFs are printed at 150 dots per inch.
+
+<a id="one-pager"></a>
+
+## Send the client a one-pager
+
+**Where:** FILE → Project → OPEN ONE-PAGER
+
+Every property has a one-page teaser for its client: a picture, the pitch, the scope, the budget range and the schedule on one Letter page. The text is drafted from the project and can be edited by hand; every saved version is a PDF among the property's documents, and the newest version is the one to send.
+
+### Try it
+
+1. A new property starts with version 1, made the moment it is created (by name or from a Polycam scan). Properties from before this feature get their text drafted the next time Tiksi opens; their first version is saved from the editor or when Tiksi closes.
+2. Open FILE → Project → OPEN ONE-PAGER, or OPEN in the ONE-PAGER section of DOCUMENTS. The page on the right follows every edit.
+3. Edit the headline, tagline, summary and highlights, name who it is prepared for and by, and choose the picture at the top: the newest rendering or site photo, a 3D view of the model, or the floor plan. Toggles take the budget range, schedule, rooms, plan or products off the page.
+4. SAVE VERSION makes the next PDF and lists it among the property's saved documents. DOWNLOAD PDF gives a copy of the page as it looks now; SEND… hands the newest version to Mail, Messages or AirDrop where the browser offers that.
+5. When Tiksi closes while the project changed since the newest version, the browser first asks Leave site?. Cancel to stay, and Tiksi asks UPDATE THE ONE-PAGER?: UPDATE NOW saves the next version right there, REVIEW FIRST opens the editor, NOT NOW keeps quiet until the project changes again. Leave closes without a new version.
+
+### Other features here
+
+**Text that follows the project.** Until a line is edited by hand, the headline, tagline, summary and highlights are written again from the rooms, floor area, scope, budget, schedule and products each time a version is saved. REDRAFT FROM THE PROJECT writes them again on purpose.
+
+**What a version was made of.** Each saved version remembers the project it was laid out from, so FILE, DOCUMENTS and the closing question can say whether the one-pager is current or behind.
+
+**Versions.** Versions are numbered and dated: 12 Elm Street - one-pager v3 - 2026-11-06.pdf. Older versions stay in the documents, so what was sent last month can be found again.
+
+**When closing asks.** FILE → Settings → One-pager: ask when the project changed since the last version (the default), every time, or never.
+
+> **Good to know:** The page is laid out in the browser and printed at 200 dots per inch, so it looks the same everywhere. Browsers only let a page ask a generic Leave site? question before it closes, which is why Tiksi's own question comes after choosing to stay.
 
 <a id="settings"></a>
 

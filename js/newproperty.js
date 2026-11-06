@@ -15,8 +15,9 @@ import { proposeFixtures, openFixtureReview } from './fixtures-ui.js';
 import { chooseScanPlacement } from './scanplace.js';
 import { addPhotoFromFile } from './photos-store.js';
 import { icon } from './icons.js';
+import { makeFirstOnePager, openOnePagerEditor } from './one-pager-dialog.js';
 
-let app = { remount() {}, refresh() {} };
+let app = { remount() {}, refresh() {}, toast() {} };
 let dlg = null;          // the open dialog element
 let run = null;          // the pipeline in flight: { abort: AbortController, prop }
 
@@ -151,6 +152,9 @@ function submit(value, into, linkOnly) {
     touch();
     closeDialog();
     app.refresh(); app.remount();
+    // Every property starts with a one-pager: its first draft is version 1, made right away.
+    makeFirstOnePager(p).then(v => { if (v) app.toast('One-pager version 1 saved for ' + p.name + '. FILE > Project > OPEN ONE-PAGER edits it.'); })
+      .catch(e => { console.error(e); app.toast('The first one-pager could not be made: ' + (e.message || e), 'error'); });
     return;
   }
   startLinkImport(link, into);
@@ -380,7 +384,6 @@ async function proposePlan(prop, scan, signal) {
 
 function finish(prop, result, applied, fixtures) {
   run = null;
-  dlg.dataset.state = 'done';
   app.refresh();
   const box = dlg.querySelector('[data-np-result]');
   const floor = roomsFloorArea(prop.rooms);
@@ -400,7 +403,15 @@ function finish(prop, result, applied, fixtures) {
       ${fixtures ? `<button class="btn" data-np-fixtures>${icon('scan')}REVIEW ${fixtures.proposals.length} FIXTURE${fixtures.proposals.length === 1 ? '' : 'S'}</button>` : ''}
       <button class="btn primary" data-np-go="plan">${icon('plan')}OPEN PLAN</button>
       <button class="btn" data-np-go="model">${icon('model')}OPEN MODEL</button>
+      <button class="btn" data-np-onepager-open hidden>${icon('file')}OPEN ONE-PAGER</button>
     </div>`;
+  // The first one-pager is part of making the property: version 1, from the scan's cover
+  // photo (or the model) and the proposed plan and scope. The dialog reads done once it is in.
+  const opStep = log('Making the first one-pager', 'run');
+  makeFirstOnePager(prop, { progress: t => opStep && opStep.detail(t) })
+    .then(v => { if (opStep) opStep.ok(v ? 'version ' + v.n + ' saved to the documents' : 'already there'); const b = dlg && dlg.querySelector('[data-np-onepager-open]'); if (b) { b.hidden = false; b.onclick = () => { closeDialog(); app.remount(); openOnePagerEditor(prop); }; } })
+    .catch(e => { console.error(e); if (opStep) opStep.warn('not made: ' + (e.message || e)); })
+    .finally(() => { if (dlg) dlg.dataset.state = 'done'; });
   box.querySelectorAll('[data-np-go]').forEach(b => b.onclick = () => { closeDialog(); location.hash = '#/' + b.dataset.npGo; app.remount(); });
   const fxBtn = box.querySelector('[data-np-fixtures]');
   if (fxBtn) fxBtn.onclick = async () => {
