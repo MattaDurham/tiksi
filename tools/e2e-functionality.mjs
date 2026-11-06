@@ -32,10 +32,21 @@ async function waitUntil(predicate, message, timeoutMs = 30_000) {
     await delay(Math.min(100, remaining));
   }
 }
+// MODEL compiles every shader variant once its first frame is up; on a software GL that blocks the
+// page for a long time, and a click that lands in it is answered only when it ends (the Linux runner
+// timed out there). So wait for the viewer to settle before clicking anything on the model page.
+async function viewerSettled(page, ms = 240000) {
+  const end = Date.now() + ms;
+  while (!(await page.evaluate(async () => (await import('/js/viewer3d.js')).viewerIdle()))) {
+    assert.ok(Date.now() < end, 'MODEL did not settle in ' + ms / 1000 + ' s: ' + JSON.stringify(await page.evaluate(async () => (await import('/js/viewer3d.js')).viewerIdleState())));
+    await page.waitForTimeout(250);
+  }
+}
 async function navigateToView(page, view) {
   // These links change the hash and mount a view in the current document. Waiting
   // for a full navigation after the click stalled the Linux CI browser check.
   // The phone layout hides the rail; its pages are in the side panel.
+  if (await page.evaluate(() => document.documentElement.classList.contains('fd-model'))) await viewerSettled(page);
   if (await page.evaluate(() => document.documentElement.classList.contains('phone'))) {
     await page.locator('.fd-menu').click();
     await page.locator(`.fd-panel a[href="#/${view}"]`).click({ noWaitAfter: true });
