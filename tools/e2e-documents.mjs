@@ -43,6 +43,9 @@ const inked = id => page.evaluate(async id => {
   return { href: href.slice(-40), ink };
 }, id);
 const waitImages = n => page.waitForFunction(n => document.querySelectorAll('.dc-paper svg image').length >= n, n, { timeout: 90000 });
+// The sheet is redrawn after every change (a drag ends in one, and each rendered view brings
+// another), which replaces the elements being measured: measure again until one holds still.
+const boxOf = async locator => { for (let i = 0; i < 40; i++) { const b = await locator.boundingBox(); if (b) return b; await page.waitForTimeout(100); } throw new Error('No box for ' + locator); };
 
 try {
   await page.goto(url + '/#/plan');
@@ -88,21 +91,21 @@ try {
 
   // Move and resize the plan by dragging; the sheet snaps to 1/8 inch.
   const hit = page.locator(`.dc-vp-hit[data-vp="${plan.id}"]`);
-  const box = await hit.boundingBox();
+  const box = await boxOf(hit);
   const inch = box.width / plan.w;
   await page.mouse.move(box.x + 20, box.y + 20); await page.mouse.down();
   await page.mouse.move(box.x + 20 + inch * 0.5, box.y + 20 + inch * 0.25, { steps: 5 }); await page.mouse.up();
   list = await vps();
   check(Math.abs(list[0].x - (plan.x + 0.5)) < 0.13 && Math.abs(list[0].y - (plan.y + 0.25)) < 0.13 && (list[0].x * 8) % 1 === 0, `dragging moves the plan half an inch right and a quarter down (${plan.x} -> ${list[0].x})`);
   const handle = page.locator(`.dc-vp-handle[data-handle="${plan.id}"]`);
-  const hb = await handle.boundingBox();
+  const hb = await boxOf(handle);
   await page.mouse.move(hb.x + 4, hb.y + 4); await page.mouse.down();
   await page.mouse.move(hb.x + 4 + inch, hb.y + 4, { steps: 5 }); await page.mouse.up();
   list = await vps();
   check(Math.abs(list[0].w - (plan.w + 1)) < 0.13, `the corner handle makes the plan an inch wider (${plan.w} -> ${list[0].w})`);
 
   // Double-click to adjust: scrolling steps the scale, Esc finishes.
-  const hb2 = await hit.boundingBox();
+  const hb2 = await boxOf(hit);
   await page.mouse.dblclick(hb2.x + hb2.width / 2, hb2.y + hb2.height / 2);
   await page.locator('.dc-adjusting').waitFor();
   await page.mouse.move(hb2.x + hb2.width / 2, hb2.y + hb2.height / 2);

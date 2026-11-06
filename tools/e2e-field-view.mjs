@@ -22,6 +22,9 @@ const serverErr = []; child.stderr.on('data', d => { serverErr.push(...String(d)
 const url = 'http://127.0.0.1:' + port;
 let browser;
 const shown = (page, sel) => page.locator(sel).first().evaluate(e => getComputedStyle(e).display !== 'none' && getComputedStyle(e).visibility !== 'hidden' && !!e.getClientRects().length);
+// Wait for MODEL to settle (first frame, models, textures and shader warm-up) before tapping it:
+// on a software GL the warm-up blocks the page for a long time and a tap lands only after it.
+const settled = async (pg, ms = 240000) => { const end = Date.now() + ms; while (!(await pg.evaluate(async () => (await import('/js/viewer3d.js')).viewerIdle()))) { assert.ok(Date.now() < end, 'MODEL did not settle: ' + JSON.stringify(await pg.evaluate(async () => (await import('/js/viewer3d.js')).viewerIdleState()))); await pg.waitForTimeout(250); } };
 try {
   for (let i = 0; i < 100; i++) {
     try { if ((await fetch(url)).ok) break; } catch {}
@@ -46,6 +49,7 @@ try {
   assert.equal(await shown(page, '#rail'), false, 'no rail on a phone');
   assert.equal(await page.locator('#rail a.active').getAttribute('data-view'), 'model', 'a phone opens on the model');
   // FILE must still open from the panel with nothing to show yet, so a property can be added.
+  await settled(page);
   await page.locator('.fd-menu').click();
   await page.locator('.fd-panel [data-file]').click();
   await page.locator('dialog.file-dialog[open]').waitFor();

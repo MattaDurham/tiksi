@@ -3998,6 +3998,20 @@ export function drawStats({ grouped } = {}) {
 export function frameState() {
   return scene && renderer ? { fast: lastFrameFast, shadowRefreshPending: renderer.shadowMap.needsUpdate, ...frameCounts } : null;
 }
+// Whether MODEL has settled: a full frame drawn, every model loaded, every procedural texture
+// in and the shader programs warmed after it, nothing left to draw. The browser checks wait
+// for this before they tap: on a software GL the warm-up blocks the page for a long time, and
+// a tap that lands in it is answered only when it ends.
+// MODEL that is not showing a model (no property yet, or another page) has nothing to settle.
+export function viewerIdle() { const s = viewerIdleState(); return !s.mounted || Object.values(s).every(Boolean); }
+// The same, part by part, so a check that gave up waiting can say what was still going on.
+export function viewerIdleState() {
+  return {
+    mounted: !!(scene && renderer), programsWarm, texturesIn: !texturesPending && !(scene && pendingTextureJobs() > 0),
+    modelsLoaded: !Object.values(scanState).some(s => s === 'loading') && !(scene && splatBusy()),
+    firstFrame: frameCounts.fullFrames > 0, nothingToDraw: framesLeft <= 0, shadowsFresh: !(renderer && renderer.shadowMap.needsUpdate),
+  };
+}
 // Whether MODEL currently draws this part of a loaded model (tag key from tags.js); null when the
 // key names no loaded part. Grouped parts answer for their proxy, others for their own mesh.
 export function partDrawn(key) {
