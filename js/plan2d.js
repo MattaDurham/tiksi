@@ -1770,6 +1770,13 @@ function onPointerMove(e) {
     const w = prop.walls.find(w => w.id === drag.id);
     if (!w) return;
     const pt = snapPoint(wx, wy, { excludeWall: drag.joint ? new Set(drag.joint.wallIds) : w.id, from: drag.end === 'a' ? [w.bx, w.by] : [w.ax, w.ay], walls: true });
+    // A corner never lands on (or within MIN_WALL of) the far end of a wall it moves: that
+    // wall would vanish from the drawing and the schedule yet stay in the data. The corner
+    // waits where it last was until the pointer leaves that zone.
+    const ends = drag.joint ? drag.joint.ends : [{ w, end: drag.end }];
+    const short = ends.find(({ w: ew, end }) => { const far = end === 'a' ? 'b' : 'a'; return Math.hypot(pt[0] - ew[far + 'x'], pt[1] - ew[far + 'y']) < MIN_WALL; });
+    if (short) { setHint(`A wall cannot be shorter than ${fmtLen(MIN_WALL)}. Delete the wall instead (Backspace).`); drag.refused = true; return; }
+    if (drag.refused) { drag.refused = false; updateHint(); }
     if (drag.joint) applyCornerMove(drag.joint, pt[0], pt[1]);
     else if (drag.end === 'a') { w.ax = pt[0]; w.ay = pt[1]; } else { w.bx = pt[0]; w.by = pt[1]; }
   } else if (drag.kind === 'floorCorner') {
@@ -2258,6 +2265,8 @@ function renderInspector() {
       <button class="btn danger" data-del>${icon('trash')}DELETE WALL</button>`;
     insp.querySelector('[data-len=len]').onchange = e => {
       const v = parseLen(e.target.value);
+      // A wall with no length has no direction to grow along (left over from older files).
+      if (!(L >= 0.001)) { setHint('This wall has no length, so it has no direction to grow along. Delete it and draw it again.'); renderInspector(); return; }
       if (!isNaN(v) && v > 0.05) {
         pushUndo();
         // The b end moves along the wall like a corner drag: walls joined there and the floor
