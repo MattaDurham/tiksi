@@ -3,14 +3,14 @@
 //
 // Times come from scripts/e2e-durations.json: seconds per suite, the slower of Linux and macOS
 // on a passing CI run. They only balance the groups; a suite missing from the file counts as
-// DEFAULT_SECONDS. Group 1 also runs the syntax and unit checks, so it starts with
-// FIRST_GROUP_EXTRA seconds of work already on it.
+// DEFAULT_SECONDS. FIRST_GROUP_EXTRA is work group 1 carries before its suites; the syntax and
+// unit checks moved to the Linux quick job, so today it is none.
 
 export const DEFAULT_SECONDS = 60;
 // The suites whose phone checks also run on Safari's engine (node scripts/e2e.mjs --webkit);
 // each reads E2E_BROWSER=webkit.
 export const WEBKIT_SUITES = ['e2e-field-view.mjs'];
-export const FIRST_GROUP_EXTRA = 150;
+export const FIRST_GROUP_EXTRA = 0;
 
 export function parseGroup(text) {
   const match = /^(\d+)\/(\d+)$/.exec(String(text || ''));

@@ -72,7 +72,9 @@ try {
     try { if ((await fetch(url)).ok) break; } catch {}
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  browser = ENGINE === 'webkit' ? await webkit.launch() : await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+  // E2E_SOFTWARE_GL=0 draws with the machine's graphics instead of Chromium's software GL.
+  const gl = process.env.E2E_SOFTWARE_GL === '0' ? [] : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'];
+  browser = ENGINE === 'webkit' ? await webkit.launch() : await chromium.launch({ args: gl });
   const errors = [];
 
   // ---------- phone, no property yet ----------

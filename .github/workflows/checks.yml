@@ -15,21 +15,32 @@ permissions:
 concurrency:
   group: checks-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'push' && github.sha || 'pr' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+# The building blocks are named by the commit of an exact release (the tag in each comment), so a
+# moved tag cannot change what runs. Update them together, by commit.
 jobs:
   quick:
-    # Syntax, private-state and unit checks on Linux. They take a few minutes and need no browser.
-    name: Quick checks (ubuntu-latest)
+    # Syntax, names, private-state and unit checks on Linux. They need no browser. They run on the
+    # oldest versions Tiksi supports (package.json engines) and on the versions this Mac runs.
+    name: Quick checks (ubuntu-latest, Node ${{ matrix.node }}, Python ${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { node: '22', python: '3.12' }
+          - { node: '26', python: '3.15' }
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '22'
+          node-version: ${{ matrix.node }}
           cache: npm
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python }}
+      # ffmpeg lets the nine video-frame tests run here instead of skipping (scripts/unit-skips.json).
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg
       - run: npm ci
       - run: npm run check && npm test
   regression:
@@ -39,7 +50,7 @@ jobs:
     # 12 of its group runs on 2026-11-06.
     # The suites take 35-45 minutes one after another, so they run as four groups of about equal
     # length side by side (scripts/e2e-groups.mjs balances them from scripts/e2e-durations.json).
-    # Group 1 also runs the syntax, private-state and unit checks.
+    # The syntax and unit checks run once, in the quick job above, not again here.
     name: Regression (macos-latest, group ${{ matrix.group }} of 4)
     strategy:
       fail-fast: false
@@ -50,20 +61,26 @@ jobs:
     # more, so 40 minutes leaves room for one stopped suite on a slow runner.
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: npm
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - if: matrix.group == 1
-        run: npm run check && npm test
+      # Every suite in the group runs even after one fails; the log ends with every failure.
       - run: node scripts/e2e.mjs --group ${{ matrix.group }}/4
-      - uses: actions/upload-artifact@v4
+      # What happened to each suite, second tries included, kept with every run.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: browser-record-macos-group-${{ matrix.group }}
+          path: test-results/e2e-*.json
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:
           name: browser-artifacts-macos-group-${{ matrix.group }}
@@ -71,14 +88,43 @@ jobs:
             tools/fixtures/**/*.png
             test-results/
           if-no-files-found: ignore
-  # One result for the whole run, for the merge tool: it passes only when the Linux quick checks
-  # and every macOS browser group passed.
+  phone-webkit:
+    # The iPhone runs Safari's engine, WebKit, not Chromium. The phone layout suite runs on it here,
+    # including a one-finger orbit and a held walk-pad button.
+    name: Phone on Safari's engine (macos-latest)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: npx playwright install webkit
+      - run: node scripts/e2e.mjs --webkit
+      # Measurement for the software-drawing question: the same suite on Chromium drawing with
+      # the runner's graphics instead of software GL. Its time is compared with the software-GL
+      # run in the browser groups; it never fails the run.
+      - run: npx playwright install chromium && time E2E_SOFTWARE_GL=0 node tools/e2e-field-view.mjs
+        continue-on-error: true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: browser-record-macos-webkit
+          path: test-results/
+          if-no-files-found: ignore
+  # One result for the whole run, for the merge tool: it passes only when both quick jobs, every
+  # macOS browser group and the Safari-engine phone run passed.
   summary:
     name: Regression
-    needs: [quick, regression]
+    needs: [quick, regression, phone-webkit]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - run: |
-          echo "Quick checks: ${{ needs.quick.result }}; browser groups: ${{ needs.regression.result }}"
-          test "${{ needs.quick.result }}" = success && test "${{ needs.regression.result }}" = success
+          echo "Quick checks: ${{ needs.quick.result }}; browser groups: ${{ needs.regression.result }}; phone on Safari's engine: ${{ needs.phone-webkit.result }}"
+          test "${{ needs.quick.result }}" = success && test "${{ needs.regression.result }}" = success && test "${{ needs.phone-webkit.result }}" = success
