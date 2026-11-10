@@ -228,11 +228,19 @@ original again or making open pages reload. A page can send an original in piece
 smaller copy of a picture (`?size=256|512|1024|2048`), mark a save with a `saveId`
 so a repeat is not committed twice (`GET /api/workspace/saves?id=<id>`), and take a
 project whose file is gone for good off the list
-(`POST /api/workspace/unavailable/<id>/forget`; no file is touched). The runtime
-keeps the newest 50 catalog copies, then one a day for 90 days and one a month;
-stored originals nothing refers to go after 30 days. Model conversion keeps its
-newest 20 jobs within 2 GB and material research its newest 100 records, removing
-the oldest to make room. Successful reads are not logged.
+(`POST /api/workspace/unavailable/<id>/forget`, for a project whose file is missing;
+no file is touched). Nothing the Mac cannot make again is removed on its own: every
+saved catalog copy and stored original stays until a clean-up is asked for.
+`GET /api/workspace/cleanup` lists what one would remove (catalog copies beyond the
+newest 50, one a day for 90 days and one a month; stored originals nothing kept refers
+to and nobody sent or asked about for 30 days), with counts and bytes, and
+`POST /api/workspace/cleanup` with exactly that list removes it. The newest copy that
+holds each property, and every original an unavailable project or a kept copy refers
+to, always stay. Model conversion keeps its newest 20 jobs within 2 GB, removing the
+oldest to make room, since their sources came from the page and their results can be
+made again. Material research keeps every record; when its 100 are full it says so
+with their size. Unfinished uploads in pieces are limited to 32 and 8 GB between
+them, and go after a week with no piece. Successful reads are not logged.
 
 ### Live material and fixture sourcing
 
