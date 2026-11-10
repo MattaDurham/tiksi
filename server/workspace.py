@@ -781,7 +781,14 @@ class WorkspaceService:
 
     def committed(self, save_id):
         """The revision the save with this id made, or None if the Mac never committed it."""
-        with self.lock: return (self.state.get('saves') or {}).get(save_id)
+        with self.lock: found = (self.state.get('saves') or {}).get(save_id)
+        return found.get('revision') if isinstance(found, dict) else found
+
+    @staticmethod
+    def save_fingerprint(request):
+        """What a save carries, reduced to one fingerprint: the same id must come with the same save."""
+        body = {k: request.get(k) for k in ('data', 'projectData', 'assets', 'unchangedProjects', 'propertyOrder')}
+        return hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()
 
     def commit_once(self, request):
         """Commit a save; returns (revision, repeated). A save carrying an id the Mac has already
@@ -791,11 +798,18 @@ class WorkspaceService:
         save_id = request.get('saveId')
         if save_id is not None and (not isinstance(save_id, str) or not 0 < len(save_id) <= 200):
             raise WorkspaceError('A save id is text of 1 to 200 characters')
+        fingerprint = self.save_fingerprint(request) if save_id is not None else None
         with self.lock:
-            if save_id is not None and save_id in (self.state.get('saves') or {}): return self.state['saves'][save_id], True
-            return self.commit_new(request, save_id), False
+            found = (self.state.get('saves') or {}).get(save_id) if save_id is not None else None
+            if found is not None:
+                if isinstance(found, dict) and found.get('body') != fingerprint:
+                    error = WorkspaceError('This save id was already used for a different save; give each save a new random id', 409)
+                    error.code = 'save-id-reused'
+                    raise error
+                return (found.get('revision') if isinstance(found, dict) else found), True
+            return self.commit_new(request, save_id, fingerprint), False
 
-    def commit_new(self, request, save_id):
+    def commit_new(self, request, save_id, fingerprint=None):
         data, assets = request.get('data'), request.get('assets')
         self.check_records(data)
         order = request.get('propertyOrder')
@@ -823,7 +837,7 @@ class WorkspaceService:
             # never in a project file; it is written in the same step as the save itself.
             saves = dict(self.state.get('saves') or {})
             if save_id is not None:
-                saves[save_id] = value['revision']
+                saves[save_id] = {'revision': value['revision'], 'body': fingerprint}
                 for old in list(saves)[:max(0, len(saves) - KEEP_SAVE_IDS)]: del saves[old]
             value['saves'] = saves
             encoded = json.dumps(value, ensure_ascii=False).encode('utf-8')

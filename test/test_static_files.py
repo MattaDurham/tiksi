@@ -213,6 +213,10 @@ class StaticFiles(unittest.TestCase):
         self.assertEqual(restarted.committed('phone-1:7'), first['revision'])
         with zipfile.ZipFile(path) as archive: self.assertNotIn(b'phone-1:7', archive.read('workspace.json'))
         self.assertEqual(self.save('Kitchen', 'x' * 201)[0], 400)
+        # The same id with a different save is refused, not taken as already done.
+        status, reused = self.save('Kitchen, something else', 'phone-1:7')
+        self.assertEqual((status, reused.get('code')), (409, 'save-id-reused'))
+        self.assertEqual(path.read_bytes(), before, 'nothing of it was written')
 
 
     @unittest.skipUnless(shutil.which('sips'), "needs the Mac's image tool")
