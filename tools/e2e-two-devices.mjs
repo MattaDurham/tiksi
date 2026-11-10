@@ -3,10 +3,10 @@
 // cursor, and without losing what either of them saved.
 // Each "device" is its own browser context (its own storage). One private server on a free
 // port; every project is synthetic and lives in a temporary folder.
-// E2E_STEP=<part name> runs one part.
+// E2E_STEP=<part name>[,<part name>] runs only those parts.
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { spawn, execFileSync } from 'node:child_process';
+import { mkdtemp, rm, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import net from 'node:net';
 import { chromium } from 'playwright';
@@ -38,6 +38,15 @@ async function untilOnTheMac(check, what, ms = 20000) {
   }
 }
 const prop = (copy, id) => copy.data.properties.find(p => p.id === id);
+// Wait until a check that needs `await` inside the page comes true. (waitForFunction takes
+// the promise an async check returns as "true" at once, so it cannot be used for these.)
+async function until(page, check, arg, what = 'what the check waits for', ms = 20000) {
+  for (const end = Date.now() + ms; ;) {
+    if (await page.evaluate(check, arg)) return;
+    if (Date.now() > end) assert.fail(what + ' did not happen within ' + ms / 1000 + ' s');
+    await new Promise(r => setTimeout(r, 150));
+  }
+}
 async function device({ hash = '#/plan', ready = SAVED, before, viewport = { width: 1280, height: 900 }, context } = {}) {
   context = context || await browser.newContext({ viewport });
   const page = await context.newPage();
@@ -78,18 +87,23 @@ const open = page => page.evaluate(async () => {
 // A device that has not opened this workspace before starts on the property the Mac's copy
 // names. Each device then chooses for itself, as a person would in the property list.
 async function look(page, id) {
-  if (await page.evaluate(() => document.querySelector('#property-select').value) !== id) await page.selectOption('#property-select', id);
-  await page.waitForFunction(async id => (await import('/js/store.js')).activeProperty()?.id === id, id);
+  // (Through the property list itself; the phone layout drives the same list from its panel.
+  // The list is filled, and listens, a moment after the page first reads SAVED TO DISK.)
+  await until(page, async id => {
+    const list = document.querySelector('#property-select');
+    if (list.onchange && list.value !== id && [...list.options].some(o => o.value === id)) { list.value = id; list.dispatchEvent(new Event('change')); }
+    return (await import('/js/store.js')).activeProperty()?.id === id && list.value === id;
+  }, id, 'opening the property', 30000);
 }
 const edit = (page, id, change) => page.evaluate(async ([id, change]) => {
   const store = await import('/js/store.js');
   Object.assign(store.ws.data.properties.find(p => p.id === id), change); store.touch();
 }, [id, change]);
 const saveNow = page => page.evaluate(async () => (await import('/js/disk-workspace.js')).diskWorkspace.sync());
-const has = (page, id, check) => page.waitForFunction(async ([id, check]) => {
+const has = (page, id, check) => until(page, async ([id, check]) => {
   const p = (await import('/js/store.js')).ws.data.properties.find(p => p.id === id);
   return !!p && new Function('p', 'return ' + check)(p);
-}, [id, check], { timeout: 20000 });
+}, [id, check], 'the other device\'s change (' + check + ')');
 
 // Which property is open, which level and which tags are on belong to each device.
 async function eachDeviceKeepsItsOwnView() {
@@ -187,7 +201,7 @@ async function modelKeepsItsCamera() {
   const one = await device(), two = await device();
   await look(one, first); await look(two, first);
   await two.evaluate(() => { location.hash = '#/model'; });
-  const idle = () => two.waitForFunction(async () => (await import('/js/viewer3d.js')).viewerIdle() && document.querySelector('#save-status').textContent === 'SAVED TO DISK', null, { timeout: 240000, polling: 500 });
+  const idle = () => until(two, async () => !!document.querySelector('#view canvas') && (await import('/js/viewer3d.js')).viewerIdle() && document.querySelector('#save-status').textContent === 'SAVED TO DISK', null, 'MODEL settling', 240000);
   await idle();
   const camera = () => two.evaluate(async () => (await import('/js/viewer3d.js')).drawStats().camera.inverse.map(v => Math.round(v * 100) / 100 || 0));
   const overview = await camera();
@@ -219,17 +233,256 @@ async function modelKeepsItsCamera() {
   await one.context().close(); await two.context().close();
 }
 
-const parts = { view: eachDeviceKeepsItsOwnView, typing: aSaveElsewhereLeavesThePageAlone, slow: aSlowActionWritesIntoTheLiveRecord, model: modelKeepsItsCamera };
+// Both devices change the same note. The second is asked, and the question says what
+// differs and whose copy is whose; choosing this window's value keeps it, and both copies
+// are preserved first.
+async function theCopiesDifferQuestionSaysWhatDiffers() {
+  step('conflict');
+  const [first] = await makeProperties('conflict');
+  const one = await device(), two = await device();
+  await look(one, first); await look(two, first);
+  const kept = async () => (await readdir(state + '/workspace/history').catch(() => [])).filter(n => n.startsWith('conflict-')).length;
+  const before = await kept();
+  await two.context().setOffline(true);
+  await edit(two, first, { notes: 'Typed in this window' });
+  await edit(one, first, { notes: 'Saved from the other device' }); await saveNow(one);
+  await two.context().setOffline(false);
+  const question = two.locator('dialog[data-copies-differ]');
+  await question.waitFor({ timeout: 30000 });
+  const words = await question.textContent();
+  assert.match(words, /Harbour house: notes/, 'the question names the record and the value that differ');
+  assert.match(words, /this window: “Typed in this window”; the saved copy: “Saved from the other device”/, 'and shows both values, each under its own name');
+  assert.doesNotMatch(words, /MAC VALUES|THIS DEVICE/, 'the sides are not called "Mac" and "this device"');
+  assert.match(words, /conflict-.*\.tiksi/, 'it says where both copies were preserved');
+  assert.equal(await question.getByRole('button').count(), 2);
+  await question.getByRole('button', { name: /^USE THIS WINDOW/ }).click();
+  const copy = await untilOnTheMac(c => prop(c, first).notes === 'Typed in this window', 'The value chosen with "use this window\'s values"');
+  await has(one, first, 'p.notes === "Typed in this window"');
+  assert.equal(await kept() - before, 2, 'both copies were preserved in the history folder before the choice');
+  const preserved = JSON.parse(execFileSync('python3', ['-c', 'import sys,pathlib,zipfile,json;print(json.dumps([p.get("notes") for f in pathlib.Path(sys.argv[1]).glob("conflict-*.tiksi") for p in json.loads(zipfile.ZipFile(f).read("workspace.json"))["properties"]]))', state + '/workspace/history']).toString());
+  assert(preserved.includes('Typed in this window') && preserved.includes('Saved from the other device'), 'the copy that was not chosen is among them');
+  assert.equal(prop(copy, first).name, 'Harbour house');
+  await one.context().close(); await two.context().close();
+}
+
+// A copy saved by newer code holds values an older tab would tidy away. The older tab loads
+// the newer code once when it has nothing unsaved, and never saves over the newer copy.
+async function anOlderTabDoesNotSaveOverANewerCopy() {
+  step('older');
+  const [first] = await makeProperties('older');
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  // To this browser, the copy on the Mac looks saved by a later Tiksi.
+  await context.route(url + '/api/workspace', async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const answer = await route.fetch(), body = await answer.json();
+    if (body.data) body.data.version = 99;
+    return route.fulfill({ response: answer, json: body });
+  });
+  let loads = 0; const saves = [];
+  const page = await context.newPage();
+  page.on('pageerror', e => errors.push(e.message));
+  page.on('load', () => { loads++; });
+  page.on('request', r => { if (r.method() === 'PUT' && new URL(r.url()).pathname === '/api/workspace') saves.push(1); });
+  await page.goto(url + '/#/plan');
+  // The Mac serves the same code again, so after its one reload the tab is still the older one.
+  // It shows the copy, and says at once that it cannot save.
+  await page.waitForFunction(() => document.querySelector('#save-status').dataset.saveState === 'refused', null, { timeout: 60000 });
+  await page.waitForTimeout(4000);
+  assert.equal(loads, 2, 'the older tab loaded the newer code once, and only once');
+  await look(page, first);
+  await edit(page, first, { notes: 'Typed in a tab running older code' });
+  await page.waitForTimeout(1500);
+  assert.equal(await page.evaluate(() => document.querySelector('#save-status').dataset.saveState), 'refused');
+  assert.match(await page.evaluate(() => document.querySelector('#save-status').textContent), /older Tiksi/i, 'the status says the tab is older than the saved copy');
+  await page.waitForTimeout(4000);
+  assert.deepEqual(saves, [], 'an older tab sends no save over a newer copy');
+  assert.notEqual(prop(await mac(), first).notes, 'Typed in a tab running older code');
+  await context.close();
+}
+
+// Two devices open the same never-drafted property at the same moment and both write its
+// one-pager draft. That is not two people's work and must not raise a question.
+async function twoDraftsAreNotAConflict() {
+  step('drafts');
+  const maker = await device({ hash: '' });
+  await maker.evaluate(async () => {
+    const store = await import('/js/store.js');
+    const p = store.propertyTemplate('Never drafted'); p.id = 'prop-drafts';
+    store.ws.data.properties.push(p); store.touch();
+    await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
+  });
+  await maker.context().close();
+  const [one, two] = await Promise.all([device({ ready: null }), device({ ready: null })]);
+  await untilOnTheMac(c => prop(c, 'prop-drafts').onePager?.draftedAt, 'The drafted one-pager');
+  for (const page of [one, two]) await page.waitForFunction(SAVED, null, { timeout: 30000 });
+  await one.waitForTimeout(3000);
+  for (const page of [one, two]) assert.equal(await page.locator('dialog[open]').count(), 0, 'two drafts written a moment apart raise no "copies differ" question');
+  await one.context().close(); await two.context().close();
+}
+
+// A project whose file is missing does not just vanish: it stays in the property list,
+// greyed, with the Mac's reason, and can be taken off the list.
+async function aProjectWithAMissingFileIsShown() {
+  step('unavailable');
+  const [first, second] = await makeProperties('unavailable');
+  const page = await device();
+  await look(page, first);
+  const path = await page.evaluate(async id => (await import('/js/disk-workspace.js')).diskWorkspace.paths[id], second);
+  await rm(path);
+  const row = page.locator('#property-select option[data-unavailable]');
+  await row.waitFor({ state: 'attached', timeout: 20000 });
+  assert.match(await row.textContent(), /Garden flat \(file missing\)/);
+  assert.equal(await row.isDisabled(), true, 'it cannot be opened while its file is missing');
+  assert.match(await row.getAttribute('title'), /Garden flat/);
+  await until(page, async id => !(await import('/js/store.js')).ws.data.properties.some(p => p.id === id), second, 'the project leaving the open records');
+  // FILE, Settings gives the Mac's message and the control to take it off the list.
+  await page.locator('#btn-file').click();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  const line = page.locator('[data-file-dialog] p[data-unavailable]');
+  assert.match(await line.textContent(), /Garden flat.*project file is not at/s);
+  page.on('dialog', d => d.accept());
+  // The Tiksi on this Mac may not offer "take off the list" yet: it says so and changes nothing.
+  await line.getByRole('button', { name: 'REMOVE FROM LIST' }).click();
+  const said = page.locator('[data-file-dialog] [data-file-status]');
+  await page.waitForFunction(() => /cannot take a project off its list yet|is off the list/.test(document.querySelector('[data-file-dialog] [data-file-status]').textContent), null, { timeout: 15000 });
+  if (/cannot take/.test(await said.textContent())) {
+    assert.equal(await line.count(), 1, 'nothing changed');
+    // A stand-in for a Mac that does offer it.
+    await page.route('**/api/workspace/unavailable/*/forget', route => route.fulfill({ json: { revision: 1, unavailable: [] } }));
+    await line.getByRole('button', { name: 'REMOVE FROM LIST' }).click();
+    await page.waitForFunction(() => /is off the list/.test(document.querySelector('[data-file-dialog] [data-file-status]').textContent), null, { timeout: 15000 });
+  }
+  assert.equal(await page.locator('[data-file-dialog] p[data-unavailable]').count(), 0, 'the project is off the list');
+  await page.context().close();
+}
+
+// Opening a project file whose property is already open here asks first, and adding the demo
+// a second time does not replace what was built on the first.
+async function aProjectFileAsksBeforeItReplaces() {
+  step('import');
+  const [first] = await makeProperties('import');
+  const page = await device();
+  await look(page, first);
+  const older = await page.evaluate(async id => JSON.stringify((await import('/js/store.js')).projectSlice(id)), first);
+  const file = state + '/Harbour house, as exported.json';
+  await writeFile(file, older);
+  await edit(page, first, { notes: 'Edited since the file was exported' }); await saveNow(page);
+  const asked = []; let answer = 'dismiss';
+  page.on('dialog', d => { asked.push(d.message()); return answer === 'accept' ? d.accept() : d.dismiss(); });
+  const openFile = async () => {
+    await page.locator('#btn-file').click();
+    await page.locator('[data-file-dialog] [data-any-file]').setInputFiles(file);
+    await page.locator('[data-file-dialog]').waitFor({ state: 'detached', timeout: 20000 });
+  };
+  await openFile();
+  assert.equal(asked.length, 1, 'opening a file of a property that is open here asks first');
+  assert.match(asked[0], /“Harbour house” is already open here[\s\S]*Open here: 4 walls[\s\S]*In Harbour house, as exported\.json \(saved /, 'the question says what is open and what the file holds, with the file\'s date');
+  assert.equal(await page.evaluate(async id => (await import('/js/store.js')).ws.data.properties.find(p => p.id === id).notes, first), 'Edited since the file was exported', 'answering no keeps what is open');
+  answer = 'accept';
+  await openFile();
+  assert.equal(await page.evaluate(async id => (await import('/js/store.js')).ws.data.properties.find(p => p.id === id).notes, first), '', 'answering yes opens the file\'s copy');
+  // The demo, twice.
+  const addDemo = async () => {
+    await page.locator('#btn-file').click();
+    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await page.locator('[data-file-dialog] summary', { hasText: 'Workspace backup' }).click();
+    await page.locator('[data-file-dialog] [data-demo]').click();
+    await page.locator('[data-file-dialog]').waitFor({ state: 'detached', timeout: 20000 });
+  };
+  await addDemo();
+  await page.evaluate(async () => { const s = await import('/js/store.js'); s.ws.data.properties.find(p => p.id === 'prop-demo').notes = 'Built on the first demo'; s.touch(); });
+  await addDemo();
+  const demos = await page.evaluate(async () => (await import('/js/store.js')).ws.data.properties.filter(p => p.id.startsWith('prop-demo')).map(p => [p.id === 'prop-demo', p.notes]));
+  assert.equal(demos.length, 2, 'the second demo is added beside the first');
+  assert.deepEqual(demos.find(d => d[0]), [true, 'Built on the first demo'], 'what was built on the first demo is still there');
+  await page.context().close();
+}
+
+// A page that fails to open says so on that page, with a way to reload; the other pages and
+// saving go on working, and it is not reported as the Mac's project files being unavailable.
+async function aPageThatFailsToOpenSaysSo() {
+  step('error');
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  await context.route('**/js/budget.js*', async route => {
+    const answer = await route.fetch(), text = await answer.text();
+    return route.fulfill({ response: answer, body: text.replace('export function mount(', 'export function mount() { throw new Error("Synthetic: this page cannot open"); }\nfunction mountAsWritten(') });
+  });
+  const page = await context.newPage();
+  const thrown = []; page.on('pageerror', e => thrown.push(e.message));
+  await page.goto(url + '/#/budget');
+  const notice = page.locator('#view .page-open-failed');
+  await notice.waitFor({ timeout: 60000 });
+  assert.match(await notice.textContent(), /could not open \(Synthetic: this page cannot open\)\. The other pages still work/);
+  assert.equal(await notice.getByRole('button', { name: 'RELOAD' }).count(), 1);
+  await page.waitForFunction(SAVED, null, { timeout: 30000 });
+  await page.locator('#rail a[data-view="plan"]').click();
+  await page.waitForFunction(() => location.hash === '#/plan' && !document.querySelector('#view .page-open-failed') && document.querySelector('#view').childElementCount > 0, null, { timeout: 20000 });
+  assert.deepEqual(thrown, [], 'the failure was caught, not left as an error with a blank page');
+  await context.close();
+}
+
+// A save reached the Mac but its reply never reached the page, and the page was dropped.
+// The Mac then changed the same value. A Mac that keeps save ids says the save arrived, so
+// the kept copy is dropped instead of being merged again over the later change.
+async function aKeptCopyTheMacAlreadyHasIsNotSentAgain() {
+  step('saveid');
+  const [first] = await makeProperties('saveid');
+  // A narrow window keeps what it has not sent, as a phone does.
+  const context = await browser.newContext({ viewport: { width: 390, height: 800 } });
+  let page = await device({ context });
+  await look(page, first);
+  let lostId = null;
+  await context.route(url + '/api/workspace', async route => {
+    if (route.request().method() !== 'PUT') return route.continue();
+    const text = route.request().postData();
+    if (!lostId && !/reply was lost/.test(text)) return route.continue();
+    // The Mac commits the save that carries the note, and the page never hears: not of that
+    // save, and not of any it tries afterwards.
+    if (!lostId) { await route.fetch(); lostId = JSON.parse(text).saveId; }
+    return route.abort();
+  });
+  await edit(page, first, { notes: 'Sent, and the reply was lost' });
+  await untilOnTheMac(c => prop(c, first).notes === 'Sent, and the reply was lost', 'The save whose reply was lost');
+  await page.waitForFunction(() => /kept on this device/.test(document.querySelector('#save-status').title), null, { timeout: 20000 });
+  assert.equal(typeof lostId, 'string', 'every save carries an id of its own'); assert.ok(lostId.length > 8);
+  await page.waitForTimeout(600);
+  await page.close();
+  await context.unroute(url + '/api/workspace');
+  const desk = await device();
+  await look(desk, first);
+  await edit(desk, first, { notes: 'Changed on the Mac afterwards' }); await saveNow(desk);
+  // A stand-in for a Mac that keeps save ids (the contract in the server session's note).
+  const asked = [];
+  await context.route('**/api/workspace/head?saveId=*', async route => {
+    const id = new URL(route.request().url()).searchParams.get('saveId'); asked.push(id);
+    const answer = await route.fetch({ url: url + '/api/workspace/head' }), body = await answer.json();
+    return route.fulfill({ response: answer, json: { ...body, save: { saveId: id, committed: id === lostId, revision: id === lostId ? body.revision - 1 : null } } });
+  });
+  page = await device({ context });
+  await page.waitForTimeout(3000);
+  assert.ok(asked.includes(lostId), 'the next open asks the Mac about the save the kept copy went out with');
+  assert.equal(await page.locator('dialog[open]').count(), 0, 'no question: the kept copy is already on the Mac');
+  assert.equal(prop(await mac(), first).notes, 'Changed on the Mac afterwards', 'the later change on the Mac is not undone');
+  assert.equal(await page.evaluate(async id => (await import('/js/store.js')).ws.data.properties.find(p => p.id === id).notes, first), 'Changed on the Mac afterwards');
+  // And it is gone from this browser: the next open asks nothing.
+  asked.length = 0;
+  await page.reload(); await page.waitForFunction(SAVED, null, { timeout: 30000 }); await page.waitForTimeout(1500);
+  assert.deepEqual(asked, []);
+  await context.close(); await desk.context().close();
+}
+
+const parts = { view: eachDeviceKeepsItsOwnView, typing: aSaveElsewhereLeavesThePageAlone, slow: aSlowActionWritesIntoTheLiveRecord, conflict: theCopiesDifferQuestionSaysWhatDiffers, older: anOlderTabDoesNotSaveOverANewerCopy,
+  drafts: twoDraftsAreNotAConflict, unavailable: aProjectWithAMissingFileIsShown, import: aProjectFileAsksBeforeItReplaces, error: aPageThatFailsToOpenSaysSo, saveid: aKeptCopyTheMacAlreadyHasIsNotSentAgain, model: modelKeepsItsCamera };
 
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(url)).ok) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
   browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   // The run is stopped after ten minutes, naming the part it was in.
   let timer;
-  await Promise.race([(async () => { for (const [key, part] of Object.entries(parts)) if (!process.env.E2E_STEP || process.env.E2E_STEP === key) await part(); })(),
+  await Promise.race([(async () => { for (const [key, part] of Object.entries(parts)) if (!process.env.E2E_STEP || process.env.E2E_STEP.split(',').includes(key)) await part(); })(),
     new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('The run did not finish; it was in part ' + lastStep)), 600000); })]).finally(() => clearTimeout(timer));
   assert.deepEqual(errors, []);
-  console.log('ok   two devices: each keeps its own view; a save elsewhere leaves the page alone unless it shows the change, and waits for a text field; a slow action writes into the live record; MODEL keeps its camera');
+  console.log('ok   two devices: own view each; a save elsewhere updates in place; the copies-differ question names what differs; an older tab cannot save over a newer copy; drafts do not conflict; a missing project file is shown; a project file asks before replacing; a failed page says so; a kept copy the Mac has is not sent again; MODEL keeps its camera');
 } catch (error) {
   // The failure first: a browser that will not close must not hide it.
   console.error(error);

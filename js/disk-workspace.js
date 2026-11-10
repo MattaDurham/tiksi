@@ -84,6 +84,30 @@ export function prepareDiskProjects(data) {
   return { data: prepared, projectData: Object.fromEntries(properties.map(p => [p.id, projectSlice(p.id, prepared)])) };
 }
 
+// The values two copies disagree on, in words: [{ what, here, there }]. A path such as
+// data.properties.<id>.walls.<id>.ax becomes "Harbour house: walls, w-e, ax"; a record is
+// named by its `name` where it has one. `here` and `there` are given for plain values, and
+// for a record one side removed.
+export function describeConflicts(paths, local, remote) {
+  const plain = v => typeof v === 'string' ? '“' + (v.length > 60 ? v.slice(0, 59) + '…' : v) + '”' : typeof v === 'object' && v !== null ? null : String(v);
+  return paths.map(path => {
+    const words = [];
+    let l = local, r = remote;
+    for (const part of path.split('.')) {
+      const step = v => Array.isArray(v) ? v.find(x => x && x.id === part) : v && typeof v === 'object' ? v[part] : undefined;
+      const list = Array.isArray(l) || Array.isArray(r);
+      l = step(l); r = step(r);
+      const named = [l, r].find(v => v && typeof v === 'object' && typeof v.name === 'string' && v.name);
+      if (list) words.push(named ? named.name : part);
+      else if (part !== 'data' && part !== 'properties') words.push(part === 'assets' ? 'original files' : part);
+    }
+    const what = words.length > 1 ? words[0] + ': ' + words.slice(1).join(', ') : words[0] || 'the whole copy';
+    if (l === undefined || r === undefined) return { what, here: l === undefined ? 'removed' : 'changed', there: r === undefined ? 'removed' : 'changed' };
+    const here = plain(l), there = plain(r);
+    return here !== null && there !== null ? { what, here, there } : { what };
+  });
+}
+
 // What a device is looking at is its own: which property is open, which level of each
 // property, and which tags are switched on. These sit in the shared records (every page
 // reads them there), but they are not project content. A device keeps its own choices in
@@ -166,6 +190,35 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   // Save rounds are numbered, to tell an original acknowledged in this round from one counted
   // on from an earlier round.
   let round = 0, reusedEarlier = false;
+  // Projects the Mac lists but cannot read just now (file missing or unreadable), as the Mac
+  // describes them: [{ id, name, path, reason, message }]. They are in no record here.
+  let unavailable = [];
+  function noteUnavailable(list) {
+    const next = Array.isArray(list) ? list : [];
+    if (sameJson(next, unavailable)) return;
+    unavailable = next;
+    onRemote?.({ properties: new Set(), keys: new Map(), materials: false, other: false });
+  }
+  // The data version this page's code writes. A copy saved by newer code holds values this
+  // page would tidy away; it must not save over them.
+  const ownVersion = emptyWorkspace().version;
+  function refuseIfOlder(...copies) {
+    const newest = Math.max(0, ...copies.map(c => Number(c && c.version) || 0));
+    if (newest <= ownVersion) return;
+    const error = new Error('This tab runs an older Tiksi than the copy on the Mac was saved with. Reload it before changing anything here');
+    error.status = 426; throw error;
+  }
+  // Every save carries an id of this page's own, so a Mac that keeps save ids can say later
+  // whether a save arrived (the reply may never have reached a page that was then dropped).
+  // `upcoming` is the id of the next save, which will hold everything the page holds when it
+  // is made. `sentSaves` are the last saves sent, each with the records it was made from
+  // and the ids it went out under (a retry of the same records adds an id). A kept copy
+  // lists the ids of every sent save made from exactly its records, and `upcoming`: if the
+  // Mac committed any of them, it has everything in that copy.
+  let saveCount = 0, sentSaves = [];
+  const nextSaveId = () => owner + '-save-' + (++saveCount);
+  let upcoming = null;
+  const coveredBy = local => sentSaves.filter(sent => sameJson(sent.form, local)).flatMap(sent => sent.ids);
   // Away from the Mac, what has not reached it is also kept in this browser's storage, so a
   // locked phone, a switched app or a dropped tab loses nothing; the next page opened on
   // this device sends it (sendKept below). The browser on the Mac keeps nothing here.
@@ -199,7 +252,8 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
         keepAgain = false;
         if (settling || taking) continue;   // the step in progress brings the kept copy up to date when it ends
         for (const id of [...notKept.keys()]) if (!changedFiles.has(id)) notKept.delete(id);
-        const mark = [edits, pending, changedFiles.size, heldByMac.size, mine.size, notKept.size].join('|'), agreed = base;
+        if (!upcoming) upcoming = nextSaveId();
+        const mark = [edits, pending, changedFiles.size, heldByMac.size, mine.size, notKept.size, sentSaves.map(sent => sent.ids.length).join(), upcoming].join('|'), agreed = base;
         if (mark === keptMark && keptBase === agreed) continue;
         // While an older browser store is still being moved to the Mac, that store is the kept
         // copy. Without an agreed copy there is nothing to merge a kept one against later.
@@ -217,6 +271,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
           if (baseJson.of !== agreed) baseJson = { of: agreed, text: JSON.stringify(agreed) };
           const held = {}; for (const [id, at] of heldByMac) held[id] = at.entry;
           written = keptHere = await unsent.keepState(owner, { at: Date.now(), base: baseJson.text, assets: JSON.stringify(assets), local: JSON.stringify(local), held,
+            saveIds: [...coveredBy(local), upcoming],
             spaces: [...new Set([owner, ...mine.values()])], notKept: Object.fromEntries([...notKept].filter(([id]) => changedFiles.has(id))) });
           if (written) await unsent.settle(owner, { files: keys });
         }
@@ -419,12 +474,17 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     }
     finally { applying = false; }
   }
-  async function resolveMerge(ancestor, local, remote) {
+  // Two copies changed the same value. Both are preserved on the Mac first; then the person
+  // is shown which values differ and chooses a side. `other` names where the other copy
+  // comes from: the copy saved on the Mac (which may hold another device's edits), or the
+  // SketchUp model.
+  async function resolveMerge(ancestor, local, remote, other = 'the saved copy') {
     let result = mergeShared(ancestor, local, remote);
     if (!result.conflicts.length) return result.value;
     status('PROJECT COPIES NEED REVIEW', true);
     // Preserve both exact variants before a choice, including rejected offline
     // edits that have never been a committed server revision.
+    const preserved = [];
     for (const value of [local, remote]) {
       let recovery = value;
       if (!value.data || !value.assets) {
@@ -432,11 +492,23 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
         data.properties = data.properties.map(p => p.id === value.id ? (pictures ? pictures.slim(value).data : copy(value)) : p);
         recovery = { data, assets: { ...await fileManifest(data, assets), ...pictureAssets(data) } };
       }
-      await request('/recovery', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(recovery) });
+      const kept = await (await request('/recovery', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(recovery) })).json().catch(() => ({}));
+      if (typeof kept.recovery === 'string') preserved.push(kept.recovery);
     }
-    const dialog = document.createElement('dialog'); dialog.className = 'file-dialog';
-    dialog.innerHTML = '<h2>Project copies differ</h2><p>This device and the Mac contain different edits to the same records. Both copies are preserved until you choose which values to use. Changes to other records will be combined.</p><p data-count></p><div class="file-actions"><button class="btn primary" data-mac>USE MAC VALUES</button><button class="btn" data-local>USE THIS DEVICE’S VALUES</button></div>';
-    dialog.querySelector('[data-count]').textContent = result.conflicts.length + ' conflicting values';
+    const lines = describeConflicts(result.conflicts, local, remote);
+    const dialog = document.createElement('dialog'); dialog.className = 'file-dialog'; dialog.dataset.copiesDiffer = '';
+    dialog.innerHTML = '<h2>Two copies of this project differ</h2><p data-what></p><ul data-values></ul><p data-more></p><p data-kept></p><div class="file-actions"><button class="btn primary" data-mac></button><button class="btn" data-local>USE THIS WINDOW’S VALUES</button></div>';
+    dialog.querySelector('[data-what]').textContent = 'This window and ' + other + ' hold different values for the same ' + (result.conflicts.length === 1 ? 'thing' : result.conflicts.length + ' things') +
+      '. Choose which to use for ' + (result.conflicts.length === 1 ? 'it' : 'them') + '; everything else from both copies is combined. Saving from this window waits for the choice.';
+    for (const line of lines.slice(0, 12)) {
+      const item = document.createElement('li'), what = document.createElement('strong');
+      what.textContent = line.what; item.append(what);
+      if (line.here !== undefined) item.append(' — this window: ' + line.here + '; ' + other + ': ' + line.there);
+      dialog.querySelector('[data-values]').append(item);
+    }
+    dialog.querySelector('[data-more]').textContent = lines.length > 12 ? 'and ' + (lines.length - 12) + ' more.' : '';
+    dialog.querySelector('[data-kept]').textContent = 'Both copies are preserved first, whichever you choose' + (preserved.length ? ': ' + preserved.join(' and ') + ' in the history folder beside the Mac’s project files.' : '.');
+    dialog.querySelector('[data-mac]').textContent = 'USE ' + other.replace(/^the /, 'THE ').toUpperCase() + '’S VALUES';
     document.body.append(dialog); dialog.showModal();
     const choice = await new Promise(resolve => {
       dialog.addEventListener('cancel', e => e.preventDefault());
@@ -468,7 +540,10 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     if (head.revision !== revision || !base) {
       remote = await (await request()).json();
       paths = remote.paths || {};
+      noteUnavailable(remote.unavailable);
       if (!pending && remote.data) {
+        // Nothing unsaved here and the saved copy is from newer code: load that code, once.
+        if (Number(remote.data.version) > ownVersion && reloadOnceFor(remote.data.version)) return;
         await fetchPictures(remote.data, remote.assets);
         if (!pending) {
           revision = remote.revision; assets = remote.assets; base = { data: remote.data, assets };
@@ -476,7 +551,12 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
         }
       }
     }
+    refuseIfOlder(remote && remote.data, base && base.data);
     const remoteRevision = remote ? remote.revision : revision;
+    // The id this round's save will carry, taken before the records are read: a copy kept
+    // before this moment is wholly inside the save.
+    const saveId = upcoming || nextSaveId();
+    upcoming = nextSaveId();
     const saved = pictures ? await pictures.slimStored(() => ws.data) : { data: copy(ws.data) };
     const sentData = view.shared(saved.data, base?.data);
     const uploadedFiles = new Map();
@@ -516,7 +596,12 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     }
     const body = '{"revision":' + JSON.stringify(remoteRevision) + ',"data":' + (dataJson ?? JSON.stringify(accepted.data)) + order + ',"assets":' + JSON.stringify(accepted.assets) +
       ',"projectData":{' + sent.join(',') + '}' + (features.has('partial-projects') ? ',"unchangedProjects":' + JSON.stringify(unchanged) : '') +
-      (pictures ? ',"pictureFiles":true' : '') + (migrationPack ? ',"migration":' + JSON.stringify(migrationPack) : '') + '}';
+      (pictures ? ',"pictureFiles":true' : '') + (migrationPack ? ',"migration":' + JSON.stringify(migrationPack) : '') + ',"saveId":' + JSON.stringify(saveId) + '}';
+    // Remember what this save was made from, so a kept copy of the same records can name it.
+    const again = sentSaves.find(sent => sameJson(sent.form, sentData));
+    if (again) again.ids = [...again.ids, saveId].slice(-20);
+    else sentSaves = [...sentSaves, { form: sentData, ids: [saveId] }].slice(-3);
+    keepUnsent();
     let reply;
     try {
       reply = await (await request('', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body })).json();
@@ -547,6 +632,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     settling = true;
     try {
       revision = reply.revision; assets = accepted.assets; base = accepted;
+      noteUnavailable(reply.unavailable);
       savedSlices = { revision, json: sliceJson };
       paths = reply.paths || (await (await request()).json()).paths || {};
       // Blob upload alone is not a save acknowledgment. Keep replacements dirty
@@ -638,7 +724,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     if (result.changed) {
       const index = ws.data.properties.findIndex(p => p.id === prop.id);
       if (index >= 0) {
-        const accepted = await resolveMerge(before, ws.data.properties[index], working);
+        const accepted = await resolveMerge(before, ws.data.properties[index], working, 'the SketchUp model');
         // The merged values go into the record that is already there: an open page, a dialog
         // or a slow action holding it keeps the live one. The open page is then redrawn.
         const live = ws.data.properties[index];
@@ -667,8 +753,30 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   }, async openProjectPath(prop, path = '') {
     // A product document or the project folder itself, opened in Finder/Preview on this Mac.
     return (await request('/open/' + encodeURIComponent(prop.id), { method: 'POST', body: JSON.stringify({ path }), headers: { 'Content-Type': 'application/json' } })).json();
-  }, get paths() { return paths; }, get folder() { return cap.projectsFolder; }, get pending() { return pending; } };
+  }, get paths() { return paths; }, get folder() { return cap.projectsFolder; }, get pending() { return pending; },
+  // Projects whose file the Mac cannot read just now, and taking one off the Mac's list for
+  // good (no file is deleted; a Mac that does not offer this answers that it cannot).
+  get unavailable() { return unavailable; },
+  async forgetUnavailable(id) {
+    const reply = await (await request('/unavailable/' + encodeURIComponent(id) + '/forget', { method: 'POST' })).json();
+    noteUnavailable(reply.unavailable);
+    return reply;
+  } };
+  // Load newer code once for a copy saved by it; a second time would mean the Mac serves the
+  // older code itself, and reloading again would not help.
+  function reloadOnceFor(version) {
+    try {
+      if (sessionStorage.getItem('tiksi.reloaded.for') === String(version)) return false;
+      sessionStorage.setItem('tiksi.reloaded.for', String(version));
+    } catch (error) { return false; }
+    location.reload();
+    return true;
+  }
   const initial = await (await request()).json();
+  unavailable = Array.isArray(initial.unavailable) ? initial.unavailable : [];
+  // The copy on the Mac was saved by newer code than this page runs: load that code, once,
+  // before showing anything (nothing can be unsaved yet).
+  if (initial.data && Number(initial.data.version) > ownVersion && reloadOnceFor(initial.data.version)) await new Promise(() => {});
   revision = initial.revision; paths = initial.paths || {}; assets = initial.assets || {};
   if (initial.data) await fetchPictures(initial.data, assets);
   if (needsMigration) {
@@ -746,6 +854,13 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
         try { kept = { base: JSON.parse(entry.base), assets: JSON.parse(entry.assets), local: JSON.parse(entry.local), held: entry.held || {} }; } catch (ignored) {}
         const files = await unsent.filesIn(spaces);
         if (!files) { waiting.shift(); continue; }   // not readable now: it stays kept for the next time Tiksi opens
+        // The Mac already committed a save that held everything in this copy (its reply never
+        // reached the page that sent it): there is nothing to send, and merging it again
+        // could undo what was changed on the Mac since.
+        if (kept && await committedAlready(entry.saveIds)) {
+          await unsent.settle(entry.owner, { state: true, at: entry.at, files: files.map(file => [file.space, file.id]) });
+          waiting.shift(); continue;
+        }
         const usable = files.filter(file => file.record?.buffer);
         // Nothing to send: a kept state that merges into the Mac's copy without changing it
         // is already there.
@@ -791,6 +906,18 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       sync().catch(failed);
       return;
     }
+  }
+  // Ask a Mac that keeps save ids whether it committed any of these. A Mac that does not
+  // (its answer has no `save`) is not asked twice, and the copy is merged as before.
+  async function committedAlready(ids) {
+    if (!Array.isArray(ids)) return false;
+    for (const id of ids.filter(id => typeof id === 'string' && id).slice(-21).reverse()) {
+      let answer;
+      try { answer = await (await request('/head?saveId=' + encodeURIComponent(id))).json(); } catch (error) { return false; }
+      if (!answer || !answer.save) return false;
+      if (answer.save.committed === true) return true;
+    }
+    return false;
   }
   // Earlier pages' states that could not be copied under this page's name: they stay until
   // the Mac has confirmed what they hold.

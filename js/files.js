@@ -32,7 +32,7 @@ const OPEN_PICKER_TYPES = [{ description: 'tiksi project or workspace', accept: 
 const FOLDER_MAP_KEY = 'tiksi.folder.v1';
 const SYNC_DELAY_MS = 4000;
 
-let app = { remount() {}, refresh() {}, afterReplace() {}, opened() {} };
+let app = { remount() {}, refresh() {}, afterReplace() {}, opened() {}, confirmReplace() { return true; } };
 export function initFiles(hooks) { app = Object.assign(app, hooks || {}); }
 
 // ---------- state ----------
@@ -209,6 +209,14 @@ export async function openFromFile(file) {
   } else parsed = await readBundle(file);
   const { data, manifest } = parsed;
   const before = new Set(ws.data.properties.map(p => p.id));
+  // A property in the file that is already open here would be replaced by the file's, and
+  // its projects that are not in the file removed. That is asked first, never done unasked.
+  const open = new Map(ws.data.properties.map(p => [p.id, p]));
+  const same = (data.properties || []).filter(p => p && open.has(p.id));
+  if (same.length && !await app.confirmReplace({ file, same: same.map(p => ({ incoming: p, current: open.get(p.id), projects: (data.projects || []).filter(pr => pr.propertyId === p.id).length })) })) {
+    setSaveStatus('KEPT WHAT IS OPEN', false);
+    return [];
+  }
   // Opening always adds/updates imported properties. Replacement is a separate explicit action.
   const ids = /\.json$/i.test(file.name) ? mergeWorkspace(data, { fromFile: true }) : await importProject(file);
   for (const id of ids) state.savedSig.set(id, signatureOf(id));

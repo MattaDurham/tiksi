@@ -42,6 +42,10 @@ export function mergeShared(base, local, remote) {
   function merge(b, l, r, path, field) {
     if (equal(l, r) || equal(b, r)) return l;
     if (equal(b, l)) return r;
+    // A one-pager nobody wrote by hand is drafted from the project by whichever page opens
+    // it. Two different drafts are not two people's work: the saved one stays, unasked, and
+    // the next page to open drafts it again from the merged project.
+    if (field === 'onePager' && object(l) && object(r) && l.customized !== true && r.customized !== true) return r;
     if (object(l) && object(r) && (b === undefined || object(b)) && !WHOLE.has(field)) {
       const out = {};
       for (const key of new Set([...Object.keys(b || {}), ...Object.keys(l), ...Object.keys(r)])) {

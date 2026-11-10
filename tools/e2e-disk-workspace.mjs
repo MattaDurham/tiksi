@@ -62,7 +62,7 @@ try {
   await phone.evaluate(async () => { const s = await import('/js/store.js'); s.ws.data.properties[0].notes = 'Offline phone edit'; const p = s.propertyTemplate('Offline addition'); p.id = 'prop-offline'; s.ws.data.properties.push(p); s.touch(); });
   await desktop.evaluate(async () => { const s = await import('/js/store.js'); s.ws.data.properties[0].notes = 'Newer Mac edit'; s.touch(); await (await import('/js/disk-workspace.js')).diskWorkspace.sync(); });
   await phoneContext.setOffline(false);
-  await phone.getByRole('button', { name: 'USE MAC VALUES', exact: true }).click();
+  await phone.getByRole('button', { name: /^USE THE SAVED COPY/ }).click();
   await phone.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   await desktop.waitForFunction(() => window.diskTestStore.ws.data.properties.some(p => p.id === 'prop-offline'));
   assert.equal(await phone.evaluate(async () => (await import('/js/store.js')).ws.data.properties[0].notes), 'Newer Mac edit');
@@ -159,7 +159,7 @@ try {
     return route.continue();
   });
   await legacy.goto('http://127.0.0.1:' + port);
-  await legacy.getByRole('button', { name: 'USE MAC VALUES', exact: true }).click();
+  await legacy.getByRole('button', { name: /^USE THE SAVED COPY/ }).click();
   await legacy.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK — CLOSE OLDER TIKSI TABS');
   await oldReader.close();
   await legacy.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');

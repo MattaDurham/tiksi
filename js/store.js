@@ -81,6 +81,8 @@ let saveFailed = false;
 let savePending = false;
 export function save(skipPlanQueue = false) {
   if (diskPersistence) return; // disk-workspace observes edits and owns save acknowledgments
+  // The stored workspace could not be read: writing now would replace it with an empty one.
+  if (unreadable) { setSaveStatus('NOT SAVED — STORED WORKSPACE UNREADABLE', true); return; }
   // Never write a copy with inline thumbnails while hydrateThumbs() is still moving them into
   // IndexedDB: a freshly imported gallery would not fit and would raise the quota alert for nothing.
   if (hydration) {
@@ -130,11 +132,34 @@ function persistable(d) {
   });
 }
 
-export function load() {
+// A workspace stored in this browser that could not be read: { raw, error }. While it is
+// set, save() writes nothing, so the stored text stays exactly as it was found. The app
+// shows what happened and lets the person keep the text before starting again (main.js).
+let unreadable = null;
+export function unreadableWorkspace() { return unreadable; }
+// Move the unreadable text aside under its own key and start again. False when the copy
+// could not be written: then nothing is cleared.
+export function setAsideUnreadableWorkspace() {
+  if (!unreadable) return true;
   try {
-    const raw = localStorage.getItem(LS_KEY);
+    const key = LS_KEY + '.unreadable.' + new Date().toISOString().replace(/[:.]/g, '-');
+    localStorage.setItem(key, unreadable.raw);
+    if (localStorage.getItem(key) !== unreadable.raw) return false;
+    localStorage.removeItem(LS_KEY);
+  } catch (e) { console.error(e); return false; }
+  unreadable = null;
+  return true;
+}
+
+export function load() {
+  let raw = null;
+  try {
+    raw = localStorage.getItem(LS_KEY);
     if (raw) { ws.data = migrate(JSON.parse(raw)); thumbsStored.clear(); plansStored.clear(); hydrateThumbs(); return true; }
-  } catch (e) { console.error('load failed', e); }
+  } catch (e) {
+    console.error('load failed', e);
+    if (raw) unreadable = { raw, error: String(e && e.message || e) };
+  }
   ws.data = emptyWorkspace();
   return false;
 }
