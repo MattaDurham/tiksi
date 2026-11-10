@@ -21,7 +21,7 @@ from urllib.parse import unquote, urlsplit
 ROOT = Path(__file__).resolve().parent.parent
 # The service packages live at the repository root, whatever folder this file is started from.
 if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
-from server.peers import this_mac_tailscale_address, trusted_peer
+from server.peers import refusal, this_mac_tailscale_address, trusted_peer
 PUBLIC_FILES = {'index.html', 'manifest.webmanifest', 'app-icon.svg'}
 PUBLIC_DIRS = {'css', 'js', 'vendor'}
 
@@ -78,7 +78,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_error(403, 'Host is not allowed')
             return True
         if self.service_caller_refused():
-            payload = (json.dumps({'error': 'Tiksi services answer only this Mac or a device on its Tailscale network'}) + '\n').encode('utf-8')
+            payload = (json.dumps({'error': refusal(self.client_address[0])}) + '\n').encode('utf-8')
             self.send_response(403)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(payload)))
@@ -129,7 +129,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_error(403, 'Host is not allowed'); return None
         # HEAD reaches here without passing dispatch().
         if self.service_caller_refused():
-            self.send_error(403, 'Tiksi services answer only this Mac or Tailscale'); return None
+            self.send_error(403, refusal(self.client_address[0])); return None
         path = unquote(urlsplit(self.path).path)
         if path == '/api/instance':
             payload = (json.dumps(self.instance()) + '\n').encode('utf-8')

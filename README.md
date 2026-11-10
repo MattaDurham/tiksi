@@ -142,8 +142,13 @@ which addresses those are, keeps the answer for a minute, and asks again at most
 every five seconds when an unknown address calls, so a newly added phone gets in
 within seconds. The Tailscale address range on its own is not enough, because some
 internet providers, hotels and mobile networks hand out addresses from it. When
-Tailscale cannot be asked (not installed or not running), the range alone decides,
-as before, and the server log says so once.
+Tailscale cannot be asked (not installed, not running, or an answer it cannot
+read), the last good answer is kept; if there has never been one, only this Mac is
+trusted until Tailscale answers. A refused device is told why, and the server log
+says so at most once a minute. The server looks for the `tailscale` command on its
+PATH and then in the Tailscale app (`/Applications/Tailscale.app/Contents/MacOS/Tailscale`),
+`/usr/local/bin` and `/opt/homebrew/bin`, since a launch agent starts it with a short
+PATH, and logs which one it used.
 
 To keep the app off the local network entirely, give `--host` once for each
 address to listen on instead of `0.0.0.0`. `tailscale` stands for the Mac's own
