@@ -83,11 +83,34 @@ export function wallInteriorMaterialId(wall, rooms) {
   return wall.materialIn || (exterior ? 'mat-drywall' : wall.material);
 }
 
-// Material id per wall face, as the 3D view paints it: a long face that looks into a room
-// takes the interior finish, every other face (outside, ends, top, reveals) the wall's own.
+// The grey an exterior wall's outside face shows while nothing says what is really there.
+export const EXTERIOR_UNKNOWN = 'mat-exterior-unknown';
+
+// Material id per wall face, as the 3D view and the SketchUp mirror paint it:
+// - a long face may carry its own finish (wall.materialPos / wall.materialNeg), which always wins;
+// - a long face that looks into a room takes the interior finish;
+// - the outside face of an exterior wall (a room on one side only) takes the wall's own finish
+//   only when that says something the interior does not: a wall whose own finish is unset or the
+//   same as its interior shows EXTERIOR_UNKNOWN there, never a copy of the room's paint;
+// - every other face (ends, top, reveals, a free-standing wall's sides) the wall's own finish.
 export function wallFaceMaterialIds(wall, rooms) {
   const sides = wallSides(wall, rooms), inId = wallInteriorMaterialId(wall, rooms);
-  return { pos: sides.pos ? inId : wall.material, neg: sides.neg ? inId : wall.material, other: wall.material };
+  const exterior = !!sides.pos !== !!sides.neg;
+  const outside = exterior && !(wall.material && wall.material !== inId) ? EXTERIOR_UNKNOWN : wall.material;
+  const face = (own, room) => own || (room ? inId : outside);
+  return { pos: face(wall.materialPos, sides.pos), neg: face(wall.materialNeg, sides.neg), other: wall.material };
+}
+
+// Names for the two long faces, for inspectors: the compass side each looks toward and what
+// lies there, e.g. { pos: 'North face (Kitchen)', neg: 'South face (outside)' }. Plan x is east,
+// y south; pos looks along the normal (-uy, ux) of a -> b.
+export function wallFaceLabels(wall, rooms) {
+  const sides = wallSides(wall, rooms);
+  const L = Math.hypot(wall.bx - wall.ax, wall.by - wall.ay) || 1;
+  const nx = -(wall.by - wall.ay) / L, ny = (wall.bx - wall.ax) / L;
+  const dir = s => Math.abs(nx) >= Math.abs(ny) ? (nx * s > 0 ? 'East' : 'West') : (ny * s > 0 ? 'South' : 'North');
+  const what = r => r ? (r.name || 'room') : 'outside';
+  return { pos: dir(1) + ' face (' + what(sides.pos) + ')', neg: dir(-1) + ' face (' + what(sides.neg) + ')' };
 }
 
 // ---------- door leaves ----------

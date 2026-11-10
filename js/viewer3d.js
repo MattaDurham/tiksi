@@ -8,7 +8,7 @@ import { environmentSun, dayOfYear, dateForDay, daysInYear, validTimeZone } from
 import { setModelXray } from './model-xray.js';
 import * as THREE from 'three';
 import { modelPanelHtml, bindModelPanel, partComponentName } from './model-panel.js';
-import { beginGeometryEdit, restoreGeometryEdit } from './edit-history.js';
+import { beginGeometryEdit, restoreGeometryEdit, revertGeometryEdit } from './edit-history.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
@@ -39,8 +39,9 @@ import { pendingTextureJobs, setTextureQuality, setTextureLimits, beginTextureBu
 import { qualityProfile, stillDimensions, effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, touchDevice, QUALITY_NAMES } from './render-quality.js';
 import { icon } from './icons.js';
 import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
+import { wallFaceLabels } from './wall-solids.js';
 import { SECTION_KINDS, SECTION_LABELS, MAX_SECTIONS, TURN_SNAP_DEG, moveSnapStep, snapTo, quatRotate, planeNormal, planeOf, flipped, rangeAlong, movedTo, makeSection, normalizeSections, levelHeightOf } from './section-planes.js';
-import { planWallMove, applyWallMove, normalOffset } from './wallmove.js';
+import { planWallMove, applyWallMove, normalOffset, movedWallLengths, moveLeavesShortWall } from './wallmove.js';
 import { addPhotoFromFile, photoUrl, photoById, revokePhotoUrls, photoBytes, ensureCameraFacts } from './photos-store.js';
 import { normalizeView, defaultHfov, hfovOf, viewFrame, viewForPin, FOV_MIN, FOV_MAX, FOUND_SOURCES } from './photo-match.js';
 import { wallAnchor, sheetPlacement, viewForSheet, PRINT_SIZES, DEFAULT_PRINT } from './pins.js';
@@ -1625,8 +1626,19 @@ function commitGizmoMove() {
   const r = v => Math.round(v * 200) / 200;
   const mv = wallMovePlan(w);
   beginGeometryEdit(prop, 'move wall');
-  if (mv && mv.connected) applyWallMove(mv, r(normalOffset(mv, dx, dz)));
-  else { w.ax = r(w.ax + dx); w.ay = r(w.ay + dz); w.bx = r(w.bx + dx); w.by = r(w.by + dz); }
+  if (mv && mv.connected) {
+    // As in PLAN: a slide that squeezes a joined wall under 5 cm (or turns one over) is refused.
+    const before = movedWallLengths(mv);
+    applyWallMove(mv, r(normalOffset(mv, dx, dz)));
+    if (moveLeavesShortWall(before, 0.05)) {
+      // Refused: put everything back bit for bit with no undo entry and no change to save; the
+      // rebuild snaps the handle back.
+      revertGeometryEdit(prop);
+      toast('A wall cannot be shorter than ' + fmtLen(0.05) + '. Delete it instead.', 'warn');
+      rebuildModel(); renderInspector();
+      return;
+    }
+  } else { w.ax = r(w.ax + dx); w.ay = r(w.ay + dz); w.bx = r(w.bx + dx); w.by = r(w.by + dz); }
   touch();
   rebuildModel();
   renderInspector();
@@ -3770,6 +3782,7 @@ function renderInspectorBody() {
       <div class="field"><label>Height (blank = level default)</label><input type="text" data-h value="${w.height ? escapeHtml(fmtLen(w.height)) : ''}" placeholder="${escapeHtml(fmtLen(levelHeight(prop, lvl.id)))}"></div>
       <div class="field"><label>Material</label>${materialSelectHtml('wall', w.material, 'data-mat')}</div>
       <div class="field"><label>Interior face material</label>${materialSelectHtml('wall', w.materialIn, 'data-matin').replace('(none)', 'Automatic')}</div>
+      ${(() => { const names = wallFaceLabels(w, roomsOn(prop, lvl.id)); return ['pos', 'neg'].map(f => `<div class="field"><label>${escapeHtml(names[f])}</label>${materialSelectHtml('wall', f === 'pos' ? w.materialPos : w.materialNeg, 'data-matface="' + f + '"').replace('(none)', 'Automatic')}</div>`).join(''); })()}
       ${researchButtonHtml(w.id, 'material', 'RESEARCH WALL MATERIAL')}
       ${researchButtonHtml(w.id, 'interior', 'RESEARCH INTERIOR FINISH')}
       ${scopeAssignHtml(w.id)}
@@ -3792,6 +3805,12 @@ function renderInspectorBody() {
     inspEl.querySelector('[data-mat]').onchange = e => { beginGeometryEdit(prop, 'change wall material'); w.material = e.target.value || null; touch(); rebuildModel(); };
     // Room-facing faces only; blank = automatic (drywall on exterior walls, the wall material otherwise).
     inspEl.querySelector('[data-matin]').onchange = e => { beginGeometryEdit(prop, 'change interior finish'); w.materialIn = e.target.value || null; touch(); rebuildModel(); };
+    // One long face only; blank = automatic (the interior finish, or the exterior's).
+    inspEl.querySelectorAll('[data-matface]').forEach(sel => sel.onchange = e => {
+      beginGeometryEdit(prop, 'change face finish'); const k = e.target.dataset.matface === 'pos' ? 'materialPos' : 'materialNeg';
+      if (e.target.value) w[k] = e.target.value; else delete w[k];
+      touch(); rebuildModel();
+    });
     inspEl.querySelector('[data-walk]').onclick = () => setMode('walk');
     inspEl.querySelector('[data-del]').onclick = () => {
       beginGeometryEdit(prop, 'delete wall');

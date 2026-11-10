@@ -18,7 +18,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { materialById, ensureLevels, levelHeight, levelOfRoom, wallsOn, roomsOn, openingsOn } from './store.js';
 import { materialFor } from './textures.js';
-import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, pointInPoly, doorLeaves } from './wall-solids.js';
+import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, wallFaceMaterialIds, pointInPoly, doorLeaves } from './wall-solids.js';
 import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
 import { applyPlanTagVisibility } from './tags-scene.js';
 import { cutPrism } from './section-planes.js';
@@ -559,12 +559,15 @@ export function buildWallGroup(wall, openings, property, ctx) {
   // ends are mitred or cut, so on a clean plan nothing overlaps in the first place.
   const lift = ((ctx.index || 0) % 10) * 0.0002;
 
-  const outMat = matFor(materialById(wall.material), FALLBACK_WALL, 0.9, ctx.matOpts);
-  // Faces that look into a room take the interior finish: an explicit one, else drywall on
-  // an exterior wall (a room on one side only) and the wall's own finish on a partition.
-  const inId = wallInteriorMaterialId(wall, rooms);
-  const inMat = (sides.pos || sides.neg) && inId !== wall.material
-    ? matFor(materialById(inId), FALLBACK_WALL, 0.9, ctx.matOpts) : outMat;
+  // Each face's finish (wall-solids.js wallFaceMaterialIds, shared with the SketchUp mirror):
+  // its own if set, else the interior finish where it looks into a room, the exterior grey on an
+  // exterior wall's unrecorded outside, and the wall's own finish on ends, top and reveals.
+  const faceIds = wallFaceMaterialIds(wall, rooms);
+  const mats = new Map();
+  const matOf = id => {
+    if (!mats.has(id)) mats.set(id, matFor(materialById(id), FALLBACK_WALL, 0.9, ctx.matOpts));
+    return mats.get(id);
+  };
   // One mesh per distinct material, each taking the faces that wear it.
   const buckets = [];
   const bucket = (mat, mask) => {
@@ -572,9 +575,9 @@ export function buildWallGroup(wall, openings, property, ctx) {
     if (!b) buckets.push(b = { mat, mask: 0, geos: [] });
     b.mask |= mask;
   };
-  bucket(outMat, FACE_OTHER);
-  bucket(sides.pos ? inMat : outMat, FACE_POS);
-  bucket(sides.neg ? inMat : outMat, FACE_NEG);
+  bucket(matOf(faceIds.other), FACE_OTHER);
+  bucket(matOf(faceIds.pos), FACE_POS);
+  bucket(matOf(faceIds.neg), FACE_NEG);
 
   const baseGeos = [];
   let baseEnds = null;
