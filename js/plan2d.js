@@ -395,8 +395,10 @@ function deleteSelection() {
     pushUndo();
     prop.rooms = prop.rooms.filter(r => r.id !== selection.id);
   } else if (selection.kind === 'underlay') {
-    // The underlay is not part of the undo snapshot, so no history entry for it. The
-    // calibration form cannot outlive its image: drop it and fall back to the select tool.
+    // The underlay is not part of the undo snapshot (no image copies in history), so removing
+    // it is final: ask first. The calibration form cannot outlive its image: drop it and fall
+    // back to the select tool.
+    if (!confirm(`Remove the plan underlay from ${lvl().name || 'this level'}? Its image, scale and alignment are removed with it, and UNDO cannot bring them back.`)) return;
     lvl().plan = null;
     vs.planSrc = planKey(prop);
     calib = null;
@@ -1864,7 +1866,9 @@ function onWheel(e) {
 }
 
 function onKeyDown(e) {
-  if (e.target.matches('input, textarea, select')) return;
+  if (e.target.matches('input, textarea, select') || e.target.isContentEditable) return;
+  // A dialog open over PLAN owns the keyboard, as in MEASURE.
+  if (document.querySelector('dialog[open]')) return;
   invalidate();
   if (e.key === ' ') { spaceDown = true; e.preventDefault(); updateCursor(); return; }
   if (e.key === 'Alt') { altDown = true; return; }
