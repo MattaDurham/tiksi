@@ -25,14 +25,15 @@ export const MIRROR_FORMAT = 'tiksi-sketchup-mirror';
 // Signatures compare lengths to 0.1 mm, finer than any typed change, and the opening position
 // to 1/100,000 of the wall. Each value is first rounded to the micrometre, as the server reports
 // what it reads from the .skp (r6 in server/sketchup_mirror.py), so a value Tiksi wrote and the
-// same value read back always sign alike. SIG_TAIL marks signatures of this precision: ones kept
-// from the earlier millimetre signatures carry none and are set aside (mergeMirror).
+// same value read back always sign alike. SIG_TAIL marks signatures of this precision. Mirrors
+// saved before it hold millimetre signatures (LEGACY_SIG): those are read against the same
+// millimetre signature of today's values (mergeMirror, syncMirror), so nothing is rewritten or
+// lost because the signatures changed.
 const micro = v => Number((Number(v) || 0).toFixed(6));
 const tenth = v => Math.round(micro(v) * 1e4);
 const along = v => Math.round(micro(v) * 1e5);
 const SIG_TAIL = '|0.1mm';
 const current = s => typeof s === 'string' && s.endsWith(SIG_TAIL);
-const currentOnly = m => Object.fromEntries(Object.entries(m || {}).filter(([, s]) => current(s)));
 
 // ---------- spec: what the .skp should contain ----------
 
@@ -49,8 +50,11 @@ function wallParams(prop, w) {
 }
 
 // Every element the mirror carries, with comparable signatures: id -> { kind, sig, params }.
-export function elementState(prop) {
+// `legacy`: the millimetre signatures mirrors were saved with before SIG_TAIL.
+export function elementState(prop, legacy = false) {
   const out = new Map();
+  const wallSig = legacy ? LEGACY_SIG.wall : wallSigNow, openingSig = legacy ? LEGACY_SIG.opening : openingSigNow;
+  const roomSig = legacy ? LEGACY_SIG.room : roomSigNow, fixtureSig = legacy ? LEGACY_SIG.fixture : fixtureSigNow;
   for (const w of prop.walls || []) {
     const L = Math.hypot(w.bx - w.ax, w.by - w.ay);
     if (L < 0.01) continue;
@@ -74,16 +78,34 @@ export function elementState(prop) {
   return out;
 }
 
-export function wallSig(p) { return ['wall', tenth(p.ax), tenth(p.ay), tenth(p.bx), tenth(p.by), tenth(p.thickness), tenth(p.height)].join(',') + SIG_TAIL; }
-export function openingSig(p) { return ['opening', p.wallId, along(p.t), tenth(p.width), tenth(p.height), tenth(p.sill)].join(',') + SIG_TAIL; }
-export function roomSig(p) { return ['room', p.name || '', ...(p.pts || []).map(q => tenth(q[0]) + ':' + tenth(q[1]))].join(',') + SIG_TAIL; }
+export function wallSig(p) { return wallSigNow(p); }
+function wallSigNow(p) { return ['wall', tenth(p.ax), tenth(p.ay), tenth(p.bx), tenth(p.by), tenth(p.thickness), tenth(p.height)].join(',') + SIG_TAIL; }
+export function openingSig(p) { return openingSigNow(p); }
+function openingSigNow(p) { return ['opening', p.wallId, along(p.t), tenth(p.width), tenth(p.height), tenth(p.sill)].join(',') + SIG_TAIL; }
+export function roomSig(p) { return roomSigNow(p); }
+function roomSigNow(p) { return ['room', p.name || '', ...(p.pts || []).map(q => tenth(q[0]) + ':' + tenth(q[1]))].join(',') + SIG_TAIL; }
 // Rotation to a tenth of a degree, the rest to 0.1 mm.
 const decideg = v => ((Math.round(Number(v || 0) * 10) % 3600) + 3600) % 3600;
-export function fixtureSig(p) {
+export function fixtureSig(p) { return fixtureSigNow(p); }
+function fixtureSigNow(p) {
   const head = ['fixture', p.kind || '', p.subtype || '', p.shape || ''];
   if (p.shape === 'box') return head.concat([tenth(p.x), tenth(p.y), decideg(p.rot), tenth(p.w), tenth(p.d), tenth(p.y0), tenth(p.h)]).join(',') + SIG_TAIL;
   return head.concat((p.pts || []).map(q => tenth(q[0]) + ':' + tenth(q[1])), [tenth(p.depth), tenth(p.y0), tenth(p.h)]).join(',') + SIG_TAIL;
 }
+
+// The signatures mirrors were saved with before SIG_TAIL, kept exactly: lengths to the
+// millimetre, an opening's position to 1/2000 of its wall.
+const mmOld = v => Math.round(Number(v || 0) * 1000), permilleOld = v => Math.round(Number(v || 0) * 2000);
+const LEGACY_SIG = {
+  wall: p => ['wall', mmOld(p.ax), mmOld(p.ay), mmOld(p.bx), mmOld(p.by), mmOld(p.thickness), mmOld(p.height)].join(','),
+  opening: p => ['opening', p.wallId, permilleOld(p.t), mmOld(p.width), mmOld(p.height), mmOld(p.sill)].join(','),
+  room: p => ['room', p.name || '', ...(p.pts || []).map(q => mmOld(q[0]) + ':' + mmOld(q[1]))].join(','),
+  fixture: p => {
+    const head = ['fixture', p.kind || '', p.subtype || '', p.shape || ''];
+    if (p.shape === 'box') return head.concat([mmOld(p.x), mmOld(p.y), decideg(p.rot), mmOld(p.w), mmOld(p.d), mmOld(p.y0), mmOld(p.h)]).join(',');
+    return head.concat((p.pts || []).map(q => mmOld(q[0]) + ':' + mmOld(q[1])), [mmOld(p.depth), mmOld(p.y0), mmOld(p.h)]).join(',');
+  },
+};
 
 // Finishes as SketchUp should paint them: { id, name, color } from the workspace materials,
 // with the 3D view's fallback colour when an id is unset or unknown (unknown ones warn).
@@ -116,8 +138,10 @@ function materialResolver(materials, warnings) {
 }
 
 // `materials` is the workspace material library (ws.data.materials).
-export function mirrorSpec(prop, materials) {
-  const state = elementState(prop), warnings = [];
+// `legacy` builds the spec as mirrors saved before SIG_TAIL were written (millimetre element
+// signatures, piece outlines rounded to the micrometre), only to recognise their signature.
+export function mirrorSpec(prop, materials, legacy = false) {
+  const state = elementState(prop, legacy), warnings = [];
   const finish = materialResolver(materials, warnings);
   // Each group goes on its Tiksi tag as a SketchUp tag of the same name ('' = the level's tag).
   const tag = key => { const t = tagById(prop, tagIdOf(prop, key)); return t ? t.name : ''; };
@@ -151,7 +175,7 @@ export function mirrorSpec(prop, materials) {
     const { origin, angle, toLocal } = fixtureLocalFrame(f);
     // Written unrounded, as walls are: the server measures the piece back from these points, and
     // a point rounded here could read back a micrometre off and change its signature.
-    const plain = v => v || 0;   // -0 and a missing value as 0, nothing rounded
+    const plain = legacy ? v => Math.round(v * 1e6) / 1e6 || 0 : v => v || 0;   // -0 and a missing value as 0, nothing rounded
     const parts = fixtureParts(f).filter(q => q.pts.length >= 3 && q.y1 - q.y0 > 1e-4).map(q => ({
       pts: q.pts.map(pt => toLocal(pt).map(plain)), z0: plain(q.y0), z1: plain(q.y1),
       material: finish(q.material, FALLBACK['fx-' + q.role] ? 'fx-' + q.role : 'fx-body', 'fixture ' + f.id),
@@ -212,21 +236,24 @@ const readSig = {
 // file reported before. Tiksi changed it when it differs from the last agreed state.
 // Mutates `prop`; the returned report's `seen` is the next `seenBefore`.
 export function mergeMirror(prop, read, synced, seenBefore) {
-  // Signatures kept from before the 0.1 mm ones cannot be compared: go by the file's own values,
-  // as for a mirror written on another machine. (Which elements the file was written with still
-  // counts; an element deleted in SketchUp across the change is kept and reported, not deleted.)
-  synced = currentOnly(synced);
-  seenBefore = currentOnly(seenBefore);
+  synced = synced || {};
+  seenBefore = seenBefore || {};
   const written = (read.model && read.model.elements && typeof read.model.elements === 'object') ? read.model.elements : {};
-  const writtenSig = id => written[id] && current(written[id].sig) ? written[id].sig : '';
   const report = { applied: [], added: [], deleted: [], conflicts: [], warnings: (read.warnings || []).slice(), untagged: read.untagged || null, seen: {} };
   const before = elementState(prop);
+  // A millimetre signature saved before SIG_TAIL stands for `sigNow` (the value's signature
+  // today) when it is the millimetre signature of that same value; otherwise it differs from it.
+  const upgrade = (stored, kind, params, sigNow) => !stored || current(stored) || !params ? stored
+    : stored === LEGACY_SIG[kind](params) ? sigNow : stored;
+  const agreedOf = (id, kind) => { const cur = before.get(id);
+    return upgrade(synced[id], kind, cur && cur.params, cur && cur.sig) || upgrade(written[id] && written[id].sig, kind, cur && cur.params, cur && cur.sig); };
   const seen = new Set();
   const decide = (id, kind, now, base) => {
     const nowSig = readSig[kind](now), fileBase = readSig[kind](base || {}), cur = before.get(id);
     report.seen[id] = nowSig;
-    const agreed = synced[id] || writtenSig(id) || fileBase;
-    const skpChanged = nowSig !== fileBase && nowSig !== synced[id] && nowSig !== seenBefore[id];
+    const agreed = agreedOf(id, kind) || fileBase;
+    const syncedSig = cur ? upgrade(synced[id], kind, cur.params, cur.sig) : synced[id];
+    const skpChanged = nowSig !== fileBase && nowSig !== syncedSig && nowSig !== upgrade(seenBefore[id], kind, now, nowSig);
     if (!cur) {
       if (synced[id] || written[id]) {   // Tiksi deleted it after the last sync
         if (skpChanged) report.conflicts.push({ id, kind, reason: 'deleted in Tiksi, changed in SketchUp; kept deleted' });
@@ -308,7 +335,7 @@ export function mergeMirror(prop, read, synced, seenBefore) {
   // element Tiksi added after the file was opened in SketchUp is not in its record.)
   for (const [id, cur] of before) {
     if (seen.has(id) || !written[id]) continue;
-    const agreed = synced[id] || writtenSig(id);
+    const agreed = agreedOf(id, cur.kind);
     if (cur.sig !== agreed) { report.conflicts.push({ id, kind: cur.kind, reason: 'deleted in SketchUp, changed in Tiksi; kept' }); continue; }
     if (cur.kind === 'wall') {
       prop.walls = prop.walls.filter(w => w.id !== id);
@@ -502,6 +529,12 @@ export async function syncMirror(folder, prop, entry, write, materials) {
   }
   const spec = mirrorSpec(prop, materials), sig = specSignature(spec);
   const underlayChanged = spec.underlays.some(u => (ms.underlays || {})[u.level] !== u.sig);
+  // A mirror saved before SIG_TAIL whose signature is that of today's project, built the old
+  // way: the .skp is up to date. Keep the new signatures; rewrite nothing.
+  if (got && ms.sig && sig !== ms.sig && !underlayChanged && ms.sig === specSignature(mirrorSpec(prop, materials, true))) {
+    ms.sig = sig;
+    ms.synced = syncedState(prop);
+  }
   if (!got || sig !== ms.sig || underlayChanged) {
     const files = {};
     for (const u of spec.underlays) {
