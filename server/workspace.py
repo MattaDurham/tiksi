@@ -756,11 +756,16 @@ class WorkspaceService:
                     with model.open('rb') as source:
                         while chunk := source.read(1024 * 1024): h.wfile.write(chunk)
                 elif h.command == 'PUT':
-                    value = self.read(h, MAX_BLOB)
-                    with self.lock:
-                        before = str(model.stat().st_mtime_ns) if model.exists() else '0'
-                        if h.headers.get('X-File-Mtime') != before: raise WorkspaceError('SketchUp model changed; retry before overwriting', 409)
-                        write_whole(model, value)
+                    stamp = lambda: str(model.stat().st_mtime_ns) if model.exists() else '0'
+                    if h.headers.get('X-File-Mtime') != stamp(): raise WorkspaceError('SketchUp model changed; retry before overwriting', 409)
+                    # The model is received into a spare file of its own beside it, never held
+                    # whole in memory, and renamed into place only if nobody changed it meanwhile.
+                    temp = self.receive(h, MAX_BLOB, model)
+                    try:
+                        with self.lock:
+                            if h.headers.get('X-File-Mtime') != stamp(): raise WorkspaceError('SketchUp model changed; retry before overwriting', 409)
+                            os.replace(temp, model)
+                    finally: temp.unlink(missing_ok=True)
                     self.reply(h, 200, {})
                 else: raise WorkspaceError('Mirror endpoint not found', 404)
             elif path.startswith('/api/workspace/open/') and h.command == 'POST':
@@ -817,6 +822,24 @@ class WorkspaceService:
         if not 0 < length <= limit: raise WorkspaceError('Upload exceeds the workspace limit', 413)
         h.connection.settimeout(120)
         return length
+
+    @classmethod
+    def receive(cls, h, limit, destination):
+        """Copy a request body into a hidden spare file beside destination, in pieces, flushed to
+        disk; the caller renames it into place. Nothing is left behind if the upload breaks off."""
+        length = cls.length(h, limit)
+        destination = Path(destination)
+        with tempfile.NamedTemporaryFile(dir=destination.parent, prefix='.' + destination.name + '.', suffix='.tmp', delete=False) as out:
+            temp = Path(out.name)
+            try:
+                left = length
+                while left:
+                    chunk = h.rfile.read(min(1024 * 1024, left))
+                    if not chunk: raise WorkspaceError('Upload was truncated')
+                    out.write(chunk); left -= len(chunk)
+                out.flush(); os.fsync(out.fileno())
+            except BaseException: out.close(); temp.unlink(missing_ok=True); raise
+        return temp
 
     @classmethod
     def read(cls, h, limit):

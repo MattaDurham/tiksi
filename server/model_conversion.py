@@ -1,5 +1,4 @@
 """Bounded local model conversion, using installed authoring engines and isolated files."""
-import io
 import json
 import logging
 import os
@@ -24,6 +23,23 @@ MIRROR_ENTRY=re.compile(r'^(mirror\.json|existing\.skp|underlay/[\w.:-]{1,80}\.(
 
 class ConversionError(ValueError):
     def __init__(self,message,status=400):super().__init__(message);self.status=status
+
+class Body:
+    """A request body of known length, copied to a file in pieces and never held whole in memory."""
+    def __init__(self,h,length):self.h=h;self.length=length
+    def __len__(self):return self.length
+    def save(self,path):
+        left=self.length
+        with open(path,'wb') as out:
+            while left:
+                chunk=self.h.rfile.read(min(1024*1024,left))
+                if not chunk:raise ConversionError('Upload was truncated')
+                out.write(chunk);left-=len(chunk)
+
+def save(data,path):
+    """Write an upload (bytes, or a Body still to be read) to path."""
+    if isinstance(data,(bytes,bytearray)):Path(path).write_bytes(data)
+    else:data.save(path)
 
 def write_report(folder,report,indent=None):
     """A conversion's record, written whole to a spare file and renamed, so it is never half written."""
@@ -110,7 +126,7 @@ class ModelConversionService:
         folder=None;report={}
         try:
             self.make_room(len(data))
-            identifier=secrets.token_hex(16);folder=self.root/identifier;folder.mkdir();source=folder/('source'+extension);source.write_bytes(data)
+            identifier=secrets.token_hex(16);folder=self.root/identifier;folder.mkdir();source=folder/('source'+extension);save(data,source)
             output=folder/('model.'+('las' if extension in {'.laz','.e57'} else target))
             if extension=='.zip':
                 package=folder/'package';package.mkdir();total=0;seen=set()
@@ -140,18 +156,19 @@ class ModelConversionService:
             result=self._run(args,folder)
             if not output.is_file() or not 0<output.stat().st_size<=MAX_BYTES:raise ConversionError('Converter did not produce a usable file',422)
             report.update(state='complete',**result);write_report(folder,report,2)
-            return identifier,output.read_bytes(),report
+            return identifier,output,report
         except Exception as error:
             if folder:
                 report.update(id=folder.name,inputFormat=extension,outputFormat='.'+target,state='failed',error=str(error));write_report(folder,report,2)
                 if isinstance(error,ConversionError):error.job_id=folder.name
             raise
         finally:self.lock.release()
-    def mirror(self,op,data):
+    def mirror(self,op,data,send=None):
         """SketchUp mirror of one property: 'write' takes a ZIP (mirror.json, optional
         existing.skp and underlay images) and returns SKP bytes; 'read' takes SKP bytes and
         returns the tagged elements as JSON. Job files are deleted afterwards: the mirror
-        itself lives in the owner's project folder, not in server history."""
+        itself lives in the owner's project folder, not in server history. With send, the
+        result is handed over as a file (send(path)) instead of returned as bytes."""
         if op not in {'write','read'}:raise ConversionError('Invalid mirror operation')
         if not self.sketchup:raise ConversionError('The SketchUp mirror needs SketchUp installed on this Mac',422)
         if not 0<len(data)<=MAX_BYTES:raise ConversionError('Mirror must be between 1 byte and 600 MB',413)
@@ -162,7 +179,8 @@ class ModelConversionService:
             folder=base/secrets.token_hex(16);folder.mkdir()
             worker=[sys.executable,str(ROOT/'server/sketchup_mirror.py'),op,str(folder)]
             if op=='write':
-                try:archive=zipfile.ZipFile(io.BytesIO(data))
+                package=folder/'package.zip';save(data,package)
+                try:archive=zipfile.ZipFile(package)
                 except zipfile.BadZipFile:raise ConversionError('Mirror package must be a ZIP')
                 with archive:
                     items=archive.infolist();names=[i.filename for i in items]
@@ -170,15 +188,18 @@ class ModelConversionService:
                     if 'mirror.json' not in names:raise ConversionError('Mirror package has no mirror.json')
                     if sum(i.file_size for i in items)>MAX_BYTES:raise ConversionError('Mirror package expands beyond 600 MB',413)
                     for item in items:
-                        target=folder/item.filename;target.parent.mkdir(exist_ok=True);target.write_bytes(archive.read(item))
+                        target=folder/item.filename;target.parent.mkdir(exist_ok=True)
+                        with archive.open(item) as source,target.open('wb') as out:shutil.copyfileobj(source,out,1024*1024)
+                package.unlink()
                 self._run(worker,folder)
                 output=folder/'model.skp'
                 if not output.is_file() or not 0<output.stat().st_size<=MAX_BYTES:raise ConversionError('Mirror writer did not produce a SketchUp file',422)
-                return output.read_bytes()
-            (folder/'source.skp').write_bytes(data)
-            self._run(worker,folder)
-            output=folder/'mirror-read.json'
-            if not output.is_file():raise ConversionError('Mirror reader did not produce a result',422)
+            else:
+                save(data,folder/'source.skp')
+                self._run(worker,folder)
+                output=folder/'mirror-read.json'
+                if not output.is_file():raise ConversionError('Mirror reader did not produce a result',422)
+            if send:send(output);return None
             return output.read_bytes()
         finally:
             if folder:shutil.rmtree(folder,ignore_errors=True)
@@ -205,19 +226,18 @@ class ModelConversionService:
                 try:length=int(h.headers.get('Content-Length','0'))
                 except ValueError:raise ConversionError('Invalid content length')
                 if not 0<length<=MAX_BYTES:raise ConversionError('Model must be smaller than 600 MB',413)
-                h.connection.settimeout(60);data=h.rfile.read(length)
-                if len(data)!=length:raise ConversionError('Upload was truncated')
-                identifier,data,report=self.convert(data,h.headers.get('X-Model-Extension','').lower(),h.headers.get('X-Model-Target','glb'))
+                # The upload is read only once the converter is free, straight into the job's folder.
+                h.connection.settimeout(60)
+                identifier,output,report=self.convert(Body(h,length),h.headers.get('X-Model-Extension','').lower(),h.headers.get('X-Model-Target','glb'))
                 mime='application/octet-stream' if report['outputFormat']!='.glb' else 'model/gltf-binary'
-                self.reply(h,200,data,mime,{'X-Tiksi-Job':identifier,'X-Tiksi-Format':report['outputFormat'],'X-Tiksi-Warnings':json.dumps(report.get('warnings',[]),ensure_ascii=True)});return True
+                self.reply_file(h,200,output,mime,{'X-Tiksi-Job':identifier,'X-Tiksi-Format':report['outputFormat'],'X-Tiksi-Warnings':json.dumps(report.get('warnings',[]),ensure_ascii=True)});return True
             if path==base+'/mirror' and h.command=='POST':
                 try:length=int(h.headers.get('Content-Length','0'))
                 except ValueError:raise ConversionError('Invalid content length')
                 if not 0<length<=MAX_BYTES:raise ConversionError('Mirror must be smaller than 600 MB',413)
-                h.connection.settimeout(60);data=h.rfile.read(length)
-                if len(data)!=length:raise ConversionError('Upload was truncated')
-                op=h.headers.get('X-Mirror-Op','');data=self.mirror(op,data)
-                self.reply(h,200,data,'application/json' if op=='read' else 'application/octet-stream');return True
+                h.connection.settimeout(60)
+                op=h.headers.get('X-Mirror-Op','')
+                self.mirror(op,Body(h,length),lambda output:self.reply_file(h,200,output,'application/json' if op=='read' else 'application/octet-stream'));return True
             if path==base+'/open-in-sketchup' and h.command=='POST':
                 # Opens the browser's mirror file in SketchUp on this Mac (sketchup_open.py).
                 from server.sketchup_open import at_this_mac,OpenError
@@ -243,11 +263,15 @@ class ModelConversionService:
                     if self.lock.locked():raise ConversionError('Wait for conversion to finish',409)
                     shutil.rmtree(folder);self.reply(h,200,b'{}','application/json');return True
                 if h.command=='GET':
-                    stream=io.BytesIO()
-                    with zipfile.ZipFile(stream,'w',zipfile.ZIP_DEFLATED) as z:
-                        for p in folder.rglob('*'):
-                            if p.is_file():z.write(p,p.relative_to(folder))
-                    self.reply(h,200,stream.getvalue(),'application/zip');return True
+                    # The handoff is packed into a file beside the jobs and sent from there.
+                    with tempfile.NamedTemporaryFile(dir=self.root,prefix='.handoff-',suffix='.zip',delete=False) as out:packed=Path(out.name)
+                    try:
+                        with zipfile.ZipFile(packed,'w',zipfile.ZIP_DEFLATED) as z:
+                            for p in folder.rglob('*'):
+                                if p.is_file():z.write(p,p.relative_to(folder))
+                        self.reply_file(h,200,packed,'application/zip')
+                    finally:packed.unlink(missing_ok=True)
+                    return True
             raise ConversionError('Conversion endpoint not found',404)
         except ConversionError as e:
             h.close_connection=True
@@ -255,6 +279,13 @@ class ModelConversionService:
         except Exception:
             log.exception('Model conversion failed (%s %s)',h.command,path)
             h.close_connection=True;self.reply(h,500,b'{"error":"Local converter failed; source and diagnostics retained."}','application/json');return True
+    @staticmethod
+    def reply_file(h,status,path,mime,extra=None):
+        size=Path(path).stat().st_size
+        h.send_response(status);h.send_header('Content-Type',mime);h.send_header('Content-Length',str(size));h.send_header('Cache-Control','no-store')
+        for name,value in (extra or {}).items():h.send_header(name,value)
+        h.end_headers()
+        with open(path,'rb') as source:shutil.copyfileobj(source,h.wfile,1024*1024)
     @staticmethod
     def reply(h,status,data,mime,extra=None):
         h.send_response(status);h.send_header('Content-Type',mime);h.send_header('Content-Length',str(len(data)));h.send_header('Cache-Control','no-store')

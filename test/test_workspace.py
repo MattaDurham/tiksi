@@ -342,6 +342,31 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(source.with_suffix('.skp').read_bytes(), b'synthetic skp')
         self.assertEqual([p.name for p in source.parent.glob('.*.tmp') if p.is_file()], [])
 
+    def test_a_sketchup_model_upload_is_received_in_pieces_into_its_own_spare_file(self):
+        self.commit(workspace())
+        source = Path(self.service.paths['prop-a']); model = source.with_suffix('.skp')
+        body = bytes(range(256)) * (6 * 4096)
+        test = self
+        class Pieces(io.BytesIO):
+            def read(self, amount=-1):
+                test.assertTrue(0 < amount <= 4 * 1024 * 1024, 'the model is read in pieces, not whole: ' + str(amount))
+                return super().read(amount)
+        def put(stamp, data):
+            class Handler:
+                path = '/api/workspace/mirror/prop-a'; command = 'PUT'; client_address = ('127.0.0.1', 1)
+                connection = type('C', (), {'settimeout': lambda self, t: None})()
+                def send_response(self, status): self.status = status
+                def send_header(self, *args): pass
+                def end_headers(self): pass
+            h = Handler(); h.rfile = Pieces(data); h.wfile = io.BytesIO()
+            h.headers = {'Host': 'localhost:8888', 'X-Tiksi-Workspace': '1', 'X-Tiksi-Token': self.service.token, 'Content-Length': str(len(data)), 'X-File-Mtime': stamp}
+            self.service.dispatch(h); return h.status
+        self.assertEqual(put('0', body), 200)
+        self.assertEqual(model.read_bytes(), body)
+        self.assertEqual(put('0', b'stale'), 409, 'a model changed meanwhile is not overwritten')
+        self.assertEqual(model.read_bytes(), body)
+        self.assertEqual([p.name for p in source.parent.iterdir() if p.name.endswith('.tmp')], [], 'no spare file is left')
+
     def test_http_reads_require_trusted_peer_same_origin_and_custom_header(self):
         class Handler:
             path = '/api/workspace'; command = 'GET'; client_address = ('100.80.1.2', 1234)
