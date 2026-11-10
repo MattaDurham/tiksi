@@ -20,7 +20,7 @@ import { beginGeometryEdit, cancelGeometryEdit, restoreGeometryEdit, revertGeome
 import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import {
   planWallMove, applyWallMove, normalOffset, planCornerMove, applyCornerMove,
-  floorCornerAttached, floorCornersOf, snapFloorToWalls,
+  floorCornerAttached, floorCornersOf, snapFloorToWalls, movedWallLengths, moveLeavesShortWall,
 } from './wallmove.js';
 import { wallFaces, roomFromWalls, sameFloor } from './roomfill.js';
 import { fixturesOn, fixtureOutline } from './fixtures.js';
@@ -1810,7 +1810,8 @@ function press(sx, sy, e) {
   if (hit.kind === 'handle') {
     const w = prop.walls.find(w => w.id === hit.id);
     const joint = w && !e.altKey ? planCornerMove(w, hit.end, curWalls(), curRooms(), curOpenings()) : null;
-    drag = { kind: 'handle', id: hit.id, end: hit.end, joint, sx, sy, moved: false };
+    drag = { kind: 'handle', id: hit.id, end: hit.end, joint, sx, sy, moved: false,
+      lengths: joint ? movedWallLengths(joint) : null, last: joint ? [joint.x0, joint.y0] : null };
     return;
   }
   if (hit.kind === 'floorCorner') {
@@ -1822,7 +1823,9 @@ function press(sx, sy, e) {
   if (hit.kind === 'wall') {
     const w = prop.walls.find(w => w.id === hit.id);
     const mv = e.altKey ? null : planWallMove(w, curWalls(), curRooms(), curOpenings());
-    drag = { kind: 'wall', id: hit.id, sx, sy, wx, wy, orig: { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by }, mv: mv && mv.connected ? mv : null, moved: false };
+    const slide = mv && mv.connected ? mv : null;
+    drag = { kind: 'wall', id: hit.id, sx, sy, wx, wy, orig: { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by }, mv: slide, moved: false,
+      lengths: slide ? movedWallLengths(slide) : null, last: 0 };
   } else if (hit.kind === 'opening') {
     drag = { kind: 'opening', id: hit.id, sx, sy, moved: false };
   } else if (hit.kind === 'underlay') {
@@ -1866,15 +1869,19 @@ function onPointerMove(e) {
     const w = prop.walls.find(w => w.id === drag.id);
     if (!w) return;
     const pt = snapPoint(wx, wy, { excludeWall: drag.joint ? new Set(drag.joint.wallIds) : w.id, from: drag.end === 'a' ? [w.bx, w.by] : [w.ax, w.ay], walls: true });
-    // A corner never lands on (or within MIN_WALL of) the far end of a wall it moves: that
-    // wall would vanish from the drawing and the schedule yet stay in the data. The corner
-    // waits where it last was until the pointer leaves that zone.
-    const ends = drag.joint ? drag.joint.ends : [{ w, end: drag.end }];
-    const short = ends.find(({ w: ew, end }) => { const far = end === 'a' ? 'b' : 'a'; return Math.hypot(pt[0] - ew[far + 'x'], pt[1] - ew[far + 'y']) < MIN_WALL; });
-    if (short) { setHint(`A wall cannot be shorter than ${fmtLen(MIN_WALL)}. Delete the wall instead (Backspace).`); drag.refused = true; return; }
-    if (drag.refused) { drag.refused = false; updateHint(); }
-    if (drag.joint) applyCornerMove(drag.joint, pt[0], pt[1]);
-    else if (drag.end === 'a') { w.ax = pt[0]; w.ay = pt[1]; } else { w.bx = pt[0]; w.by = pt[1]; }
+    // A move never leaves a wall it reshapes shorter than MIN_WALL: that wall would vanish
+    // from the drawing and the schedule yet stay in the data. The corner waits where it last
+    // was until the pointer leaves that zone.
+    if (drag.joint) {
+      applyCornerMove(drag.joint, pt[0], pt[1]);
+      if (moveLeavesShortWall(drag.lengths, MIN_WALL)) { applyCornerMove(drag.joint, ...drag.last); refuseShortWall(); return; }
+      drag.last = pt;
+    } else {
+      const far = drag.end === 'a' ? 'b' : 'a';
+      if (Math.hypot(pt[0] - w[far + 'x'], pt[1] - w[far + 'y']) < MIN_WALL) { refuseShortWall(); return; }
+      if (drag.end === 'a') { w.ax = pt[0]; w.ay = pt[1]; } else { w.bx = pt[0]; w.by = pt[1]; }
+    }
+    shortWallAllowed();
   } else if (drag.kind === 'floorCorner') {
     const r = drag.r, n = r && r.pts.length;
     if (!n || drag.i >= n) return;
@@ -1883,7 +1890,15 @@ function onPointerMove(e) {
   } else if (drag.kind === 'wall') {
     const w = prop.walls.find(w => w.id === drag.id);
     if (!w) return;
-    if (drag.mv) { applyWallMove(drag.mv, rnd(normalOffset(drag.mv, wx - drag.wx, wy - drag.wy))); return; }
+    if (drag.mv) {
+      // A slide that would squeeze a joined wall to (almost) nothing stops where it last was.
+      const off = rnd(normalOffset(drag.mv, wx - drag.wx, wy - drag.wy));
+      applyWallMove(drag.mv, off);
+      if (moveLeavesShortWall(drag.lengths, MIN_WALL)) { applyWallMove(drag.mv, drag.last); refuseShortWall(); return; }
+      drag.last = off;
+      shortWallAllowed();
+      return;
+    }
     const dx = rnd(wx - drag.wx), dy = rnd(wy - drag.wy);
     w.ax = drag.orig.ax + dx; w.ay = drag.orig.ay + dy;
     w.bx = drag.orig.bx + dx; w.by = drag.orig.by + dy;
@@ -1899,6 +1914,12 @@ function onPointerMove(e) {
     drag.pl.offsetY = drag.oy + (wy - drag.wy);
   }
 }
+
+function refuseShortWall() {
+  setHint(`A wall cannot be shorter than ${fmtLen(MIN_WALL)}. Delete the wall instead (Backspace).`);
+  drag.refused = true;
+}
+function shortWallAllowed() { if (drag.refused) { drag.refused = false; updateHint(); } }
 
 function onPointerUp(e) {
   if (e && e.pointerType === 'touch') { onFingerUp(e); return; }
@@ -2490,8 +2511,11 @@ function renderInspector() {
         // The b end moves along the wall like a corner drag: walls joined there and the floor
         // corners on it come along.
         const ux = (w.bx - w.ax) / L, uy = (w.by - w.ay) / L;
-        applyCornerMove(planCornerMove(w, 'b', curWalls(), curRooms(), curOpenings()), rnd(w.ax + ux * v), rnd(w.ay + uy * v));
-        touch();
+        const cm = planCornerMove(w, 'b', curWalls(), curRooms(), curOpenings()), lengths = movedWallLengths(cm);
+        applyCornerMove(cm, rnd(w.ax + ux * v), rnd(w.ay + uy * v));
+        // A wall joined at that end must not be squeezed to nothing either.
+        if (moveLeavesShortWall(lengths, MIN_WALL)) { applyCornerMove(cm, cm.x0, cm.y0); cancelGeometryEdit(prop); setHint(`That length would leave a joined wall shorter than ${fmtLen(MIN_WALL)}.`); }
+        else touch();
       }
       renderInspector();
     };
