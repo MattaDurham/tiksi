@@ -7,6 +7,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 import urllib.error
@@ -37,6 +38,8 @@ class WorkflowTests(unittest.TestCase):
         (self.root / '.gitignore').write_text('.worktrees/\nAGENTS.local.md\n.tiksi-*\n', encoding='utf-8')
         self.git('add', '.')
         self.git('commit', '-m', 'Synthetic root')
+        # The private-data check needs a word list on this Mac; this one is synthetic.
+        (self.root / '.git' / 'tiksi-private-patterns').write_text('Synthetic Owner Word\n', encoding='utf-8')
         self.workflow = branch.Workflow(self.root)
         self.children = []
         # Concurrent suites have distinct disposable Git repositories and locks.
@@ -311,6 +314,187 @@ class SERVICE:
         self.assertIn(('pr', 'ready', 'codex/feature'), calls)
         self.assertEqual(args.read_text(encoding='utf-8').strip(), '--merge')
         self.assertEqual(self.git('rev-parse', 'main', cwd=remote), self.git('rev-parse', 'main'))
+
+    def test_lock_left_by_a_killed_command_is_cleared_but_a_live_one_is_kept(self):
+        lock = self.workflow.records / 'lock'
+        self.workflow.records.mkdir(exist_ok=True)
+        lock.mkdir()
+        (lock / 'owner.json').write_text(json.dumps({'pid': os.getpid(), 'created': 0}), encoding='utf-8')
+        with self.assertRaisesRegex(branch.WorkflowError, 'owns the lock'):
+            with self.workflow.lock(): pass
+        self.assertTrue(lock.exists())
+        gone = subprocess.Popen(['true']); gone.wait()
+        (lock / 'owner.json').write_text(json.dumps({'pid': gone.pid, 'created': 0}), encoding='utf-8')
+        with self.workflow.lock():
+            self.assertEqual(json.loads((lock / 'owner.json').read_text(encoding='utf-8'))['pid'], os.getpid())
+        self.assertFalse(lock.exists())
+        # A lock whose owner never wrote its record counts as stale only after the grace period.
+        lock.mkdir()
+        with self.assertRaisesRegex(branch.WorkflowError, 'owns the lock'):
+            with self.workflow.lock(): pass
+        old = time.time() - branch.Workflow.LOCK_GRACE_SECONDS - 5
+        os.utime(lock, (old, old))
+        with self.workflow.lock(): pass
+
+    def test_discard_keeps_a_pushed_branch_that_is_not_in_main(self):
+        remote = self.add_origin()
+        target = self.start()
+        self.commit_feature(target)
+        head = self.git('rev-parse', 'HEAD', cwd=target)
+        self.git('push', '-u', 'origin', 'codex/feature', cwd=target)
+        with patch.object(self.workflow, 'gh'), patch.object(self.workflow, 'pr_info', return_value=None):
+            self.workflow.discard('feature', owner_approved=True)
+        self.assertNotIn('codex/feature', self.git('branch', '-a'))
+        self.assertEqual(self.git('ls-remote', '--heads', str(remote), 'codex/feature'), '')
+        refs = self.git('for-each-ref', '--format=%(objectname)', 'refs/tiksi-discarded/').splitlines()
+        self.assertEqual(refs, [head])
+
+    def test_two_commands_clearing_one_stale_lock_never_remove_each_others_lock(self):
+        lock = self.workflow.records / 'lock'
+        self.workflow.records.mkdir(exist_ok=True)
+        lock.mkdir()
+        gone = subprocess.Popen(['true']); gone.wait()
+        (lock / 'owner.json').write_text(json.dumps({'pid': gone.pid, 'created': 0}), encoding='utf-8')
+        other = branch.Workflow(self.root)
+        real = branch.Workflow.stale_lock
+        def slow_check(lock_path):
+            # This command decides the lock is stale; before it acts, the other command clears it
+            # and takes a fresh lock of its own.
+            verdict = real(self.workflow, lock_path)
+            other.claim_stale(lock_path)
+            self.assertTrue(other.take(lock_path, {'pid': os.getpid(), 'created': 1, 'id': 'other'}))
+            return verdict
+        with patch.object(self.workflow, 'stale_lock', side_effect=slow_check):
+            with self.assertRaisesRegex(branch.WorkflowError, 'took the lock just now'):
+                self.workflow.claim_stale(lock)
+        self.assertEqual(json.loads((lock / 'owner.json').read_text(encoding='utf-8'))['created'], 1)
+        self.assertEqual([p.name for p in self.workflow.records.glob('lock*')], ['lock'])
+
+    def merge_ready(self):
+        remote = self.add_origin()
+        target = self.start()
+        self.commit_feature(target)
+        self.git('push', '-u', 'origin', 'codex/feature', cwd=target)
+        return remote, target, self.green_pr(target)
+
+    def test_merge_refuses_when_github_main_has_commits_local_main_lacks(self):
+        remote, target, info = self.merge_ready()
+        other = Path(self.temp.name) / 'other'
+        self.git('clone', '-b', 'main', str(remote), str(other))
+        self.git('config', 'user.name', 'Synthetic Test', cwd=other)
+        self.git('config', 'user.email', 'test@example.com', cwd=other)
+        (other / 'README.md').write_text('pushed from elsewhere', encoding='utf-8')
+        self.git('add', '.', cwd=other); self.git('commit', '-m', 'Elsewhere', cwd=other); self.git('push', 'origin', 'main', cwd=other)
+        before = self.git('rev-parse', 'main')
+        with patch.object(self.workflow, 'pr_info', return_value=info), patch.object(self.workflow, 'gh'):
+            with self.assertRaisesRegex(branch.WorkflowError, "GitHub's main has commits"):
+                self.workflow.merge('feature', owner_approved=True)
+        self.assertEqual(self.git('rev-parse', 'main'), before)
+        self.assertTrue(target.exists())
+
+    def test_a_refused_push_of_main_undoes_the_merge_in_the_live_checkout(self):
+        remote, target, info = self.merge_ready()
+        hook = remote / 'hooks' / 'pre-receive'
+        hook.write_text('#!/bin/sh\necho "synthetic refusal" >&2\nexit 1\n', encoding='utf-8')
+        hook.chmod(0o755)
+        before = self.git('rev-parse', 'main')
+        with patch.object(self.workflow, 'pr_info', return_value=info), patch.object(self.workflow, 'gh'):
+            with self.assertRaisesRegex(branch.WorkflowError, 'merge was undone'):
+                self.workflow.merge('feature', owner_approved=True)
+        self.assertEqual(self.git('rev-parse', 'main'), before)
+        self.assertNotIn('upgraded fixture', (self.root / 'index.html').read_text(encoding='utf-8'))
+        self.assertEqual(self.git('status', '--porcelain'), '')
+        self.assertEqual(self.git('rev-parse', 'codex/feature'), info['headRefOid'])
+
+    def test_discard_keeps_commits_found_nowhere_else_and_every_ignored_file(self):
+        target = self.start()
+        self.commit_feature(target)
+        head = self.git('rev-parse', 'HEAD', cwd=target)
+        (target / '.tiksi-notes.txt').write_text('synthetic ignored note', encoding='utf-8')
+        (target / '.tiksi-state').mkdir()
+        (target / '.tiksi-state/project.json').write_text('synthetic snapshot', encoding='utf-8')
+        self.workflow.discard('feature', owner_approved=True)
+        self.assertFalse(target.exists())
+        refs = self.git('for-each-ref', '--format=%(refname) %(objectname)', 'refs/tiksi-discarded/').splitlines()
+        self.assertEqual(len(refs), 1)
+        self.assertTrue(refs[0].startswith('refs/tiksi-discarded/feature-'))
+        self.assertTrue(refs[0].endswith(head))
+        archive = next((self.workflow.records / 'archives').glob('feature-*'))
+        self.assertEqual((archive / '.tiksi-notes.txt').read_text(encoding='utf-8'), 'synthetic ignored note')
+        self.assertEqual((archive / '.tiksi-state/project.json').read_text(encoding='utf-8'), 'synthetic snapshot')
+        # A branch whose commits are all in main leaves nothing behind.
+        self.start('second')
+        self.workflow.discard('second', owner_approved=True)
+        self.assertEqual(len(self.git('for-each-ref', 'refs/tiksi-discarded/').splitlines()), 1)
+
+    def use_real_checks(self, packages=True):
+        """Give the synthetic live checkout this repository's quick checks."""
+        for name in ['preflight.sh', 'check.py', 'check-private.py', 'check-names.py', 'check-names.mjs', 'check-vendor.py',
+                     'check-names-allow.json', 'browser-globals.json', 'smoke-open.mjs', 'unit.py', 'unit-skips.json']:
+            shutil.copy(ROOT / 'scripts' / name, self.root / 'scripts' / name)
+        (self.root / 'package.json').write_text(json.dumps({'type': 'module', 'scripts': {
+            'check': 'python3 scripts/check.py', 'test': 'true'}}), encoding='utf-8')
+        if packages: (self.root / 'node_modules').symlink_to(ROOT / 'node_modules', target_is_directory=True)
+        with (self.root / '.gitignore').open('a', encoding='utf-8') as ignore: ignore.write('node_modules\n')
+        self.git('add', '.'); self.git('commit', '-qm', 'Real checks')
+
+    def test_the_fast_path_needs_no_packages_and_the_full_check_says_what_to_install(self):
+        self.use_real_checks(packages=False)
+        fast = subprocess.run(['sh', 'scripts/preflight.sh', '--fast'], cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(fast.returncode, 0, fast.stdout + fast.stderr)
+        full = subprocess.run(['python3', 'scripts/check.py'], cwd=self.root, capture_output=True, text=True)
+        self.assertNotEqual(full.returncode, 0)
+        self.assertIn('npm ci', full.stderr)
+
+    def test_the_live_checkout_checks_grade_a_branch_that_weakens_its_own(self):
+        self.use_real_checks()
+        remote, target, _ = self.merge_ready()
+        # Without the credential the same checks pass, so the refusal below is theirs.
+        clean = subprocess.run(['sh', str(self.root / 'scripts/preflight.sh'), '--fast'], cwd=target, capture_output=True, text=True)
+        self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+        (target / 'scripts/check-private.py').write_text('import sys\nsys.exit(0)\n', encoding='utf-8')
+        (target / 'settings.js').write_text('export const token = "ghp_' + 'C' * 40 + '";\n', encoding='utf-8')
+        self.git('add', '.', cwd=target); self.git('commit', '-qm', 'Weaken the guard', cwd=target)
+        self.git('push', 'origin', 'codex/feature', cwd=target)
+        self.assertEqual(subprocess.run(['python3', 'scripts/check-private.py', '--tree'], cwd=target).returncode, 0)
+        info = self.green_pr(target)
+        before = self.git('rev-parse', 'main')
+        with patch.object(self.workflow, 'pr_info', return_value=info), patch.object(self.workflow, 'gh'):
+            with self.assertRaises(branch.WorkflowError):
+                self.workflow.merge('feature', owner_approved=True, skip_checks=True)
+        self.assertEqual(self.git('rev-parse', 'main'), before)
+        self.assertEqual(self.git('rev-parse', 'main', cwd=remote), before)
+
+    def test_pr_and_merge_refuse_private_words_before_pushing(self):
+        remote = self.add_origin()
+        (self.root / '.tiksi-private-patterns').write_text('# synthetic list\nSynthetic Lane\n', encoding='utf-8')
+        # The synthetic live checkout's own guard predates the push check, as main's does today.
+        (self.root / 'scripts/check-private.py').write_text('import sys\nsys.exit(0)\n', encoding='utf-8')
+        self.git('add', '.'); self.git('commit', '-qm', 'Older guard')
+        cases = [('synthetic-lane-fix', 'Plain message', 'Plain title'),
+                 ('plain-one', 'Fix the door at 12 synthetic LANE', 'Plain title'),
+                 ('plain-two', 'Plain message', 'Floors for Synthetic Lane')]
+        for slug, message, title in cases:
+            with self.subTest(slug=slug):
+                target = self.start(slug)
+                (target / 'index.html').write_text('<html>' + slug + '</html>', encoding='utf-8')
+                self.git('add', '.', cwd=target); self.git('commit', '-qm', message, cwd=target)
+                with patch.object(self.workflow, 'gh') as gh, patch.object(self.workflow, 'pr_info', return_value=None):
+                    with self.assertRaisesRegex(branch.WorkflowError, 'Private-data check refused') as refused:
+                        self.workflow.pr(slug, title=title)
+                    gh.assert_not_called()
+                self.assertNotIn('Synthetic Lane', str(refused.exception))
+                self.assertNotIn('codex/' + slug, self.git('branch', '-r'))
+        target = self.start('plain-three')
+        self.commit_feature(target)
+        with patch.object(self.workflow, 'gh', return_value='https://example.com/pr/1'), patch.object(self.workflow, 'pr_info', return_value=None):
+            self.workflow.pr('plain-three', title='Plain title')
+        self.assertEqual(self.git('rev-parse', 'codex/plain-three', cwd=remote), self.git('rev-parse', 'HEAD', cwd=target))
+        info = {**self.green_pr(self.workflow.target('synthetic-lane-fix'))}
+        with patch.object(self.workflow, 'pr_info', return_value=info), patch.object(self.workflow, 'gh'):
+            with self.assertRaisesRegex(branch.WorkflowError, 'Private-data check refused'):
+                self.workflow.merge('synthetic-lane-fix', owner_approved=True, skip_checks=True)
+        self.assertNotIn('synthetic-lane', self.git('log', '--format=%s', 'main'))
 
     def test_unknown_flags_and_primary_adoption_rejected(self):
         result = subprocess.run(['python3', str(ROOT / 'scripts/branch.py'), 'serve', 'example', '--unknown'], cwd=self.root, capture_output=True)

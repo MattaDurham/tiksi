@@ -1,0 +1,63 @@
+{
+  "about": "Every bundled library: its version, where it came from, and checksums of its files. Recorded 2026-11-10 by comparing the files with the published packages: every listed file is byte for byte the same as in the named package. scripts/check-vendor.py (part of npm run check) fails when a file changes or appears without an update here; after a deliberate update, run python3 scripts/check-vendor.py --update and correct the version and source.",
+  "libraries": [
+    {
+      "name": "three.js",
+      "version": "0.185.1",
+      "source": "https://registry.npmjs.org/three/-/three-0.185.1.tgz",
+      "from": "build/three.module.min.js, build/three.core.min.js and examples/jsm/ (as vendor/addons/)",
+      "license": "MIT (vendor/THREE-LICENSE.txt)",
+      "paths": [
+        "three.module.min.js",
+        "three.core.min.js",
+        "addons",
+        "THREE-LICENSE.txt"
+      ],
+      "files": {
+        "three.module.min.js": "86bcee248b64f44bcfc23c331ae74619061957d59cab040171dcb6fb5900beb6",
+        "three.core.min.js": "05b2609338c76cd65daf74f3ac515bc9a5045e1b3b33edc07d8c9bd55250fa90"
+      },
+      "allFiles": {
+        "count": 123,
+        "sha256": "ded025be3835e592b3b7be35095771a3e8cbd8fbc4c9143255e8e01863bd3e14"
+      }
+    },
+    {
+      "name": "PDF.js (pdfjs-dist)",
+      "version": "6.4.299",
+      "source": "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-6.4.299.tgz",
+      "from": "build/pdf.min.mjs and build/pdf.worker.min.mjs (renamed .js), cmaps/, standard_fonts/, wasm/ (without the two quickjs-eval files)",
+      "license": "Apache-2.0 (vendor/PDFJS-LICENSE.txt)",
+      "paths": [
+        "pdfjs",
+        "PDFJS-LICENSE.txt"
+      ],
+      "files": {
+        "pdfjs/pdf.min.js": "57456c8e0c81e46be31174b499ef77f2b9f5ee46d04412ba627320a36755d4c2",
+        "pdfjs/pdf.worker.min.js": "9536359f1b8367850d485731ca1d5e45c159a7b7a0912325e539937aa21ceb18"
+      },
+      "allFiles": {
+        "count": 199,
+        "sha256": "828bb3bb11ca7d2128270cdaa8eae173d167583d5b3b0ea81322d73b92de2334"
+      }
+    },
+    {
+      "name": "Spark (@sparkjsdev/spark)",
+      "version": "2.1.0",
+      "source": "https://registry.npmjs.org/@sparkjsdev/spark/-/spark-2.1.0.tgz",
+      "from": "dist/spark.module.min.js",
+      "license": "MIT (vendor/SPARK-LICENSE.txt)",
+      "paths": [
+        "spark",
+        "SPARK-LICENSE.txt"
+      ],
+      "files": {
+        "spark/spark.module.min.js": "8d26ea30315f4b17e6c980dd2e7319e5a238ff5fd0c73c60768df602fe9456fe"
+      },
+      "allFiles": {
+        "count": 2,
+        "sha256": "8ec39479cb5786ee89abf47e76edc23a29decc39459a0d7dfbf8091c208b265c"
+      }
+    }
+  ]
+}

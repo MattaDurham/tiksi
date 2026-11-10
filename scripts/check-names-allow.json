@@ -1,0 +1,83 @@
+{
+  "about": "Known cases scripts/check-names.mjs and scripts/check-names.py report that are not fixed yet. A case that no longer happens is named in a warning: delete its entry. Fix the code rather than adding entries to get a change through.",
+  "allow": [
+    {
+      "file": "js/files.js",
+      "kind": "unused-import",
+      "name": "importBundle",
+      "why": "app code, found 2026-11-10; left for the session that owns js/"
+    },
+    {
+      "file": "js/files.js",
+      "kind": "unused-import",
+      "name": "replaceWorkspace",
+      "why": "app code, found 2026-11-10; left for the session that owns js/"
+    },
+    {
+      "file": "js/main.js",
+      "kind": "unused-import",
+      "name": "listAllFileIds",
+      "why": "app code, found 2026-11-10; left for the session that owns js/"
+    },
+    {
+      "file": "js/main.js",
+      "kind": "unused-import",
+      "name": "FSA",
+      "why": "app code, found 2026-11-10; left for the session that owns js/"
+    },
+    {
+      "file": "js/viewer3d.js",
+      "kind": "unused-import",
+      "name": "openNewPropertyDialog",
+      "why": "app code, found 2026-11-10; left for the session that owns js/"
+    },
+    {
+      "file": "js/viewer3d.js",
+      "kind": "unused-import",
+      "name": "projectPose",
+      "why": "app code, found 2026-11-10; left for the session that owns js/"
+    },
+    {
+      "file": "js/viewer3d.js",
+      "kind": "unused-import",
+      "name": "setOnScreen",
+      "why": "app code, found 2026-11-10; left for the session that owns js/"
+    },
+    {
+      "file": "js/picture-assets.js",
+      "kind": "undefined",
+      "name": "Buffer",
+      "why": "not a fault: the Node-only fallback after a typeof FileReader test, used by the unit tests"
+    },
+    {
+      "file": "server/folder_intake.py",
+      "kind": "unused-import",
+      "name": "unquote",
+      "why": "found 2026-11-10; the file belongs to another session"
+    },
+    {
+      "file": "test/test_material_research.py",
+      "kind": "unused-import",
+      "name": "copy",
+      "why": "found 2026-11-10; the file belongs to another session"
+    },
+    {
+      "file": "test/test_model_conversion.py",
+      "kind": "unused-import",
+      "name": "zipfile",
+      "why": "found 2026-11-10; the file belongs to another session"
+    },
+    {
+      "file": "test/test_photo_placement.py",
+      "kind": "unused-import",
+      "name": "shutil",
+      "why": "found 2026-11-10; the file belongs to another session"
+    },
+    {
+      "file": "test/test_sketchup_mirror.py",
+      "kind": "unused-import",
+      "name": "math",
+      "why": "found 2026-11-10; the file belongs to another session"
+    }
+  ]
+}
