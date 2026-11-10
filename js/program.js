@@ -5,7 +5,7 @@
 // Selected means pr.selected is set: a project without the flag is parked, as BUDGET shows
 // it. Subprojects are projects of their own (with a parentId) and count when selected.
 
-import { projectTotals, itemPriced, dayDiff } from './store.js';
+import { projectTotals, itemPriced, dayDiff, addDays } from './store.js';
 
 // The projects of a property as BUDGET and SCHEDULE list them: the property's own, and any
 // whose property is missing from the workspace (they show under every property).
@@ -27,9 +27,19 @@ export function programTotals(projects) {
   return t;
 }
 
+// Whole calendar days for a span that may end part-way through a day (half-day items): a
+// job that ends at day 2.5 takes 3 calendar days. The small allowance keeps float noise
+// (0.1 + 0.2) from adding a day.
+export const wholeDays = span => span > 0 ? Math.ceil(span - 1e-9) : 0;
+
+// The last calendar day with work on it, for a span of `span` days from `start` (ISO date):
+// a one-day job that starts Nov 10 ends Nov 10. '' when there is no work.
+export const lastWorkDay = (start, span) => start && wholeDays(span) > 0 ? addDays(start, wholeDays(span) - 1) : '';
+
 // The selected projects laid out from `start` (ISO date): each project's critical path,
 // starting on its own start date when that is later, side by side. `days` is the program's
-// span in calendar days from start to the last finish (0 when nothing has a duration).
+// span in whole calendar days from start to the last finish (0 when nothing has a duration),
+// and `lastDay` the last calendar day with work on it.
 export function programSchedule(projects, start) {
   const plans = selectedProjects(projects).filter(p => (p.items || []).some(i => (Number(i.durationDays) || 0) > 0)).map(p => {
     const lag = p.startDate && start ? dayDiff(start, p.startDate) : 0;
@@ -37,7 +47,8 @@ export function programSchedule(projects, start) {
     const { sched, end, cyclic } = cpm(p.items || []);
     return { p, offset, sched, end, cyclic, finish: offset + end };
   });
-  return { plans, days: Math.max(0, ...plans.map(x => x.finish)) };
+  const days = wholeDays(Math.max(0, ...plans.map(x => x.finish)));
+  return { plans, days, lastDay: lastWorkDay(start, days) };
 }
 
 // ---------- critical path (CPM) ----------

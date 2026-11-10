@@ -5,7 +5,7 @@ import {
   ws, touch, escapeHtml, fmtDate, addDays, dayDiff, isoToday, projectLabel, propertyProjects,
 } from './store.js';
 import { icon } from './icons.js';
-import { programSchedule } from './program.js';
+import { programSchedule, lastWorkDay } from './program.js';
 
 let el = null;
 export function mount(root) { el = root; render(); }
@@ -20,7 +20,7 @@ function render() {
   const start = d.settings.programStart || isoToday();
   const mine = propertyProjects();
   // The same layout the one-pager reads: program.js.
-  const { plans, days } = programSchedule(mine, start);
+  const { plans, days, lastDay } = programSchedule(mine, start);
   // The chart needs a week of width; the headline figure is the program's own span.
   const chartEnd = Math.max(7, days);
 
@@ -38,8 +38,8 @@ function render() {
           <div class="k-sub">click to change</div>
         </div>
         <div class="kpi accent">
-          <div class="k-label">Program finish</div>
-          <div class="k-value" style="font-size:15px">${plans.length ? fmtDate(addDays(start, days)) : '-'}</div>
+          <div class="k-label">Last day of work</div>
+          <div class="k-value" style="font-size:15px">${plans.length ? fmtDate(lastDay) : '-'}</div>
           <div class="k-sub">${plans.length ? days + ' calendar day' + (days === 1 ? '' : 's') : 'nothing scheduled'}</div>
         </div>
         <div class="kpi">
@@ -163,7 +163,7 @@ function ganttSvg(plans, startIso, programEnd) {
       svg += `<g class="g-rowg"><rect class="g-row" x="0" y="${y}" width="${width}" height="${PROJH}"/>`;
       svg += `<text x="12" y="${y + 19}" fill="#e9eef3" font-size="11.5" font-weight="700" letter-spacing="0.08em">${escapeHtml(projectLabel(p)).toUpperCase()}</text>`;
       svg += `<rect x="${x0}" y="${y + 10}" width="${Math.max(x1 - x0, 2)}" height="8" rx="4" fill="url(#g-proj)" stroke="rgba(232,151,58,0.45)"/>`;
-      svg += `<text x="${x1 + 8}" y="${y + 19}" fill="#5d6a76" font-size="9.5">${fmtDate(addDays(startIso, r.x.finish))}</text></g>`;
+      svg += `<text x="${x1 + 8}" y="${y + 19}" fill="#5d6a76" font-size="9.5">${fmtDate(lastWorkDay(startIso, r.x.finish))}</text></g>`;
       y += PROJH;
     } else {
       const s = r.x.sched[r.it.id];
@@ -182,7 +182,7 @@ function ganttSvg(plans, startIso, programEnd) {
       const bw = Math.max(x1 - x0, 3);
       const bh = ROWH - 10;
       const dur = escapeHtml(r.it.durationDays);
-      const title = `${escapeHtml(r.it.name)}: ${dur}d, ${fmtDate(addDays(startIso, off + s.es))} to ${fmtDate(addDays(startIso, off + s.ef))}${s.critical ? ' (CRITICAL)' : ', slack ' + s.slack + 'd'}`;
+      const title = `${escapeHtml(r.it.name)}: ${dur}d, ${fmtDate(addDays(startIso, off + s.es))} to ${fmtDate(lastWorkDay(startIso, off + s.ef))}${s.critical ? ' (CRITICAL)' : ', slack ' + s.slack + 'd'}`;
       if (s.critical) {
         svg += `<g class="g-bar"><title>${title}</title>` +
           `<rect x="${x0}" y="${y + 5}" width="${bw}" height="${bh}" rx="4" fill="url(#g-crit)" stroke="rgba(255,205,140,0.7)" stroke-width="1" filter="url(#g-glow)"/>` +

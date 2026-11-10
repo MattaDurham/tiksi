@@ -5,7 +5,7 @@
 // tests can lay a page out without a browser.
 
 import { fmtMoney, fmtArea, fmtDate, polyArea } from './store.js';
-import { onePagerFacts, latestVersion } from './one-pager.js';
+import { onePagerFacts, latestVersion, workDates } from './one-pager.js';
 
 export const PAGE_W = 816, PAGE_H = 1056;
 export const HERO_W = 720, HERO_H = 300;   // the picture's box, CSS pixels (2.4:1)
@@ -67,7 +67,7 @@ export function onePagerHtml(prop, data, assets = {}, opts = {}) {
   const stats = [];
   if (show.budget && f.budget.priced) stats.push(stat('Likely cost', fmtMoney(f.budget.likely), f.budget.low !== f.budget.high ? fmtMoney(f.budget.low) + ' to ' + fmtMoney(f.budget.high) : plural(f.program.length, 'project') + ' priced'));
   else if (show.budget && f.program.length) stats.push(stat('Scope', plural(f.program.length, 'project'), f.scopeItems ? plural(f.scopeItems, 'scope item') + ', not priced yet' : 'not priced yet'));
-  if (show.schedule && f.days > 0) stats.push(stat('Schedule', 'About ' + plural(f.days, 'calendar day'), f.start ? fmtDate(f.start) + ' to ' + fmtDate(f.finish) : ''));
+  if (show.schedule && f.days > 0) stats.push(stat('Schedule', 'About ' + plural(f.days, 'calendar day'), f.start ? workDates(f, false) : ''));
   if (show.rooms && f.rooms.length) stats.push(stat('Rooms', plural(f.rooms.length, 'room') + (f.floorArea > 0 ? ' · ' + fmtArea(f.floorArea) : ''), f.rooms.slice(0, MAX_ROOMS).map(r => r.name || 'Room').join(', ') + (f.rooms.length > MAX_ROOMS ? ', …' : '') + (f.floorArea > 0 ? '. Area to wall centre lines' : '')));
   if (!stats.length) stats.push(stat('Status', 'In design', 'Scope and budget to follow'));
   const planInSide = show.plan && planSvg && !(hero && hero.plan);

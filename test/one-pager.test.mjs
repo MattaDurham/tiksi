@@ -61,7 +61,7 @@ check(f.photos.length === 1 && f.renderings.length === 0, 'site photos are count
 const changed = op.draftOnePager(A, store.ws.data);
 const o = A.onePager;
 check(changed && o.headline === '12 Elm Street' && /2 rooms/.test(o.tagline), 'the draft names the property and its rooms in the tagline (' + o.tagline + ')');
-check(/Kitchen refresh/.test(o.summary) && /\$33,000/.test(o.summary) && /\$25,800 to \$42,500/.test(o.summary) && /13 calendar days, from Nov 10, 2026 to Nov 23, 2026/.test(o.summary) && /Acme Shaker cabinets/.test(o.summary), 'the summary says what the work is, what it costs and when, and names a product');
+check(/Kitchen refresh/.test(o.summary) && /\$33,000/.test(o.summary) && /\$25,800 to \$42,500/.test(o.summary) && /13 calendar days, from Nov 10, 2026 to Nov 22, 2026\./.test(o.summary) && /Acme Shaker cabinets/.test(o.summary), 'the summary says what the work is, what it costs and when, and names a product');
 check(o.highlights[0] === 'Kitchen refresh: $33,000 likely' && o.highlights[1] === 'Pantry shelving: $600 likely', 'highlights list the projects with their likely cost (' + o.highlights.join(' / ') + ')');
 check(o.customized === false && o.draftedAt, 'a drafted record is not customized and says when it was drafted');
 check(op.draftOnePager(A, store.ws.data) === false, 'drafting again from the same project changes nothing');
@@ -101,7 +101,15 @@ check(empty.onePager.headline === 'Bare lot' && /A renovation at Bare lot/.test(
     'the one-pager costs what BUDGET totals: selected subprojects in, unflagged projects out (' + f.budget.likely + ' likely, BUDGET ' + budgetTotals.likely + ')');
   const span = program.programSchedule(store.propertyProjects(), '2026-11-10').days;
   check(f.days === 12 && span === 12, 'the one-pager spans what SCHEDULE lays out: projects side by side in calendar days (' + f.days + ' days; adding them up would give 34)');
-  check(f.finish === '2026-11-22', 'and finishes on SCHEDULE\'s finish date (' + f.finish + ')');
+  const lastDay = program.programSchedule(store.propertyProjects(), '2026-11-10').lastDay;
+  check(f.lastDay === '2026-11-21' && lastDay === f.lastDay, 'and ends on SCHEDULE\'s last day of work, the 12th day (' + f.lastDay + ', SCHEDULE ' + lastDay + ')');
+  // Half-day items: whole calendar days, never 0.30000000000000004 of one, and a one-day job
+  // is "on" its day, not "from Nov 10 to Nov 11".
+  store.ws.data.projects = [proj('Patch', { selected: true }, [it('h1', 'Patch', { likely: 100, durationDays: 0.1 }), it('h2', 'Paint', { likely: 100, durationDays: 0.2, deps: ['h1'] })])];
+  const short = op.onePagerFacts(P, store.ws.data);
+  check(short.days === 1 && short.lastDay === '2026-11-10', 'a 0.3-day job takes 1 calendar day, ending the day it starts (' + short.days + ', ' + short.lastDay + ')');
+  const shortSummary = op.draftText(short).summary;
+  check(shortSummary.includes('The work takes about 1 calendar day, on Nov 10, 2026.'), 'the summary says one calendar day, on the day (' + shortSummary + ')');
   check(f.program.map(p => p.name).join('|') === 'Kitchen|Bath', 'the work named on the page is the selected projects (' + f.program.map(p => p.name).join('|') + ')');
   check(sched.cpm === program.cpm, 'SCHEDULE and the one-pager share one critical-path calculation');
   store.ws.data = before;
@@ -158,7 +166,7 @@ check(/<div xmlns="http:\/\/www.w3.org\/1999\/xhtml" class="op-page">/.test(html
 check(/Prepared for The Does &lt;family&gt;/.test(html) && /Studio &amp; Co/.test(html) && /hello@example.com/.test(html), 'client, author and contact are on the page, escaped');
 check(/<h1>12 Elm Street<\/h1>/.test(html) && /Version 1 · Nov 6, 2026/.test(html), 'the headline and the version label are printed');
 check(/<img src="data:image\/jpeg;base64,AAAA" alt=""\/>/.test(html) && /<div class="op-plan"><svg/.test(html), 'the picture goes at the top and the plan beside the text');
-check(/\$25,000/.test(html) && /\$20,000 to \$32,000/.test(html) && /About 10 calendar days/.test(html) && /Nov 10, 2026 to Nov 20, 2026/.test(html) && /2 rooms · 215 sf/.test(html), 'budget, schedule and rooms are printed (' + (html.match(/<b>[^<]*<\/b>/g) || []).slice(0, 4).join(' ') + ')');
+check(/\$25,000/.test(html) && /\$20,000 to \$32,000/.test(html) && /About 10 calendar days/.test(html) && /Nov 10, 2026 to Nov 19, 2026/.test(html) && /2 rooms · 215 sf/.test(html), 'budget, schedule and rooms are printed (' + (html.match(/<b>[^<]*<\/b>/g) || []).slice(0, 4).join(' ') + ')');
 check(/Specified products/.test(html) && /Shaker cabinets <span>Acme S-12<\/span>/.test(html), 'specified products are listed with brand and model');
 B.onePager.show.budget = false; B.onePager.show.products = false; B.onePager.show.plan = false;
 const html2 = page.onePagerHtml(B, store.ws.data, { hero: { plan: true }, planSvg: '<svg xmlns="http://www.w3.org/2000/svg"></svg>' }, { version: 'Draft' });

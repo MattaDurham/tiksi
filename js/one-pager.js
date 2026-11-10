@@ -15,7 +15,7 @@
 // settings.onePagerPrompt says when closing Tiksi asks to update it: 'changed' (the project
 // changed since the newest version, or there is none), 'always' or 'never'.
 
-import { fmtMoney, fmtArea, fmtDate, roomsFloorArea, projectTotals, itemPriced, isoToday, addDays } from './store.js';
+import { fmtMoney, fmtArea, fmtDate, roomsFloorArea, projectTotals, itemPriced, isoToday } from './store.js';
 import { programProjects, programTotals, programSchedule, selectedProjects } from './program.js';
 import { normalizeOnePager, emptyOnePager, latestVersion, SHOW_KEYS, MAX_HIGHLIGHTS, MAX_TEXT, cleanLine } from './one-pager-record.js';
 
@@ -35,6 +35,14 @@ const str = v => typeof v === 'string' ? v : '';
 
 // Everything the page and the draft text read from the project, in one place.
 // `data` is the workspace (its projects and products); `prop` the property.
+// When the work happens, in words: ", on Nov 10, 2026" for a one-day job, ", from Nov 10, 2026
+// to Nov 21, 2026" otherwise, the second date being the last day with work on it. Without the
+// lead-in for the page's schedule figure.
+export function workDates(f, lead = true) {
+  if (f.start === f.lastDay) return (lead ? ', on ' : '') + fmtDate(f.start);
+  return (lead ? ', from ' : '') + fmtDate(f.start) + ' to ' + fmtDate(f.lastDay);
+}
+
 export function onePagerFacts(prop, data) {
   const d = data || { projects: [], products: [], settings: {} };
   const rooms = (prop.rooms || []).filter(r => r && r.kind !== 'unscanned' && r.pts && r.pts.length >= 3);
@@ -63,10 +71,10 @@ export function onePagerFacts(prop, data) {
   const scopeItems = own.reduce((n, pr) => n + (pr.items || []).length, 0);
   const start = ISO_DATE_RE.test(str(d.settings && d.settings.programStart)) ? d.settings.programStart : '';
   // SCHEDULE lays the program out from its start (today when none is set) in calendar days.
-  const days = programSchedule(own, start || isoToday()).days;
-  const finish = start && days > 0 ? addDays(start, days) : '';
+  // lastDay is the last calendar day with work on it, the date SCHEDULE shows as its last day.
+  const { days, lastDay } = programSchedule(own, start || isoToday());
   return { name: prop.name || 'Property', address: str(prop.address), rooms, floorArea, levels, projects, program, scopeItems, budget, products, photos, renderings,
-    scans: (prop.scans || []).length, days, start, finish };
+    scans: (prop.scans || []).length, days, start, lastDay: start ? lastDay : '' };
 }
 
 const list = (names, max = 3) => {
@@ -93,7 +101,7 @@ export function draftText(facts) {
   else if (f.projects.length) s.push(plural(f.projects.length, 'project') + ' ' + (f.projects.length === 1 ? 'is' : 'are') + ' under consideration: ' + list(f.projects.map(p => p.name)) + '.');
   else s.push('Scope, budget and schedule will fill in as the design takes shape.');
   if (f.budget.priced) s.push('The likely cost is ' + fmtMoney(f.budget.likely) + (f.budget.low !== f.budget.high ? ', within a range of ' + fmtMoney(f.budget.low) + ' to ' + fmtMoney(f.budget.high) : '') + '.');
-  if (f.days > 0) s.push('The work takes about ' + plural(f.days, 'calendar day') + (f.start ? ', from ' + fmtDate(f.start) + ' to ' + fmtDate(f.finish) : '') + '.');
+  if (f.days > 0) s.push('The work takes about ' + plural(f.days, 'calendar day') + (f.start ? workDates(f) : '') + '.');
   if (f.products.length) s.push(plural(f.products.length, 'product') + ' ' + (f.products.length === 1 ? 'is' : 'are') + ' specified, such as ' + list(f.products.slice(0, 2).map(p => [p.brand, p.name].filter(Boolean).join(' ')), 2) + '.');
   const highlights = [];
   for (const p of f.projects.slice(0, MAX_HIGHLIGHTS)) highlights.push(p.name + (p.priced ? ': ' + fmtMoney(p.likely) + ' likely' : p.items ? ': ' + plural(p.items, 'scope item') : ''));

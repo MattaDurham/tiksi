@@ -80,7 +80,7 @@ try {
   check(await prop('return s.ws.data.settings.budgetCap === 250000') && /The cap is still \$250,000/.test(await page.locator('#cap-note').textContent()), 'an amount BUDGET cannot read is refused with a reason and the cap stays');
   await page.goto(url + '/#/schedule');
   await page.locator('#prog-start').waitFor();
-  check(/Nov 23, 2026/.test(await page.locator('.kpi.accent .k-value').textContent()) && /13 calendar days/.test(await page.locator('.kpi.accent .k-sub').textContent()), 'SCHEDULE finishes the program on Nov 23, 2026, 13 calendar days');
+  check((await page.locator('.kpi.accent .k-label').textContent()) === 'Last day of work' && (await page.locator('.kpi.accent .k-value').textContent()) === 'Nov 22, 2026' && /13 calendar days/.test(await page.locator('.kpi.accent .k-sub').textContent()), 'SCHEDULE\'s last day of work is Nov 22, 2026, the 13th calendar day');
   await page.goto(url + '/#/plan');
   await page.waitForSelector('#btn-file');
 
@@ -92,7 +92,7 @@ try {
   check(/No one-pager saved yet/.test(await page.locator('.op-dlg-status').textContent()), 'the editor opens and says no version is saved');
   check((await page.inputValue('[data-f="headline"]')) === 'Test House' && /2 rooms/.test(await page.inputValue('[data-f="tagline"]')), 'the headline and tagline are drafted from the property');
   const summary = await page.inputValue('[data-f="summary"]');
-  check(/Kitchen refresh/.test(summary) && /\$32,000/.test(summary) && /13 calendar days, from Nov 10, 2026 to Nov 23, 2026/.test(summary) && /Acme Shaker cabinets/.test(summary), 'the summary names the scope, the likely cost, the schedule and a product');
+  check(/Kitchen refresh/.test(summary) && /\$32,000/.test(summary) && /13 calendar days, from Nov 10, 2026 to Nov 22, 2026\./.test(summary) && /Acme Shaker cabinets/.test(summary), 'the summary names the scope, the likely cost, the schedule and a product');
   await page.waitForFunction(() => !!document.querySelector('.op-preview-page .op-hero img'));
   const pageText = await page.locator('.op-preview-page .op-page').innerText();
   check(/Test House/.test(pageText) && /\$32,000/.test(pageText) && /\$25,000 to \$41,000/.test(pageText) && /13 calendar days/.test(pageText) && /2 rooms/.test(pageText) && /Shaker cabinets/.test(pageText), 'the page shows the headline, budget range, schedule, rooms and products');
@@ -207,6 +207,33 @@ try {
   await page.click('[data-onepager-doc]');
   await page.waitForFunction(() => { const i = document.querySelector('.dc-viewer-page img'); return i && i.src.startsWith('data:image/jpeg'); }, null, { timeout: 90000 });
   check(/one-pager v2/.test(await page.locator('.dc-inspector').textContent()), 'the newest version opens like any saved document');
+
+  // ---- saves made without the editor check for cut-off text too ----
+  // UPDATE NOW on the closing question: a tagline too long for its line is named before saving.
+  const tagWas = await prop('return p.onePager.tagline');
+  check(await prop('return p.onePager.customized'), 'the text is hand-written by now, so a save prints it as typed');
+  await prop("p.onePager.tagline = 'A tagline that keeps on going far past the single line the page gives it, and then some more words, and more again until it plainly cannot fit on one line'; s.touch();");
+  const v3before = (await versions()).join();
+  await page.evaluate(async () => { (await import('/js/one-pager-dialog.js')).openClosePrompt(); });
+  await page.locator('.op-prompt').waitFor();
+  await page.click('[data-op-update]');
+  await page.waitForFunction(() => /Cut off on the page/.test(document.querySelector('[data-op-prompt-note]')?.textContent || ''), null, { timeout: 60000 });
+  check(await page.locator('[data-op-prompt-note]').textContent() === 'Cut off on the page: the tagline is longer than one line. REVIEW FIRST to shorten it, or UPDATE NOW again to save it as it is.'
+    && await page.locator('[data-op-prompt-note]').getAttribute('role') === 'alert' && (await versions()).join() === v3before, 'UPDATE NOW names the cut-off tagline and saves nothing yet');
+  await page.click('[data-op-later]');
+  await page.locator('.op-prompt').waitFor({ state: 'detached' });
+  await prop('p.onePager.tagline = ' + JSON.stringify(tagWas) + '; s.touch();');
+  // A new property's first version: its long name does not fit the headline, and a toast says so.
+  const firstCut = await page.evaluate(async () => {
+    const s = await import('/js/store.js'), d = await import('/js/one-pager-dialog.js');
+    const q = s.propertyTemplate('Synthetic Residence With A Name Long Enough To Run Past The Two Lines The Headline Has Room For');
+    s.ws.data.properties.push(q);
+    const v = await d.makeFirstOnePager(q);
+    const toast = document.querySelector('.toast')?.textContent || '';
+    s.ws.data.properties.splice(s.ws.data.properties.indexOf(q), 1); s.touch();
+    return { n: v && v.n, toast };
+  });
+  check(firstCut.n === 1 && /^One-pager version 1 for Synthetic Residence .* is cut off: the headline is longer than two lines\. OPEN ONE-PAGER to shorten it and save version 2\.$/.test(firstCut.toast), 'a first version that is cut off is saved and says so (' + firstCut.toast + ')');
 
   // ---- a reload keeps everything ----
   // The room renamed while the setting was Never left the one-pager behind: bring it up to date first.

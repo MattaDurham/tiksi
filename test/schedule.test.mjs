@@ -23,4 +23,11 @@ const short = programSchedule([{ id: 'p', selected: true, items: [item('a', 2), 
 assert.equal(short.days, 3, 'a three-day program reads 3 days, not a week');
 assert.equal(programSchedule([{ id: 'p', selected: false, items: [item('a', 2)] }], '2026-11-10').days, 0, 'parked projects take no time');
 assert.equal(programSchedule([{ id: 'p', selected: true, startDate: '2026-11-12', items: [item('a', 2)] }, { id: 'q', selected: true, items: [item('b', 3)] }], '2026-11-10').days, 4, 'projects run side by side from their own start dates');
+// Spans are whole calendar days, and the last day is the last day with work on it.
+const half = programSchedule([{ id: 'p', selected: true, items: [item('a', 0.1), item('b', 0.2, ['a'])] }], '2026-11-10');
+assert.equal(half.days, 1, 'a 0.3-day job takes 1 calendar day, not 0.30000000000000004');
+assert.equal(half.lastDay, '2026-11-10', 'and ends the day it starts');
+assert.equal(programSchedule([{ id: 'p', selected: true, items: [item('a', 2.5)] }], '2026-11-10').days, 3, 'two and a half days take 3 calendar days');
+assert.equal(short.lastDay, '2026-11-12', 'a 3-day program from Nov 10 works Nov 10, 11 and 12');
+assert.equal(programSchedule([{ id: 'p', selected: true, items: [item('a', 0.2), item('b', 2.2, ['a']), item('c', 0.6, ['b'])] }], '2026-11-10').days, 3, 'float noise (0.2 + 2.2 + 0.6 = 3.0000000000000004) never adds a day');
 console.log('program span checks passed');
