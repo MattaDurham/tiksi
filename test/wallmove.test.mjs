@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   planWallMove, applyWallMove, normalOffset, planCornerMove, applyCornerMove,
-  floorCornerAttached, floorCornersOf, snapFloorToWalls,
+  floorCornerAttached, floorCornersOf, snapFloorToWalls, movedWallLengths, moveLeavesShortWall,
 } from '../js/wallmove.js';
 
 // Two rooms side by side: a 6 x 4 m box split by an interior wall at x = 3 that ends on the
@@ -183,4 +183,18 @@ test('a floor corner clear of every wall is loose, and snapping attaches it', ()
   assert.equal(snapFloorToWalls(h2.rooms[0], h2.walls), 0, 'attached corners are left alone');
   const far = { id: 'f', pts: [[1.5, 2], [2, 2], [2, 2.5]] };
   assert.equal(snapFloorToWalls(far, h2.walls), 0, 'a corner out of reach stays');
+});
+
+test('a slide that squeezes or turns over a joined wall is flagged; an ordinary slide is not', () => {
+  const box = () => {
+    const wall = (id, ax, ay, bx, by) => ({ id, ax, ay, bx, by, thickness: 0.114 });
+    return [wall('s', 0, 0, 6, 0), wall('e', 6, 0, 6, 4), wall('n', 6, 4, 0, 4), wall('w', 0, 4, 0, 0), wall('m', 3, 0, 3, 4)];
+  };
+  for (const [offset, short] of [[1, false], [3.9, false], [3.97, true], [4, true], [4.6, true]]) {
+    const walls = box(), north = walls[2];
+    const mv = planWallMove(north, walls, [], []), before = movedWallLengths(mv);
+    // n runs from x = 6 to 0, so its +normal points to -y: a positive offset slides it south.
+    applyWallMove(mv, offset);
+    assert.equal(moveLeavesShortWall(before, 0.05), short, `slide by ${offset} m`);
+  }
 });

@@ -99,6 +99,31 @@ class ConversionTests(unittest.TestCase):
             def end_headers(self):pass
         handler=Handler();self.assertTrue(self.service.dispatch(handler));self.assertEqual(handler.status,403)
         handler.headers={'Host':'localhost:8888'};handler.wfile=io.BytesIO();self.service.dispatch(handler);self.assertEqual(handler.status,403)
+    def jobs(self):
+        class Handler:
+            path='/api/model-conversion/jobs';command='GET';client_address=('127.0.0.1',1)
+            def __init__(self,token):self.headers={'Host':'localhost:8888','X-Tiksi-Token':token};self.wfile=io.BytesIO()
+            def send_response(self,status):self.status=status
+            def send_header(self,*args):pass
+            def end_headers(self):pass
+        handler=Handler(self.service.token);self.service.dispatch(handler)
+        return handler.status,json.loads(handler.wfile.getvalue())
+    def test_one_unreadable_record_does_not_break_the_conversion_list(self):
+        with self.assertRaises(ConversionError) as caught:self.service.convert(b'synthetic native content','.rvt')
+        broken=self.root/('b'*32);broken.mkdir();(broken/'report.json').write_text('{"id": "bbbb", "sta')
+        status,reply=self.jobs()
+        self.assertEqual(status,200,reply)
+        self.assertEqual([job['id'] for job in reply['jobs']],[caught.exception.job_id])
+        self.assertEqual((broken/'report.json').read_text(),'{"id": "bbbb", "sta','the unreadable record is left as it is')
+    def test_a_conversion_cut_off_by_a_restart_is_marked_interrupted(self):
+        folder=self.root/('c'*32);folder.mkdir();(folder/'source.ifc').write_bytes(b'synthetic source')
+        (folder/'report.json').write_text(json.dumps({'id':folder.name,'inputFormat':'.ifc','outputFormat':'.glb','state':'running','createdAt':1}))
+        self.service.close();self.service=ModelConversionService(self.root)
+        report=json.loads((folder/'report.json').read_text())
+        self.assertEqual(report['state'],'interrupted');self.assertIn('restarted',report['error'])
+        self.assertEqual((folder/'source.ifc').read_bytes(),b'synthetic source','the source is kept')
+        self.assertEqual([job['state'] for job in self.jobs()[1]['jobs']],['interrupted'])
+        self.assertEqual(list(folder.glob('*.tmp')),[])
     @unittest.skipUnless(library_path(),'SketchUp SDK not installed')
     def test_real_native_skp_carries_tags_into_glb_nodes(self):
         tri=[0,0,0,2,0,0,0,3,0]

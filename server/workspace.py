@@ -1,18 +1,24 @@
 """Private, revisioned workspace and immutable assets shared by this Mac's clients."""
+import ctypes
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
 import secrets
+import stat
 import subprocess
+import sys
 import threading
 import tempfile
+import time
 import zipfile
 from urllib.parse import urlsplit
 
 from server.peers import trusted_peer
 
+log = logging.getLogger('tiksi.workspace')
 MAX_JSON = 32 * 1024 * 1024
 # A save envelope includes shared metadata, portable project slices and, during
 # migration, the recovery copy. Each can be valid while their sum exceeds one
@@ -48,8 +54,59 @@ class WorkspaceError(ValueError):
         self.status = status
 
 
+# Kinds of file "Open on this Mac" hands to the Mac's default app: documents, pictures,
+# videos and drawings or models. Anything else (an app, a script, a shortcut, a web page) is
+# shown in Finder instead, so a click never launches a program that ended up in the folder.
+DOCUMENT_TYPES = frozenset((
+    '.pdf', '.txt', '.md', '.rtf', '.rtfd', '.csv', '.tsv', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.pages', '.numbers', '.key', '.odt', '.ods', '.odp',
+    '.jpg', '.jpeg', '.png', '.gif', '.heic', '.heif', '.tif', '.tiff', '.webp', '.bmp', '.dng',
+    '.mov', '.mp4', '.m4v',
+    '.skp', '.dwg', '.dxf', '.ifc', '.usdz', '.glb', '.gltf', '.obj', '.stl', '.ply', '.3dm', '.e57', '.las', '.laz'))
+
+
+# Finder flags (in a file's or folder's Finder information) that mark an alias, and a folder
+# the Mac treats as one item, a package (an app, a plug-in, a document bundle).
+IS_ALIAS, HAS_BUNDLE = 0x8000, 0x2000
+# The start of an alias file's contents (a bookmark).
+ALIAS_START = b'book\0\0\0\0mark'
+
+
+def finder_flags(target):
+    """The Finder flags of a file or folder; 0 when it has none or this is not a Mac."""
+    if sys.platform != 'darwin': return 0
+    try:
+        libc = ctypes.CDLL(None)
+        libc.getxattr.restype = ctypes.c_ssize_t
+        libc.getxattr.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int)
+        info = ctypes.create_string_buffer(32)
+        size = libc.getxattr(os.fsencode(target), b'com.apple.FinderInfo', info, 32, 0, 0)
+        return int.from_bytes(info.raw[8:10], 'big') if size >= 10 else 0
+    except (OSError, AttributeError, ValueError): return 0
+
+
+def opens_directly(target, flags=finder_flags):
+    """True for a document, or a plain folder (opened in Finder); False for anything to show in
+    Finder only: a program, an alias (even one named like a document) or a package folder."""
+    target = Path(target)
+    marked = flags(target)
+    suffix = target.suffix.lower()
+    if target.is_dir():
+        # A folder named like a bundle (Example.app, Tool.workflow) is a program to the Mac, and
+        # so is one marked as a package or holding an app's contents, whatever its name.
+        if suffix[1:].isalpha() or marked & HAS_BUNDLE: return False
+        return not ((target / 'Contents' / 'Info.plist').exists() or (target / 'Contents' / 'MacOS').exists())
+    if suffix not in DOCUMENT_TYPES or marked & IS_ALIAS: return False
+    try:
+        with open(target, 'rb') as source: start = source.read(len(ALIAS_START))
+    except OSError: return False
+    return start != ALIAS_START
+
+
 def open_in_folder(folder, relative, run=subprocess.run):
-    """Open a file or folder inside a project folder with the Mac's default app (Finder for folders)."""
+    """Open a document or folder inside a project folder with the Mac's default app (Finder for
+    folders). Any other kind of file is shown in Finder, selected, and not opened.
+    Returns the target and 'opened' or 'shown'."""
     if not isinstance(relative, str) or len(relative) > 1024 or '\0' in relative or relative.startswith(('/', '\\')):
         raise WorkspaceError('Invalid project file path')
     parts = Path(relative).parts
@@ -58,10 +115,33 @@ def open_in_folder(folder, relative, run=subprocess.run):
     target = (root / relative).resolve()
     if not target.is_relative_to(root): raise WorkspaceError('Invalid project file path')
     if not target.exists(): raise WorkspaceError((relative or 'The project folder') + ' is not in the project folder on this Mac', 404)
-    try: result = run(['open', str(target)], capture_output=True, text=True, timeout=30)
+    action = 'opened' if target == root or opens_directly(target) else 'shown'
+    command = ['open', str(target)] if action == 'opened' else ['open', '-R', str(target)]
+    try: result = run(command, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as error: raise WorkspaceError('Could not open ' + target.name + ': ' + str(error), 422)
     if result.returncode: raise WorkspaceError('Could not open ' + target.name + ': ' + (result.stderr or '').strip()[:300], 422)
-    return target
+    return target, action
+
+
+def write_whole(destination, data):
+    """Write bytes through a spare file of its own (hidden, uniquely named) and rename it into
+    place, so the file is whole or unchanged, and two writes at once never share a spare file."""
+    destination = Path(destination)
+    with tempfile.NamedTemporaryFile(dir=destination.parent, prefix='.' + destination.name + '.', suffix='.tmp', delete=False) as out:
+        temp = Path(out.name)
+        try: out.write(data); out.flush(); os.fsync(out.fileno())
+        except BaseException: out.close(); temp.unlink(missing_ok=True); raise
+    try: os.replace(temp, destination)
+    except BaseException: temp.unlink(missing_ok=True); raise
+
+
+def file_state(path):
+    """'file' for a regular file, 'missing' when nothing is there, 'unreadable' when the Mac
+    cannot even look (no permission, a failing drive)."""
+    try: info = os.stat(path)
+    except (FileNotFoundError, NotADirectoryError, ValueError): return 'missing'
+    except OSError: return 'unreadable'
+    return 'file' if stat.S_ISREG(info.st_mode) else 'missing'
 
 
 def project_file_base(name):
@@ -86,10 +166,16 @@ class WorkspaceService:
         self.path = self.root / 'current.json'
         self.projects_dir = Path(projects_dir or self.root / 'projects').resolve()
         self.projects_dir.mkdir(parents=True, exist_ok=True)
+        self.stamps = {}
         self.recover()
         # A damaged store must fail visibly, never become an empty workspace.
         self.state = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {'revision': 0, 'data': None, 'assets': {}}
         self.paths = self.state.get('paths', {})
+        # Registered projects whose file is missing or cannot be read: id -> (path, reason).
+        # Only these are left out; every other project keeps loading and saving.
+        self.unavailable = {}
+        # Unreadable registered files and their (mtime, size), so one is not re-read every poll.
+        self.unreadable = {}
         self.has_pictures = bool(picture_refs(self.state.get('data')))
         self.stamps = {}
         self.parts = {}
@@ -124,17 +210,79 @@ class WorkspaceService:
         folder = Path(self.paths[identifier]).parent
         return folder.parent if folder.name == 'Tiksi' else folder
 
+    def set_aside(self, note, kind):
+        """Move an unreadable note into the history folder, kept for inspection, never deleted."""
+        aside = self.root / 'history' / ('unreadable-' + kind + '-' + str(time.time_ns()) + '.json')
+        os.replace(note, aside)
+        log.warning('An unreadable %s was set aside as %s; the project files were not changed by it.', kind.replace('-', ' '), aside)
+
+    @staticmethod
+    def read_pairs(files):
+        if not isinstance(files, list) or not all(
+                isinstance(pair, list) and len(pair) == 2 and all(isinstance(item, str) for item in pair) for pair in files):
+            raise ValueError('unexpected file list')
+        return files
+
+    def place_files(self, files):
+        """Move each finished spare file over its project file. A pair whose spare file and
+        project file are both missing (the drive they are on is not mounted, say) is not done
+        yet: it is returned, to be done when they appear."""
+        left = []
+        for source, destination in files:
+            if Path(source).exists():
+                os.replace(source, destination)
+                self.stamps.pop(destination, None)
+            # A spare file that is gone while its project file is there was already moved into place.
+            elif not Path(destination).exists(): left.append([source, destination])
+        return left
+
+    def keep_unplaced(self, left):
+        """Record pairs still to be done, together with any recorded earlier."""
+        note = self.root / 'pending-files.json'
+        held = []
+        if note.exists():
+            try: held = self.read_pairs(json.loads(note.read_text(encoding='utf-8')))
+            except (ValueError, TypeError, UnicodeDecodeError): self.set_aside(note, 'file-note')
+        pairs = held + [pair for pair in left if pair not in held]
+        if pairs: write_whole(note, json.dumps(pairs).encode('utf-8'))
+        elif note.exists(): note.unlink()
+
+    def finish_files(self):
+        """Finish the moves an earlier save could not do because their drive was not mounted."""
+        note = self.root / 'pending-files.json'
+        if not note.exists(): return
+        try: pairs = self.read_pairs(json.loads(note.read_text(encoding='utf-8')))
+        except (ValueError, TypeError, UnicodeDecodeError):
+            self.set_aside(note, 'file-note'); return
+        left = self.place_files(pairs)
+        if left == pairs: return
+        if left: write_whole(note, json.dumps(left).encode('utf-8'))
+        else: note.unlink()
+        log.info('Finished %d project file move(s) left from an earlier save.', len(pairs) - len(left))
+
     def recover(self):
         journal = self.root / 'pending.json'
         if not journal.exists(): return False
-        pending = json.loads(journal.read_text(encoding='utf-8'))
-        for source, destination in pending['files']:
-            if Path(source).exists(): os.replace(source, destination)
-            elif not Path(destination).is_file(): raise WorkspaceError('An interrupted project save needs recovery', 409)
+        try:
+            pending = json.loads(journal.read_text(encoding='utf-8'))
+            files = self.read_pairs(pending['files'])
+            if not isinstance(pending['state'], dict): raise ValueError('unexpected save note')
+        except (ValueError, KeyError, TypeError, UnicodeDecodeError):
+            # The note is complete before any project file is replaced, so a note that cannot
+            # be read means that save never started: every project file is as it was. The
+            # note is kept for inspection, and so are the save's spare files.
+            self.set_aside(journal, 'save-note')
+            return False
+        left = self.place_files(files)
         temp = self.root / 'current.tmp'
         with temp.open('w', encoding='utf-8') as out:
             json.dump(pending['state'], out); out.flush(); os.fsync(out.fileno())
         os.replace(temp, self.path)
+        # Moves that could not be done yet are recorded before the note goes, and done when
+        # their files appear; until then the project shows as unavailable.
+        if left:
+            self.keep_unplaced(left)
+            log.warning('%d project file(s) from the last save are on a drive or folder that is not there; they are moved into place when it is.', len(left))
         journal.unlink()
         return True
 
@@ -144,6 +292,19 @@ class WorkspaceService:
             self.state = json.loads(self.path.read_text(encoding='utf-8'))
             self.paths = self.state['paths']
             self.stamps, self.parts, self.part_assets = {}, {}, {}
+        self.finish_files()
+        # A registered file that is not there, or cannot be looked at, marks only its own
+        # project unavailable.
+        unavailable = {}
+        for i, name in self.paths.items():
+            found = file_state(name)
+            if found != 'file': unavailable[i] = (name, found)
+        # If the same project turns up at another path the server scans, that path takes its
+        # place, but only when the missing file's folder is still there (it was moved or
+        # renamed) or it was in the projects folder. When the folder is gone too, as when the
+        # drive it is on is not mounted, the project waits for it.
+        replaceable = {i for i, (name, reason) in unavailable.items() if reason == 'missing' and self.moved_away(name)}
+        registered = {name: i for i, name in self.paths.items()}
         candidates = set(self.paths.values())
         for directory in (self.projects_dir, *[p for p in self.projects_dir.iterdir() if p.is_dir()]):
             candidates.update(str(p) for p in directory.glob('*.tiksi'))
@@ -151,22 +312,30 @@ class WorkspaceService:
         changed = False
         for name in sorted(candidates):
             path = Path(name)
-            if not path.exists():
-                if name in self.paths.values(): raise WorkspaceError('A project file is missing; restore it before saving', 409)
-                continue
-            stamp = (path.stat().st_mtime_ns, path.stat().st_size)
-            if self.stamps.get(name) == stamp: continue
+            if file_state(name) != 'file': continue
+            stamp = None
             try:
+                found = path.stat()
+                stamp = (found.st_mtime_ns, found.st_size)
+                if name in registered and self.unreadable.get(name) == stamp:
+                    unavailable[registered[name]] = (name, 'unreadable'); continue
+                if self.stamps.get(name) == stamp: continue
                 with zipfile.ZipFile(path) as archive:
                     info = archive.getinfo('workspace.json')
                     if info.file_size > MAX_JSON: raise WorkspaceError('Project metadata exceeds 32 MB', 413)
                     data = json.loads(archive.read(info))
+                    if not isinstance(data, dict): raise ValueError('Project metadata is not an object')
+                    for key in ('projects', 'materials', 'products'):
+                        records = data.get(key, [])
+                        if not isinstance(records, list) or not all(isinstance(r, dict) and (key == 'projects' or 'id' in r) for r in records):
+                            raise ValueError('Project ' + key + ' are not a list of records')
                     props = data.get('properties', [])
                     if len(props) != 1 or not isinstance(props[0], dict) or not isinstance(props[0].get('id'), str): continue
                     identifier = props[0]['id']
                     if identifier in self.state.get('archived', {}): continue
-                    # Explicitly registered file wins over a duplicate backup in another folder.
-                    if identifier in self.paths and self.paths[identifier] != name: continue
+                    # Explicitly registered file wins over a duplicate backup in another folder,
+                    # unless the registered file is gone: then this copy is where it went.
+                    if identifier in self.paths and self.paths[identifier] != name and identifier not in replaceable: continue
                     if archive.getinfo('manifest.json').file_size > MAX_JSON: raise WorkspaceError('Project manifest exceeds 32 MB', 413)
                     manifest = json.loads(archive.read('manifest.json'))
                     members = manifest.get('files', [])
@@ -180,9 +349,16 @@ class WorkspaceService:
                             digest, size = self.store_blob(source)
                         assets[item['id']] = {k: v for k, v in item.items() if k in ('name', 'format', 'mime', 'kind')}
                         assets[item['id']].update(hash=digest, size=size)
-            except (zipfile.BadZipFile, KeyError, ValueError) as error:
-                if name in self.paths.values(): raise WorkspaceError('A project file cannot be read; its original has been preserved', 422) from error
+            except (zipfile.BadZipFile, KeyError, ValueError, AttributeError, TypeError, OSError) as error:
+                # The file is left exactly as it is, and only its own project is set aside. A
+                # file whose contents are wrong is read again only once it changes; one the Mac
+                # could not read (permission, a failing drive) is tried again on the next look.
+                if name in registered:
+                    unavailable[registered[name]] = (name, 'unreadable')
+                    if stamp is not None and not isinstance(error, OSError): self.unreadable[name] = stamp
                 continue
+            self.unreadable.pop(name, None)
+            unavailable.pop(identifier, None)
             current = self.state['data']
             if current is None:
                 current = {**data, 'properties': [], 'projects': [], 'materials': [], 'products': []}
@@ -199,10 +375,24 @@ class WorkspaceService:
             self.part_assets[identifier] = assets
             self.stamps[name] = stamp
             changed = True
+        for identifier, (name, _) in unavailable.items():
+            # Read again in full when it comes back, even with the same time and size.
+            self.stamps.pop(name, None)
+        if unavailable != self.unavailable:
+            # Every device sees the change on its next poll: the project leaves, or returns.
+            self.unavailable = unavailable
+            changed = True
         if changed:
             self.state['revision'] += 1
             self.has_pictures = bool(picture_refs(self.state['data']))
             self.persist_catalog()
+
+    def moved_away(self, name):
+        """True when a missing project file's folder is still there, or the file was in the
+        projects folder: then a copy found elsewhere is where it went."""
+        old = Path(name)
+        try: return old.parent.is_dir() or old.is_relative_to(self.projects_dir)
+        except (OSError, ValueError): return False
 
     def persist_catalog(self):
         self.state['paths'] = self.paths
@@ -247,10 +437,33 @@ class WorkspaceService:
             entries[identifier] = {'mime': mime, 'kind': 'picture', **(given or {}), 'hash': digest, 'size': path.stat().st_size}
         return entries
 
+    def unavailable_projects(self):
+        """What the page is told about each project left out: its name, the path, and why."""
+        names = {p.get('id'): p.get('name') for p in (self.state.get('data') or {}).get('properties', []) if isinstance(p, dict)}
+        out = []
+        for identifier, (path, reason) in sorted(self.unavailable.items()):
+            name = names.get(identifier) or Path(path).stem
+            if reason == 'missing': message = name + ': the project file is not at ' + path + '. Put it back, or reconnect the drive it is on; the other projects keep saving.'
+            else: message = name + ': the project file at ' + path + ' cannot be read. It has been left exactly as it is; the other projects keep saving.'
+            out.append({'id': identifier, 'name': name, 'path': path, 'reason': reason, 'message': message})
+        return out
+
+    def visible_paths(self):
+        return {i: name for i, name in self.paths.items() if i not in self.unavailable}
+
     def snapshot(self):
         with self.lock:
             self.refresh()
-            return {k: json.loads(json.dumps(self.state.get(k))) for k in ('revision', 'data', 'assets', 'paths')}
+            value = {k: json.loads(json.dumps(self.state.get(k))) for k in ('revision', 'data', 'assets')}
+            value['paths'] = self.visible_paths()
+            data = value['data']
+            if data and self.unavailable:
+                # A project whose file is not readable is left out, so no device can edit a copy
+                # of it that would have nowhere to be saved. It comes back when its file does.
+                data['properties'] = [p for p in data.get('properties', []) if p.get('id') not in self.unavailable]
+                data['projects'] = [p for p in data.get('projects', []) if p.get('propertyId') not in self.unavailable]
+            value['unavailable'] = self.unavailable_projects()
+            return value
 
     @staticmethod
     def check_records(data):
@@ -311,7 +524,7 @@ class WorkspaceService:
             if self.path.exists():
                 # Keep every committed revision for recovery; assets are never garbage-collected here.
                 history = self.root / 'history' / (str(self.state['revision']) + '.json')
-                if not history.exists(): history.write_bytes(self.path.read_bytes())
+                self.keep_history(history)
             slices = request.get('projectData')
             # A project file the client did not change since the revision it saved against
             # is named instead of sent; the server already holds exactly that file.
@@ -334,6 +547,15 @@ class WorkspaceService:
                     identifier = prop['id']
                     part = slices[identifier]
                     if not isinstance(part, dict) or part.get('properties') != [prop]: raise WorkspaceError('Project file does not match workspace')
+                    if identifier in self.unavailable:
+                        # Its file is missing or unreadable: nothing is written at that path. A
+                        # device that still had the project and changed it gets its copy kept
+                        # in the server's recovery copies; the rest of the save goes ahead.
+                        destinations[identifier] = self.paths[identifier]
+                        relevant = {i: assets[i] for i in self.referenced(part) if i in assets}
+                        if self.parts.get(identifier) != part or self.part_assets.get(identifier) != relevant:
+                            self.archive_copy({'data': part, 'assets': relevant}, 'unavailable-project')
+                        continue
                     base = project_file_base(prop.get('name', 'Project'))
                     folder = self.projects_dir / (base + '-' + hashlib.sha256(identifier.encode()).hexdigest()[:8])
                     dest = Path(self.paths.get(identifier) or self.state.get('archived', {}).get(identifier) or self.planned.get(identifier) or str(folder / (base + '.tiksi')))
@@ -352,27 +574,52 @@ class WorkspaceService:
                     # avoiding a full copy of a large scan on every note/geometry edit.
                 # All files are complete before replacing any canonical file. A durable
                 # journal lets startup finish a multi-project commit after interruption.
-                value['paths'] = destinations
-                value['archived'] = {**self.state.get('archived', {}), **{i: name for i, name in self.paths.items() if i not in slices}}
+                # A project left out while its file is unavailable keeps its registered path.
+                value['paths'] = {**{i: name for i, (name, _) in self.unavailable.items()}, **destinations}
+                value['archived'] = {**self.state.get('archived', {}), **{i: name for i, name in self.paths.items() if i not in slices and i not in self.unavailable}}
                 for i in slices: value['archived'].pop(i, None)
                 journal = self.root / 'pending.json'
-                with journal.open('w', encoding='utf-8') as out:
-                    json.dump({'state': value, 'files': [[str(a), str(b)] for a, b, _ in staged]}, out)
-                    out.flush(); os.fsync(out.fileno())
+                # The note is written in full to a spare file and then renamed, so a crash or a
+                # full disk leaves either the whole note or none.
+                note = self.root / 'pending.tmp'
+                try:
+                    with note.open('w', encoding='utf-8') as out:
+                        json.dump({'state': value, 'files': [[str(a), str(b)] for a, b, _ in staged]}, out)
+                        out.flush(); os.fsync(out.fileno())
+                    os.replace(note, journal)
+                finally:
+                    if note.exists(): note.unlink()
                 for temp, dest, identifier in staged:
                     os.replace(temp, dest)
                     self.stamps[str(dest)] = (dest.stat().st_mtime_ns, dest.stat().st_size)
                 self.state, self.paths = value, value['paths']
                 for i in destinations: self.planned.pop(i, None)
                 self.has_pictures = bool(pictures)
-                self.parts = slices
-                self.part_assets = {i: {k: assets[k] for k in self.referenced(part) if k in assets} for i, part in slices.items()}
+                held_parts, held_assets = self.parts, self.part_assets
+                self.parts = {i: (held_parts[i] if i in self.unavailable and i in held_parts else part) for i, part in slices.items()}
+                self.part_assets = {i: (held_assets.get(i, {}) if i in self.unavailable and i in held_parts else {k: assets[k] for k in self.referenced(part) if k in assets}) for i, part in slices.items()}
+                saved = value['revision']
+                if any(i in self.unavailable for i in slices):
+                    # One more revision, so the device that sent an unavailable project reads
+                    # the workspace again and sees that project left out, with its message.
+                    self.state = {**value, 'revision': saved + 1}
                 self.persist_catalog()
                 journal.unlink()
             finally:
                 for temp, _, _ in staged:
                     if temp.exists() and not (self.root / 'pending.json').exists(): temp.unlink()
-            return value['revision']
+            return saved
+
+    def keep_history(self, history):
+        """Copy the catalog into history, whole or not at all. A copy left half written by an
+        earlier failure is set aside (never deleted) and written again."""
+        if history.exists():
+            try:
+                json.loads(history.read_text(encoding='utf-8'))
+                return
+            except (ValueError, UnicodeDecodeError):
+                os.replace(history, history.with_name(history.stem + '.unreadable-' + str(time.time_ns()) + '.json'))
+        write_whole(history, self.path.read_bytes())
 
     def archive_copy(self, record, label='conflict'):
         """Preserve a declined/uncommitted variant without changing canonical data."""
@@ -418,6 +665,15 @@ class WorkspaceService:
         ids.update(picture_refs(data))
         return ids
 
+    def check_available(self, identifier):
+        with self.lock:
+            self.refresh()
+            if identifier in self.unavailable:
+                found = next(p for p in self.unavailable_projects() if p['id'] == identifier)
+                error = WorkspaceError(found['message'], 409)
+                error.code = 'project-unavailable'
+                raise error
+
     # One definition of a trusted caller, shared with the server's own check (tools/serve.py).
     trusted_peer = staticmethod(trusted_peer)
 
@@ -448,8 +704,8 @@ class WorkspaceService:
                 try: request = json.loads(payload)
                 except (ValueError, UnicodeDecodeError): raise WorkspaceError('Workspace must be JSON')
                 revision = self.commit(request)
-                with self.lock: paths = dict(self.paths)
-                self.reply(h, 200, {'revision': revision, 'paths': paths})
+                with self.lock: paths, unavailable = self.visible_paths(), self.unavailable_projects()
+                self.reply(h, 200, {'revision': revision, 'paths': paths, 'unavailable': unavailable})
             elif path == '/api/workspace/recovery' and h.command == 'POST':
                 payload = self.read(h, MAX_WORKSPACE_REQUEST)
                 try: record = json.loads(payload)
@@ -473,6 +729,7 @@ class WorkspaceService:
                 action = identifier.rsplit('/', 1)[-1]
                 if action in ('state', 'open', 'info'): identifier = identifier.rsplit('/', 1)[0]
                 if identifier not in self.paths: raise WorkspaceError('Project not found', 404)
+                self.check_available(identifier)
                 source = Path(self.paths[identifier])
                 model = source.with_suffix('.skp')
                 state_path = source.parent / ('.' + source.stem + '.mirror.json')
@@ -481,8 +738,8 @@ class WorkspaceService:
                 elif action == 'state':
                     if h.command == 'PUT':
                         value = json.loads(self.read(h, MAX_JSON))
-                        temp = state_path.with_suffix('.tmp'); temp.write_text(json.dumps(value)); os.replace(temp, state_path)
-                    value = json.loads(state_path.read_text()) if state_path.exists() else {'file': source.name}
+                        write_whole(state_path, json.dumps(value).encode('utf-8'))
+                    value = json.loads(state_path.read_text(encoding='utf-8')) if state_path.exists() else {'file': source.name}
                     self.reply(h, 200, value)
                 elif action == 'open' and h.command == 'POST':
                     if not at_this_mac(h.client_address[0], h.headers.get('Host')): raise WorkspaceError('Open SketchUp on the Mac; the model remains viewable here', 403)
@@ -503,7 +760,7 @@ class WorkspaceService:
                     with self.lock:
                         before = str(model.stat().st_mtime_ns) if model.exists() else '0'
                         if h.headers.get('X-File-Mtime') != before: raise WorkspaceError('SketchUp model changed; retry before overwriting', 409)
-                        temp = model.with_suffix('.skp.tmp'); temp.write_bytes(value); os.replace(temp, model)
+                        write_whole(model, value)
                     self.reply(h, 200, {})
                 else: raise WorkspaceError('Mirror endpoint not found', 404)
             elif path.startswith('/api/workspace/open/') and h.command == 'POST':
@@ -511,12 +768,14 @@ class WorkspaceService:
                 from server.sketchup_open import at_this_mac
                 identifier = path.removeprefix('/api/workspace/open/')
                 if identifier not in self.paths: raise WorkspaceError('This property has no project folder yet; save it to disk first', 404)
+                self.check_available(identifier)
                 if not at_this_mac(h.client_address[0], h.headers.get('Host')): raise WorkspaceError('Project files open on the Mac running Tiksi; use Tiksi at localhost on that Mac', 422)
                 try: request = json.loads(self.read(h, 64 * 1024))
                 except (ValueError, UnicodeDecodeError): raise WorkspaceError('Open request must be JSON')
                 if not isinstance(request, dict): raise WorkspaceError('Open request must be an object')
-                target = open_in_folder(self.project_folder(identifier), request.get('path', ''), self.run)
-                self.reply(h, 200, {'path': str(target.relative_to(self.project_folder(identifier).resolve())), 'folder': self.project_folder(identifier).name})
+                target, action = open_in_folder(self.project_folder(identifier), request.get('path', ''), self.run)
+                # action is 'opened', or 'shown' when the file is not a document and was only shown in Finder.
+                self.reply(h, 200, {'path': str(target.relative_to(self.project_folder(identifier).resolve())), 'folder': self.project_folder(identifier).name, 'action': action})
             elif path.startswith('/api/workspace/blobs/') and h.command == 'GET':
                 digest = path.removeprefix('/api/workspace/blobs/')
                 if not HASH.fullmatch(digest): raise WorkspaceError('Asset not found', 404)
@@ -543,6 +802,8 @@ class WorkspaceService:
             h.close_connection = True
             self.reply(h, error.status, {'error': str(error), **({'code': error.code} if getattr(error, 'code', None) else {})})
         except (OSError, ValueError, TypeError, KeyError):
+            # The page gets a plain sentence; the server log gets the real error and where it happened.
+            log.exception('Project files could not be updated (%s %s)', h.command, path)
             h.close_connection = True
             self.reply(h, 500, {'error': 'Project files could not be updated. Existing copies and recovery data have been preserved.'})
         finally:

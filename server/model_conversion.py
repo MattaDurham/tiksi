@@ -1,6 +1,7 @@
 """Bounded local model conversion, using installed authoring engines and isolated files."""
 import io
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -15,6 +16,7 @@ from urllib.parse import urlsplit
 import zipfile
 
 ROOT=Path(__file__).resolve().parent.parent
+log=logging.getLogger('tiksi.model_conversion')
 MAX_BYTES=600*1024*1024
 CAD={'.ifc','.step','.stp','.iges','.igs','.dxf','.laz','.3dm','.e57'}
 BLENDER={'.blend','.usd','.usda','.usdc','.usdz'}
@@ -23,9 +25,29 @@ MIRROR_ENTRY=re.compile(r'^(mirror\.json|existing\.skp|underlay/[\w.:-]{1,80}\.(
 class ConversionError(ValueError):
     def __init__(self,message,status=400):super().__init__(message);self.status=status
 
+def write_report(folder,report,indent=None):
+    """A conversion's record, written whole to a spare file and renamed, so it is never half written."""
+    with tempfile.NamedTemporaryFile('w',dir=folder,prefix='.report.',suffix='.tmp',delete=False,encoding='utf-8') as out:
+        temp=Path(out.name)
+        try:out.write(json.dumps(report,indent=indent));out.flush();os.fsync(out.fileno())
+        except BaseException:out.close();temp.unlink(missing_ok=True);raise
+    os.replace(temp,Path(folder)/'report.json')
+
+def read_reports(root):
+    """Every conversion record that can be read; one that cannot is left out, not fatal to the list."""
+    for path in sorted(Path(root).glob('*/report.json')):
+        try:report=json.loads(path.read_text(encoding='utf-8'))
+        except (OSError,ValueError):continue
+        if isinstance(report,dict):yield path.parent,report
+
 class ModelConversionService:
     def __init__(self,root):
         self.root=Path(root);self.root.mkdir(parents=True,exist_ok=True)
+        # A conversion still marked running was cut off by a restart; it will never finish now.
+        for folder,report in read_reports(self.root):
+            if report.get('state')=='running':
+                report.update(state='interrupted',error='The server restarted before this conversion finished. The source is kept; convert it again.')
+                write_report(folder,report,2)
         self.token=secrets.token_urlsafe(32);self.lock=threading.Lock();self.process=None
         self.blender=shutil.which('blender') or (str(Path('/Applications/Blender.app/Contents/MacOS/Blender')) if Path('/Applications/Blender.app/Contents/MacOS/Blender').exists() else None)
         from server.sketchup_convert import library_path
@@ -91,7 +113,7 @@ class ModelConversionService:
                 if len(models)!=1:raise ConversionError('Package one native model and its resources at a time')
                 source=models[0];extension=source.suffix.lower();output=folder/('model.'+('las' if extension in {'.laz','.e57'} else target))
             report={'id':identifier,'inputFormat':extension,'outputFormat':output.suffix,'state':'running','createdAt':time.time()}
-            (folder/'report.json').write_text(json.dumps(report))
+            write_report(folder,report)
             if target=='ifc' and extension=='.json' and self.python.is_file():args=[str(self.python),str(ROOT/'server/ifc_write.py'),str(source),str(output)]
             elif target=='skp' and extension=='.json':args=[sys.executable,str(ROOT/'server/sketchup_convert.py'),str(source),str(output)]
             elif extension=='.skp' and target=='glb':args=[sys.executable,str(ROOT/'server/sketchup_convert.py'),str(source),str(output)]
@@ -103,11 +125,11 @@ class ModelConversionService:
                 raise ConversionError('No installed reader for this format. Source retained in an agent handoff for interpretation.',422)
             result=self._run(args,folder)
             if not output.is_file() or not 0<output.stat().st_size<=MAX_BYTES:raise ConversionError('Converter did not produce a usable file',422)
-            report.update(state='complete',**result);(folder/'report.json').write_text(json.dumps(report,indent=2))
+            report.update(state='complete',**result);write_report(folder,report,2)
             return identifier,output.read_bytes(),report
         except Exception as error:
             if folder:
-                report.update(id=folder.name,inputFormat=extension,outputFormat='.'+target,state='failed',error=str(error));(folder/'report.json').write_text(json.dumps(report,indent=2))
+                report.update(id=folder.name,inputFormat=extension,outputFormat='.'+target,state='failed',error=str(error));write_report(folder,report,2)
                 if isinstance(error,ConversionError):error.job_id=folder.name
             raise
         finally:self.lock.release()
@@ -197,7 +219,7 @@ class ModelConversionService:
                 except OpenError as e:raise ConversionError(str(e),e.status)
                 self.reply(h,200,json.dumps(result).encode(),'application/json');return True
             if path==base+'/jobs' and h.command=='GET':
-                jobs=[json.loads(p.read_text()) for p in self.root.glob('*/report.json')]
+                jobs=[report for _,report in read_reports(self.root)]
                 self.reply(h,200,json.dumps({'jobs':jobs}).encode(),'application/json');return True
             parts=path[len(base):].strip('/').split('/')
             if len(parts)==2 and parts[0]=='jobs' and len(parts[1])==32 and all(c in '0123456789abcdef' for c in parts[1]):
@@ -217,6 +239,7 @@ class ModelConversionService:
             h.close_connection=True
             self.reply(h,e.status,json.dumps({'error':str(e),'jobId':getattr(e,'job_id',None)}).encode(),'application/json');return True
         except Exception:
+            log.exception('Model conversion failed (%s %s)',h.command,path)
             h.close_connection=True;self.reply(h,500,b'{"error":"Local converter failed; source and diagnostics retained."}','application/json');return True
     @staticmethod
     def reply(h,status,data,mime,extra=None):

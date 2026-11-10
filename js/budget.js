@@ -2,20 +2,23 @@
 // Select/deselect projects against a cap, roll up by project and category, print a report.
 
 import {
-  ws, touch, fmtMoney, parseMoney, escapeHtml, projectTotals, selectedTotals,
+  ws, touch, fmtMoney, readMoney, escapeHtml, projectTotals,
   fmtDate, isoToday, projectLabel, propertyProjects,
 } from './store.js';
+import { programTotals } from './program.js';
 import { icon } from './icons.js';
+import { printSheet } from './print-sheet.js';
 
 let el = null;
+let capProblem = '';   // the cap as typed when it could not be read, and why
 export function mount(root) { el = root; render(); }
-export function unmount() { el = null; }
+export function unmount() { el = null; capProblem = ''; }
 
 function render() {
   if (!el) return;
   const d = ws.data;
   const cap = d.settings.budgetCap || 0;
-  const sel = selectedTotals();
+  const sel = programTotals(propertyProjects());   // the totals the one-pager prints
   const remaining = cap - sel.likely;
   const pct = cap > 0 ? Math.min(sel.likely / cap, 1.4) : 0;
 
@@ -47,7 +50,7 @@ function render() {
           <div class="k-label">Budget cap</div>
           <div class="k-value"><input type="text" id="cap-input" value="${fmtMoney(cap)}"
             style="background:transparent;border:none;color:var(--ink);font:inherit;width:130px;border-bottom:1px dashed var(--line-2)"></div>
-          <div class="k-sub">click to edit</div>
+          <div class="k-sub" id="cap-note" ${capProblem ? 'role="alert" style="color:var(--red)"' : ''}>${capProblem ? escapeHtml(capProblem) : 'click to edit'}</div>
         </div>
         <div class="kpi accent">
           <div class="k-label">Selected (likely)</div>
@@ -98,7 +101,12 @@ function render() {
     </div>`;
 
   const capInput = el.querySelector('#cap-input');
-  capInput.onchange = () => { d.settings.budgetCap = parseMoney(capInput.value); touch(); render(); };
+  // An amount that cannot be read keeps the cap as it was and says why, instead of guessing.
+  capInput.onchange = () => {
+    const r = readMoney(capInput.value);
+    if (Number.isNaN(r.value)) { capProblem = r.error + ' The cap is still ' + fmtMoney(cap) + '.'; render(); return; }
+    capProblem = ''; d.settings.budgetCap = r.value; touch(); render();
+  };
   el.querySelectorAll('[data-sel]').forEach(cb => cb.onchange = () => {
     const p = d.projects.find(p => p.id === cb.dataset.sel);
     p.selected = cb.checked;
@@ -125,7 +133,7 @@ function projRow(p, maxLikely) {
 export function budgetReportHtml() {
   const d = ws.data;
   const cap = d.settings.budgetCap || 0;
-  const sel = selectedTotals();
+  const sel = programTotals(propertyProjects());   // the totals the one-pager prints
   const projects = propertyProjects();
   const selectedProjects = projects.filter(p => p.selected);
   const parked = projects.filter(p => !p.selected);
@@ -180,6 +188,5 @@ export function budgetReportHtml() {
 }
 
 function printReport() {
-  document.getElementById('print-root').innerHTML = budgetReportHtml();
-  window.print();
+  printSheet(budgetReportHtml());
 }

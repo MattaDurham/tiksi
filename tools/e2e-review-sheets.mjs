@@ -92,7 +92,7 @@ try {
   assert.ok(Math.abs(front.width - 6.96) < 1e-6 && Math.abs(front.t - 0.5) < 1e-6, 'a too-wide door is held to its wall');
   await page.locator('#btn-undo').click();
   assert.equal((await prop()).openings.find(o => o.id === 'o-front').width, 0.9, 'undo reverts the clamped edit');
-  assert.equal(await width('o-front').inputValue(), '2\'-11"', 'the panel follows undo');
+  assert.equal(await width('o-front').inputValue(), '2\'-11 7/16"', 'the panel follows undo');
   await page.locator('#btn-undo').click(); await page.locator('#btn-undo').click();
   assert.equal(JSON.stringify((await prop()).openings), before, 'each schedule edit is one undo step');
   await page.locator('#btn-redo').click();

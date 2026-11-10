@@ -13,7 +13,7 @@
 import { ws, touch, activeProperty, projectSlice, onWorkspaceReplace, escapeHtml as esc, fmtDate, isoToday } from './store.js';
 import { icon } from './icons.js';
 import { normalizeOnePager, draftOnePager, latestVersion, onePagerStatus, shouldAskOnClose, projectSignature, DEFAULT_PROMPT, SHOW_KEYS, MAX_HIGHLIGHTS } from './one-pager.js';
-import { PAGE_CSS, PAGE_W, PAGE_H } from './one-pager-page.js';
+import { PAGE_CSS, PAGE_W, PAGE_H, pageCuts } from './one-pager-page.js';
 import { pageAssets, pageMarkup, onePagerPdf, saveOnePagerVersion, versionInProgress, heroCandidates, latestVersionBytes } from './one-pager-render.js';
 
 let app = { refresh() {}, remount() {}, toast() {} };
@@ -64,8 +64,31 @@ export async function makeFirstOnePager(prop, { progress } = {}) {
   normalizeOnePager(prop);
   if (draftOnePager(prop, ws.data, { force: !prop.onePager.customized })) touch();
   if (latestVersion(prop)) return null;
-  const r = await saveOnePagerVersion(prop, { progress });
+  // A property always gets its first version, but not a clipped one in silence.
+  const assets = await pageAssets(prop);
+  const cuts = await cutsOffScreen(prop, assets, 'Version 1');
+  const r = await saveOnePagerVersion(prop, { progress, assets });
+  if (cuts.length) {
+    const text = 'One-pager version 1 for ' + (prop.name || 'this property') + ' is cut off: ' + cuts.join('; ') + '. OPEN ONE-PAGER to shorten it and save version 2.';
+    progress && progress(text);
+    app.toast && app.toast(text, 'error');
+  }
   return r.version;
+}
+
+// What the page would cut off, laid out out of sight exactly as the editor's preview lays it
+// out, for saves made without the editor open.
+export async function cutsOffScreen(prop, assets, version) {
+  const host = document.createElement('div');
+  host.setAttribute('aria-hidden', 'true');
+  host.style.cssText = 'position:fixed;left:-20000px;top:0;width:' + PAGE_W + 'px;height:' + PAGE_H + 'px;overflow:hidden;visibility:hidden;pointer-events:none';
+  host.innerHTML = '<style>' + PAGE_CSS + '</style><div class="op-preview-page">' + pageMarkup(prop, assets, { version, date: isoToday() }) + '</div>';
+  document.body.appendChild(host);
+  try {
+    if (document.fonts && document.fonts.ready) await document.fonts.ready;
+    await Promise.all([...host.querySelectorAll('img')].map(i => i.decode().catch(() => {})));
+    return pageCuts(host.querySelector('.op-page'));
+  } finally { host.remove(); }
 }
 
 // ---------- the editor ----------
@@ -126,7 +149,7 @@ export function openOnePagerEditor(prop = activeProperty(), opts = {}) {
         </div>
         <div data-op-versions>${versionsHtml(prop)}</div>
       </form>
-      <div class="op-preview-wrap"><div class="op-preview" data-op-preview><style>${PAGE_CSS}</style><div class="op-preview-page" data-op-page></div></div></div>
+      <div class="op-preview-wrap"><p class="np-status fail" data-op-cuts role="alert" hidden></p><div class="op-preview" data-op-preview><style>${PAGE_CSS}</style><div class="op-preview-page" data-op-page></div></div></div>
     </div>
     <footer class="op-dlg-foot">
       <span class="np-status" data-op-note role="status"></span>
@@ -172,6 +195,7 @@ export function openOnePagerEditor(prop = activeProperty(), opts = {}) {
       if (!editor) return;
       page.innerHTML = pageMarkup(prop, a, { version: 'Version ' + ((latestVersion(prop)?.n || 0) + 1) + ' (draft)', date: isoToday() });
       fitPreview();
+      showCuts();
     } catch (e) { console.error(e); say('The page could not be drawn: ' + (e.message || e), 'fail'); }
   };
   const fitPreview = () => {
@@ -179,6 +203,12 @@ export function openOnePagerEditor(prop = activeProperty(), opts = {}) {
     const k = Math.min(1, (wrap.clientWidth - 2) / PAGE_W);
     page.style.transform = 'scale(' + k + ')';
     wrap.style.height = Math.round(PAGE_H * k) + 'px';
+  };
+  // Text the page has no room for is clipped on the PDF too: say so before it is saved.
+  const showCuts = () => {
+    const cuts = pageCuts(page.querySelector('.op-page')), box = dlg.querySelector('[data-op-cuts]');
+    box.hidden = !cuts.length;
+    box.textContent = cuts.length ? 'Cut off on the page: ' + cuts.join('; ') + '. Shorten the text or turn parts off before you save.' : '';
   };
   const schedulePreview = () => { clearTimeout(previewTimer); previewTimer = setTimeout(drawPreview, 250); };
   const readField = (el) => {
@@ -307,12 +337,25 @@ export function openClosePrompt(prop = activeProperty()) {
   dlg.addEventListener('cancel', e => { if (busy) e.preventDefault(); else snooze(prop); });
   dlg.querySelector('[data-op-later]').onclick = () => { snooze(prop); dlg.close(); };
   dlg.querySelector('[data-op-review]').onclick = () => { dlg.close(); openOnePagerEditor(prop); };
+  let warned = '';   // the cut-off text already shown: a second UPDATE NOW saves as it is
   dlg.querySelector('[data-op-update]').onclick = async () => {
     if (busy) return;
     busy = true;
     dlg.querySelectorAll('button').forEach(b => b.disabled = true);
     try {
-      const r = await saveOnePagerVersion(prop, { progress: t => say(t, '') });
+      // The text the save will print: drafted afresh unless it was written by hand.
+      if (draftOnePager(prop, ws.data)) touch();
+      const assets = await pageAssets(prop);
+      const cuts = await cutsOffScreen(prop, assets, 'Version ' + next);
+      const cutText = cuts.length ? 'Cut off on the page: ' + cuts.join('; ') + '.' : '';
+      if (cutText && cutText !== warned) {
+        warned = cutText;
+        say(cutText + ' REVIEW FIRST to shorten it, or UPDATE NOW again to save it as it is.', 'fail');
+        note.setAttribute('role', 'alert');
+        dlg.querySelectorAll('button').forEach(b => b.disabled = false);
+        return;
+      }
+      const r = await saveOnePagerVersion(prop, { progress: t => say(t, ''), assets });
       dlg.querySelector('[data-op-prompt-text]').textContent = 'Version ' + r.version.n + ' saved: ' + r.doc.name + '. Close Tiksi when you are ready.';
       say('', '');
       app.refresh();

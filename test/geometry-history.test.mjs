@@ -57,3 +57,40 @@ test('history stays bounded and does not undo into another project', () => {
   assert.equal(h.restore(p, 'undo'), true); assert.equal(h.restore(p, 'undo'), true);
   assert.equal(h.restore(p, 'undo'), false); assert.equal(p.walls[0].thickness, .2);
 });
+test('both buttons from one copy give the same answers as asking each direction', () => {
+  const p = house(), h = new GeometryHistory();
+  assert.deepEqual(h.states(p), { undo: h.state(p, 'undo'), redo: h.state(p, 'redo') });
+  move(p, h);
+  assert.deepEqual(h.states(p), { undo: h.state(p, 'undo'), redo: h.state(p, 'redo') });
+  assert.equal(h.states(p).undo.available, true); assert.equal(h.states(p).redo.available, false);
+  h.restore(p, 'undo');
+  assert.deepEqual(h.states(p), { undo: h.state(p, 'undo'), redo: h.state(p, 'redo') });
+  assert.equal(h.states(p).redo.available, true);
+  p.walls[1].ax = 9;   // a newer edit to the same wall blocks redo
+  assert.equal(h.states(p).redo.blocked, true);
+});
+test('reverting a cancelled drag puts every moved piece back and leaves no undo entry', () => {
+  const p = house(), h = new GeometryHistory(), before = geometrySnapshot(p).data, plan = p.levels[0].plan;
+  h.begin(p, 'move wall');
+  const mv = planWallMove(p.walls[1], p.walls, p.rooms, p.openings);
+  applyWallMove(mv, normalOffset(mv, 1.5, 0));
+  assert.equal(p.walls[1].ax, 7.5);
+  assert.equal(h.revert(p), true);
+  assert.deepEqual(geometrySnapshot(p).data, before);
+  assert.equal(p.levels[0].plan, plan, 'the underlay object is kept, not copied');
+  h.commit(p);
+  assert.equal(h.states(p).undo.available, false, 'nothing to undo after a reverted drag');
+  assert.equal(h.revert(p), false, 'a second revert has nothing to put back');
+});
+test('a held edit survives change events until its owner lets go, so a cancel can still put it back', () => {
+  const p = house(), h = new GeometryHistory(), before = geometrySnapshot(p).data;
+  h.begin(p, 'move wall', { hold: true });
+  p.walls[1].ax = 7;
+  h.commit(p);                                   // a change event mid-drag
+  assert.equal(h.states(p).undo.available, false, 'not closed by the change event');
+  assert.equal(h.revert(p), true); assert.deepEqual(geometrySnapshot(p).data, before);
+  h.begin(p, 'move wall', { hold: true }); p.walls[1].ax = 7.5;
+  h.release(); h.commit(p);
+  assert.equal(h.states(p).undo.available, true, 'closed once released');
+  assert.equal(h.restore(p, 'undo'), true); assert.equal(p.walls[1].ax, 6);
+});

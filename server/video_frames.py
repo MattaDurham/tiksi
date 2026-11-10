@@ -6,6 +6,7 @@ the video's SHA-256, sandboxed on macOS. The cache is derived and disposable: th
 video lives in the project (.tiksi) and is never altered here."""
 import hashlib
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -18,6 +19,8 @@ import tempfile
 import threading
 import time
 from urllib.parse import urlsplit
+
+log = logging.getLogger('tiksi.video_frames')
 
 MAX_BYTES = 600 * 1024 * 1024
 # A login item's PATH lacks Homebrew, so the live service would miss an installed ffmpeg.
@@ -469,6 +472,7 @@ class VideoFrameService:
             h.close_connection = True
             return self.reply(h, e.status, {'error': str(e)})
         except Exception:
+            log.exception('Video processing failed (%s %s)', h.command, path)
             h.close_connection = True
             return self.reply(h, 500, {'error': 'Video processing failed; the original video is unchanged.'})
 

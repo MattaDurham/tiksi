@@ -5,6 +5,8 @@ import {
   ws, escapeHtml, fmtMoney, fmtLen, fmtArea, fmtDate, isoToday,
   allScopeItems, elementInfo, materialById, itemTotals,
 } from './store.js';
+import { printSheet } from './print-sheet.js';
+import { safeResearchUrl } from './research.js';
 
 let el = null;
 let current = null; // {kind:'item'|'product', id}
@@ -57,8 +59,7 @@ function render() {
   el.querySelector('#print-sheet').onclick = () => {
     const html = currentSheetHtml();
     if (!html) return;
-    document.getElementById('print-root').innerHTML = html;
-    window.print();
+    printSheet(html);
   };
 
   const view = el.querySelector('#sheet-view');
@@ -82,6 +83,13 @@ function specLines(specs) {
   return String(specs || '').split('\n').map(s => s.trim()).filter(Boolean);
 }
 
+// A vendor link only for a web address (the check research and products use); anything else
+// (a javascript: link from an imported file, say) is printed as plain text, never a link.
+function vendorLink(url) {
+  const safe = safeResearchUrl(url);
+  return safe ? `<a href="${escapeHtml(safe)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>` : escapeHtml(url);
+}
+
 function productBlock(p) {
   return `<div class="p-block">
     ${p.imageUrl ? `<img src="${escapeHtml(p.imageUrl)}" onerror="this.style.display='none'">` : ''}
@@ -91,7 +99,7 @@ function productBlock(p) {
       <div class="pb-specs">${specLines(p.specs).map(s => escapeHtml(s)).join('<br>')}</div>
       ${p.notes ? `<div class="pb-specs" style="margin-top:6px; color:#555">${escapeHtml(p.notes)}</div>` : ''}
       <div class="pb-price">${p.price ? fmtMoney(p.price) + (p.unit && p.unit !== 'ea' ? ' per ' + escapeHtml(p.unit) : '') : 'price TBD'}</div>
-      ${p.url ? `<div style="font-size:11px; margin-top:3px"><a href="${escapeHtml(p.url)}">${escapeHtml(p.url)}</a></div>` : ''}
+      ${p.url ? `<div style="font-size:11px; margin-top:3px">${vendorLink(p.url)}</div>` : ''}
     </div>
   </div>`;
 }
@@ -131,7 +139,7 @@ function sitePhotosHtml(photos) {
     }).join('')}</div>`;
 }
 
-function itemSheetHtml(project, item) {
+export function itemSheetHtml(project, item) {
   const t = itemTotals(item);
   const photos = sitePhotosFor(item);
   const prods = ws.data.products.filter(p => (p.itemIds || []).includes(item.id));
@@ -154,7 +162,7 @@ function itemSheetHtml(project, item) {
       </tr></tbody></table>
 
     ${elements.length ? `<h2>Model elements (digital twin)</h2>
-    <table><thead><tr><th>Element</th><th class="num">Length</th><th class="num">Height</th><th class="num">Area</th><th>Material</th></tr></thead>
+    <table><thead><tr><th>Element</th><th class="num">Length (wall CL)</th><th class="num">Height</th><th class="num">Area (wall CL)</th><th>Material</th></tr></thead>
       <tbody>${elements.map(e => `<tr>
         <td>${escapeHtml(e.label)} <span style="color:#999; font-family:var(--mono); font-size:10px">${escapeHtml(e.id)}</span></td>
         <td class="num">${e.length ? fmtLen(e.length) : '-'}</td>
@@ -163,7 +171,8 @@ function itemSheetHtml(project, item) {
         <td>${escapeHtml((materialById(e.material) || {}).name || '-')}</td></tr>`).join('')}
       ${wallArea || floorArea ? `<tr><td><b>Takeoff totals</b></td><td></td><td></td>
         <td class="num"><b>${wallArea ? fmtArea(wallArea) + ' wall' : ''}${wallArea && floorArea ? ', ' : ''}${floorArea ? fmtArea(floorArea) + ' floor' : ''}</b></td><td></td></tr>` : ''}
-      </tbody></table>` : ''}
+      </tbody></table>
+    <p style="font-size:10.5px; color:#666; margin-top:4px">Lengths and areas are measured on wall centre lines (CL), as the plan is drawn: clear room dimensions and finished floor areas are smaller by half of each wall's thickness.</p>` : ''}
 
     ${matIds.size ? `<h2>Materials</h2>
       <table><tbody>${[...matIds].map(id => {
@@ -183,7 +192,7 @@ function itemSheetHtml(project, item) {
   </div>`;
 }
 
-function productSheetHtml(p) {
+export function productSheetHtml(p) {
   const uses = [];
   for (const { project, item } of allScopeItems()) {
     if ((p.itemIds || []).includes(item.id)) uses.push(project.name + ' / ' + item.name);

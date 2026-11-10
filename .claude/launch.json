@@ -2,14 +2,13 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "tiksi",
-      "runtimeExecutable": "python3",
+      "name": "tiksi-preview",
+      "runtimeExecutable": "sh",
       "runtimeArgs": [
-        "-m",
-        "http.server",
-        "8642"
+        "-c",
+        "exec python3 tools/serve.py --host 127.0.0.1 --port 8699 --state-dir \"${TMPDIR:-/tmp}/tiksi-launch-preview-8699\""
       ],
-      "port": 8642
+      "port": 8699
     }
   ]
 }

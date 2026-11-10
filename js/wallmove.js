@@ -168,6 +168,26 @@ export function applyWallMove(plan, offset) {
   placeOpenings(plan.anchors);
 }
 
+// The walls a move plan reshapes (a wall slide's run and the walls joined to it, or a
+// corner move's walls and those stretched along them), each with its direction and length
+// now. A caller keeps these from before the move and refuses one that leaves a wall too short.
+export function movedWallLengths(plan) {
+  const walls = new Set();
+  for (const e of plan.run || []) walls.add(e.w);
+  for (const e of plan.ends || []) walls.add(e.w);
+  for (const h of plan.hosted || []) if (h.kind === 'end') walls.add(h.w);
+  return [...walls].map(w => [w, w.bx - w.ax, w.by - w.ay]);
+}
+// Whether a plan, as applied now, left a wall shorter than `min` that was not already that
+// short, or turned a wall end over end (a move that jumped through zero length).
+// `before` comes from movedWallLengths ahead of the first apply.
+export function moveLeavesShortWall(before, min) {
+  return before.some(([w, dx0, dy0]) => {
+    const dx = w.bx - w.ax, dy = w.by - w.ay, L = Math.hypot(dx, dy), L0 = Math.hypot(dx0, dy0);
+    return (L < min && L < L0 - 1e-9) || (L0 >= min && dx * dx0 + dy * dy0 <= 0);
+  });
+}
+
 // The component of a pointer displacement along the plan's normal.
 export function normalOffset(plan, dx, dy) { return dx * plan.nx + dy * plan.ny; }
 

@@ -12,6 +12,7 @@ import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility } from
 import { pendingTextureJobs } from './textures.js';
 import { wallsOn, roomsOn, openingsOn, levelHeight, polyArea, fmtLen, fmtArea, escapeHtml } from './store.js';
 import { orthoFrame, sectionPlane, lineFrame } from './doc-sets.js';
+import { doorSwings } from './wall-solids.js';
 
 let renderer = null;
 const scene = new THREE.Scene();
@@ -294,12 +295,16 @@ export function planVectorSvg(prop, v) {
     const c = o.t * L, half = o.width / 2, t2 = (w.thickness || 0.12) / 2;
     const P = (s, d) => [w.ax + ux * s + nx * d, w.ay + uy * s + ny * d];
     if (o.type === 'door') {
-      const side = o.flip ? -1 : 1;
-      const [hx, hy] = P(c - half, side * t2), [ex, ey] = P(c - half, side * (t2 + o.width)), [fx, fy] = P(c + half, side * t2);
-      out.push(`<line x1="${n3(m.X(hx))}" y1="${n3(m.Y(hy))}" x2="${n3(m.X(ex))}" y2="${n3(m.Y(ey))}" stroke="#1d1d1d" stroke-width="0.9"/>`);
-      const r = o.width * m.k;
-      const sweep = (side > 0) === ((ux * ny - uy * nx) > 0) ? 0 : 1;
-      out.push(`<path d="M ${n3(m.X(ex))} ${n3(m.Y(ey))} A ${n3(r)} ${n3(r)} 0 0 ${sweep} ${n3(m.X(fx))} ${n3(m.Y(fy))}" fill="none" stroke="#555" stroke-width="0.45" stroke-dasharray="2 1.5"/>`);
+      // The leaves PLAN and MODEL draw (wall-solids.js): one leaf, or a pair meeting in the
+      // middle. Each opens on the wall's positive side from its hinge to its swing arc.
+      for (const sw of doorSwings(o)) {
+        const [hx, hy] = P(c + sw.s, t2), [ex, ey] = P(c + sw.s, t2 + sw.r), [fx, fy] = P(c + sw.s + sw.dir * sw.r, t2);
+        const H = [m.X(hx), m.Y(hy)], E = [m.X(ex), m.Y(ey)], F = [m.X(fx), m.Y(fy)];
+        out.push(`<line x1="${n3(H[0])}" y1="${n3(H[1])}" x2="${n3(E[0])}" y2="${n3(E[1])}" stroke="#1d1d1d" stroke-width="0.9"/>`);
+        const r = sw.r * m.k;
+        const sweep = (E[0] - H[0]) * (F[1] - H[1]) - (E[1] - H[1]) * (F[0] - H[0]) > 0 ? 1 : 0;
+        out.push(`<path d="M ${n3(E[0])} ${n3(E[1])} A ${n3(r)} ${n3(r)} 0 0 ${sweep} ${n3(F[0])} ${n3(F[1])}" fill="none" stroke="#555" stroke-width="0.45" stroke-dasharray="2 1.5"/>`);
+      }
     } else {
       for (const d of [-t2 * 0.35, t2 * 0.35]) {
         const [x1, y1] = P(c - half, d), [x2, y2] = P(c + half, d);

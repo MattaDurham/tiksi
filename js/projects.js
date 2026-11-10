@@ -8,7 +8,7 @@
 // the links open PLAN, PRODUCTS or PHOTOS on that record.
 
 import {
-  ws, uid, touch, fmtMoney, parseMoney, escapeHtml, projectTotals, projectProgress,
+  ws, uid, touch, fmtMoney, readMoney, escapeHtml, projectTotals, projectProgress,
   activeProperty, elementInfo, fmtLen, fmtArea, isoToday,
   PRIORITIES, ITEM_STATUSES, subprojectsOf, projectById, roomsOn, wallsOn, propertyProjects,
 } from './store.js';
@@ -27,6 +27,7 @@ let el = null;
 let activeProjectId = null;
 let freshId = null;              // a project just made with NEW PROJECT / ADD SUBPROJECT, still unnamed
 const openItems = new Set();     // scope items whose panel is open
+let moneyProblem = null;         // { itemId, text }: a price as typed that could not be read, and why
 
 // ---------- the list's view: search, filters, sort, grouping, list or board ----------
 // Remembered in this browser for each property (like a saved default view); never written to
@@ -61,6 +62,7 @@ export function mount(root) {
 export function unmount() {
   window.removeEventListener('keydown', onKey);
   document.removeEventListener('pointerdown', onOutside);
+  moneyProblem = null;
   el = null;
 }
 
@@ -632,7 +634,7 @@ function itemRow(p, it) {
       <button type="button" class="dep-summary ${summary === '-' ? 'none' : ''}" data-dep-open ${others.length ? '' : 'disabled'}>${escapeHtml(summary)}</button>
       <select multiple size="${Math.min(6, Math.max(2, others.length))}" data-deps>${depOpts}</select></div></td>
     <td><span class="row-del" data-del-item="${escapeHtml(it.id)}" title="Remove item">${icon('close', { size: 13 })}</span></td>
-  </tr>${open ? `<tr class="item-more" data-more="${escapeHtml(it.id)}"><td colspan="10">${itemPanel(p, it)}</td></tr>` : ''}`;
+  </tr>${moneyProblem && moneyProblem.itemId === it.id ? `<tr class="item-money-problem"><td colspan="10" role="alert" data-money-problem style="color:var(--red)">${escapeHtml(moneyProblem.text)}</td></tr>` : ''}${open ? `<tr class="item-more" data-more="${escapeHtml(it.id)}"><td colspan="10">${itemPanel(p, it)}</td></tr>` : ''}`;
 }
 
 // The panel under an open scope item: its notes, the rooms and walls it rebuilds, the products
@@ -694,8 +696,15 @@ function bindItemRows(p) {
       it[f] = (f === 'qty' || f === 'durationDays') ? parseFloat(inp.value) || 0 : inp.value;
       touch(); refresh(p);
     });
+    // A price that cannot be read keeps the price it had and says why, instead of becoming $0.
     tr.querySelectorAll('[data-money]').forEach(inp => inp.onchange = () => {
-      it[inp.dataset.money] = parseMoney(inp.value);
+      const key = inp.dataset.money, r = readMoney(inp.value);
+      if (Number.isNaN(r.value)) {
+        moneyProblem = { itemId: it.id, text: r.error + ' The ' + key + ' price of ' + (it.name || 'this item') + ' is still ' + (it[key] ? fmtMoney(it[key]) : 'blank') + '.' };
+        refresh(p); return;
+      }
+      moneyProblem = null;
+      it[key] = r.value;
       touch(); refresh(p);
     });
     const setItemStatus = s => {
