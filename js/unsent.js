@@ -26,7 +26,13 @@ export function unsentStore(factory = globalThis.indexedDB) {
         db.createObjectStore('states', { keyPath: 'owner' });
         db.createObjectStore('files', { keyPath: ['owner', 'id'] }).createIndex('owner', 'owner');
       };
-      request.onsuccess = () => { request.result.onversionchange = () => { request.result.close(); opening = null; }; resolve(request.result); };
+      request.onsuccess = () => {
+        const db = request.result;
+        db.onversionchange = () => { db.close(); opening = null; };
+        // A phone may drop the connection while the page is in the background: open it again next time.
+        db.onclose = () => { opening = null; };
+        resolve(db);
+      };
       request.onerror = () => reject(request.error || new Error('Browser storage is unavailable'));
       request.onblocked = () => reject(new Error('Browser storage is busy'));
     });
@@ -37,7 +43,13 @@ export function unsentStore(factory = globalThis.indexedDB) {
   // removed before it was written.
   let queue = Promise.resolve();
   function inOrder(work) {
-    const result = queue.then(work).catch(error => { console.warn('unsent changes:', error && error.message || error); return false; });
+    const result = queue.then(work).catch(error => {
+      console.warn('unsent changes:', error && error.message || error);
+      // The connection may be the thing that failed: the next write starts with a new one.
+      const stale = opening; opening = null;
+      if (stale) stale.then(db => db.close(), () => {});
+      return false;
+    });
     queue = result; return result;
   }
   const done = tx => new Promise((resolve, reject) => {
@@ -79,6 +91,15 @@ export function unsentStore(factory = globalThis.indexedDB) {
         }
         return [...byOwner.values()].sort((a, b) => (a.state?.at || 0) - (b.state?.at || 0));
       }).then(found => found || []);
+    },
+    // Remove the storage itself, for a browser that keeps nothing and found nothing kept.
+    forget() {
+      return inOrder(async () => {
+        const stale = opening; opening = null;
+        if (stale) (await stale).close();
+        await new Promise((resolve, reject) => { const request = factory.deleteDatabase(DATABASE); request.onsuccess = request.onblocked = () => resolve(); request.onerror = () => reject(request.error); });
+        return true;
+      });
     },
     remove(owner) {
       return inOrder(async () => {

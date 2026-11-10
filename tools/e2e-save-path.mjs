@@ -96,6 +96,10 @@ async function transfersTakeAsLongAsTheyNeed() {
       await store.putFile(id, bytes.buffer, { kind: 'photo', mime: 'image/jpeg', name: id + '.jpg' });
       store.ws.data.properties.find(p => p.id === 'prop-slow-link').photos.push({ id, name: id, thumb: '', notes: '', kind: 'photo' });
     };
+    window.addOriginalAgain = async (id, size, fill) => {
+      const bytes = new Uint8Array(size); for (let i = 0; i < size; i += 251) bytes[i] = (i * 31 + fill) & 255;
+      await store.putFile(id, bytes.buffer, { kind: 'photo', mime: 'image/jpeg', name: id + '.jpg' });
+    };
   }, limits);
 
   // 1. A slow link: 1.2 MB at 200 kB/s takes about six seconds, four times the stall limit.
@@ -145,6 +149,11 @@ async function transfersTakeAsLongAsTheyNeed() {
   assert.equal(mac.assets['first-of-two']?.size, 60000); assert.equal(mac.assets['second-of-two']?.size, 70000);
   assert.equal(uploads.filter(size => size === 60000).length, 1, 'an original the Mac already holds is not uploaded again (uploads: ' + uploads.join(', ') + ')');
   await page.unroute('**/api/workspace/blobs');
+  // 4. The same original is put again with the very same bytes. There is nothing new for the
+  // Mac to write, and the page must not go on saying it is saving.
+  await page.evaluate(async () => { await window.addOriginalAgain('first-of-two', 60000, 2); });
+  await page.waitForFunction(SAVED, null, { timeout: 20000 });
+  assert.equal(await page.evaluate(async () => (await import('/js/disk-workspace.js')).diskWorkspace.pending), false, 'an original put again unchanged does not stay unsaved');
   await context.close();
   console.log('ok   slow transfers finish (upload ' + uploadSeconds.toFixed(1) + ' s, download ' + downloadSeconds.toFixed(1) + ' s against a ' + limits.stallMs / 1000 + ' s stall limit); a stalled round resends only what the Mac lacks');
 }

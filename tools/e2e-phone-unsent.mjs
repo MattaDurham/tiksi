@@ -196,23 +196,64 @@ async function run(name, type, profile) {
   await phone.waitForFunction(SAVED, null, { timeout: 30000 });
   assert.equal(uploads.filter(size => size === second.size).length, 0, 'a photo the Mac already holds is not uploaded again after the tab was dropped (uploads: ' + uploads.join(', ') + ')');
 
+  step('8');
+  // 8. An original is added a moment before the record that names it (a long video is
+  // checked in between), and a save round passes in that moment. The original must still be
+  // kept: the record is then made out of reach and the tab is dropped.
+  const lateId = 'original-before-record-' + name;
+  const late = await phone.evaluate(async lateId => {
+    const store = await import('/js/store.js');
+    const bytes = new Uint8Array(50000); for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 131) & 255;
+    await store.putFile(lateId, bytes.buffer, { kind: 'photo', mime: 'image/jpeg', name: 'Before its record.jpg' });
+    await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
+    return bytes.length;
+  }, lateId);
+  await phoneContext.setOffline(true);
+  await phone.evaluate(async ([id, lateId]) => {
+    const store = await import('/js/store.js');
+    store.ws.data.properties.find(p => p.id === id).photos.push({ id: lateId, name: 'Before its record', thumb: '', notes: '', kind: 'photo' }); store.touch();
+  }, [id, lateId]);
+  await phone.waitForFunction(() => /kept on this device/.test(document.querySelector('#save-status').title), null, { timeout: 20000 });
+  await phone.close();
+  await phoneContext.setOffline(false);
+  phone = await openPage(phoneContext, '#/photos');
+  mac = await untilOnTheMac(m => m.data.properties.find(p => p.id === id).photos.some(p => p.id === lateId), 'A photo record made after its original');
+  assert.equal(mac.assets[lateId]?.size, late, 'an original added before its record is still kept and reaches the Mac');
+  await phone.waitForFunction(SAVED, null, { timeout: 30000 });
+
+  step('9');
+  // 9. A page that is still open sends its own changes. A second page opened beside it
+  // leaves the first page's kept copy alone.
+  await phone.route('**/api/workspace**', route => route.abort());
+  await edit(phone, id, { notes: 'Still open in the first page' });
+  await phone.waitForFunction(() => /kept on this device/.test(document.querySelector('#save-status').title), null, { timeout: 20000 });
+  const beside = await openPage(phoneContext, '#/photos');
+  await saveNow(beside);
+  assert.notEqual(await noteOnMac(), 'Still open in the first page', 'a second page does not send what an open page kept');
+  assert.equal(await beside.evaluate(async id => (await import('/js/store.js')).ws.data.properties.find(p => p.id === id).notes, id), 'Mac, meanwhile', 'the second page shows the Mac\'s copy');
+  await beside.close();
+  await phone.unroute('**/api/workspace**');
+  await untilOnTheMac(m => m.data.properties.find(p => p.id === id).notes === 'Still open in the first page', 'The open page\'s own edit, once it could reach the Mac', 30000);
+
   step('7');
   // 7. The Mac's own desktop browser sits beside its server and keeps nothing in the browser.
   assert.equal(await desktop.evaluate(async () => (await indexedDB.databases()).some(d => d.name === 'tiksi-unsent')), false, 'the desktop browser on the Mac keeps no unsent copy');
   assert.equal(await phone.evaluate(async () => (await indexedDB.databases()).some(d => d.name === 'tiksi-files')), false, 'the phone still keeps no project store of its own');
 
   await browser.close(); browser = null;
-  console.log('ok   ' + name + ': the phone bar shows the save state; a hidden page sends at once; unsent edits and photos survive a dropped tab and go through review when the Mac moved on');
+  console.log('ok   ' + name + ': the phone bar shows the save state; a hidden page sends at once; unsent edits and photos survive a dropped tab and go through review when the Mac moved on; an open page keeps its own');
 }
 
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(url)).ok) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
   // One browser's run is stopped after five minutes, naming the step it was in.
   const limited = work => { let timer; return Promise.race([work, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('The run did not finish; it was in step ' + lastStep)), 300000); })]).finally(() => clearTimeout(timer)); };
-  await limited(run('chromium', chromium, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }));
+  // E2E_ONLY=webkit (or chromium) runs one of the two, for a closer look at one engine.
+  const only = process.env.E2E_ONLY;
+  if (only !== 'webkit') await limited(run('chromium', chromium, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }));
   // Safari's engine with the iPhone profile, where it is installed (CI installs Chromium only).
-  let safari = true;
-  try { await (await webkit.launch()).close(); } catch (error) { safari = false; console.log('SKIP WebKit with the iPhone profile: that browser is not installed here'); }
+  let safari = only !== 'chromium';
+  if (safari) try { await (await webkit.launch()).close(); } catch (error) { safari = false; console.log('SKIP WebKit with the iPhone profile: that browser is not installed here'); }
   if (safari) await limited(run('webkit', webkit, devices['iPhone 14']));
   assert.deepEqual(errors, []);
 } catch (error) {
