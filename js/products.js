@@ -5,7 +5,7 @@ import { ws, uid, touch, fmtMoney, readMoney, escapeHtml, allScopeItems, activeP
 import { icon } from './icons.js';
 import { openResearch, safeResearchUrl, researchApi } from './research.js';
 import { diskWorkspace } from './disk-workspace.js';
-import { openedWords } from './documentcenter.js';
+import { openedWords } from './open-words.js';
 
 const CATEGORIES = ['appliance', 'plumbing', 'lighting', 'flooring', 'tile', 'cabinetry', 'hardware', 'hvac', 'electrical', 'lumber', 'windows-doors', 'paint', 'other'];
 const STALE_DAYS = 90;

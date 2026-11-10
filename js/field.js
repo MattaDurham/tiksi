@@ -269,7 +269,8 @@ async function addCapturedPhoto(file) {
     const rec = await addPhotoFromFile(prop, file);
     const canPin = (prop.walls || []).length || (prop.scans || []).length;
     captureNote = canPin ? '' : 'Photo added to PHOTOS.';
-    location.hash = canPin ? '#/model?pin=' + encodeURIComponent(rec.id) : '#/photos?select=' + encodeURIComponent(rec.id);
+    // one=1: MODEL places this photo and stops, never moving on to an older unpinned one.
+    location.hash = canPin ? '#/model?pin=' + encodeURIComponent(rec.id) + '&one=1' : '#/photos?select=' + encodeURIComponent(rec.id);
   } catch (e) {
     captureNote = 'The photo could not be added: ' + (e.message || e);
     show();

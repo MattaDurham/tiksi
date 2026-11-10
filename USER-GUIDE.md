@@ -787,7 +787,7 @@ On a phone Tiksi opens on the model, full screen, with one side panel behind the
 
 **DOCUMENTS on a phone.** Sheets and saved documents are for looking at: arrange sheets and save PDFs on the Mac. Product documents in the project folder open on the Mac running Tiksi.
 
-**PHOTO TO 3D on a phone.** TAKE A PHOTO counts the photos taken so far and goes straight back to the camera for the next one.
+**PHOTO TO 3D on a phone.** The camera takes one photo per tap. TAKE A PHOTO then reads TAKE ANOTHER PHOTO with the count so far; CLEAR SELECTION starts the count again.
 
 > **Good to know:** A phone keeps only what it has not sent yet; the Mac holds the project. The save state in the bar says whether everything has reached it.
 

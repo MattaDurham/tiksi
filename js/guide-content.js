@@ -463,7 +463,7 @@ export const chapters = [
       ['PROJECTS on a phone', 'Scope items stack as cards with their numbers labelled. Removing an item asks first, since PROJECTS has no undo.'],
       ['SCHEDULE on a phone', 'Tap a bar for its dates and slack; the line above the chart shows them.'],
       ['DOCUMENTS on a phone', 'Sheets and saved documents are for looking at: arrange sheets and save PDFs on the Mac. Product documents in the project folder open on the Mac running Tiksi.'],
-      ['PHOTO TO 3D on a phone', 'TAKE A PHOTO counts the photos taken so far and goes straight back to the camera for the next one.'],
+      ['PHOTO TO 3D on a phone', 'The camera takes one photo per tap. TAKE A PHOTO then reads TAKE ANOTHER PHOTO with the count so far; CLEAR SELECTION starts the count again.'],
     ],
     note: 'A phone keeps only what it has not sent yet; the Mac holds the project. The save state in the bar says whether everything has reached it.',
     related: ['photos', 'model', 'settings'],

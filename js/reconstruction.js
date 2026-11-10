@@ -32,8 +32,9 @@ async function api(path, options = {}) {
 async function json(path, options) { return (await api(path, options)).json(); }
 function setMessage(text) { message = text; if (root) root.querySelector('.rc-message').textContent = text; }
 function selectedCount() { return files.length + galleryIds.size; }
+// Returns how many new photos it took (not counting refused or repeated files).
 function addFiles(list) {
-  const invalid = [];
+  const invalid = [], before = files.length;
   for (const file of Array.from(list || [])) {
     if (!TYPES.test(file.name)) { invalid.push(file.name); continue; }
     if (file.size > (capabilities?.maxImageBytes || 60 * 1048576)) { invalid.push(file.name + ' exceeds 60 MB'); continue; }
@@ -41,6 +42,7 @@ function addFiles(list) {
   }
   if (invalid.length) setMessage('Not added: ' + invalid.join(', ') + '. Use original JPEG, PNG, HEIC/HEIF or TIFF photographs.');
   renderSelection();
+  return files.length - before;
 }
 function renderSelection() {
   if (!root) return;
@@ -239,7 +241,7 @@ async function review() {
 export function mount(container) {
   root = container; property = activeProperty(); mountEpoch++;
   if (!property) {
-    root.innerHTML = '<div class="view-scroll"><span class="view-title">PHOTO TO 3D</span><p>Create a property from the PROPERTY selector before reconstructing a model.</p></div>';
+    root.innerHTML = '<div class="view-scroll"><span class="view-title">PHOTO TO 3D</span><p>Create a property with NEW PROPERTY under FILE before reconstructing a model.</p></div>';
     return;
   }
   files = []; galleryIds.clear(); capabilities = null; message = '';
@@ -272,14 +274,15 @@ export function mount(container) {
   root.querySelector('[data-action=camera]').onclick = () => camera.click();
   for (const input of [upload, camera]) input.onchange = () => {
     if (!busy) {
-      addFiles(input.files);
-      // A phone camera hands back one photo a trip: the button says how many so far and goes
-      // straight back for the next.
-      if (input === camera && input.files.length) { cameraShots += input.files.length; root.querySelector('[data-action=camera]').textContent = 'Take another photo (' + cameraShots + ' taken)'; }
+      const took = addFiles(input.files);
+      // A phone camera hands back one photo a trip: the button says how many it has taken so far
+      // and is ready for the next tap.
+      if (input === camera && took) { cameraShots += took; cameraLabel(); }
     }
     input.value = '';
   };
-  root.querySelector('[data-action=clear]').onclick = () => { files = []; galleryIds.clear(); renderSelection(); renderGallery(); };
+  const cameraLabel = () => { root.querySelector('[data-action=camera]').textContent = cameraShots ? 'Take another photo (' + cameraShots + ' taken)' : 'Take a photo'; };
+  root.querySelector('[data-action=clear]').onclick = () => { files = []; galleryIds.clear(); cameraShots = 0; cameraLabel(); renderSelection(); renderGallery(); };
   root.querySelector('[data-action=start]').onclick = reconstruct;
   root.querySelector('.rc-job-select').onchange = event => { clearPreview(); job = jobs.find(j => j.id === event.target.value) || null; renderJob(); };
   renderSelection(); renderGallery(); renderJobs(); renderJob();

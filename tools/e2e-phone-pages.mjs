@@ -40,7 +40,8 @@ async function part(label, name, fn) {
 async function startServer() {
   const state = await mkdtemp(tmpdir() + '/tiksi-phone-pages-test-');
   const socket = net.createServer();
-  await new Promise(resolve => socket.listen(Number(process.env.E2E_APP_PORT) || 0, '127.0.0.1', resolve));
+  // Several servers start in turn here, so each takes a free port of its own (not E2E_APP_PORT).
+  await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve));
   const port = socket.address().port;
   await new Promise(resolve => socket.close(resolve));
   const child = spawn('python3', ['tools/serve.py', '--port', String(port), '--state-dir', state], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -157,6 +158,13 @@ async function run(label, engine, profile) {
       // Capture a photo: the camera, then MODEL asks where it was taken; DONE stops.
       await go(page, url, 'photos');
       await openPanel(page);
+      // An older photo waits unpinned: placing the new one must never move it.
+      const older = await page.evaluate(async bytes => {
+        const s = await import('/js/store.js'), ps = await import('/js/photos-store.js');
+        const rec = await ps.addPhotoFromFile(s.activeProperty(), new File([new Uint8Array(bytes)], 'older.jpg', { type: 'image/jpeg' }));
+        rec.roomId = s.activeProperty().rooms[0]?.id || ''; rec.elementIds = s.activeProperty().walls[0] ? [s.activeProperty().walls[0].id] : []; s.touch();
+        return { id: rec.id, roomId: rec.roomId, elementIds: rec.elementIds };
+      }, [...await jpeg(page)]);
       const photosBefore = await page.evaluate(async () => (await import('/js/store.js')).activeProperty().photos.length);
       const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.locator('.fd-panel [data-capture=photo]').tap()]);
       check(chooser.element ? (await chooser.element().getAttribute('capture')) === 'environment' : true, label + ': TAKE A PHOTO opens the camera');
@@ -168,6 +176,20 @@ async function run(label, engine, profile) {
       check((await page.locator('.fd-task span').textContent()) === 'Tap where this photo was taken.', label + ': the photo joins PHOTOS and MODEL asks where it was taken');
       const done = await page.locator('.fd-task-done').boundingBox();
       check(done && done.width >= 44 && done.height >= 44, label + ': DONE is a 44-point target');
+      // Two taps on the model: the first places the new photo; the second must not move another.
+      const end = Date.now() + 240000;
+      while (!(await page.evaluate(async () => (await import('/js/viewer3d.js')).viewerIdle())) && Date.now() < end) await page.waitForTimeout(250);
+      const newId = await page.evaluate(() => decodeURIComponent((location.hash.match(/pin=([^&]+)/) || [])[1] || '')) || await page.evaluate(async () => (await import('/js/store.js')).activeProperty().photos.at(-1).id);
+      await page.touchscreen.tap(W / 2, H * 0.55);
+      await page.waitForTimeout(800);
+      await page.touchscreen.tap(W / 2 + 40, H * 0.6);
+      await page.waitForTimeout(800);
+      const after = await page.evaluate(async ([o, n]) => { const p = (await import('/js/store.js')).activeProperty(); const a = p.photos.find(x => x.id === o), b = p.photos.find(x => x.id === n); return { olderPin: a && a.pin, olderRoom: a && a.roomId, olderEls: a && a.elementIds, newPinned: !!(b && b.pin), tool: (await import('/js/viewer3d.js')).fieldState().tool, banner: !document.querySelector('.fd-task').hidden }; }, [older.id, newId]);
+      check(after.newPinned && !after.olderPin && after.olderRoom === older.roomId && JSON.stringify(after.olderEls) === JSON.stringify(older.elementIds), label + ': a tap places the new photo, and a second tap moves no other photo (' + JSON.stringify(after) + ')');
+      check(after.tool === 'select' && !after.banner, label + ': after the photo is placed MODEL leaves pin mode and the banner goes');
+      // DONE stops placing before any tap.
+      await page.evaluate(async id => { location.hash = '#/model?pin=' + encodeURIComponent(id) + '&one=1'; }, newId);
+      await page.locator('.fd-task:not([hidden])').waitFor({ timeout: 60000 });
       await page.locator('.fd-task-done').tap();
       await page.waitForFunction(() => document.querySelector('.fd-task').hidden, null, { timeout: 10000 });
       check(await page.evaluate(async () => (await import('/js/viewer3d.js')).fieldState().tool) === 'select', label + ': DONE stops placing the photo');
@@ -364,6 +386,24 @@ async function run(label, engine, profile) {
       await page.evaluate(async () => { const s = await import('/js/store.js'); delete s.ws.data.products[0].priceCheck; s.touch(); });
     });
 
+    await part(label, 'hidden stays hidden', async () => {
+      await go(page, url, 'reconstruct');
+      const open = await page.locator('.rc-open-model').evaluate(e => ({ hidden: e.hidden, shown: getComputedStyle(e).display !== 'none' }));
+      check(open.hidden && !open.shown, label + ': PHOTO TO 3D keeps OPEN MODEL hidden until there is a model (' + JSON.stringify(open) + ')');
+      await go(page, url, 'projects');
+      const clear = await page.locator('#proj-clear').evaluate(e => ({ hidden: e.hidden, shown: getComputedStyle(e).display !== 'none' }));
+      check(clear.hidden && !clear.shown, label + ': PROJECTS keeps its filter CLEAR hidden with no filter (' + JSON.stringify(clear) + ')');
+      // A tap on the in-program label flips the checkbox and does not open the card.
+      const cardEl = page.locator('#proj-list .proj-card:not(.active)').first();
+      const id = await cardEl.getAttribute('data-id');
+      const tap = await cardEl.locator('.bd-sel-tap').boundingBox();
+      const was = await page.evaluate(async id => (await import('/js/store.js')).ws.data.projects.find(p => p.id === id).selected, id);
+      await page.touchscreen.tap(tap.x + 3, tap.y + 3);
+      await page.waitForTimeout(400);
+      const now = await page.evaluate(async id => { const p = (await import('/js/store.js')).ws.data.projects.find(p => p.id === id); return { sel: p.selected, open: !!document.querySelector('#proj-list .proj-card.active[data-id="' + id + '"]') || document.querySelector('#proj-detail [data-f=name]')?.value === p.name }; }, id);
+      check(now.sel === !was && !now.open, label + ': a tap at the edge of a card\'s checkbox flips it and does not open the card (' + JSON.stringify(now) + ')');
+    });
+
     await part(label, 'PHOTO TO 3D', async () => {
       // ---------- PHOTO TO 3D ----------
       await go(page, url, 'reconstruct');
@@ -371,6 +411,10 @@ async function run(label, engine, profile) {
       check(await camInput.evaluate(i => i.multiple && i.getAttribute('capture') === 'environment'), label + ': the PHOTO TO 3D camera can hand over several photos');
       await camInput.setInputFiles({ name: 'room-1.jpg', mimeType: 'image/jpeg', buffer: await jpeg(page) });
       check(await page.locator('[data-action=camera]').textContent() === 'Take another photo (1 taken)', label + ': after a photo the camera button counts it and offers the next');
+      await camInput.setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('not a photo') });
+      check(await page.locator('[data-action=camera]').textContent() === 'Take another photo (1 taken)', label + ': a refused file is not counted');
+      await page.locator('[data-action=clear]').tap();
+      check(await page.locator('[data-action=camera]').textContent() === 'Take a photo', label + ': CLEAR SELECTION starts the count again');
     });
 
     check(!errors.length, label + ': no page errors' + (errors.length ? ' (' + errors.slice(0, 2).join(' | ') + ')' : ''));
@@ -381,7 +425,42 @@ async function run(label, engine, profile) {
   }
 }
 
+// The Mac's pages, with a mouse: none of the phone's changes show there.
+async function desktop() {
+  console.log('-- desktop');
+  const server = await startServer();
+  const { url } = server;
+  const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+  try {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    context.setDefaultTimeout(20000); context.setDefaultNavigationTimeout(120000);
+    const page = await context.newPage();
+    page.on('dialog', d => (d.type() === 'beforeunload' ? d.accept() : d.dismiss()).catch(() => {}));
+    await page.goto(url + '/#/projects');
+    await page.waitForFunction(() => /SAVED/.test(document.querySelector('#save-status')?.textContent || ''), null, { timeout: 60000 });
+    await loadDemo(page, url);
+    await part('desktop', 'pages', async () => {
+      check(!(await page.evaluate(() => document.documentElement.classList.contains('touch') || document.documentElement.classList.contains('phone'))), 'desktop: a computer is neither touch nor phone');
+      await go(page, url, 'projects');
+      await page.locator('#proj-list .proj-card').first().click();
+      await page.locator('#items-table tr[data-item]').first().waitFor();
+      const del = await page.locator('#items-table .row-del').first().evaluate(b => { const cs = getComputedStyle(b); return { bg: cs.backgroundColor, border: cs.borderTopWidth, opacity: cs.opacity, w: b.getBoundingClientRect().width }; });
+      check((del.bg === 'rgba(0, 0, 0, 0)' || del.bg === 'transparent') && del.border === '0px' && del.opacity === '0' && Math.round(del.w) === 22, 'desktop: a scope item\'s remove control is the faint 22-point mark it was, no grey box (' + JSON.stringify(del) + ')');
+      await page.evaluate(async () => { const s = await import('/js/store.js'); for (const p of s.ws.data.projects) p.selected = true; s.touch(); });
+      await go(page, url, 'schedule');
+      await page.locator('#gantt .gantt-svg').waitFor();
+      const sched = await page.evaluate(() => ({ strip: !!document.querySelector('#gantt-detail'), stops: document.querySelectorAll('#gantt [tabindex]').length, rows: document.querySelectorAll('#gantt .g-rowg').length, sep: [...document.querySelectorAll('#gantt line')].find(l => l.getAttribute('y1') === '0' && l.getAttribute('x1') === l.getAttribute('x2'))?.getAttribute('x1') }));
+      check(!sched.strip && sched.stops === 0 && sched.rows > 0 && sched.sep === '236', 'desktop: SCHEDULE has no new strip, no new tab stops and its full name column (' + JSON.stringify(sched) + ')');
+      await go(page, url, 'documents');
+      check(await page.locator('[data-toolbar] [data-touch-viewer]').count() === 0, 'desktop: DOCUMENTS keeps its layout tools');
+      check(!(await page.locator('#topbar .fd-return').isVisible()), 'desktop: no PHONE LAYOUT button at full width');
+    });
+    await context.close();
+  } finally { await browser.close(); await server.stop(); }
+}
+
 const { defaultBrowserType, ...iphone } = devices['iPhone 14 Pro'];
+await desktop();
 await run('chromium', chromium, { viewport: { width: W, height: H }, isMobile: true, hasTouch: true, deviceScaleFactor: 3 });
 const want = process.env.E2E_PHONE_WEBKIT || '';
 if (want !== 'skip') {

@@ -347,7 +347,8 @@ function setStatus(p, status) {
 function bindList(list, v) {
   const open = id => { activeProjectId = id; renderList(); renderDetail(projectById(id)); };
   list.querySelectorAll('.card, .sub-row').forEach(c => c.onclick = e => {
-    if (e.target.matches('input')) return;
+    // The in-program checkbox and the finger-sized label around it flip that, not open the card.
+    if (e.target.closest('input, label')) return;
     open(c.dataset.id);
   });
   list.querySelectorAll('[data-sel]').forEach(cb => cb.onchange = () => {

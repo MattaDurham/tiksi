@@ -10,6 +10,8 @@ import {
 } from './store.js';
 import { icon } from './icons.js';
 import { touchDevice } from './render-quality.js';
+import { openedWords } from './open-words.js';
+export { openedWords };
 import { diskWorkspace } from './disk-workspace.js';
 import {
   PAPERS, SCALES, STYLES, KINDS, SCHEDULE_SOURCES, ELEVATION_SIDES, paperOf, drawingArea, fitScale, nextScale, scaleLabel,
@@ -162,13 +164,6 @@ function renderLists() {
     try { const r = await diskWorkspace.openProjectPath(prop, p.documents[+i].path); setStatus(openedWords(r, p.documents[+i].path)); }
     catch (e) { setStatus(e.message || 'Could not open the file.'); }
   });
-}
-
-// What "open on this Mac" did: opened the document, or (for an app, script, shortcut, web page
-// or a file with no extension) only showed it in Finder.
-export function openedWords(r, asked) {
-  const what = (r && r.path && r.path !== '.' ? r.path : r && r.folder) || asked || 'the project folder';
-  return r && r.action === 'shown' ? 'Showed ' + what + ' in Finder (not a document, so it was not opened).' : 'Opened ' + what + ' on this Mac.';
 }
 
 // The newest one-pager version opens in the middle like any saved document.

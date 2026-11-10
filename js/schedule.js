@@ -23,6 +23,8 @@ function render() {
   const mine = propertyProjects();
   // The same layout the one-pager reads: program.js.
   const { plans, days, lastDay } = programSchedule(mine, start);
+  // A finger taps a bar for its details; a mouse keeps the hover tooltip, as before.
+  const finger = touchDevice();
   // The chart needs a week of width; the headline figure is the program's own span.
   const chartEnd = Math.max(7, days);
 
@@ -62,7 +64,7 @@ function render() {
         <span><span class="sw" style="background:rgba(255,255,255,.06); border:1px solid var(--line-2)"></span>weekend</span>
         <span><span class="sw" style="background:var(--red); width:2px"></span>today</span>
       </div>
-      <div class="gantt-detail" id="gantt-detail" role="status" ${plans.length ? '' : 'hidden'}>${plans.length ? 'Tap a bar for its dates and slack.' : ''}</div>
+      ${finger && plans.length ? '<div class="gantt-detail" id="gantt-detail" role="status">Tap a bar for its dates and slack.</div>' : ''}
       <div class="gantt-wrap" id="gantt"></div>
       ${plans.map(x => criticalPathLine(x)).join('')}
       ${plans.length === 0 ? `<div class="empty-state" style="margin-top:14px"><span class="empty-ic">${icon('schedule')}</span><b>No schedulable work</b>
@@ -76,7 +78,7 @@ function render() {
 
   if (plans.length) {
     const gantt = el.querySelector('#gantt');
-    gantt.innerHTML = ganttSvg(plans, start, chartEnd, smallScreen(), touchDevice());
+    gantt.innerHTML = ganttSvg(plans, start, chartEnd, smallScreen(), finger);
     // A bar's dates and slack were a hover tooltip only: a tap (or Enter) shows them above the chart.
     const pick = row => {
       if (!row) return;
@@ -84,8 +86,9 @@ function render() {
       row.classList.add('on');
       el.querySelector('#gantt-detail').textContent = row.dataset.detail;
     };
-    gantt.onclick = e => pick(e.target.closest('[data-detail]'));
-    gantt.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { const row = e.target.closest('[data-detail]'); if (row) { e.preventDefault(); pick(row); } } };
+    // On a computer the hover tooltip stays the way to read a bar, as before.
+    if (finger) gantt.onclick = e => pick(e.target.closest('[data-detail]'));
+    if (finger) gantt.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { const row = e.target.closest('[data-detail]'); if (row) { e.preventDefault(); pick(row); } } };
   } else el.querySelector('#gantt').remove();
 }
 
@@ -188,7 +191,7 @@ function ganttSvg(plans, startIso, programEnd, narrow = false, finger = false) {
       const yc = y + ROWH / 2;
       const name = r.it.name.length > NAMECH ? r.it.name.slice(0, NAMECH - 1) + '…' : r.it.name;
       const detail = `${r.it.name}: ${r.it.durationDays} day${Number(r.it.durationDays) === 1 ? '' : 's'}, ${fmtDate(addDays(startIso, off + s.es))} to ${fmtDate(lastWorkDay(startIso, off + s.ef))}, ${s.critical ? 'on the critical path' : 'slack ' + Math.round(s.slack * 10) / 10 + ' day' + (Math.round(s.slack * 10) / 10 === 1 ? '' : 's')}`;
-      svg += `<g class="g-rowg g-item" data-detail="${escapeHtml(detail)}" tabindex="0" role="button" aria-label="${escapeHtml(detail)}"><rect class="g-row" x="0" y="${y}" width="${width}" height="${ROWH}"/>`;
+      svg += `<g class="g-rowg${finger ? ' g-item" data-detail="' + escapeHtml(detail) + '" tabindex="0" role="button" aria-label="' + escapeHtml(detail) : ''}"><rect class="g-row" x="0" y="${y}" width="${width}" height="${ROWH}"/>`;
       svg += `<text class="g-label" x="24" y="${yc + 3.5}" fill="#8f9ca8" font-size="10.5">${escapeHtml(name)}</text>`;
       // Slack whisker.
       if (s.slack > 0.001) {

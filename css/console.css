@@ -530,6 +530,7 @@ table.grid select[multiple] option:checked { background: var(--accent-soft); col
 .dep-wrap.open select { display: block; }
 table.grid .row-del {
   opacity: 0; cursor: pointer; color: var(--faint); font-family: var(--mono); font-size: 11px;
+  background: none; border: 0; padding: 0;   /* a <button>: none of the browser's own box */
   display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 4px;
   transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease), background var(--dur) var(--ease);
 }
@@ -730,7 +731,7 @@ a.btn { text-decoration: none; }
   box-shadow: var(--lift), var(--shadow-1);
 }
 .gantt-svg { display: block; }
-.gantt-svg .g-item { cursor: pointer; outline: none; }
+html.touch .gantt-svg .g-item { cursor: pointer; outline: none; }
 .gantt-svg .g-item.on .g-row, .gantt-svg .g-item:focus-visible .g-row { fill: rgba(232, 151, 58, 0.09); }
 .gantt-detail { min-height: 44px; display: flex; align-items: center; margin-bottom: 8px; padding: 8px 12px; border-left: 2px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); font-size: 13px; line-height: 1.4; color: var(--ink); }
 .gantt-detail[hidden] { display: none; }
@@ -1219,24 +1220,24 @@ html.touch:not([data-view=plan]):not([data-view=model]) #view :is(.btn, .tb-btn,
 html.touch:not([data-view=plan]):not([data-view=model]) #view :is(.btn, .tb-btn, .seg-btn, .ps-chip, .mv-chip-btn, .row-del, .it-toggle) { min-width: 44px; }
 html.touch:not([data-view=plan]):not([data-view=model]) #view :is(input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea),
 html.touch dialog :is(input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea) { font-size: 16px !important; }
-html.touch:not([data-view=plan]):not([data-view=model]) #view :is(.btn, .seg-btn, .ps-chip, .mv-chip-btn) { display: inline-flex; align-items: center; justify-content: center; }
+html.touch:not([data-view=plan]):not([data-view=model]) #view :is(.btn, .seg-btn, .ps-chip, .mv-chip-btn):not([hidden]) { display: inline-flex; align-items: center; justify-content: center; }
 /* A small checkbox gets a finger-sized label around it to tap. */
-html.touch #view :is(.it-done-tap, .bd-sel-tap) { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; margin: -6px 0; cursor: pointer; }
+html.touch #view :is(.it-done-tap, .bd-sel-tap):not([hidden]) { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; margin: -6px 0; cursor: pointer; }
 html.touch #view :is(.it-done-tap, .bd-sel-tap) input { width: 22px; height: 22px; margin: 0; }
 /* Nothing a finger needs is shown only under a mouse. */
 html.touch table.grid .row-del, html.touch #items-table .it-links.none { opacity: 1; }
 /* Inline links that act as buttons (PRODUCTS' maker and vendor links). */
-html.touch #view a.p-link { display: inline-flex; align-items: center; min-height: 44px; min-width: 44px; }
+html.touch #view a.p-link:not([hidden]) { display: inline-flex; align-items: center; min-height: 44px; min-width: 44px; }
 html.touch dialog .btn { min-height: 44px; }
 html.touch .file-dialog select { min-height: 44px; }
 html.touch .file-dialog input[type=checkbox] { width: 22px; height: 22px; }
 html.touch .file-dialog label { min-height: 44px; }
 /* A checkbox in a label of its own words (PROJECTS' "In the program only"), and a row of radio
    choices (MEASURE's confidence): the whole label is the target. */
-html.touch #view :is(.pv-check, .ms-seg label) { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+html.touch #view :is(.pv-check, .ms-seg label):not([hidden]) { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
 html.touch #view :is(.pv-check, .ms-seg label) input { width: 20px; height: 20px; }
 /* The GUIDE's map of the views: each name is a link to that view. */
-html.touch #view .guide-view-map a { display: inline-flex; align-items: center; min-height: 44px; min-width: 44px; }
+html.touch #view .guide-view-map a:not([hidden]) { display: inline-flex; align-items: center; min-height: 44px; min-width: 44px; }
 
 @media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
   /* BUDGET's project tables keep the name, the three totals and the checkbox on a phone. */
