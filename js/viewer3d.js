@@ -1325,6 +1325,7 @@ function resize() {
   camera.updateProjectionMatrix();
   if (match) applyMatchFrame();
   for (const m of measures) m.line.material.resolution.set(w * pr, h * pr);
+  renderToolStrip();   // the strip belongs to the phone layout, which a resize can enter or leave
   requestRender(2);
 }
 
@@ -1540,9 +1541,11 @@ function onPointerUp(e) {
   if (tool === 'pin') return placePin(e);
   if (tool === 'note') return placeNote(e);
   if (match && match.points && match.points.mode === 'model') return addMatchModelPoint(e);
-  const hit = pick(e);
+  // The phone layout has no inspector, so a tap can only open a photo pin or a note: only those
+  // markers are tested, never the model's and the scans' triangles for a result nobody uses.
+  const hit = pick(e, fieldLayout() ? { markersOnly: true } : undefined);
   if (!hit || hit.kind === 'ground') { setSelection(null); return; }
-  // The phone layout has no inspector: a tap opens a photo pin and otherwise clears the selection.
+  if (fieldLayout() && hit.kind === 'note') { setSelection(null); openNoteEditor({ note: noteById(hit.id), at: { x: e.clientX, y: e.clientY } }); return; }
   if (fieldLayout() && hit.kind !== 'pin') { setSelection(null); return; }
   if (hit.kind === 'pin') { setSelection({ kind: 'pin', id: hit.id }); const ph = photoById(prop, hit.id); if (ph && ph.kind === 'document') flyToSheet(hit.id); else openLightbox(hit.id); return; }
   if (hit.kind === 'camera') { startMatch(hit.id); return; }
@@ -2929,7 +2932,7 @@ function addNote(hit, text) {
   buildNote(note);
   if (tool === 'note') setTool('select');
   setSelection({ kind: 'note', id: note.id });
-  toast('Note pinned' + (noteWhere(note) ? ' in ' + noteWhere(note) : '') + '. Right-click it to edit, move or delete.', 'ok');
+  toast('Note pinned' + (noteWhere(note) ? ' in ' + noteWhere(note) : '') + (fieldLayout() ? '. Tap it to edit or delete it.' : '. Right-click it to edit, move or delete.'), 'ok');
   return note;
 }
 function deleteNote(id) {
@@ -2956,7 +2959,7 @@ function openNoteEditor(opts) {
   box.className = 'v-note-edit';
   box.innerHTML = `<label>${note ? 'EDIT NOTE' : 'NEW NOTE'}</label>
     <textarea rows="3" maxlength="2000" placeholder="Type the note. Enter saves; Shift+Enter adds a line."></textarea>
-    <div class="v-note-actions"><button class="btn small" data-cancel>CANCEL</button><button class="btn small primary" data-save>${note ? 'SAVE' : 'PIN NOTE'}</button></div>`;
+    <div class="v-note-actions">${note && fieldLayout() ? '<button class="btn small danger" data-delete>DELETE</button>' : ''}<button class="btn small" data-cancel>CANCEL</button><button class="btn small primary" data-save>${note ? 'SAVE' : 'PIN NOTE'}</button></div>`;
   wrapEl.appendChild(box);
   const rect = wrapEl.getBoundingClientRect();
   const x = THREE.MathUtils.clamp(opts.at.x - rect.left + 12, 8, Math.max(8, rect.width - box.offsetWidth - 8));
@@ -2983,6 +2986,9 @@ function openNoteEditor(opts) {
   };
   box.querySelector('[data-save]').onclick = save;
   box.querySelector('[data-cancel]').onclick = closeNoteEditor;
+  // The phone layout has no right-click menu and no inspector: deleting is here.
+  const del = box.querySelector('[data-delete]');
+  if (del) del.onclick = () => { closeNoteEditor(); deleteNote(note.id); };
   ta.focus();
   ta.setSelectionRange(ta.value.length, ta.value.length);
 }
@@ -3299,6 +3305,38 @@ function toast(msg, kind, ms) {
 function setHint(text) {
   if (!hud.hint) return;
   hud.hint.textContent = text || defaultHint();
+  renderToolStrip();
+}
+// The phone layout hides the hint line, the tool column and the inspector, and a phone has no
+// Esc key. While a tool or PHOTO MODE is on, a strip over the view says what a tap does and
+// has the way out: DONE (and CLEAR for measurements). Styled inline, like the notices.
+const STRIP_STYLE = 'position:absolute;left:12px;right:12px;bottom:calc(84px + env(safe-area-inset-bottom, 0px));z-index:6;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;background:rgba(9,12,15,0.92);border:1px solid var(--accent,#e8973a);color:var(--ink,#e9eef3);font:13px/1.35 var(--sans,sans-serif);';
+let toolStrip = null;
+function stripText() {
+  if (match) return 'PHOTO MODE: the photo is laid over the model from where it was taken.';
+  if (tool === 'measure') {
+    if (measureDraft) return 'MEASURE: tap the second point.';
+    const last = measures[measures.length - 1];
+    return last ? 'MEASURE: ' + fmtLen(last.a.distanceTo(last.b)) + '. Tap two more points for another.' : 'MEASURE: tap two points on any surface.';
+  }
+  if (tool === 'note') return movingNoteId && noteById(movingNoteId) ? 'MOVE NOTE: tap where the note belongs.' : 'NOTE: tap a surface to pin a note there.';
+  if (tool === 'pin') { const ph = pinPhotoId && photoById(prop, pinPhotoId); return ph ? 'PIN PHOTO: tap the wall or surface to hang "' + ph.name + '" on.' : 'PIN PHOTO: choose a photo on the PHOTOS page first.'; }
+  if (tool === 'move') return 'MOVE WALLS needs the desktop layout.';
+  return '';
+}
+function renderToolStrip() {
+  const text = wrapEl && fieldLayout() ? stripText() : '';
+  if (!text) { if (toolStrip) { toolStrip.remove(); toolStrip = null; } return; }
+  if (!toolStrip || toolStrip.parentElement !== wrapEl) {
+    toolStrip = document.createElement('div');
+    toolStrip.className = 'v-tool-strip'; toolStrip.setAttribute('role', 'status'); toolStrip.style.cssText = STRIP_STYLE;
+    wrapEl.appendChild(toolStrip);
+  }
+  const clear = tool === 'measure' && measures.length > 0;
+  toolStrip.innerHTML = `<span style="flex:1;min-width:0">${escapeHtml(text)}</span>${clear ? '<button type="button" class="btn small" data-strip-clear style="width:auto;padding:10px 12px">CLEAR</button>' : ''}<button type="button" class="btn small primary" data-strip-done style="width:auto;padding:10px 14px">DONE</button>`;
+  toolStrip.querySelector('[data-strip-done]').onclick = () => { if (match) endMatch(); else setTool('select'); };
+  const c = toolStrip.querySelector('[data-strip-clear]');
+  if (c) c.onclick = () => { clearMeasures(); renderToolCol(); renderToolStrip(); requestRender(2); };
 }
 function defaultHint() {
   if (mode === 'walk') return walkLocked ? 'WALK: WASD / arrows move, Shift runs, mouse looks. Esc releases the mouse.' : 'WALK: WASD / arrows move, Shift runs. Drag to look or click to capture the mouse. Esc exits.';
@@ -4227,7 +4265,7 @@ function addView() {
   const v = addSavedView(prop, '', viewState());
   activeViewId = v.id;
   touch(); renderViews();
-  toast('Saved the view "' + v.name + '" with its camera and tags. Double-click its tab to rename it.', 'ok');
+  toast('Saved the view "' + v.name + '" with its camera and tags.' + (fieldLayout() ? '' : ' Double-click its tab to rename it.'), 'ok');
   return v;
 }
 function goToView(id) {
@@ -4443,6 +4481,7 @@ function renderToolCol() {
     rebuildModel();setSelection(chosen==='design'?null:{kind:'scan',id:chosen});renderToolCol();touch();
   };
   on('before',()=>compare('before'));on('after',()=>compare('after'));
+  compareDesign = compare;
   tc.querySelectorAll('[data-scan]').forEach(b => b.onclick = () => setSelection({ kind: 'scan', id: b.dataset.scan }));
   tc.querySelectorAll('[data-level]').forEach(b => b.onclick = () => toggleLevel(b.dataset.level));
   tc.querySelectorAll('[data-tag]').forEach(b => b.onclick = () => toggleTag(b.dataset.tag));
@@ -4569,6 +4608,8 @@ function openModel(root) {
   for (const k of Object.keys(notices)) delete notices[k];
   appliedQuality = null; renderFailed = false;
   scanQueue = Promise.resolve();   // this visit's own queue (see loadScans)
+  toolStrip = null; rebuildQueued = false;
+  pinQueue.length = 0;   // pictures the last visit was still waiting to load
   mountId++;
 
   ensureRenderer();
@@ -4800,6 +4841,8 @@ export function unmount() {
   selection = null; hoverTarget = null; tween = null; pressed = null; dragLook = null; rightPress = null; movingNoteId = null;
 }
 
+let compareDesign = null;   // the BEFORE / AFTER switch (set where the tool column builds it)
+
 // ---------- phone layout (field.js) ----------
 // The phone layout hides the tool column, inspector and HUD; its side panel reads the view's
 // state and drives it through these calls.
@@ -4826,6 +4869,15 @@ export function fieldState() {
       return { min: sp.min, max: sp.max, step: sp.step, value: r.d, label: r.label, kinds: SECTION_KINDS.map(k => ({ id: k, label: SECTION_LABELS[k][0] + SECTION_LABELS[k].slice(1).toLowerCase(), on: s.kind === k })) };
     })(),
     levels: prop.levels.map(l => ({ id: l.id, label: l.name, on: !hidden.has(l.id) })),
+    // Marking up by tap: the tools the panel can switch on (the view shows what a tap does and
+    // a DONE button while one is on), and how many measurements are drawn.
+    tool,
+    tools: [{ id: 'measure', label: 'Measure', on: tool === 'measure' }, { id: 'note', label: 'Note', on: tool === 'note' }],
+    measures: measures.length,
+    // Scans not loaded because they are over this device's size limit; 'load-scan' loads one anyway.
+    tooLarge: prop.scans.filter(sc => scanState[sc.id] === 'too-large').map(sc => ({ id: sc.id, label: sc.name, detail: tooLargeText(sc) })),
+    // The before / after pair, when the property has one.
+    compare: prop.designComparison ? [{ id: 'before', label: 'Before', on: prop.designComparison.view === 'before' }, { id: 'after', label: 'After', on: prop.designComparison.view !== 'before' }] : [],
     // The quality this device draws at (a touch device's own choice; otherwise the property's).
     quality: QUALITY_NAMES.map(id => ({ id, label: id[0].toUpperCase() + id.slice(1), on: quality() === id })),
     // One switch per tag that holds something; Untagged only when objects sit on no tag.
@@ -4845,6 +4897,20 @@ export function fieldAction(kind, id, value) {
   }
   else if (kind === 'view') goToView(id);
   else if (kind === 'save-view') addView();
+  // Saved-view editing for the panel: `value` is the new name.
+  else if (kind === 'view-rename') { if (String(value || '').trim() && renameSavedView(prop, id, String(value).trim())) { touch(); renderViews(); } }
+  else if (kind === 'view-update') { if ((prop.savedViews || []).some(v => v.id === id)) { updateSavedView(prop, id, viewState()); activeViewId = id; touch(); renderViews(); toast('View updated.', 'ok'); } }
+  else if (kind === 'view-delete') { if ((prop.savedViews || []).some(v => v.id === id)) { deleteSavedView(prop, id); if (activeViewId === id) activeViewId = null; touch(); renderViews(); } }
+  // Tools by tap. Choosing the tool that is on switches it off.
+  else if (kind === 'tool') {
+    if (mode === 'walk') setMode('orbit');
+    if (id === tool || id === 'select') setTool('select');
+    else if (id === 'measure') setTool('measure');
+    else if (id === 'note') startNoteMode(null);
+  }
+  else if (kind === 'load-scan') loadScanAnyway(id);
+  else if (kind === 'clear-measures') { clearMeasures(); renderToolCol(); renderToolStrip(); requestRender(2); }
+  else if (kind === 'compare') { if (compareDesign && prop.designComparison && (id === 'before' || id === 'after')) compareDesign(id); }
   else if (kind === 'tag') toggleTag(id || UNTAGGED);
   else if (kind === 'level') toggleLevel(id);
   else if (kind === 'quality') {
