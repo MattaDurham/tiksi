@@ -182,7 +182,15 @@ installation's paths, service label and restart instructions in the private
 
 With Tailscale connected on both devices and the Mac awake, open
 `http://<Mac-Tailscale-IP>:8642/` on your phone. Tailscale Serve can optionally
-provide an HTTPS URL once Serve/HTTPS is enabled for the tailnet. The shell and
+provide an HTTPS URL once Serve/HTTPS is enabled for the tailnet: run
+`tailscale serve --bg 8642` on the Mac and add `--allowed-host <the Mac's name>.<tailnet>.ts.net`
+to the server's arguments, then open `https://<the Mac's name>.<tailnet>.ts.net/` on the phone.
+Over https the phone gets the share sheet, the clipboard, video fingerprints and installing
+as an app. Its browser keeps what it holds (unsent changes, view settings) per address, so
+let the phone send its changes over the old address first. Through a proxy on the Mac the
+server serves only requests that Tailscale Serve marks with a signed-in tailnet user; a
+request through Tailscale Funnel, which reaches the open internet, carries none and is refused.
+The shell and
 forms adapt to narrow screens; detailed model editing still benefits from a
 desktop. Both devices read and edit the same `.tiksi` files on the Mac. Each
 project gets its own folder, with original scans and photos embedded in its bundle;
@@ -207,6 +215,24 @@ that changed. A workspace saved before this moves its pictures on first load,
 byte for byte. A tab still running an older Tiksi is refused until it is reloaded.
 The static GitHub Pages edition retains its portable browser mode and is separate
 from the Mac's private files.
+
+The server sends the page's text compressed and addresses its libraries and style
+sheets by content fingerprint, so a browser keeps those without asking again. It
+answers byte ranges, so video plays and seeks without a whole download. A save
+that changes only records rewrites only the end of the project file (its originals
+stay where they are), and a restart re-reads records without fingerprinting every
+original again or making open pages reload. A page can send an original in pieces
+(`PUT /api/workspace/uploads/<hash>` with `X-Upload-Size` and `X-Upload-Offset`;
+`GET` on the same address says how far it got), ask which originals the Mac holds
+(`HEAD /api/workspace/blobs/<hash>`, or `POST /api/workspace/blobs/held`), ask for a
+smaller copy of a picture (`?size=256|512|1024|2048`), mark a save with a `saveId`
+so a repeat is not committed twice (`GET /api/workspace/saves?id=<id>`), and take a
+project whose file is gone for good off the list
+(`POST /api/workspace/unavailable/<id>/forget`; no file is touched). The runtime
+keeps the newest 50 catalog copies, then one a day for 90 days and one a month;
+stored originals nothing refers to go after 30 days. Model conversion keeps its
+newest 20 jobs within 2 GB and material research its newest 100 records, removing
+the oldest to make room. Successful reads are not logged.
 
 ### Live material and fixture sourcing
 
