@@ -76,10 +76,10 @@ try {
   check(/No one-pager saved yet/.test(await page.locator('.op-dlg-status').textContent()), 'the editor opens and says no version is saved');
   check((await page.inputValue('[data-f="headline"]')) === 'Test House' && /2 rooms/.test(await page.inputValue('[data-f="tagline"]')), 'the headline and tagline are drafted from the property');
   const summary = await page.inputValue('[data-f="summary"]');
-  check(/Kitchen refresh/.test(summary) && /\$32,000/.test(summary) && /13 working days from Nov 10, 2026/.test(summary) && /Acme Shaker cabinets/.test(summary), 'the summary names the scope, the likely cost, the schedule and a product');
+  check(/Kitchen refresh/.test(summary) && /\$32,000/.test(summary) && /13 calendar days, from Nov 10, 2026 to Nov 23, 2026/.test(summary) && /Acme Shaker cabinets/.test(summary), 'the summary names the scope, the likely cost, the schedule and a product');
   await page.waitForFunction(() => !!document.querySelector('.op-preview-page .op-hero img'));
   const pageText = await page.locator('.op-preview-page .op-page').innerText();
-  check(/Test House/.test(pageText) && /\$32,000/.test(pageText) && /\$25,000 to \$41,000/.test(pageText) && /13 working days/.test(pageText) && /2 rooms/.test(pageText) && /Shaker cabinets/.test(pageText), 'the page shows the headline, budget range, schedule, rooms and products');
+  check(/Test House/.test(pageText) && /\$32,000/.test(pageText) && /\$25,000 to \$41,000/.test(pageText) && /13 calendar days/.test(pageText) && /2 rooms/.test(pageText) && /Shaker cabinets/.test(pageText), 'the page shows the headline, budget range, schedule, rooms and products');
   check((await page.locator('.op-preview-page .op-plan svg polygon').count()) >= 2 && /LIVING ROOM/.test(await page.locator('.op-preview-page .op-plan').innerHTML()), 'the floor plan is drawn beside the text with its rooms named');
   check(/front\.jpg/.test(await page.locator('[data-op-hero] option').first().textContent()), 'the automatic picture is the site photo');
 

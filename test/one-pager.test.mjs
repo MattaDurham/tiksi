@@ -35,7 +35,7 @@ function house() {
 }
 store.ws.data = store.emptyWorkspace();
 const A = house();
-store.ws.data.properties.push(A);
+store.ws.data.properties.push(A, Object.assign(store.propertyTemplate('Another house'), { id: 'prop-other' }));
 store.ws.data.settings.activePropertyId = A.id;
 store.ws.data.settings.programStart = '2026-11-10';
 const it = (id, name, extra) => Object.assign({ id, name, qty: 1, unit: 'ea', low: 0, likely: 0, high: 0, durationDays: 0, deps: [], elementIds: [], notes: '', status: 'todo', doneAt: '' }, extra);
@@ -61,7 +61,7 @@ check(f.photos.length === 1 && f.renderings.length === 0, 'site photos are count
 const changed = op.draftOnePager(A, store.ws.data);
 const o = A.onePager;
 check(changed && o.headline === '12 Elm Street' && /2 rooms/.test(o.tagline), 'the draft names the property and its rooms in the tagline (' + o.tagline + ')');
-check(/Kitchen refresh/.test(o.summary) && /\$33,000/.test(o.summary) && /\$25,800 to \$42,500/.test(o.summary) && /13 working days from Nov 10, 2026/.test(o.summary) && /Acme Shaker cabinets/.test(o.summary), 'the summary says what the work is, what it costs and when, and names a product');
+check(/Kitchen refresh/.test(o.summary) && /\$33,000/.test(o.summary) && /\$25,800 to \$42,500/.test(o.summary) && /13 calendar days, from Nov 10, 2026 to Nov 23, 2026/.test(o.summary) && /Acme Shaker cabinets/.test(o.summary), 'the summary says what the work is, what it costs and when, and names a product');
 check(o.highlights[0] === 'Kitchen refresh: $33,000 likely' && o.highlights[1] === 'Pantry shelving: $600 likely', 'highlights list the projects with their likely cost (' + o.highlights.join(' / ') + ')');
 check(o.customized === false && o.draftedAt, 'a drafted record is not customized and says when it was drafted');
 check(op.draftOnePager(A, store.ws.data) === false, 'drafting again from the same project changes nothing');
@@ -74,6 +74,38 @@ const empty = store.propertyTemplate('Bare lot');
 store.ws.data.properties.push(empty);
 op.draftOnePager(empty, store.ws.data);
 check(empty.onePager.headline === 'Bare lot' && /A renovation at Bare lot/.test(empty.onePager.summary) && /fill in as the design takes shape/.test(empty.onePager.summary) && empty.onePager.highlights.length === 0, 'a property with nothing in it still gets a sensible first draft');
+
+// ---------- the one-pager prints BUDGET's totals and SCHEDULE's span ----------
+{
+  const program = await import('../js/program.js');
+  const sched = await import('../js/schedule.js');
+  const before = store.ws.data;
+  store.ws.data = store.emptyWorkspace();
+  const P = house();
+  store.ws.data.properties.push(P);
+  store.ws.data.settings.activePropertyId = P.id;
+  store.ws.data.settings.programStart = '2026-11-10';
+  const proj = (id, extra, items) => Object.assign({ id, name: id, propertyId: P.id, category: 'interior', status: 'scoped', parentId: '', priority: '', roomId: '', source: '', startDate: '', notes: '', items }, extra);
+  store.ws.data.projects.push(
+    proj('Bath', { selected: true }, [it('b1', 'Tile', { low: 9000, likely: 10000, high: 12000, durationDays: 8 })]),
+    // Starts a week into the program, so it runs side by side with the bath, not after it.
+    proj('Kitchen', { selected: true, startDate: '2026-11-17' }, [it('k1', 'Cabinets', { low: 18000, likely: 20000, high: 25000, durationDays: 5 })]),
+    // A selected punch list inside the bath: BUDGET counts it.
+    proj('Bath punch list', { selected: true, parentId: 'Bath' }, [it('s1', 'Caulk', { low: 150, likely: 200, high: 300, durationDays: 1 })]),
+    // No selected flag at all: BUDGET parks it.
+    proj('Porch', {}, [it('p1', 'Decking', { low: 4000, likely: 5000, high: 6000, durationDays: 20 })]),
+  );
+  const f = op.onePagerFacts(P, store.ws.data);
+  const budgetTotals = store.selectedTotals();
+  check(f.budget.likely === budgetTotals.likely && f.budget.low === budgetTotals.low && f.budget.high === budgetTotals.high && f.budget.likely === 30200,
+    'the one-pager costs what BUDGET totals: selected subprojects in, unflagged projects out (' + f.budget.likely + ' likely, BUDGET ' + budgetTotals.likely + ')');
+  const span = program.programSchedule(store.propertyProjects(), '2026-11-10').days;
+  check(f.days === 12 && span === 12, 'the one-pager spans what SCHEDULE lays out: projects side by side in calendar days (' + f.days + ' days; adding them up would give 34)');
+  check(f.finish === '2026-11-22', 'and finishes on SCHEDULE\'s finish date (' + f.finish + ')');
+  check(f.program.map(p => p.name).join('|') === 'Kitchen|Bath', 'the work named on the page is the selected projects (' + f.program.map(p => p.name).join('|') + ')');
+  check(sched.cpm === program.cpm, 'SCHEDULE and the one-pager share one critical-path calculation');
+  store.ws.data = before;
+}
 
 // ---------- the signature, the state and closing ----------
 const sig = () => op.projectSignature(store.projectSlice(A.id));
@@ -126,7 +158,7 @@ check(/<div xmlns="http:\/\/www.w3.org\/1999\/xhtml" class="op-page">/.test(html
 check(/Prepared for The Does &lt;family&gt;/.test(html) && /Studio &amp; Co/.test(html) && /hello@example.com/.test(html), 'client, author and contact are on the page, escaped');
 check(/<h1>12 Elm Street<\/h1>/.test(html) && /Version 1 · Nov 6, 2026/.test(html), 'the headline and the version label are printed');
 check(/<img src="data:image\/jpeg;base64,AAAA" alt=""\/>/.test(html) && /<div class="op-plan"><svg/.test(html), 'the picture goes at the top and the plan beside the text');
-check(/\$25,000/.test(html) && /\$20,000 to \$32,000/.test(html) && /10 working days/.test(html) && /from Nov 10, 2026/.test(html) && /2 rooms · 215 sf/.test(html), 'budget, schedule and rooms are printed (' + (html.match(/<b>[^<]*<\/b>/g) || []).slice(0, 4).join(' ') + ')');
+check(/\$25,000/.test(html) && /\$20,000 to \$32,000/.test(html) && /About 10 calendar days/.test(html) && /Nov 10, 2026 to Nov 20, 2026/.test(html) && /2 rooms · 215 sf/.test(html), 'budget, schedule and rooms are printed (' + (html.match(/<b>[^<]*<\/b>/g) || []).slice(0, 4).join(' ') + ')');
 check(/Specified products/.test(html) && /Shaker cabinets <span>Acme S-12<\/span>/.test(html), 'specified products are listed with brand and model');
 B.onePager.show.budget = false; B.onePager.show.products = false; B.onePager.show.plan = false;
 const html2 = page.onePagerHtml(B, store.ws.data, { hero: { plan: true }, planSvg: '<svg xmlns="http://www.w3.org/2000/svg"></svg>' }, { version: 'Draft' });

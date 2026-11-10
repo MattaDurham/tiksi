@@ -5,56 +5,13 @@ import {
   ws, touch, escapeHtml, fmtDate, addDays, dayDiff, isoToday, projectLabel, propertyProjects,
 } from './store.js';
 import { icon } from './icons.js';
+import { programSchedule } from './program.js';
 
 let el = null;
 export function mount(root) { el = root; render(); }
 export function unmount() { el = null; }
 
-// ---------- CPM ----------
-export function cpm(items) {
-  // items: [{id, durationDays, deps[]}] -> map id -> {es, ef, ls, lf, slack, critical}
-  const sched = Object.create(null), byId = Object.create(null);
-  const list = items.filter(i => Number.isFinite(Number(i.durationDays)) && Number(i.durationDays) > 0);
-  for (const it of list) byId[it.id] = it;
-
-  // Deduplicate edges, and ignore dependencies outside this project and budget-only items.
-  const indeg = Object.create(null), succs = Object.create(null), predecessors = Object.create(null);
-  for (const it of list) {
-    const deps = [...new Set(it.deps || [])].filter(d => Object.hasOwn(byId, d));
-    predecessors[it.id] = deps;
-    indeg[it.id] = deps.length;
-    for (const d of deps) (succs[d] ||= []).push(it.id);
-  }
-  const queue = list.filter(i => !indeg[i.id]).map(i => i.id);
-  const order = [];
-  while (queue.length) {
-    const id = queue.shift();
-    order.push(id);
-    for (const s of succs[id] || []) if (--indeg[s] === 0) queue.push(s);
-  }
-  const cyclic = order.length < list.length;
-  if (cyclic) for (const it of list) if (!order.includes(it.id)) order.push(it.id);
-
-  // In a cycle, use only predecessors already scheduled. Rebuild the successor graph from
-  // those accepted edges so the backward pass never reads an unfinished successor's LS.
-  const acceptedSuccs = Object.create(null);
-  for (const id of order) {
-    const deps = predecessors[id].filter(d => Object.hasOwn(sched, d));
-    for (const dep of deps) (acceptedSuccs[dep] ||= []).push(id);
-    const es = deps.length ? Math.max(...deps.map(d => sched[d].ef)) : 0;
-    sched[id] = { es, ef: es + Number(byId[id].durationDays) };
-  }
-  const end = Math.max(0, ...Object.values(sched).map(s => s.ef));
-  for (const id of [...order].reverse()) {
-    const ss = acceptedSuccs[id] || [];
-    const lf = ss.length ? Math.min(...ss.map(s => sched[s].ls)) : end;
-    sched[id].lf = lf;
-    sched[id].ls = lf - Number(byId[id].durationDays);
-    sched[id].slack = sched[id].ls - sched[id].es;
-    sched[id].critical = sched[id].slack < 0.001;
-  }
-  return { sched, end, cyclic };
-}
+export { cpm } from './program.js';
 
 // ---------- render ----------
 function render() {
@@ -62,15 +19,10 @@ function render() {
   const d = ws.data;
   const start = d.settings.programStart || isoToday();
   const mine = propertyProjects();
-  const projects = mine.filter(p => p.selected && p.items.some(i => (i.durationDays || 0) > 0));
-
-  // Compute per-project schedules and program span.
-  const plans = projects.map(p => {
-    const offset = p.startDate && dayDiff(start, p.startDate) > 0 ? dayDiff(start, p.startDate) : 0;
-    const { sched, end, cyclic } = cpm(p.items);
-    return { p, offset, sched, end, cyclic, finish: offset + end };
-  });
-  const programEnd = Math.max(7, ...plans.map(x => x.finish));
+  // The same layout the one-pager reads: program.js.
+  const { plans, days } = programSchedule(mine, start);
+  // The chart needs a week of width; the headline figure is the program's own span.
+  const chartEnd = Math.max(7, days);
 
   el.innerHTML = `
     <div class="view-scroll">
@@ -87,8 +39,8 @@ function render() {
         </div>
         <div class="kpi accent">
           <div class="k-label">Program finish</div>
-          <div class="k-value" style="font-size:15px">${fmtDate(addDays(start, programEnd))}</div>
-          <div class="k-sub">${programEnd} calendar days</div>
+          <div class="k-value" style="font-size:15px">${plans.length ? fmtDate(addDays(start, days)) : '-'}</div>
+          <div class="k-sub">${plans.length ? days + ' calendar day' + (days === 1 ? '' : 's') : 'nothing scheduled'}</div>
         </div>
         <div class="kpi">
           <div class="k-label">Projects scheduled</div>
@@ -119,7 +71,7 @@ function render() {
     touch(); render();
   };
 
-  if (plans.length) el.querySelector('#gantt').innerHTML = ganttSvg(plans, start, programEnd);
+  if (plans.length) el.querySelector('#gantt').innerHTML = ganttSvg(plans, start, chartEnd);
   else el.querySelector('#gantt').remove();
 }
 
