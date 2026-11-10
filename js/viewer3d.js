@@ -4600,6 +4600,8 @@ export function unmount() {
   if (scene) { const on = section.on; section.on = false; applySection(); section.on = on; }
   for (const g of [secMove, secTurn]) if (g) { g.detach(); g.dispose(); }
   secMove = null; secTurn = null; sheetRoot = null; sectionBoxCache = null; clipPlanes = []; capMeshes = [];
+  // The navigation's listeners sit on the canvas and the window, which outlive this visit.
+  if (nav) { nav.dispose(); nav = null; }
   if (controls) { controls.dispose(); controls = null; }
   if (modelGroup) { disposeBuilt(modelGroup); modelGroup = null; }
   interiorFill = false;
