@@ -54,6 +54,7 @@ import {
   scanStats, dropScanToFloor, centerScanOnModel, releaseSplatRenderer, splatDrawables, splatBusy,
 } from './scans.js';
 import { attachSketchupNavigation } from './sketchup-nav.js';
+import { indexForPicking, buildPickIndexes, pendingPickBuilds } from './pick-index.js';
 import { ModelBatches } from './model-batch.js';
 import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown } from './tags.js';
 import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags } from './saved-views.js';
@@ -1434,13 +1435,15 @@ function pick(e, opts) {
   camera.updateMatrixWorld();
   raycaster.setFromCamera(ndcFromEvent(e), camera);
   const targets = [];
-  if (modelGroup) targets.push(modelGroup);
+  // `markersOnly`: photo pins, notes, photo cameras and positions, and nothing else. The plan
+  // model and the scans are not tested at all.
+  if (modelGroup && !opts.markersOnly) targets.push(modelGroup);
   if (opts.pins !== false && pinRoot) targets.push(pinRoot);
   if (opts.notes !== false && noteRoot) targets.push(noteRoot);
   if (opts.pins !== false && cameraRoot) targets.push(cameraRoot);
   if (opts.pins !== false && positionRoot) targets.push(positionRoot);
-  if (opts.scans !== false && scanRoot) targets.push(scanRoot);
-  if (opts.ground && groundGroup) targets.push(groundGroup);
+  if (opts.scans !== false && scanRoot && !opts.markersOnly) targets.push(scanRoot);
+  if (opts.ground && groundGroup && !opts.markersOnly) targets.push(groundGroup);
   const hits = raycaster.intersectObjects(targets, true);
   for (const h of hits) {
     if (!isVisibleChain(h.object)) continue;
@@ -3013,6 +3016,11 @@ async function addScanToScene(scan) {
   const tagged = detectModelTags(prop, scan, obj);
   applyModelTagVisibility(prop, scan, obj);
   scanRoot.add(obj);
+  // Large meshes and point clouds are tested through a tree of boxes (pick-index.js), built in
+  // a background helper. A computer asks for it now, ahead of the first click; a touch device
+  // only if a tool or a pinch ever needs it (a plain tap there tests markers only), so it
+  // costs no memory until then.
+  if (indexForPicking(obj) && !ownQuality()) buildPickIndexes(obj);
   setModelXray(obj, xray ? prop.env.xrayOpacity : null);
   fitShadow();
   applyEnvironment();
@@ -4523,7 +4531,7 @@ export function viewerIdleState() {
     mounted: !!(scene && renderer), programsWarm, texturesIn: !texturesPending && !(scene && pendingTextureJobs() > 0),
     modelsLoaded: !Object.values(scanState).some(s => s === 'loading') && !(scene && splatBusy()),
     firstFrame: frameCounts.fullFrames > 0, nothingToDraw: framesLeft <= 0, shadowsFresh: !(renderer && renderer.shadowMap.needsUpdate),
-    graphics: !contextLost,
+    graphics: !contextLost, pickIndex: pendingPickBuilds() === 0,
   };
 }
 // For the browser checks: the quality this device draws at and what was set from it, and where
