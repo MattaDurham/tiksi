@@ -2434,15 +2434,37 @@ function scanPlacementMatrix() {
   }
   return null;
 }
+// What the scan sessions are lined up against, and the first guess at their placement. The
+// result is saved and places the photo cameras, so it is computed from every scan of the
+// property, hidden ones too, exactly as when opening MODEL loaded them all: the scans that are
+// not loaded yet are loaded first (and stay hidden).
+async function lineUpModel() {
+  const token = mountId;
+  if (prop.scans.some(s => !scanObjs[s.id] && (!scanState[s.id] || scanState[s.id] === 'hidden' || scanState[s.id] === 'loading'))) {
+    setHint('Loading the scans to line up against…');
+    await loadScans(true);
+    if (token !== mountId) return null;
+    setHint('');
+  }
+  return { ...sampleModelPoints(), init: scanPlacementMatrix() };
+}
+// For the browser checks: what a line-up would be computed against right now.
+export async function lineUpSource() {
+  if (!scene || !prop) return null;
+  const model = await lineUpModel();
+  return model && { from: model.from, points: model.points.length, placed: !!model.init };
+}
 async function lineUpSessions(setId) {
   const set = (prop.cameraSets || []).find(s => s.id === setId);
   if (!set) return;
   const folder = await ensureFolderFor(set);
   if (!folder) return;
-  const model = sampleModelPoints();
+  const token = mountId;
+  const model = await lineUpModel();
+  if (token !== mountId || !model) return;
   if (model.points.length < 500) { toast('The model has too little surface to line the scan up against. Load the scan or draw the plan first.', 'warn'); return; }
-  const report = [], token = mountId;
-  const inits = [scanPlacementMatrix()].filter(Boolean);
+  const report = [];
+  const inits = [model.init].filter(Boolean);
   // Larger sessions first: once one is lined up, its placement is a starting guess for the rest.
   const segs = segmentsOf(set).sort((a, b) => set.keyframes.filter(r => r[KF.seg] === b).length - set.keyframes.filter(r => r[KF.seg] === a).length);
   for (const seg of segs) {
@@ -2977,11 +2999,18 @@ async function addScanToScene(scan) {
 // scan (the other side of a before/after pair, say) costs no download, parse or memory until
 // someone switches it on. One at a time, in list order. Call this after anything that can show
 // a scan; scans already loaded, loading, missing or failed are left alone.
+//
+// `every` loads hidden scans too (they stay hidden): for work whose saved result is computed
+// from every scan of the property, so that hiding one cannot change the answer.
+//
+// The queue belongs to one visit (mount resets it): a load left behind by the visit before, a
+// download or parse that may never finish, must not hold up this one.
 let scanQueue = Promise.resolve();
-function loadShownScans() {
+function loadShownScans() { return loadScans(false); }
+function loadScans(every) {
   const token = mountId;
   for (const scan of prop.scans) if (scan.visible === false && !scanObjs[scan.id] && !scanState[scan.id]) scanState[scan.id] = 'hidden';
-  const wanted = prop.scans.filter(scan => scan.visible !== false && !scanObjs[scan.id] && (!scanState[scan.id] || scanState[scan.id] === 'hidden'));
+  const wanted = prop.scans.filter(scan => (every || scan.visible !== false) && !scanObjs[scan.id] && (!scanState[scan.id] || scanState[scan.id] === 'hidden'));
   // Marked now, so a second call before the queue reaches them does not queue them twice.
   for (const scan of wanted) setScanState(scan.id, 'loading');
   if (wanted.length) renderToolCol();
@@ -2990,7 +3019,7 @@ function loadShownScans() {
       if (token !== mountId || !scene) return;
       // Deleted, or hidden again, while it waited its turn.
       if (!prop.scans.some(s => s.id === scan.id)) { delete scanState[scan.id]; continue; }
-      if (scan.visible === false) { setScanState(scan.id, 'hidden'); continue; }
+      if (!every && scan.visible === false) { setScanState(scan.id, 'hidden'); continue; }
       try { await addScanToScene(scan); }
       catch (e) { console.error(e); if (token === mountId) toast('Could not load scan ' + scan.name + ': ' + errMsg(e), 'error'); }
     }
