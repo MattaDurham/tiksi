@@ -15,7 +15,10 @@ const ARROW = d => `<svg viewBox="0 0 24 24" width="24" height="24" fill="none" 
 const ARROWS = { forward: 'm6 15 6-6 6 6', back: 'm6 9 6 6 6-6', left: 'm15 6-6 6 6 6', right: 'm9 6 6 6-6 6' };
 const ARROW_LABELS = { forward: 'Walk forward', back: 'Walk back', left: 'Step left', right: 'Step right' };
 
-let media = null, viewName = '', els = null, open = false;
+// What the bar says for each state of the save status line (js/disk-workspace.js marks it).
+const SAVE_LABELS = { saved: 'Saved', sending: 'Sending', waiting: 'Waiting for the Mac', refused: 'Not saved' };
+
+let media = null, viewName = '', els = null, open = false, noteTimer = null;
 
 function preference() { try { return localStorage.getItem(PREF) || ''; } catch (e) { return ''; } }
 function setPreference(v) { try { if (v) localStorage.setItem(PREF, v); else localStorage.removeItem(PREF); } catch (e) { /* this browser only */ } }
@@ -84,7 +87,14 @@ function build() {
   const host = document.getElementById('app');
   const bar = document.createElement('div');
   bar.className = 'fd-bar';
-  bar.innerHTML = `<button type="button" class="fd-btn fd-menu" aria-label="Open the view panel" aria-expanded="false" aria-controls="fd-panel">${MENU_SVG}</button><span class="fd-title"></span>`;
+  bar.innerHTML = `<button type="button" class="fd-btn fd-menu" aria-label="Open the view panel" aria-expanded="false" aria-controls="fd-panel">${MENU_SVG}</button><span class="fd-title"></span>
+    <button type="button" class="fd-save" data-state="saved" aria-controls="fd-save-note" aria-expanded="false"><i aria-hidden="true"></i><span>${SAVE_LABELS.saved}</span></button>`;
+  // The full wording of the save state, shown under the bar when the state is tapped.
+  const note = document.createElement('div');
+  note.className = 'fd-save-note';
+  note.id = 'fd-save-note';
+  note.setAttribute('role', 'status');
+  note.hidden = true;
   const frame = document.createElement('button');
   frame.type = 'button';
   frame.className = 'fd-btn fd-frame';
@@ -104,8 +114,9 @@ function build() {
   panel.setAttribute('aria-label', 'View panel');
   panel.setAttribute('aria-hidden', 'true');
   panel.inert = true;
-  host.append(bar, frame, pad, scrim, panel);
-  els = { bar, menu: bar.querySelector('.fd-menu'), title: bar.querySelector('.fd-title'), frame, pad, scrim, panel };
+  host.append(bar, note, frame, pad, scrim, panel);
+  els = { bar, menu: bar.querySelector('.fd-menu'), title: bar.querySelector('.fd-title'), save: bar.querySelector('.fd-save'), note, frame, pad, scrim, panel };
+  watchSave();
 
   els.menu.onclick = () => (open ? close() : show());
   scrim.onclick = close;
@@ -139,6 +150,34 @@ function build() {
     sel.dispatchEvent(new Event('change'));
     render();
   });
+}
+
+// The save status line sits in the topbar, which a phone does not show. The bar repeats it:
+// saved, sending, waiting for the Mac, or not saved. A tap gives the status line's own words.
+function watchSave() {
+  const line = document.getElementById('save-status');
+  if (!line) { els.save.hidden = true; return; }
+  const words = () => line.title || line.textContent.trim();
+  const update = () => {
+    const text = line.textContent.trim();
+    // Other parts of the app write the line without marking it: go by what it shows.
+    const state = line.dataset.saveState || (/FAILED|NOT SAVED/.test(text) ? 'refused' : line.classList.contains('busy') ? 'sending' : 'saved');
+    els.save.dataset.state = state;
+    els.save.querySelector('span').textContent = SAVE_LABELS[state] || SAVE_LABELS.sending;
+    els.save.setAttribute('aria-label', 'Save state: ' + text);
+    if (!els.note.hidden) els.note.textContent = words();
+  };
+  const hide = () => { clearTimeout(noteTimer); els.note.hidden = true; els.save.setAttribute('aria-expanded', 'false'); };
+  els.save.onclick = () => {
+    if (!els.note.hidden) { hide(); return; }
+    els.note.textContent = words();
+    els.note.hidden = false;
+    els.save.setAttribute('aria-expanded', 'true');
+    clearTimeout(noteTimer); noteTimer = setTimeout(hide, 8000);
+  };
+  document.addEventListener('pointerdown', e => { if (!els.note.hidden && !els.save.contains(e.target) && !els.note.contains(e.target)) hide(); });
+  new MutationObserver(update).observe(line, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class', 'data-save-state', 'title'] });
+  update();
 }
 
 function show() {
