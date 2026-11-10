@@ -39,6 +39,7 @@ import { pendingTextureJobs, setTextureQuality, setTextureLimits, beginTextureBu
 import { qualityProfile, stillDimensions, effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, touchDevice, QUALITY_NAMES } from './render-quality.js';
 import { icon } from './icons.js';
 import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
+import { wallFaceLabels } from './wall-solids.js';
 import { SECTION_KINDS, SECTION_LABELS, MAX_SECTIONS, TURN_SNAP_DEG, moveSnapStep, snapTo, quatRotate, planeNormal, planeOf, flipped, rangeAlong, movedTo, makeSection, normalizeSections, levelHeightOf } from './section-planes.js';
 import { planWallMove, applyWallMove, normalOffset, movedWallLengths, moveLeavesShortWall } from './wallmove.js';
 import { addPhotoFromFile, photoUrl, photoById, revokePhotoUrls, photoBytes, ensureCameraFacts } from './photos-store.js';
@@ -3770,6 +3771,7 @@ function renderInspectorBody() {
       <div class="field"><label>Height (blank = level default)</label><input type="text" data-h value="${w.height ? escapeHtml(fmtLen(w.height)) : ''}" placeholder="${escapeHtml(fmtLen(levelHeight(prop, lvl.id)))}"></div>
       <div class="field"><label>Material</label>${materialSelectHtml('wall', w.material, 'data-mat')}</div>
       <div class="field"><label>Interior face material</label>${materialSelectHtml('wall', w.materialIn, 'data-matin').replace('(none)', 'Automatic')}</div>
+      ${(() => { const names = wallFaceLabels(w, roomsOn(prop, lvl.id)); return ['pos', 'neg'].map(f => `<div class="field"><label>${escapeHtml(names[f])}</label>${materialSelectHtml('wall', f === 'pos' ? w.materialPos : w.materialNeg, 'data-matface="' + f + '"').replace('(none)', 'Automatic')}</div>`).join(''); })()}
       ${researchButtonHtml(w.id, 'material', 'RESEARCH WALL MATERIAL')}
       ${researchButtonHtml(w.id, 'interior', 'RESEARCH INTERIOR FINISH')}
       ${scopeAssignHtml(w.id)}
@@ -3792,6 +3794,12 @@ function renderInspectorBody() {
     inspEl.querySelector('[data-mat]').onchange = e => { beginGeometryEdit(prop, 'change wall material'); w.material = e.target.value || null; touch(); rebuildModel(); };
     // Room-facing faces only; blank = automatic (drywall on exterior walls, the wall material otherwise).
     inspEl.querySelector('[data-matin]').onchange = e => { beginGeometryEdit(prop, 'change interior finish'); w.materialIn = e.target.value || null; touch(); rebuildModel(); };
+    // One long face only; blank = automatic (the interior finish, or the exterior's).
+    inspEl.querySelectorAll('[data-matface]').forEach(sel => sel.onchange = e => {
+      beginGeometryEdit(prop, 'change face finish'); const k = e.target.dataset.matface === 'pos' ? 'materialPos' : 'materialNeg';
+      if (e.target.value) w[k] = e.target.value; else delete w[k];
+      touch(); rebuildModel();
+    });
     inspEl.querySelector('[data-walk]').onclick = () => setMode('walk');
     inspEl.querySelector('[data-del]').onclick = () => {
       beginGeometryEdit(prop, 'delete wall');
