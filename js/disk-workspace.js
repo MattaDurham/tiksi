@@ -9,6 +9,58 @@ export let diskWorkspace = null;
 // A JSON-shaped copy whose objects are all new; strings are immutable and shared.
 const copy = value => mapStrings(value, s => s);
 
+// A request to the Mac has no limit on its whole duration: a large scan over a slow link
+// takes as long as it takes. It is given up only when no byte has moved, in either
+// direction, for `stallMs`; `answerMs` is the wait for the Mac's answer once everything was
+// sent (it may be writing a large project file).
+export const transferLimits = { stallMs: 45000, answerMs: 120000 };
+function stalled(ms) {
+  const error = new Error('The connection to the Mac stopped: nothing moved for ' + Math.round(ms / 1000) + ' seconds');
+  error.stalled = true; return error;
+}
+const answer = (status, buffer) => ({ status, ok: status >= 200 && status < 300, async arrayBuffer() { return buffer; }, async json() { return JSON.parse(new TextDecoder().decode(buffer)); } });
+// A request with a body. XMLHttpRequest reports the bytes as they leave, which fetch cannot.
+function sendBody(url, method, headers, body) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let timer, waited = 0;
+    const watch = ms => { clearTimeout(timer); waited = ms; timer = setTimeout(() => xhr.abort(), ms); };
+    xhr.open(method, url); xhr.responseType = 'arraybuffer';
+    for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
+    xhr.upload.onprogress = () => watch(transferLimits.stallMs);
+    xhr.upload.onload = () => watch(transferLimits.answerMs);
+    xhr.onprogress = () => watch(transferLimits.stallMs);
+    xhr.onload = () => { clearTimeout(timer); resolve(answer(xhr.status, xhr.response)); };
+    xhr.onerror = () => { clearTimeout(timer); reject(new TypeError('Could not reach the Mac')); };
+    xhr.onabort = () => { clearTimeout(timer); reject(stalled(waited)); };
+    watch(transferLimits.stallMs); xhr.send(body);
+  });
+}
+// A request without a body: the answer is read piece by piece, so a download that keeps
+// arriving is never cut off.
+async function readBody(url, method, headers, cache) {
+  const control = new AbortController();
+  let timer, waited = 0;
+  const watch = ms => { clearTimeout(timer); waited = ms; timer = setTimeout(() => control.abort(), ms); };
+  try {
+    watch(transferLimits.answerMs);
+    const r = await fetch(url, { method, headers, cache, signal: control.signal });
+    if (!r.body) return answer(r.status, await r.arrayBuffer());
+    // The Mac states the size of a file it sends: the bytes go straight into their final place.
+    const stated = Number(r.headers.get('Content-Length'));
+    let bytes = new Uint8Array(Number.isInteger(stated) && stated > 0 ? stated : 65536), size = 0;
+    for (const reader = r.body.getReader(); ;) {
+      watch(transferLimits.stallMs);
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (size + value.byteLength > bytes.byteLength) { const grown = new Uint8Array(Math.max(bytes.byteLength * 2, size + value.byteLength)); grown.set(bytes.subarray(0, size)); bytes = grown; }
+      bytes.set(value, size); size += value.byteLength;
+    }
+    return answer(r.status, size === bytes.byteLength ? bytes.buffer : bytes.slice(0, size).buffer);
+  } catch (error) { throw control.signal.aborted ? stalled(waited) : error; }
+  finally { clearTimeout(timer); }
+}
+
 // Saved records never share objects with `data`: only properties that gain photos are new.
 export function prepareDiskProjects(data) {
   // Portable project files carry the photos needed by their custom materials,
@@ -42,13 +94,19 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   const needsMigration = hadLocal || rawLegacy !== null || hasLegacyDatabase;
   let applying = false, pending = false, running = null, timer, base, revision = 0, paths = {}, assets = {}, migration = needsMigration, cleanupNotice = false, edits = 0;
   const changedFiles = new Set(), inFlightFiles = new Map();
+  // Originals this page has uploaded that no save has confirmed yet: id -> { buffer, entry }.
+  // The Mac stores a file by its content and keeps it, so a round that failed part-way sends
+  // only the files the Mac does not hold yet.
+  const heldByMac = new Map();
   // What a newer server can do: keep pictures as files, take only the project files and
   // property records that changed, and answer a save with the project paths.
   const features = new Set(Array.isArray(cap.features) ? cap.features : []);
   // The project files last acknowledged, as sent: { revision, json: { id: text } }.
   let savedSlices = { revision: -1, json: {} };
   async function request(path = '', options = {}) {
-    const r = await fetch('/api/workspace' + path, { ...options, headers: { ...headers, ...(options.headers || {}) }, cache: options.cache || 'no-store', signal: AbortSignal.timeout(120000) });
+    const sent = { ...headers, ...(options.headers || {}) };
+    const r = options.body == null ? await readBody('/api/workspace' + path, options.method || 'GET', sent, options.cache || 'no-store')
+      : await sendBody('/api/workspace' + path, options.method || 'POST', sent, options.body);
     if (r.status === 403) {
       const refreshed = await fetch('/api/workspace/capabilities', { headers: { 'X-Tiksi-Workspace': '1' }, cache: 'no-store', signal: AbortSignal.timeout(10000) });
       if (!refreshed.ok) throw new Error('Project-file server unavailable');
@@ -104,7 +162,13 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       const local = await getCachedFile(id);
       if (starting[id] && !changedFiles.has(id) && (!migration || !local?.buffer)) { out[id] = starting[id]; continue; }
       if (!local?.buffer) { if (starting[id]) out[id] = starting[id]; continue; }
-      const uploaded = await (await request('/blobs', { method: 'POST', body: local.buffer })).json();
+      const held = heldByMac.get(id);
+      let uploaded = held && held.buffer === local.buffer ? held.entry : null;
+      if (!uploaded) {
+        uploaded = await (await request('/blobs', { method: 'POST', body: local.buffer })).json();
+        if (uploaded.size !== local.buffer.byteLength) throw new Error('An upload was incomplete');
+        heldByMac.set(id, { buffer: local.buffer, entry: uploaded });
+      }
       out[id] = { ...uploaded };
       for (const k of ['name', 'format', 'kind', 'mime']) if (typeof local[k] === 'string') out[id][k] = local[k];
       // A later replacement must remain dirty while this upload is in progress.
@@ -224,13 +288,15 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       reply = await (await request('', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body })).json();
     } catch (error) {
       savedSlices = { revision: -1, json: {} };
+      // The Mac did not accept the list of originals: send them again rather than trust it.
+      if (error.status === 400) heldByMac.clear();
       if (error.code === 'resend-projects') throw error;   // retried at once with every project file
       if ([403, 409].includes(error.status)) {
         // Carry the reviewed choice into the retry. Re-ask only if the remote
         // value changed again, rather than replaying the same migration dialog.
         const remoteState = remote && remote.data ? { data: remote.data, assets: remote.assets } : base;
         base = remoteState; assets = accepted.assets;
-        for (const [id, buffer] of uploadedFiles) if (accepted.assets[id]?.hash !== sentAssets[id]?.hash && (await getCachedFile(id))?.buffer === buffer) changedFiles.delete(id);
+        for (const [id, buffer] of uploadedFiles) if (accepted.assets[id]?.hash !== sentAssets[id]?.hash && (await getCachedFile(id))?.buffer === buffer) { changedFiles.delete(id); heldByMac.delete(id); }
         await fetchPictures(accepted.data, accepted.assets);
         const current = savedFormNow(), retry = mergeShared(sentData, current, accepted.data).value;
         if (!sameJson(retry, current)) await apply(retry);
@@ -243,7 +309,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     paths = reply.paths || (await (await request()).json()).paths || {};
     // Blob upload alone is not a save acknowledgment. Keep replacements dirty
     // across revision retries, while preserving any still-newer in-flight edit.
-    for (const [id, buffer] of uploadedFiles) if ((await getCachedFile(id))?.buffer === buffer) changedFiles.delete(id);
+    for (const [id, buffer] of uploadedFiles) if ((await getCachedFile(id))?.buffer === buffer) { changedFiles.delete(id); heldByMac.delete(id); }
     await fetchPictures(accepted.data, accepted.assets);
     const current = savedFormNow();
     const after = mergeShared(sentData, current, accepted.data);

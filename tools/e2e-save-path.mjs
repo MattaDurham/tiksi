@@ -78,10 +78,82 @@ async function sketchupSaveUnderAnOpenPage() {
   console.log('ok   an open PLAN page keeps saving after a SketchUp save is merged');
 }
 
+// A file transfer has no limit on its whole duration, only on how long nothing moves; and a
+// round that failed part-way sends again only what the Mac does not hold.
+async function transfersTakeAsLongAsTheyNeed() {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await openPage(context);
+  // Nothing moving for 1.5 seconds is a stall here, so the check runs in seconds, not minutes.
+  const limits = { stallMs: 1500, answerMs: 1500 };
+  await page.evaluate(async limits => {
+    const store = await import('/js/store.js'); window.saveTestStore = store;
+    Object.assign((await import('/js/disk-workspace.js')).transferLimits, limits);
+    const p = store.propertyTemplate('Slow link'); p.id = 'prop-slow-link';
+    store.ws.data.properties.push(p); store.ws.data.settings.activePropertyId = p.id; store.touch();
+    await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
+    window.addOriginal = async (id, size, fill) => {
+      const bytes = new Uint8Array(size); for (let i = 0; i < size; i += 251) bytes[i] = (i * 31 + fill) & 255;
+      await store.putFile(id, bytes.buffer, { kind: 'photo', mime: 'image/jpeg', name: id + '.jpg' });
+      store.ws.data.properties.find(p => p.id === 'prop-slow-link').photos.push({ id, name: id, thumb: '', notes: '', kind: 'photo' });
+    };
+  }, limits);
+
+  // 1. A slow link: 1.2 MB at 200 kB/s takes about six seconds, four times the stall limit.
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Network.enable');
+  await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: 200 * 1024 });
+  const started = Date.now();
+  await page.evaluate(async () => { await window.addOriginal('slow-upload', 1200000, 1); window.saveTestStore.touch(); await (await import('/js/disk-workspace.js')).diskWorkspace.sync(); });
+  const uploadSeconds = (Date.now() - started) / 1000;
+  await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+  assert(uploadSeconds > 2 * limits.stallMs / 1000, 'the slow upload really ran well past the stall limit (' + uploadSeconds + ' s)');
+  assert.equal((await onTheMac()).assets['slow-upload']?.size, 1200000, 'an upload that keeps moving finishes, however long it takes');
+
+  // The same for a download, in a second browser that does not have the file yet.
+  const other = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const reader = await openPage(other);
+  await reader.evaluate(async limits => { Object.assign((await import('/js/disk-workspace.js')).transferLimits, limits); }, limits);
+  const otherCdp = await other.newCDPSession(reader);
+  await otherCdp.send('Network.enable');
+  await otherCdp.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: 200 * 1024, uploadThroughput: -1 });
+  const downloadStarted = Date.now();
+  const got = await reader.evaluate(async () => { const file = await (await import('/js/store.js')).getFile('slow-upload'); const b = new Uint8Array(file.buffer); return { size: b.length, sample: b[251 * 4000] }; });
+  const downloadSeconds = (Date.now() - downloadStarted) / 1000;
+  assert(downloadSeconds > 2 * limits.stallMs / 1000, 'the slow download really ran well past the stall limit (' + downloadSeconds + ' s)');
+  assert.deepEqual(got, { size: 1200000, sample: (251 * 4000 * 31 + 1) & 255 }, 'a download that keeps arriving finishes with every byte');
+  await other.close();
+
+  // 2. Two new originals; the Mac never answers the second upload. The page gives that
+  // request up once nothing has moved for the stall limit, and says so.
+  const uploads = [];   // the size of every original the page sends
+  let hang = true, release;
+  const hung = new Promise(r => { release = r; });
+  await page.route('**/api/workspace/blobs', async route => {
+    const size = route.request().postDataBuffer()?.length;
+    uploads.push(size);
+    if (hang && size === 70000) { await hung; return route.abort().catch(() => {}); }
+    return route.continue();
+  });
+  await page.evaluate(async () => { await window.addOriginal('first-of-two', 60000, 2); await window.addOriginal('second-of-two', 70000, 3); window.saveTestStore.touch(); });
+  await page.waitForFunction(() => /^NOT SAVED/.test(document.querySelector('#save-status').textContent), null, { timeout: 20000 });
+  assert.deepEqual(uploads.slice(0, 2), [60000, 70000], 'both originals were sent in the first round');
+  assert.equal((await onTheMac()).assets['first-of-two'], undefined, 'the round that stalled saved nothing yet');
+  // 3. The link comes back. The first original reached the Mac in the failed round: it is not sent again.
+  hang = false; release();
+  await page.waitForFunction(SAVED, null, { timeout: 20000 });
+  const mac = await onTheMac();
+  assert.equal(mac.assets['first-of-two']?.size, 60000); assert.equal(mac.assets['second-of-two']?.size, 70000);
+  assert.equal(uploads.filter(size => size === 60000).length, 1, 'an original the Mac already holds is not uploaded again (uploads: ' + uploads.join(', ') + ')');
+  await page.unroute('**/api/workspace/blobs');
+  await context.close();
+  console.log('ok   slow transfers finish (upload ' + uploadSeconds.toFixed(1) + ' s, download ' + downloadSeconds.toFixed(1) + ' s against a ' + limits.stallMs / 1000 + ' s stall limit); a stalled round resends only what the Mac lacks');
+}
+
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(url)).ok) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
   browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   await sketchupSaveUnderAnOpenPage();
+  await transfersTakeAsLongAsTheyNeed();
   assert.deepEqual(errors, []);
 } catch (error) {
   // The failure first: a browser that will not close must not hide it.
