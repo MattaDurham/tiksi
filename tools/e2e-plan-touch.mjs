@@ -95,6 +95,7 @@ try {
   await openHouse(page, url);
   assert.ok(await page.evaluate(() => document.documentElement.classList.contains('phone')), 'the phone layout is on');
   assert.equal(await page.locator('.plan-canvas canvas').evaluate(c => getComputedStyle(c).touchAction), 'none', 'the plan tells the browser it handles its own touches');
+  assert.match(await page.locator('.canvas-hint').innerText(), /^Tap /, 'on a phone the hint speaks of taps before the first touch');
 
   const cdp = await context.newCDPSession(page);
   const touch = (type, points) => cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x, y], id) => ({ x, y, id, radiusX: 4, radiusY: 4, force: 1 })) });
@@ -192,6 +193,35 @@ try {
   assert.deepEqual(errors, [], 'no page errors');
   console.log('PLAN by finger (Chromium touch): tap selects and sizes are typed, one-finger pan, pinch zoom, taps draw a wall, no page scroll.');
   await context.close();
+
+  // 5. A touchscreen laptop (or a tablet with a pen): a finger that lands while the mouse drags
+  //    the partition is ignored, and the mouse drag carries on to its end.
+  {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, hasTouch: true });
+    const pg = await ctx.newPage();
+    const errs = []; pg.on('pageerror', e => errs.push(e.message));
+    await openHouse(pg, url);
+    assert.ok(!(await pg.evaluate(() => document.documentElement.classList.contains('phone'))), 'the desktop layout is on');
+    const cd = await ctx.newCDPSession(pg);
+    const t = (type, points) => cd.send('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x, y], id) => ({ x, y, id })) });
+    const bx = await pg.locator('.plan-canvas canvas').boundingBox();
+    const vw = await viewModel(pg);
+    const wat = (x, y) => [bx.x + (x - vw.panX) * vw.zoom, bx.y + (y - vw.panY) * vw.zoom];
+    await pg.mouse.move(...wat(3, 2.5)); await pg.mouse.down();
+    await pg.mouse.move(...wat(3.5, 2.5), { steps: 6 });
+    // A finger taps empty floor (it would clear the selection) while the button is still down.
+    await t('touchStart', [wat(1.2, 1.2)]); await t('touchEnd', []);
+    await pg.mouse.move(...wat(4.2, 2.5), { steps: 8 });
+    await pg.mouse.up();
+    const mid = (await geometry(pg)).walls.mid;
+    near(mid[0], 4.2, 0.02, 'the mouse drag carried the partition all the way');
+    assert.match(await pg.locator('.inspector').innerText(), /^WALL/, 'the finger did not clear the selection');
+    const undo = await pg.evaluate(async () => { const h = await import('/js/edit-history.js'), s = await import('/js/store.js'); return h.editHistoryState(s.activeProperty()).undo.available; });
+    assert.ok(undo, 'the drag was recorded, so it is saved and can be undone');
+    assert.deepEqual(errs, [], 'no page errors');
+    await ctx.close();
+    console.log('PLAN with mouse and finger together: a finger under a mouse drag is ignored.');
+  }
 
   if (process.env.E2E_WEBKIT) {
     // Safari's engine with an iPhone profile: Playwright drives real taps there; pans and

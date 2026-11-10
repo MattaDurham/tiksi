@@ -128,6 +128,11 @@ const fingers = new Map();
 let gesture = null;          // {kind: 'tap'|'pan'|'pinch', ...}
 let lastTap = null;          // {t, sx, sy}: the previous tap, for a double-tap
 let touchInput = false;      // the last press on the canvas was a finger (hints say tap)
+let inputSeen = false;       // a press on the canvas has happened since the page loaded
+function phoneScreen() {
+  return document.documentElement.classList.contains('phone') ||
+    (typeof matchMedia === 'function' && matchMedia('(hover: none) and (pointer: coarse)').matches);
+}
 // A file saved while a zero-length calibration was possible can carry a scale that is not a
 // positive number, which breaks every view of the underlay and every later calibration. Such
 // a scale goes back to the upload default (18 m across the image), marked not calibrated.
@@ -1720,6 +1725,7 @@ function onPointerDown(e) {
   if (e.pointerType === 'touch') { onFingerDown(e); return; }
   if (e.button === 2) return;
   invalidate();
+  inputSeen = true;
   if (touchInput) { touchInput = false; updateHint(); }
   canvas.setPointerCapture(e.pointerId);
   const [sx, sy] = canvasPos(e);
@@ -1975,6 +1981,7 @@ function onFingerDown(e) {
   // touchscreen laptop) is ignored: it must not select, place or pan under that drag.
   if (drag) return;
   invalidate();
+  inputSeen = true;
   if (!touchInput) { touchInput = true; updateHint(); }
   try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* already released */ }
   const pos = canvasPos(e);
@@ -2660,6 +2667,9 @@ export function mount(root) {
   }
   ensureLevels(prop);
   repairUnderlayScales(prop);
+  // On a phone (or any screen whose only pointer is a finger) the hints say tap from the start;
+  // a mouse press switches them back.
+  if (!inputSeen) touchInput = phoneScreen();
   root.innerHTML = `
     <div class="editor-layout">
       <div class="tool-col"></div>

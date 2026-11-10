@@ -223,15 +223,28 @@ try {
   }
 
   if (part('print')) {
-    // 6. PRINT on the opening schedule: a white plan, printed only once its image is ready, and
-    //    nothing left behind for a later Cmd+P.
+    // 6. Every PRINT button prints its own sheet (PLAN's opening schedule on white, once its
+    //    image is ready); Cmd+P afterwards prints the page, not the sheet left behind. The
+    //    browser's print is stood in for: like a real one it fires beforeprint first (twice,
+    //    as Safari does when the paper size changes) and then afterprint.
     await page.evaluate(() => {
       window.__prints = [];
       window.print = () => {
-        const img = document.querySelector('#print-root .s-plan');
-        window.__prints.push({ ready: !!img && img.complete && img.naturalWidth > 0, src: img ? img.src : '' });
+        window.dispatchEvent(new Event('beforeprint'));
+        window.dispatchEvent(new Event('beforeprint'));
+        const root = document.getElementById('print-root'), img = root.querySelector('.s-plan');
+        window.__prints.push({ sheet: root.firstElementChild ? root.firstElementChild.className : '', text: root.innerText.slice(0, 200),
+          ready: !!img && img.complete && img.naturalWidth > 0, src: img ? img.src : '' });
+        window.dispatchEvent(new Event('afterprint'));
+      };
+      // Cmd+P: the key, then the browser's own print of the page (no PRINT button).
+      window.__cmdP = () => {
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', metaKey: true, bubbles: true }));
+        window.dispatchEvent(new Event('beforeprint'));
+        return document.getElementById('print-root').children.length;
       };
     });
+    const appOnPaper = async () => { await page.emulateMedia({ media: 'print' }); const d = await page.locator('#app').evaluate(e => getComputedStyle(e).display); await page.emulateMedia({ media: 'screen' }); return d; };
     await page.locator('[data-chk=numbers]').check();
     await page.locator('[data-ps=print]').click();
     await page.waitForFunction(() => window.__prints.length === 1);
@@ -241,18 +254,127 @@ try {
       const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
       const g = c.getContext('2d'); g.drawImage(img, 0, 0);
       const px = (x, y) => Array.from(g.getImageData(x, y, 1, 1).data.slice(0, 3));
-      return { ready: shot.ready, corner: px(4, 4), middle: px(Math.round(img.width * 0.5), Math.round(img.height * 0.08)) };
+      return { ...shot, corner: px(4, 4), middle: px(Math.round(img.width * 0.5), Math.round(img.height * 0.08)) };
     });
+    assert.match(printed.sheet, /opening-sheet/, 'PLAN PRINT printed the opening schedule');
     assert.ok(printed.ready, 'the plan image was decoded before printing');
     for (const v of [...printed.corner, ...printed.middle]) assert.ok(v > 235, `the printed plan is on white: ${printed.corner} ${printed.middle}`);
-    await page.emulateMedia({ media: 'print' });
-    assert.equal(await page.locator('#app').evaluate(e => getComputedStyle(e).display), 'none', 'while the sheet is prepared, only the sheet prints');
-    await page.evaluate(() => window.dispatchEvent(new Event('afterprint')));
-    assert.equal(await page.locator('#print-root').evaluate(e => e.children.length), 0, 'the sheet is cleared after printing');
-    assert.notEqual(await page.locator('#app').evaluate(e => getComputedStyle(e).display), 'none', 'a later Cmd+P prints the page, not a blank or an old sheet');
-    await page.emulateMedia({ media: 'screen' });
+    assert.equal(await appOnPaper(), 'none', 'while the sheet is there, paper shows only the sheet');
+    assert.equal(await page.evaluate(() => window.__cmdP()), 0, 'Cmd+P after a PLAN print empties the old sheet');
+    assert.notEqual(await appOnPaper(), 'none', 'and prints the page instead');
     await page.locator('[data-chk=numbers]').uncheck();
-    console.log('print: white plan, printed when ready, cleared afterwards.');
+
+    // The budget report: its PRINT prints it, a later Cmd+P does not.
+    await page.evaluate(() => { location.hash = '#/budget'; });
+    await page.locator('#print-report').click();
+    await page.waitForFunction(() => window.__prints.length === 2);
+    assert.ok((await page.evaluate(() => window.__prints[1].text)).length > 0, 'the budget PRINT printed its report');
+    assert.equal(await page.evaluate(() => window.__cmdP()), 0, 'Cmd+P after a budget print empties the old report');
+    assert.notEqual(await appOnPaper(), 'none', 'and prints the page instead');
+
+    // A product cut sheet.
+    await page.evaluate(async () => { const s = await import('/js/store.js'); s.ws.data.products.push({ id: 'prod-print-check', name: 'Synthetic faucet', category: 'plumbing', price: 100 }); s.touch(); location.hash = '#/sheets'; });
+    await page.locator('#print-sheet').click();
+    await page.waitForFunction(() => window.__prints.length === 3);
+    assert.ok((await page.evaluate(() => window.__prints[2].text)).length > 0, 'the cut sheet PRINT printed its sheet');
+    assert.equal(await page.evaluate(() => window.__cmdP()), 0, 'Cmd+P after a cut sheet print empties it');
+    await page.evaluate(async () => { const s = await import('/js/store.js'); s.ws.data.products = s.ws.data.products.filter(p => p.id !== 'prod-print-check'); s.touch(); });
+    await house();
+    await openPlan();
+    console.log('print: each PRINT prints its sheet (PLAN on white, when ready); Cmd+P afterwards prints the page.');
+  }
+
+  if (part('renumber')) {
+    // 8. Sliding a window past another renumbers them; the schedule panel and the inspector
+    //    show the new numbers as soon as the drag ends.
+    await page.evaluate(async () => {
+      const s = await import('/js/store.js');
+      const p = s.activeProperty();
+      p.openings = [
+        { id: 'wa', wallId: 'south', t: 0.2, type: 'window', width: 0.6, height: 1, sill: 0.8 },
+        { id: 'wb', wallId: 'south', t: 0.6, type: 'window', width: 0.6, height: 1, sill: 0.8 },
+      ];
+      s.touch();
+    });
+    await openPlan();
+    await page.locator('[data-chk=numbers]').check();
+    const panel = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.plan-schedule .ps-row')].map(r => [r.dataset.id, r.querySelector('.ps-num').textContent])));
+    const fresh = () => page.evaluate(async () => {
+      const s = await import('/js/store.js'), { openingSchedule } = await import('/js/opening-schedule.js');
+      const p = s.activeProperty();
+      return Object.fromEntries(openingSchedule(p, p.activeLevelId).map(r => [r.id, r.number]));
+    });
+    const before = await panel();
+    assert.deepEqual(before, await fresh());
+    await page.mouse.move(...at(1.2, 0)); await page.mouse.down();
+    await page.mouse.move(...at(5.2, 0), { steps: 14 }); await page.mouse.up();
+    const after = await fresh();
+    assert.notDeepEqual(after, before, 'the slide changed the numbering');
+    assert.deepEqual(await panel(), after, 'the schedule panel shows the numbers as they are after the drag');
+    assert.match(await inspector(), new RegExp('^WINDOW ' + after.wa), 'the inspector names the dragged window by its new number');
+    await page.locator('[data-chk=numbers]').uncheck();
+    await house();
+    await openPlan();
+    console.log('renumber: the panel and inspector follow a drag that renumbers openings.');
+  }
+
+  if (part('slide')) {
+    // 9. Sliding the north wall onto the south wall stops before the east, west and middle
+    //    walls (which it squeezes) get shorter than 5 cm.
+    await page.mouse.move(...at(1.5, 4)); await page.mouse.down();
+    await page.mouse.move(...at(1.5, 0.5), { steps: 12 });
+    await page.mouse.move(...at(1.5, 0), { steps: 6 });
+    await page.mouse.move(...at(1.5, -0.6), { steps: 6 });
+    await page.mouse.up();
+    const p = await prop();
+    for (const w of p.walls) {
+      const L = Math.hypot(w.bx - w.ax, w.by - w.ay);
+      assert.ok(L >= 0.05 - 1e-9, `${w.id} keeps at least 5 cm (got ${L.toFixed(3)} m)`);
+    }
+    const north = p.walls.find(w => w.id === 'north');
+    assert.ok(north.ay < 4 - 1 && north.ay >= 0.05 - 1e-9, `the north wall did slide, and stopped short (${north.ay})`);
+    await house();
+    await openPlan();
+    console.log('slide: a wall slide cannot squeeze a joined wall to nothing.');
+  }
+
+  if (part('cancel')) {
+    // 10. A drag the browser cancels puts the wall back, tells the store (so an autosave that
+    //     ran meanwhile is corrected), and still does so when another change arrived mid-drag.
+    await page.evaluate(async () => {
+      const s = await import('/js/store.js');
+      window.__changes = 0;
+      s.onChange(() => { window.__changes++; });
+    });
+    await page.mouse.move(...at(3, 2)); await page.mouse.down();
+    await page.mouse.move(...at(4.2, 2), { steps: 10 });
+    let mid = (await prop()).walls.find(w => w.id === 'mid');
+    assert.ok(mid.ax > 3.5, 'the partition is moving');
+    // Another change while the drag runs (a save from another device does the same).
+    await page.evaluate(async () => { const s = await import('/js/store.js'); s.touch(); });
+    await page.mouse.move(...at(4.5, 2), { steps: 3 });
+    const changes = await page.evaluate(() => window.__changes);
+    await page.locator('.plan-canvas canvas').evaluate(c => c.dispatchEvent(new PointerEvent('pointercancel', { pointerId: 1, pointerType: 'mouse', bubbles: true })));
+    await page.mouse.up();
+    mid = (await prop()).walls.find(w => w.id === 'mid');
+    assert.deepEqual([mid.ax, mid.ay, mid.bx, mid.by], [3, 0, 3, 4], 'the cancelled drag put the partition back');
+    assert.ok(await page.evaluate(() => window.__changes) > changes, 'the store heard of the put-back walls');
+    await house();
+    await openPlan();
+    console.log('cancel: a cancelled drag is put back and saved, even after a change mid-drag.');
+  }
+
+  if (part('scale')) {
+    // 11. A file saved with a scale that is not a number opens with a usable, uncalibrated scale.
+    await page.evaluate(async () => { const s = await import('/js/store.js'); Object.assign(s.activeProperty().levels[0].plan, { mPerPx: Infinity, offsetX: NaN, calibrated: true }); s.touch(); });
+    await openPlan();
+    const pl = (await prop()).levels[0].plan;
+    assert.ok(Number.isFinite(pl.mPerPx) && pl.mPerPx > 0, `the scale is a positive number again (${pl.mPerPx})`);
+    assert.equal(pl.calibrated, false, 'and marked not calibrated');
+    assert.ok(Number.isFinite(pl.offsetX), 'the offset is a number again');
+    await house();
+    await openPlan();
+    console.log('scale: a saved non-number scale is repaired when PLAN opens.');
   }
 
   if (part('frames')) {
