@@ -517,6 +517,14 @@ class MaterialResearchManager:
             self.jobs[job_id].update(changes, updatedAt=utc_now())
             self._persist(self.jobs[job_id])
 
+    def _drop_oldest_finished(self, count):
+        """Make room by removing the oldest finished research records (never one still running)."""
+        finished = sorted((job for job in self.jobs.values() if job["status"] not in ("queued", "running") and job["id"] not in self.cancel_events),
+                          key=lambda job: (str(job.get("updatedAt") or ""), str(job.get("createdAt") or "")))
+        for job in finished[:count]:
+            (self.root / (job["id"] + ".json")).unlink(missing_ok=True)
+            del self.jobs[job["id"]]
+
     def create(self, payload):
         request = validate_request(payload)
         available, reason = self.runner.availability()
@@ -528,7 +536,9 @@ class MaterialResearchManager:
             if active >= self.max_concurrent_jobs:
                 raise ResearchError("Research queue is full; wait for a job or cancel it", 429)
             if len(self.jobs) >= self.max_records:
-                raise ResearchError("Research history is full; remove old local research records before continuing", 429)
+                self._drop_oldest_finished(len(self.jobs) - self.max_records + 1)
+            if len(self.jobs) >= self.max_records:
+                raise ResearchError("Research history is full of research still running; wait for one to finish", 429)
             job_id, stamp = str(uuid.uuid4()), utc_now()
             roles = ["focused"] if request["mode"] == "focused" else ["specifications", "vendors", "alternatives"]
             job = {"id": job_id, "status": "queued", "createdAt": stamp, "updatedAt": stamp,

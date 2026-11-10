@@ -83,6 +83,18 @@ class ConversionTests(unittest.TestCase):
         for ext,target,body in [('../evil','glb',b'abc'),('.rvt','sh',b'abc'),('.rvt','glb',b'')]:
             with self.assertRaises(ConversionError):self.service.convert(body,ext,target)
         self.assertFalse(any(self.root.glob('*/report.json')))
+    def test_a_full_conversion_store_makes_room_by_removing_the_oldest(self):
+        made=[]
+        for _ in range(23):
+            with self.assertRaises(ConversionError) as caught:self.service.convert(b'synthetic native content','.rvt')
+            made.append(caught.exception.job_id)
+        kept=sorted(p.name for p in self.root.iterdir() if p.is_dir() and len(p.name)==32)
+        self.assertEqual(len(kept),20,'conversions keep going; the store stays bounded')
+        self.assertIn(made[-1],kept);self.assertNotIn(made[0],kept,'the oldest went first')
+        self.service.KEEP_BYTES=60
+        with self.assertRaises(ConversionError) as caught:self.service.convert(b'x'*40,'.rvt')
+        self.assertNotEqual(caught.exception.status,409,'a full store by size makes room too')
+        self.assertTrue((self.root/caught.exception.job_id/'source.rvt').is_file())
     def test_busy_converter_does_not_store_second_upload(self):
         self.service.lock.acquire()
         try:

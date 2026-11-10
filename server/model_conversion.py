@@ -41,6 +41,7 @@ def read_reports(root):
         if isinstance(report,dict):yield path.parent,report
 
 class ModelConversionService:
+    KEEP_JOBS=20;KEEP_BYTES=2*1024**3
     def __init__(self,root):
         self.root=Path(root);self.root.mkdir(parents=True,exist_ok=True)
         # A conversion still marked running was cut off by a restart; it will never finish now.
@@ -53,6 +54,20 @@ class ModelConversionService:
         from server.sketchup_convert import library_path
         sdk=library_path();self.sketchup=bool(sdk and sdk.is_file())
         self.python=Path(os.environ.get('TIKSI_CAD_PYTHON',str(self.root/'venv/bin/python')))
+    def make_room(self,incoming):
+        """Keep at most KEEP_JOBS conversions and KEEP_BYTES of them: the oldest are removed to make
+        room for a new one, so conversions never stop for want of space."""
+        jobs=[]
+        for job in self.root.iterdir():
+            if not job.is_dir() or len(job.name)!=32:continue
+            try:report=json.loads((job/'report.json').read_text(encoding='utf-8'))
+            except (OSError,ValueError):report={}
+            created=report.get('createdAt') if isinstance(report,dict) and isinstance(report.get('createdAt'),(int,float)) else job.stat().st_mtime
+            jobs.append((created,job,sum(p.stat().st_size for p in job.rglob('*') if p.is_file())))
+        jobs.sort(key=lambda item:item[0])
+        total=sum(size for _,_,size in jobs)
+        while jobs and (len(jobs)>=self.KEEP_JOBS or total+incoming>self.KEEP_BYTES):
+            _,job,size=jobs.pop(0);shutil.rmtree(job,ignore_errors=True);total-=size
     def capabilities(self):
         return {'token':self.token,'blender':bool(self.blender),'sketchup':self.sketchup,'cad':self.python.is_file(),
                 'imports':sorted((BLENDER if self.blender else set()) | (CAD if self.python.is_file() else set()) | ({'.skp'} if self.sketchup else set())),
@@ -94,8 +109,7 @@ class ModelConversionService:
         if not self.lock.acquire(blocking=False):raise ConversionError('Another model conversion is running',409)
         folder=None;report={}
         try:
-            jobs=[p for p in self.root.iterdir() if p.is_dir() and len(p.name)==32]
-            if len(jobs)>=20 or sum(p.stat().st_size for job in jobs for p in job.rglob('*') if p.is_file())+len(data)>2*1024**3:raise ConversionError('Conversion storage is full. Delete old handoffs in 3D Exchange.',409)
+            self.make_room(len(data))
             identifier=secrets.token_hex(16);folder=self.root/identifier;folder.mkdir();source=folder/('source'+extension);source.write_bytes(data)
             output=folder/('model.'+('las' if extension in {'.laz','.e57'} else target))
             if extension=='.zip':
