@@ -1,5 +1,6 @@
 """The real server answering for the page's own files and stored originals: ranges, reuse, size."""
 import gzip
+import hashlib
 import http.client
 import importlib.util
 import io
@@ -7,8 +8,10 @@ import ipaddress
 import json
 from pathlib import Path
 import re
+import socket
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -133,6 +136,44 @@ class StaticFiles(unittest.TestCase):
                                     json.dumps({'hashes': [digest, 'f' * 64, 'not a hash', digest]}).encode())
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), {'held': [digest], 'sizes': {digest: len(payload)}})
+
+
+    def test_an_original_sent_in_pieces_continues_where_a_stalled_upload_stopped(self):
+        payload = bytes(range(256)) * 4000; digest = hashlib.sha256(payload).hexdigest(); size = len(payload)
+        auth = {**WORKSPACE, 'X-Tiksi-Token': self.token}
+        def put(offset, piece, declared=size):
+            status, _, body = self.call('/api/workspace/uploads/' + digest, 'PUT', {**auth, 'X-Upload-Size': str(declared), 'X-Upload-Offset': str(offset)}, piece)
+            return status, json.loads(body)
+        ask = lambda: json.loads(self.call('/api/workspace/uploads/' + digest, headers=auth)[2])
+        self.assertEqual(ask(), {'hash': digest, 'size': None, 'received': 0, 'done': False})
+        self.assertEqual(put(0, payload[:300000]), (200, {'hash': digest, 'size': size, 'received': 300000, 'done': False}))
+        # The next piece stalls: the connection breaks after 123456 of its 400000 bytes.
+        raw = socket.create_connection(('127.0.0.1', self.server.server_port), timeout=10)
+        head = ('PUT /api/workspace/uploads/%s HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Tiksi-Workspace: 1\r\nX-Tiksi-Token: %s\r\n'
+                'X-Upload-Size: %d\r\nX-Upload-Offset: 300000\r\nContent-Length: 400000\r\n\r\n') % (digest, self.token, size)
+        raw.sendall(head.encode() + payload[300000:423456]); raw.shutdown(socket.SHUT_WR)
+        try: raw.recv(65536)
+        finally: raw.close()
+        for _ in range(100):
+            if ask()['received'] == 423456: break
+            time.sleep(0.02)
+        self.assertEqual(ask()['received'], 423456, 'what arrived is kept')
+        status, reply = put(0, payload[:10])
+        self.assertEqual((status, reply['code'], reply['received']), (409, 'upload-offset', 423456), 'a piece from the wrong place is refused and told where to start')
+        self.assertEqual(put(423456, payload[423456:]), (200, {'hash': digest, 'size': size, 'received': size, 'done': True}))
+        self.assertEqual(self.call('/api/workspace/blobs/' + digest, headers=auth)[2], payload, 'it is a stored original now')
+        self.assertTrue(ask()['done'])
+        self.assertEqual(list((self.server.workspace.root / 'uploads').iterdir()), [], 'nothing of the upload is left behind')
+        # The whole-file upload still works as before.
+        status, _, body = self.call('/api/workspace/blobs', 'POST', auth, b'whole file at once')
+        self.assertEqual((status, json.loads(body)['hash']), (200, hashlib.sha256(b'whole file at once').hexdigest()))
+
+    def test_an_original_that_does_not_match_its_hash_is_not_stored(self):
+        auth = {**WORKSPACE, 'X-Tiksi-Token': self.token}; digest = 'a' * 64
+        status, _, body = self.call('/api/workspace/uploads/' + digest, 'PUT', {**auth, 'X-Upload-Size': '5', 'X-Upload-Offset': '0'}, b'wrong')
+        self.assertEqual(status, 422)
+        self.assertFalse((self.server.workspace.root / 'blobs' / digest).exists())
+        self.assertEqual(json.loads(self.call('/api/workspace/uploads/' + digest, headers=auth)[2])['received'], 0, 'it starts again from nothing')
 
 
 if __name__ == '__main__': unittest.main()

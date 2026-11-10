@@ -152,6 +152,9 @@ DAILY_DAYS = 90
 # A stored original nothing refers to is removed only after this long, so an upload whose save
 # has not arrived yet (a phone offline for a while) still finds it.
 BLOB_GRACE = 30 * 86400
+# An original sent in pieces: each piece at most this big, and an upload left unfinished this long is dropped.
+MAX_PIECE = 64 * 1024 * 1024
+UPLOAD_KEEP = 7 * 86400
 REVISION_COPY = re.compile(r'^(\d+)\.json$')
 
 
@@ -217,7 +220,9 @@ class WorkspaceService:
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / 'blobs').mkdir(exist_ok=True)
         (self.root / 'history').mkdir(exist_ok=True)
+        (self.root / 'uploads').mkdir(exist_ok=True)
         self.lock = threading.RLock()
+        self.upload_locks = {}
         self.jobs = 0
         self.token = secrets.token_urlsafe(32)
         identity = self.root / 'identity'
@@ -507,8 +512,66 @@ class WorkspaceService:
                     if now - path.stat().st_mtime < BLOB_GRACE: continue
                     path.unlink(); removed += 1
                 except OSError: continue
+        for path in (self.root / 'uploads').iterdir():
+            try:
+                if now - path.stat().st_mtime >= UPLOAD_KEEP: path.unlink()
+            except OSError: continue
         if removed: log.info('Removed %d stored original(s) that nothing refers to any more.', removed)
         return removed
+
+    def upload_state(self, digest):
+        """How far an original sent in pieces has come: (received bytes, declared size or None)."""
+        part, note = self.root / 'uploads' / (digest + '.part'), self.root / 'uploads' / (digest + '.json')
+        try: size = json.loads(note.read_text(encoding='utf-8')).get('size')
+        except (OSError, ValueError, AttributeError): size = None
+        received = part.stat().st_size if part.is_file() and isinstance(size, int) else 0
+        return received, size if isinstance(size, int) else None
+
+    def upload_piece(self, digest, size, offset, body, length):
+        """Add one piece of an original to its upload. The piece must start where the upload has
+        got to; whatever of it arrives is kept even if the connection breaks, so the next piece
+        continues from there. Once every byte is in, the whole is checked against its hash and
+        becomes a stored original. Returns (received, size, done)."""
+        if not HASH.fullmatch(digest): raise WorkspaceError('Invalid hash', 404)
+        if not 0 < size <= MAX_BLOB: raise WorkspaceError('An original must be between 1 byte and 600 MB', 413)
+        if (self.root / 'blobs' / digest).is_file(): return size, size, True
+        with self.lock: guard = self.upload_locks.setdefault(digest, threading.Lock())
+        if not guard.acquire(blocking=False): raise WorkspaceError('This original is being sent from another page; ask again in a moment', 409)
+        try:
+            part, note = self.root / 'uploads' / (digest + '.part'), self.root / 'uploads' / (digest + '.json')
+            received, declared = self.upload_state(digest)
+            if declared != size:
+                # A new upload, or one that changed its declared size: it starts again.
+                part.unlink(missing_ok=True); received = 0
+                write_whole(note, json.dumps({'size': size}).encode('utf-8'))
+            if offset != received:
+                error = WorkspaceError('The upload has ' + str(received) + ' bytes; send from there', 409)
+                error.code, error.received = 'upload-offset', received
+                raise error
+            if received + length > size: raise WorkspaceError('The piece goes beyond the declared size', 413)
+            with part.open('ab') as out:
+                try:
+                    left = length
+                    while left:
+                        chunk = body.read(min(1024 * 1024, left))
+                        if not chunk: raise WorkspaceError('Upload was truncated; ask how far it got and send the rest')
+                        out.write(chunk); left -= len(chunk)
+                finally: out.flush(); os.fsync(out.fileno())
+            received = part.stat().st_size
+            if received < size: return received, size, False
+            digest_found = hashlib.sha256()
+            with part.open('rb') as source:
+                while chunk := source.read(1024 * 1024): digest_found.update(chunk)
+            if digest_found.hexdigest() != digest:
+                part.unlink(missing_ok=True); note.unlink(missing_ok=True)
+                raise WorkspaceError('The upload does not match its hash; send it again from the start', 422)
+            os.replace(part, self.root / 'blobs' / digest)
+            note.unlink(missing_ok=True)
+            return size, size, True
+        finally:
+            guard.release()
+            with self.lock:
+                if not guard.locked(): self.upload_locks.pop(digest, None)
 
     def store_member(self, archive, member):
         """Fingerprint one original in a project file; copy it into the blob store only when the
@@ -950,6 +1013,24 @@ class WorkspaceService:
                 target, action = open_in_folder(self.project_folder(identifier), request.get('path', ''), self.run)
                 # action is 'opened', or 'shown' when the file is not a document and was only shown in Finder.
                 self.reply(h, 200, {'path': str(target.relative_to(self.project_folder(identifier).resolve())), 'folder': self.project_folder(identifier).name, 'action': action})
+            elif path.startswith('/api/workspace/uploads/'):
+                # An original sent in pieces (see upload_piece); a stalled upload continues where it stopped.
+                digest = path.removeprefix('/api/workspace/uploads/')
+                if not HASH.fullmatch(digest): raise WorkspaceError('Invalid hash', 404)
+                if h.command == 'GET':
+                    if (self.root / 'blobs' / digest).is_file():
+                        size = (self.root / 'blobs' / digest).stat().st_size
+                        self.reply(h, 200, {'hash': digest, 'size': size, 'received': size, 'done': True})
+                    else:
+                        received, size = self.upload_state(digest)
+                        self.reply(h, 200, {'hash': digest, 'size': size, 'received': received, 'done': False})
+                elif h.command == 'PUT':
+                    try: size, offset = int(h.headers.get('X-Upload-Size', '')), int(h.headers.get('X-Upload-Offset', ''))
+                    except ValueError: raise WorkspaceError('Send X-Upload-Size and X-Upload-Offset')
+                    length = self.length(h, MAX_PIECE)
+                    received, size, done = self.upload_piece(digest, size, offset, h.rfile, length)
+                    self.reply(h, 200, {'hash': digest, 'size': size, 'received': received, 'done': done})
+                else: raise WorkspaceError('Upload endpoint not found', 404)
             elif path == '/api/workspace/blobs/held' and h.command == 'POST':
                 # Which of these stored originals the Mac already holds, in one question.
                 try: asked = json.loads(self.read(h, 2 * 1024 * 1024)).get('hashes')
@@ -992,7 +1073,8 @@ class WorkspaceService:
             else: raise WorkspaceError('Workspace endpoint not found', 404)
         except WorkspaceError as error:
             h.close_connection = True
-            self.reply(h, error.status, {'error': str(error), **({'code': error.code} if getattr(error, 'code', None) else {})})
+            self.reply(h, error.status, {'error': str(error), **({'code': error.code} if getattr(error, 'code', None) else {}),
+                                         **({'received': error.received} if hasattr(error, 'received') else {})})
         except (OSError, ValueError, TypeError, KeyError):
             # The page gets a plain sentence; the server log gets the real error and where it happened.
             log.exception('Project files could not be updated (%s %s)', h.command, path)
