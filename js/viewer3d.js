@@ -204,7 +204,86 @@ function ensureRenderer() {
   renderer.domElement.className = 'v-canvas';
   pmrem = new THREE.PMREMGenerator(renderer);
   pmrem.compileEquirectangularShader();
+  // three's own listeners (added by the constructor, so they run first) keep the context
+  // restorable and start a fresh GL state; these do what three cannot (see graphicsRestored).
+  renderer.domElement.addEventListener('webglcontextlost', graphicsLost);
+  renderer.domElement.addEventListener('webglcontextrestored', graphicsRestored);
   return renderer;
+}
+
+// ---------- messages over the view ----------
+// A panel over the canvas for the moments there is no picture to trust: the graphics context
+// is gone, or a frame would not draw. Styled inline: it must show whatever else failed.
+const NOTICE_STYLE = 'position:absolute;inset:0;z-index:7;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;background:rgba(9,12,15,0.92);color:var(--ink,#e9eef3);font:14px/1.45 var(--sans,sans-serif);';
+const notices = {};   // kind -> element
+function noticeHtml(message, reload) {
+  return `<p style="margin:0;max-width:34em">${escapeHtml(message)}</p>${reload ? '<button type="button" class="btn" data-reload style="width:auto;padding:10px 18px">RELOAD</button>' : ''}`;
+}
+function showNotice(kind, message, reload = false) {
+  if (!wrapEl) return;
+  let box = notices[kind];
+  if (!box || box.parentElement !== wrapEl) {
+    box = document.createElement('div');
+    box.className = 'v-notice'; box.dataset.notice = kind; box.setAttribute('role', 'alert'); box.style.cssText = NOTICE_STYLE;
+    wrapEl.appendChild(box);
+    notices[kind] = box;
+  }
+  box.innerHTML = noticeHtml(message, reload);
+  const button = box.querySelector('[data-reload]');
+  if (button) button.onclick = () => location.reload();
+}
+function hideNotice(kind) { const box = notices[kind]; if (box) { box.remove(); delete notices[kind]; } }
+
+// ---------- losing the graphics context ----------
+// A phone takes graphics memory back from a page that is in the background or when memory is
+// short; a desktop can do the same after a very large still. three re-uploads geometry and
+// ordinary textures from their source data once the context returns, and makes every render
+// target again, empty. So what was drawn into a target is gone until it is drawn again: the
+// sun's shadow map and the sky lighting. Nothing would ask for a frame either, so the view
+// stayed blank until a touch. While the context is away the view says so; a reload is offered
+// if it has not come back after CONTEXT_WAIT_MS on screen.
+const CONTEXT_WAIT_MS = 4000;
+let contextLost = false, contextTimer = 0;
+function contextNotice(waited) {
+  showNotice('graphics', waited
+    ? 'The 3D view lost its graphics memory and has not got it back. Reload to open the model again.'
+    : 'The 3D view lost its graphics memory. Waiting for it to come back…', waited);
+}
+// The wait only counts while the page is on screen: a phone gives the context back when the
+// page returns to the front, and that must not be met by a reload prompt.
+function armContextTimer() {
+  clearTimeout(contextTimer);
+  if (!contextLost || document.visibilityState === 'hidden') return;
+  contextTimer = setTimeout(() => { if (contextLost) contextNotice(true); }, CONTEXT_WAIT_MS);
+}
+document.addEventListener('visibilitychange', armContextTimer);
+function graphicsLost() {
+  contextLost = true;
+  clearTimeout(pmremTimer);
+  contextNotice(false);
+  armContextTimer();
+}
+function graphicsRestored() {
+  contextLost = false;
+  clearTimeout(contextTimer);
+  hideNotice('graphics');
+  // The generator's own buffers and shader belonged to the old context.
+  if (pmrem) pmrem.dispose();
+  pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+  if (!scene || !composer) return;   // MODEL is not open: the next mount builds everything
+  renderFailed = false;
+  hideNotice('draw');
+  if (envRT) { envRT.dispose(); envRT = null; }
+  scene.environment = null;
+  if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
+  // Buffers for smoothing, shading, outlines and glow at this device's quality and size.
+  applyQuality();
+  // Sky lighting first, then the shader warm-up it triggers, then the shadows and a frame.
+  programsWarm = false;
+  regenEnvMap();
+  invalidateShadows();
+  requestRender(4);
 }
 
 // ---------- scene ----------
@@ -608,7 +687,7 @@ function scheduleEnvMap(delay) {
   pmremTimer = setTimeout(regenEnvMap, delay);
 }
 function regenEnvMap() {
-  if (!scene) return;
+  if (!scene || contextLost) return;   // a restored context bakes it again (graphicsRestored)
   const env = prop.env;
   let rt = null;
   if (env.sky === 'studio') {
@@ -1082,6 +1161,8 @@ function tick(time) {
     invalidateShadows();
     requestRender(3);
   }
+  // Nothing can be drawn into a lost context; what is waiting is drawn when it returns.
+  if (contextLost) return;
   if (framesLeft > 0) {
     framesLeft--;
     // One bad frame must not kill the animation loop for the rest of the session.
@@ -4233,6 +4314,8 @@ export function mount(root) {
   movingNoteId = null; rightPress = null; ctxMenu = null; noteEditor = null;
   panoNagged = false; panoPending = null; panoMissing = null;
   for (const k of Object.keys(scanState)) delete scanState[k];
+  for (const k of Object.keys(notices)) delete notices[k];
+  appliedQuality = null; renderFailed = false;
   mountId++;
 
   ensureRenderer();
@@ -4270,6 +4353,8 @@ export function mount(root) {
   resizeObs = new ResizeObserver(resize);
   resizeObs.observe(wrapEl);
   resize();
+  // The context went while MODEL was closed and is not back yet.
+  if (contextLost) { contextNotice(false); armContextTimer(); }
   programsWarm = false;
   lastT = 0;
   renderer.setAnimationLoop(tick);
@@ -4347,6 +4432,7 @@ export function viewerIdleState() {
     mounted: !!(scene && renderer), programsWarm, texturesIn: !texturesPending && !(scene && pendingTextureJobs() > 0),
     modelsLoaded: !Object.values(scanState).some(s => s === 'loading') && !(scene && splatBusy()),
     firstFrame: frameCounts.fullFrames > 0, nothingToDraw: framesLeft <= 0, shadowsFresh: !(renderer && renderer.shadowMap.needsUpdate),
+    graphics: !contextLost,
   };
 }
 // Whether MODEL currently draws this part of a loaded model (tag key from tags.js); null when the
@@ -4379,6 +4465,8 @@ export function unmount() {
   mountId++;
   revokePhotoUrls();   // object URLs handed to the lightbox, pin picker and pano loader
   // mount() bails out before building anything when there is no property; there is nothing to tear down.
+  for (const k of Object.keys(notices)) hideNotice(k);
+  appliedQuality = null;
   if (!scene) { el = wrapEl = inspEl = null; hud = {}; return; }
   window.removeEventListener('keydown', onKeyDown);
   window.removeEventListener('keyup', onKeyUp);
