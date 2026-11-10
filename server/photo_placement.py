@@ -15,6 +15,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -26,6 +27,8 @@ import sys
 import threading
 import time
 from urllib.parse import urlsplit
+
+log = logging.getLogger('tiksi.photo_placement')
 
 ROOT = Path(__file__).resolve().parent.parent
 INSTALL = 'python3 tools/install-photo-placement.py'
@@ -367,6 +370,7 @@ class PhotoPlacementService:
             h.close_connection = True   # a refused upload may leave unread bytes
             return self.reply(h, e.status, {'error': str(e)})
         except Exception:
+            log.exception('Photo placement failed (%s %s)', h.command, path)
             h.close_connection = True
             return self.reply(h, 500, {'error': 'Photo placement failed; the scan and photos are unchanged.'})
 

@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
 """Serve public Tiksi assets and optional local services, excluding private files."""
 import argparse
+import errno
 import html
 import io
 import ipaddress
 import json
+import logging
 import os
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import faulthandler
 import signal
+import socket
 import sys
 import threading
+import time
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 # The service packages live at the repository root, whatever folder this file is started from.
 if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
-from server.peers import trusted_peer
+from server.peers import refusal, this_mac_tailscale_address, trusted_peer
 PUBLIC_FILES = {'index.html', 'manifest.webmanifest', 'app-icon.svg'}
 PUBLIC_DIRS = {'css', 'js', 'vendor'}
 
@@ -74,7 +78,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_error(403, 'Host is not allowed')
             return True
         if self.service_caller_refused():
-            payload = (json.dumps({'error': 'Tiksi services answer only this Mac or a device on its Tailscale network'}) + '\n').encode('utf-8')
+            payload = (json.dumps({'error': refusal(self.client_address[0])}) + '\n').encode('utf-8')
             self.send_response(403)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(payload)))
@@ -125,7 +129,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_error(403, 'Host is not allowed'); return None
         # HEAD reaches here without passing dispatch().
         if self.service_caller_refused():
-            self.send_error(403, 'Tiksi services answer only this Mac or Tailscale'); return None
+            self.send_error(403, refusal(self.client_address[0])); return None
         path = unquote(urlsplit(self.path).path)
         if path == '/api/instance':
             payload = (json.dumps(self.instance()) + '\n').encode('utf-8')
@@ -187,20 +191,76 @@ class AppServer(ThreadingHTTPServer):
     # them only after 1, 2, 4, 8 and 16 seconds, so a page can sit half-loaded for 30 seconds.
     request_queue_size = 128
 
+class AppServer6(AppServer):
+    address_family = socket.AF_INET6
+
+LOOPBACK_NAMES = {'127.0.0.1', 'localhost', '::1'}
+# Everything a request handler reads from its server; every listening address shares one set.
+SHARED = ('instance_file', 'allowed_hostname', 'allowed_hosts', 'remote_access', 'workspace', 'reconstruction',
+          'material_research', 'model_conversion', 'video_frames', 'photo_placement', 'folder_intake')
+log = logging.getLogger('tiksi.serve')
+
+def resolve_host(host):
+    """An address to listen on. 'tailscale' is this Mac's Tailscale address, None until Tailscale has one."""
+    return this_mac_tailscale_address() if host == 'tailscale' else host
+
+def bind(address, port):
+    return (AppServer6 if ':' in address else AppServer)((address, port), AppHandler)
+
+def share(source, target):
+    for name in SHARED: setattr(target, name, getattr(source, name, None))
+
+def listen_later(host, port, primary, servers, stopping, every=10):
+    """Keep trying an address that is not on this Mac yet (Tailscale not up, say); serve it once it is."""
+    logged = False
+    while not stopping.wait(0 if not logged else every):
+        try:
+            address = resolve_host(host)
+            if address is None: raise OSError(errno.EADDRNOTAVAIL, 'this Mac has no Tailscale address yet')
+            server = bind(address, port)
+        except OSError as error:
+            if not logged: log.warning('Cannot listen on %s yet (%s); trying again every %d seconds.', host, error, every)
+            logged = True
+            continue
+        share(primary, server)
+        server.allowed_hosts = [*primary.allowed_hosts, address]
+        servers.append(server)
+        print(f'Tiksi listening on {address}:{port}', flush=True)
+        if stopping.is_set(): server.server_close(); return
+        server.serve_forever()
+        return
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--host', default='127.0.0.1')
+    parser.add_argument('--host', action='append', help='address to listen on (default 127.0.0.1); repeat it to listen on several, '
+                        'for example --host 127.0.0.1 --host tailscale, where "tailscale" is this Mac\'s Tailscale address')
     parser.add_argument('--port', type=int, default=8642)
     parser.add_argument('--instance-file', type=Path)
     parser.add_argument('--state-dir', type=Path, default=ROOT / '.tiksi-state')
     parser.add_argument('--projects-dir', type=Path, help='private project folders served to this Mac and its Tailscale clients')
     parser.add_argument('--allowed-host', action='append', default=[], help='explicit trusted proxy hostname, e.g. a Tailscale Serve name')
     args = parser.parse_args()
-    with AppServer((args.host, args.port), AppHandler) as server:
+    hosts = args.host or ['127.0.0.1']
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s', stream=sys.stderr)
+    # The first address must be served now: a port in use there stops the start, as it always has.
+    first = resolve_host(hosts[0])
+    if first is None: parser.error('this Mac has no Tailscale address; list an address that is on this Mac first, such as 127.0.0.1')
+    with bind(first, args.port) as server:
+        port = server.server_port
+        servers, later, stopping = [server], [], threading.Event()
+        for host in hosts[1:]:
+            # The other addresses are served too; one that is not on this Mac yet is tried again in the background.
+            address = resolve_host(host)
+            try:
+                if address is None: raise OSError(errno.EADDRNOTAVAIL, 'not on this Mac yet')
+                servers.append(bind(address, port))
+            except OSError as error:
+                if error.errno == errno.EADDRINUSE: raise
+                later.append(host)
         server.instance_file = args.instance_file
-        server.allowed_hostname = args.host
-        server.allowed_hosts = args.allowed_host
-        server.remote_access = args.host not in {'127.0.0.1', 'localhost', '::1'}
+        server.allowed_hostname = first
+        server.allowed_hosts = [*args.allowed_host, *(s.server_address[0] for s in servers)]
+        server.remote_access = any(h not in LOOPBACK_NAMES for h in hosts)
         sys.path.insert(0, str(ROOT))
         from server.workspace import WorkspaceService
         server.workspace = WorkspaceService(args.state_dir / 'workspace', args.projects_dir)
@@ -234,15 +294,22 @@ def main():
             # A property from a folder the owner picks on this Mac; files are read there, never changed.
             from server.folder_intake import FolderIntakeService
             server.folder_intake = FolderIntakeService(server.workspace)
+        for other in servers[1:]: share(server, other)
         def shutdown(signum, frame):
-            threading.Thread(target=server.shutdown, daemon=True).start()
+            stopping.set()
+            for each in list(servers): threading.Thread(target=each.shutdown, daemon=True).start()
         # A hung test asks for every thread's stack with SIGUSR1 (written to stderr).
         if hasattr(signal, 'SIGUSR1'): faulthandler.register(signal.SIGUSR1, all_threads=True)
         signal.signal(signal.SIGTERM, shutdown)
         signal.signal(signal.SIGINT, shutdown)
-        print(f'Tiksi listening on {args.host}:{server.server_port}', flush=True)
+        for each in servers:
+            print(f'Tiksi listening on {each.server_address[0]}:{port}', flush=True)
+            if each is not server: threading.Thread(target=each.serve_forever, daemon=True).start()
+        for host in later: threading.Thread(target=listen_later, args=(host, port, server, servers, stopping), daemon=True).start()
         try: server.serve_forever()
         finally:
+            stopping.set()
+            for each in servers[1:]: each.server_close()
             for name in ('reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement', 'folder_intake'):
                 service = getattr(server, name, None)
                 if service: service.close()
