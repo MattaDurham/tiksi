@@ -265,6 +265,37 @@ test('spec carries each face\'s finish the way the 3D view paints it', () => {
   assert.deepEqual(spec.warnings, []);
 });
 
+test('each long face can carry its own finish; an unrecorded exterior shows grey, not the room\'s paint', async () => {
+  const { wallFaceLabels } = await import('../js/wall-solids.js');
+  const list = mats().concat([{ id: 'mat-exterior-unknown', name: 'Exterior, not recorded', color: '#9b9d9f' }]);
+  const grey = pick(list, 'mat-exterior-unknown');
+  const p = finished();
+  const w = id => p.walls.find(x => x.id === id);
+  // North wall: exterior, its own finish the same as its interior: the outside does not copy it.
+  w('w-n').material = 'mat-sage'; w('w-n').materialIn = 'mat-sage';
+  // West wall: exterior with no finish of its own at all.
+  w('w-w').material = null;
+  // East wall: the partition between the studio and the annex, sage toward the annex only.
+  w('w-e').materialNeg = 'mat-sage';
+  // South wall: brick outside stays brick (it says something the interior does not).
+  let spec = mirrorSpec(p, list);
+  const faces = id => spec.walls.find(x => x.id === id).materials;
+  assert.deepEqual(faces('w-n'), { pos: pick(list, 'mat-sage'), neg: grey, other: pick(list, 'mat-sage') });
+  assert.deepEqual(faces('w-w').neg, grey, 'no finish of its own: grey outside');
+  assert.deepEqual(faces('w-w').pos, pick(list, 'mat-drywall'), 'the room side keeps the automatic drywall');
+  assert.deepEqual(faces('w-e'), { pos: pick(list, 'mat-brick'), neg: pick(list, 'mat-sage'), other: pick(list, 'mat-brick') },
+    'a partition shows a different finish to each room');
+  assert.deepEqual(faces('w-s'), { pos: pick(list, 'mat-sage'), neg: pick(list, 'mat-brick'), other: pick(list, 'mat-brick') });
+  // A face's own finish wins on the outside too, once the cladding is known.
+  w('w-n').materialNeg = 'mat-brick';
+  spec = mirrorSpec(p, list);
+  assert.deepEqual(faces('w-n').neg, pick(list, 'mat-brick'));
+  assert.deepEqual(spec.warnings, []);
+  // Labels name the compass side and what it looks onto (plan y runs south).
+  assert.deepEqual(wallFaceLabels(w('w-s'), p.rooms), { pos: 'South face (Studio)', neg: 'North face (outside)' });
+  assert.deepEqual(wallFaceLabels(w('w-e'), p.rooms), { pos: 'West face (Studio)', neg: 'East face (Annex)' });
+});
+
 test('a finish change rewrites the mirror without reading back as a SketchUp edit', () => {
   const p = finished(), list = mats();
   const written = mirrorSpec(p, list), synced = syncedState(p);
