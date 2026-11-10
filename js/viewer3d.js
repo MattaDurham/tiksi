@@ -1774,7 +1774,7 @@ function updateMeasureLabels() {
 // pointing at what the photo shows; clicking it opens the photo over the model.
 const PRINT_BORDER = 0.035;   // white border, as a share of the print's long side
 function printCanvas(img, aspect, isDoc) {
-  const long = 1024;
+  const long = PIN_CARD;
   const W = aspect >= 1 ? long : Math.round(long * aspect), H = aspect >= 1 ? Math.round(long / aspect) : long;
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
@@ -1836,8 +1836,42 @@ function buildPin(photo) {
   thumb.onload = () => swap(thumb);
   if (photo.thumb) thumb.src = photo.thumb;
   if (isDoc) documentCanvas(photo, 2048).then(swap).catch(e => console.warn('document page', e));
-  else photoUrl(photo.id).then(url => { if (!url) return; const img = new Image(); img.onload = () => swap(img); img.src = url; }).catch(() => {});
+  else queuePinPicture(() => pinPicture(photo, () => pinObjs[photo.id] === rec && token === mountId).then(picture => {
+    swap(picture);   // drawn onto the card at once
+    if (picture && typeof picture.close === 'function') picture.close();
+  }));
   buildCameraGlyph(photo);
+}
+// The sharper picture for a pin's card, a few pins at a time (every pin used to ask for its
+// camera original at once). A computer decodes the original, as before. A touch device decodes
+// it straight to the card's size (the card is PIN_CARD pixels on its long side), so no
+// full-size picture is held; the original is opened whole only in the full-screen view.
+const PIN_CARD = 1024, PIN_LOADS = 2;
+const pinQueue = [];
+let pinLoading = 0;
+function queuePinPicture(job) {
+  pinQueue.push(job);
+  nextPinPicture();
+}
+function nextPinPicture() {
+  while (pinLoading < PIN_LOADS && pinQueue.length) {
+    pinLoading++;
+    Promise.resolve().then(pinQueue.shift()).catch(() => {}).then(() => { pinLoading--; nextPinPicture(); });
+  }
+}
+async function pinPicture(photo, wanted) {
+  if (!wanted()) return null;
+  if (ownQuality() && typeof createImageBitmap === 'function') {
+    const bytes = await photoBytes(photo.id);
+    if (!bytes || !wanted()) return null;
+    const blob = new Blob([bytes], { type: photo.mime || 'image/jpeg' });
+    const landscape = photoAspect(photo) >= 1;
+    try { return await createImageBitmap(blob, landscape ? { resizeWidth: PIN_CARD, resizeQuality: 'high' } : { resizeHeight: PIN_CARD, resizeQuality: 'high' }); }
+    catch (e) { /* a browser without resize options: fall through to the plain decode */ }
+  }
+  const url = await photoUrl(photo.id);
+  if (!url || !wanted()) return null;
+  return new Promise(resolve => { const img = new Image(); img.onload = () => resolve(img); img.onerror = () => resolve(null); img.src = url; });
 }
 function removePin(id) {
   const rec = pinObjs[id];
