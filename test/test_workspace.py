@@ -1,8 +1,11 @@
 """Disk project sharing: synthetic bundles and temporary directories only."""
+import contextlib
 import io
 import ipaddress
 import json
+import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -211,6 +214,31 @@ class WorkspaceTests(unittest.TestCase):
             target = str((folder / relative).resolve())
             self.assertEqual(command, ['open', target] if expected == 'opened' else ['open', '-R', target], relative)
 
+    def test_an_alias_or_a_package_folder_is_only_shown_in_finder(self):
+        from server.workspace import opens_directly, finder_flags, IS_ALIAS, HAS_BUNDLE
+        folder = self.root / 'documents'; folder.mkdir()
+        def made(name, contents=b'%PDF-1.7 synthetic'):
+            (folder / name).write_bytes(contents); return folder / name
+        plain = made('spec sheet.pdf')
+        bookmark = made('spec sheet alias.pdf', b'book\0\0\0\0mark\0\0\0\0synthetic bookmark')
+        flagged = made('drawing.dwg')
+        package = folder / 'Installer'; (package / 'Contents' / 'MacOS').mkdir(parents=True)
+        bundle = folder / 'Marked'; bundle.mkdir()
+        listed = folder / 'Listed'; (listed / 'Contents').mkdir(parents=True); (listed / 'Contents' / 'Info.plist').write_text('<plist/>')
+        ordinary = folder / 'Site photos'; (ordinary / 'Contents').mkdir(parents=True)
+        marks = {flagged: IS_ALIAS, bundle: HAS_BUNDLE}
+        flags = lambda target: marks.get(Path(target), 0)
+        decided = {path.name: opens_directly(path, flags) for path in (plain, bookmark, flagged, package, bundle, listed, ordinary)}
+        self.assertEqual(decided, {'spec sheet.pdf': True, 'spec sheet alias.pdf': False, 'drawing.dwg': False,
+                                   'Installer': False, 'Marked': False, 'Listed': False, 'Site photos': True})
+        if sys.platform == 'darwin':
+            # The Finder flags are read from the file itself.
+            import ctypes
+            info = bytearray(32); info[0:4] = b'alis'; info[4:8] = b'MACS'; info[8:10] = IS_ALIAS.to_bytes(2, 'big')
+            self.assertEqual(ctypes.CDLL(None).setxattr(os.fsencode(plain), b'com.apple.FinderInfo', bytes(info), 32, 0, 0), 0)
+            self.assertEqual(finder_flags(plain), IS_ALIAS)
+            self.assertFalse(opens_directly(plain))
+
     def test_missing_assets_fail_without_overwrite(self):
         self.commit(workspace())
         with self.assertRaises(WorkspaceError): self.commit(workspace('Bad'), {'missing': {'hash': 'f' * 64, 'size': 4}})
@@ -342,6 +370,11 @@ def two(a='A', b='B'):
     return data
 
 
+def three(a='A', b='B', c='C'):
+    data = two(a, b); data['properties'].append({'id': 'prop-c', 'name': c, 'scans': [], 'photos': []})
+    return data
+
+
 def project_name(path):
     with zipfile.ZipFile(path) as archive: return json.loads(archive.read('workspace.json'))['properties'][0]['name']
 
@@ -459,6 +492,108 @@ class UnavailableProjectTests(unittest.TestCase):
         self.assertEqual(project_name(kept[0]), 'A edited offline', 'the edit is kept, not lost')
         self.assertGreater(self.service.snapshot()['revision'], revision, 'the device reads the workspace again and sees A left out')
         self.assertGreater(revision, before)
+
+    def on_a_drive(self):
+        """A third project, C, kept on a separate drive, with an older copy in the projects folder."""
+        self.drive = self.root / 'drive'; folder = self.drive / 'Client work'; folder.mkdir(parents=True)
+        self.c = Path(self.service.plan_destination('prop-c', str(folder), 'C'))
+        self.commit(three('A', 'B', 'C old'))
+        self.assertEqual(self.service.paths['prop-c'], str(self.c))
+        self.old_c = self.root / 'projects' / 'Copied earlier' / 'C.tiksi'; self.old_c.parent.mkdir()
+        self.old_c.write_bytes(self.c.read_bytes())
+        self.commit(three('A', 'B', 'C newer'))
+        self.assertEqual((project_name(self.c), project_name(self.old_c)), ('C newer', 'C old'))
+
+    def unmount(self): self.drive.rename(self.root / 'drive-not-mounted')
+
+    def mount(self): (self.root / 'drive-not-mounted').rename(self.drive)
+
+    def test_a_project_on_a_drive_that_is_not_mounted_waits_for_it_and_an_older_copy_does_not_take_over(self):
+        self.on_a_drive()
+        self.unmount()
+        restarted = WorkspaceService(self.root / 'workspace', self.root / 'projects')
+        names, snapshot = self.visible(restarted)
+        self.assertEqual(sorted(names), ['A', 'B'], 'the older copy is not shown in its place')
+        self.assertEqual([(u['id'], u['reason']) for u in snapshot['unavailable']], [('prop-c', 'missing')])
+        self.assertEqual(restarted.paths['prop-c'], str(self.c), 'the drive path stays registered')
+        data = {**snapshot['data'], 'properties': [p if p['id'] != 'prop-b' else {**p, 'name': 'B revised'} for p in snapshot['data']['properties']]}
+        self.commit(data, service=restarted)
+        self.mount()
+        names, snapshot = self.visible(restarted)
+        self.assertEqual(sorted(names), ['A', 'B revised', 'C newer'])
+        self.assertEqual(restarted.paths['prop-c'], str(self.c))
+        self.assertEqual(snapshot['unavailable'], [])
+        self.assertEqual(project_name(self.old_c), 'C old', 'the older copy is left as it was')
+        self.assertEqual(WorkspaceService(self.root / 'workspace', self.root / 'projects').paths['prop-c'], str(self.c))
+
+    def test_a_save_cut_off_with_its_drive_then_unplugged_finishes_when_the_drive_returns(self):
+        self.on_a_drive()
+        real = os.replace
+        def interrupt(source, destination):
+            if str(destination) == str(self.c): raise OSError('Synthetic: the drive went away mid-save')
+            return real(source, destination)
+        with patch('server.workspace.os.replace', side_effect=interrupt):
+            with self.assertRaises(OSError): self.commit(three('A', 'B', 'C newest'))
+        self.assertTrue((self.service.root / 'pending.json').exists())
+        self.unmount()
+        with self.assertLogs('tiksi.workspace', 'WARNING'):
+            restarted = WorkspaceService(self.root / 'workspace', self.root / 'projects')
+        names, snapshot = self.visible(restarted)
+        self.assertEqual(sorted(names), ['A', 'B'])
+        self.assertEqual(snapshot['unavailable'][0]['id'], 'prop-c')
+        self.assertTrue((restarted.root / 'pending-files.json').exists(), 'the move still to do is kept')
+        # Another start before the drive returns still keeps it.
+        restarted = WorkspaceService(self.root / 'workspace', self.root / 'projects')
+        self.assertTrue((restarted.root / 'pending-files.json').exists())
+        self.mount()
+        names, snapshot = self.visible(restarted)
+        self.assertEqual(sorted(names), ['A', 'B', 'C newest'], 'the save that was cut off is the one shown')
+        self.assertEqual(project_name(self.c), 'C newest')
+        self.assertFalse((restarted.root / 'pending-files.json').exists())
+        self.assertEqual(list(self.c.parent.glob('*.tmp')), [], 'no spare file is left behind')
+        self.commit(three('A', 'B', 'C after'), service=restarted)
+        self.assertEqual(project_name(self.c), 'C after')
+
+    def test_a_project_file_the_mac_cannot_read_sets_aside_only_its_own_project(self):
+        original = self.a.read_bytes()
+        def zipped(workspace_json):
+            def write():
+                with zipfile.ZipFile(self.a, 'w') as archive:
+                    archive.writestr('workspace.json', workspace_json); archive.writestr('manifest.json', '{"files": []}')
+            return write
+        def no_permission():
+            if hasattr(os, 'geteuid') and os.geteuid() == 0: self.skipTest('root reads any file')
+            self.a.chmod(0)
+        real_zip = zipfile.ZipFile
+        def failing(path, *args, **kwargs):
+            if Path(path) == self.a: raise OSError(5, 'Input/output error')
+            return real_zip(path, *args, **kwargs)
+        cases = {'no read permission': (no_permission, None),
+                 'workspace.json is a list': (zipped('[]'), None),
+                 'products are not records': (zipped(json.dumps({**workspace('A'), 'products': 'x'})), None),
+                 'manifest is a list': (zipped(json.dumps(workspace('A'))), None),
+                 'a failing drive': (lambda: None, patch('server.workspace.zipfile.ZipFile', side_effect=failing)),
+                 'gone between the check and the read': (self.a.unlink, patch('server.workspace.file_state', return_value='file'))}
+        for label, (damage, during) in cases.items():
+            with self.subTest(label):
+                if label == 'manifest is a list':
+                    with zipfile.ZipFile(self.a, 'w') as archive:
+                        archive.writestr('workspace.json', json.dumps({**workspace('A'), 'properties': [{'id': 'prop-a', 'name': 'A', 'scans': [], 'photos': []}]}))
+                        archive.writestr('manifest.json', '[]')
+                else: damage()
+                with (during or contextlib.nullcontext()):
+                    # The server starts with the file in this state.
+                    restarted = WorkspaceService(self.root / 'workspace', self.root / 'projects')
+                    names, snapshot = self.visible(restarted)
+                    self.assertEqual([n[0] for n in names], ['B'], 'only A is left out')
+                    self.assertEqual([(u['id'], u['reason']) for u in snapshot['unavailable']], [('prop-a', 'unreadable')])
+                    data = {**snapshot['data'], 'properties': [{**snapshot['data']['properties'][0], 'name': 'B ' + label}]}
+                    self.commit(data, service=restarted)
+                self.assertEqual(project_name(self.b), 'B ' + label)
+                if self.a.exists(): self.a.chmod(0o644)
+                self.a.write_bytes(original)
+                names, snapshot = self.visible(restarted)
+                self.assertEqual(sorted(names), ['A', 'B ' + label], 'it returns once readable')
 
     def test_open_and_mirror_requests_for_a_missing_project_name_the_file(self):
         self.a.unlink()

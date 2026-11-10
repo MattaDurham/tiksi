@@ -170,7 +170,11 @@ be read, only that project is left out: the workspace answer lists it under
 `unavailable` with its path and the reason, every other project keeps loading and
 saving, and nothing is written at the missing path. It returns when its file does,
 and if the same project file turns up at another path the server scans, that path
-replaces the old one.
+replaces the old one, but only while the missing file's folder is still there (it
+was moved or renamed) or it was in the projects folder. A project whose folder is
+gone too, as on a drive that is not mounted, waits for it, so an older copy never
+takes its place. A save that could not finish moving a project file into place
+because its drive went away finishes when the drive returns.
 
 For automatic startup, use your operating system's service manager. Keep the
 installation's paths, service label and restart instructions in the private
