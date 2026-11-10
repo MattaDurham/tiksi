@@ -18,6 +18,7 @@ import zipfile
 from urllib.parse import urlsplit
 
 from server.peers import trusted_peer
+from server.ranges import Part, byte_range
 
 log = logging.getLogger('tiksi.workspace')
 MAX_JSON = 32 * 1024 * 1024
@@ -962,14 +963,24 @@ class WorkspaceService:
                     h.send_header('Cache-Control', 'private, max-age=31536000, immutable')
                     h.end_headers()
                     return True
-                h.send_response(200)
+                size = dest.stat().st_size
+                # One byte range when asked for: a walk-through video plays and seeks on the phone.
+                wanted = byte_range(h.headers.get('Range') if h.headers.get('If-Range', tag) == tag else None, size)
+                if wanted == 'unsatisfiable':
+                    h.send_response(416); h.send_header('Content-Range', 'bytes */%d' % size); h.send_header('Content-Length', '0'); h.end_headers()
+                    return True
+                start, end = wanted or (0, size - 1)
+                h.send_response(206 if wanted else 200)
+                if wanted: h.send_header('Content-Range', 'bytes %d-%d/%d' % (start, end, size))
                 h.send_header('Content-Type', 'application/octet-stream')
-                h.send_header('Content-Length', str(dest.stat().st_size))
+                h.send_header('Content-Length', str(end - start + 1))
+                h.send_header('Accept-Ranges', 'bytes')
                 h.send_header('ETag', tag)
                 h.send_header('Cache-Control', 'private, max-age=31536000, immutable')
                 h.end_headers()
                 with dest.open('rb') as source:
-                    while chunk := source.read(1024 * 1024): h.wfile.write(chunk)
+                    source.seek(start); part = Part(source, end - start + 1)
+                    while chunk := part.read(1024 * 1024): h.wfile.write(chunk)
             else: raise WorkspaceError('Workspace endpoint not found', 404)
         except WorkspaceError as error:
             h.close_connection = True

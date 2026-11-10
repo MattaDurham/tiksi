@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Serve public Tiksi assets and optional local services, excluding private files."""
 import argparse
+import email.utils
 import errno
 import html
 import io
@@ -21,6 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # The service packages live at the repository root, whatever folder this file is started from.
 if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
 from server.peers import refusal, this_mac_tailscale_address, trusted_peer
+from server.ranges import Part, byte_range
 PUBLIC_FILES = {'index.html', 'manifest.webmanifest', 'app-icon.svg'}
 PUBLIC_DIRS = {'css', 'js', 'vendor'}
 
@@ -156,7 +158,56 @@ class AppHandler(SimpleHTTPRequestHandler):
             badge = '<div style="position:fixed;bottom:8px;right:8px;z-index:2147483647;padding:6px 10px;background:#f3c467;color:#1b1b1b;font:12px monospace;border-radius:4px;pointer-events:none" aria-label="Branch preview">PREVIEW ' + html.escape(metadata.get('branch', 'unknown')) + ' / ' + html.escape(metadata.get('head', '')[:8]) + '</div>'
             document = document.replace('</body>', badge + '\n</body>')
             return self.bytes_response(document.encode('utf-8'), 'text/html; charset=utf-8')
-        return super().send_head()
+        return self.static_file(target)
+
+    def static_file(self, target):
+        """A public file, with a validator for reuse and a single byte range when one is asked
+        for (video in the guide plays and seeks without downloading the whole clip)."""
+        if not target.is_file():
+            self.send_error(404); return None
+        try:
+            source = target.open('rb'); info = os.fstat(source.fileno())
+        except OSError:
+            self.send_error(404); return None
+        tag = '"%x-%x"' % (info.st_mtime_ns, info.st_size)
+        modified = email.utils.formatdate(info.st_mtime, usegmt=True)
+        if self.not_modified(tag, info.st_mtime):
+            source.close()
+            self.send_response(304); self.send_header('ETag', tag); self.end_headers()
+            return None
+        kind = self.guess_type(str(target))
+        # A range is honoured unless If-Range names another version of the file.
+        asked = self.headers.get('Range') if self.headers.get('If-Range', tag) in (tag, modified) else None
+        wanted = byte_range(asked, info.st_size)
+        if wanted == 'unsatisfiable':
+            source.close()
+            self.send_response(416); self.send_header('Content-Range', 'bytes */%d' % info.st_size)
+            self.send_header('Content-Length', '0'); self.end_headers()
+            return None
+        if wanted:
+            start, end = wanted
+            source.seek(start)
+            self.send_response(206)
+            self.send_header('Content-Range', 'bytes %d-%d/%d' % (start, end, info.st_size))
+            length, body = end - start + 1, Part(source, end - start + 1)
+        else:
+            self.send_response(200)
+            length, body = info.st_size, source
+        self.send_header('Content-Type', kind)
+        self.send_header('Content-Length', str(length))
+        self.send_header('Last-Modified', modified)
+        self.send_header('ETag', tag)
+        self.send_header('Accept-Ranges', 'bytes')
+        self.end_headers()
+        return body
+
+    def not_modified(self, tag, mtime):
+        match = self.headers.get('If-None-Match')
+        if match is not None: return tag in [t.strip() for t in match.split(',')] or match.strip() == '*'
+        since = self.headers.get('If-Modified-Since')
+        if not since: return False
+        try: return int(mtime) <= email.utils.parsedate_to_datetime(since).timestamp()
+        except (TypeError, ValueError, IndexError, OverflowError): return False
 
     def bytes_response(self, payload, content_type):
         self.send_response(200)
