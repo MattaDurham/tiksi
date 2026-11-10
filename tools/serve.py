@@ -35,6 +35,7 @@ COMPRESSIBLE = {'text/javascript', 'text/css', 'text/html', 'text/plain', 'appli
 # changed file gets a new address. The page's own scripts in js/ are asked about each time.
 VERSIONED = ('vendor', 'css')
 IMMUTABLE = 'public, max-age=31536000, immutable'
+PROXY_REFUSED = 'Through a proxy such as Tailscale Serve, Tiksi services answer only devices signed in to this tailnet'
 
 
 class Fingerprints:
@@ -161,14 +162,30 @@ class AppHandler(SimpleHTTPRequestHandler):
         # can pass by under a different spelling.
         path = urlsplit(self.path).path
         if path != '/api' and not path.startswith('/api/'): return False
-        return not trusted_peer(self.client_address[0])
+        if not trusted_peer(self.client_address[0]): return True
+        return self.through_proxy() and not self.headers.get('Tailscale-User-Login', '').strip()
+
+    def through_proxy(self):
+        """True when a request reached this Mac through a proxy on it, such as Tailscale Serve:
+        the caller is this Mac, but the browser addressed another name. Tailscale Serve adds the
+        signed-in user (Tailscale-User-Login) to requests from devices on the tailnet and removes
+        any such header a caller sent itself; Tailscale Funnel, which serves the open internet,
+        adds none. So through a proxy only a request carrying that header is served."""
+        try:
+            if not ipaddress.ip_address(self.client_address[0].split('%')[0]).is_loopback: return False
+        except ValueError: return False
+        host = (urlsplit('//' + self.headers.get('Host', '')).hostname or '').lower()
+        if host == 'localhost' or host.endswith('.localhost'): return False
+        try: return not ipaddress.ip_address(host).is_loopback
+        except ValueError: return True
 
     def dispatch(self):
         if not self.valid_host():
             self.send_error(403, 'Host is not allowed')
             return True
         if self.service_caller_refused():
-            payload = (json.dumps({'error': refusal(self.client_address[0])}) + '\n').encode('utf-8')
+            reason = PROXY_REFUSED if trusted_peer(self.client_address[0]) else refusal(self.client_address[0])
+            payload = (json.dumps({'error': reason}) + '\n').encode('utf-8')
             self.send_response(403)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(payload)))
@@ -228,7 +245,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_error(403, 'Host is not allowed'); return None
         # HEAD reaches here without passing dispatch().
         if self.service_caller_refused():
-            self.send_error(403, refusal(self.client_address[0])); return None
+            self.send_error(403, PROXY_REFUSED if trusted_peer(self.client_address[0]) else refusal(self.client_address[0])); return None
         path = unquote(urlsplit(self.path).path)
         if path == '/api/instance':
             payload = (json.dumps(self.instance()) + '\n').encode('utf-8')

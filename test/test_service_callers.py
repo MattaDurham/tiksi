@@ -228,6 +228,24 @@ class ServiceCallers(unittest.TestCase):
         self.assertTrue(any('404' in line for line in self.logged), self.logged)
         self.assertTrue(any('POST /api/workspace/recovery' in line for line in self.logged), self.logged)
 
+    def test_through_tailscale_serve_only_signed_in_tailnet_devices_get_services(self):
+        # Tailscale Serve and Funnel both pass requests on from this Mac, under the Mac's https name.
+        self.server.allowed_hosts = ['mac.example-tailnet.ts.net']
+        proxied = {'Host': 'mac.example-tailnet.ts.net'}
+        for service in SERVICES:
+            headers = {**PAGE_HEADERS.get(service, {}), **proxied}
+            status, body = self.call('/api/' + service + '/capabilities', headers={**headers, 'Tailscale-User-Login': 'owner@example.com'})
+            self.assertEqual(status, 200, ('through Serve, from a signed-in device', service))
+            status, body = self.call('/api/' + service + '/capabilities', headers=headers)
+            self.assertEqual(status, 403, ('through Funnel, from anyone', service))
+            self.assertNotIn(b'token', body)
+            self.assertIn('signed in to this tailnet', json.loads(body)['error'])
+        self.assertEqual(self.call('/api/instance', 'HEAD', proxied)[0], 403)
+        self.assertEqual(self.call('/index.html', headers=proxied)[0], 200, 'the page itself still loads')
+        # A browser on this Mac, by any of its own names, is served as before.
+        for host in ('localhost:8642', '127.0.0.1:8642'):
+            self.assertEqual(self.call('/api/workspace/capabilities', headers={**PAGE_HEADERS['workspace'], 'Host': host})[0], 200, host)
+
     def test_a_stolen_token_is_still_refused_for_every_method(self):
         tokens = {service: json.loads(self.call('/api/' + service + '/capabilities', headers=PAGE_HEADERS.get(service))[1])['token'] for service in SERVICES}
         self.seen.clear(); self.caller = '192.168.1.9'
