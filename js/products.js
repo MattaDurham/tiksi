@@ -5,6 +5,7 @@ import { ws, uid, touch, fmtMoney, readMoney, escapeHtml, allScopeItems, activeP
 import { icon } from './icons.js';
 import { openResearch, safeResearchUrl, researchApi } from './research.js';
 import { diskWorkspace } from './disk-workspace.js';
+import { openedWords } from './documentcenter.js';
 
 const CATEGORIES = ['appliance', 'plumbing', 'lighting', 'flooring', 'tile', 'cabinetry', 'hardware', 'hvac', 'electrical', 'lumber', 'windows-doors', 'paint', 'other'];
 const STALE_DAYS = 90;
@@ -511,8 +512,7 @@ function renderForm() {
 
 async function openInFolder(prop, path) {
   try {
-    const opened = await diskWorkspace.openProjectPath(prop, path || '');
-    message = 'Opened ' + (opened.path && opened.path !== '.' ? opened.path : opened.folder) + ' on this Mac.';
+    message = openedWords(await diskWorkspace.openProjectPath(prop, path || ''), path);
   } catch (e) { message = e.message || 'Could not open the project folder.'; }
   if (el) renderForm();
 }
@@ -563,16 +563,18 @@ function pollPriceChecks() {
   const running = ws.data.products.filter(p => p.priceCheck?.status === 'running' && p.priceCheck.jobId).map(p => [p.id, p.priceCheck.jobId]);
   if (!running.length) return;
   pollTimer = setTimeout(async () => {
+    // Redraw only when a check finished: a redraw while one runs would wipe what is being typed.
+    let changed = false;
     for (const [id, jobId] of running) {
       let job = null, lost = false;
       try { const result = await researchApi('/' + encodeURIComponent(jobId)); job = result.job || result; }
       catch (e) { lost = /not found/i.test(e.message || ''); }
       const p = byId(id);
       if (!p || p.priceCheck?.jobId !== jobId) continue;
-      if (job && TERMINAL.has(job.status)) { applyPriceCheck(p, job); touch(); }
-      else if (lost) { p.priceCheck = { status: 'failed', at: new Date().toISOString(), message: 'The price check was lost when the server restarted. The price was not changed.' }; touch(); }
+      if (job && TERMINAL.has(job.status)) { applyPriceCheck(p, job); touch(); changed = true; }
+      else if (lost) { p.priceCheck = { status: 'failed', at: new Date().toISOString(), message: 'The price check was lost when the server restarted. The price was not changed.' }; touch(); changed = true; }
     }
-    if (el) render();
+    if (el && changed) render();
     pollPriceChecks();
   }, 4000);
 }
