@@ -65,6 +65,23 @@ class Workflow:
             if item: items.append(item)
         return items
 
+    # A lock with no owner record is given this long to write one before it counts as stale.
+    LOCK_GRACE_SECONDS = 60
+
+    def stale_lock(self, lock):
+        """Whether the lock's owner is gone: a killed command never removes its lock."""
+        owner = read_json(lock / 'owner.json')
+        if owner is None:
+            try: age = time.time() - lock.stat().st_mtime
+            except OSError: return False
+            return age > self.LOCK_GRACE_SECONDS
+        pid = owner.get('pid')
+        if not isinstance(pid, int) or pid <= 0: return False
+        try: os.kill(pid, 0)
+        except ProcessLookupError: return True
+        except PermissionError: return False
+        return False
+
     @contextmanager
     def lock(self):
         self.records.mkdir(exist_ok=True)
@@ -72,7 +89,14 @@ class Workflow:
         try:
             lock.mkdir()
         except FileExistsError:
-            raise WorkflowError('Another workflow command owns the lock. Inspect it; never clear a live lock.')
+            if not self.stale_lock(lock):
+                raise WorkflowError('Another workflow command owns the lock. Inspect it; never clear a live lock.')
+            owner = read_json(lock / 'owner.json') or {}
+            shutil.rmtree(lock, ignore_errors=True)
+            print(f'Cleared a lock left by a command that is no longer running (process {owner.get("pid", "unknown")}).')
+            try: lock.mkdir()
+            except FileExistsError:
+                raise WorkflowError('Another workflow command took the lock just now. Retry.')
         try:
             (lock / 'owner.json').write_text(json.dumps({'pid': os.getpid(), 'created': time.time()}), encoding='utf-8')
             yield
@@ -264,6 +288,20 @@ class Workflow:
     def gh(self, *args):
         return run(['gh', *args], self.live)
 
+    def private_guard(self, target, branch, base='main', title=None, body_file=None):
+        """Refuse before a push that would make a private word public: the branch name, the
+        branch's commit messages, and the PR title and text. The live checkout's guard and
+        word list are used, so every branch copy is held to the same list."""
+        guard = self.live / 'scripts/check-private.py'
+        if not guard.exists(): guard = Path(__file__).resolve().parent / 'check-private.py'
+        args = [sys.executable, str(guard), '--push', branch, '--base', base]
+        if title: args += ['--text', title]
+        if body_file: args += ['--text-file', str(Path(body_file).resolve())]
+        result = subprocess.run(args, cwd=target, text=True, encoding='utf-8', capture_output=True)
+        if result.returncode:
+            raise WorkflowError('Private-data check refused the push; nothing was pushed.\n'
+                                + (result.stderr or result.stdout).strip())
+
     def pr_info(self, slug, strict=False):
         try:
             return json.loads(self.gh('pr', 'view', self.validate(slug), '--json',
@@ -282,6 +320,7 @@ class Workflow:
             raise WorkflowError('PR body file does not exist; no push attempted.')
         if self.git('rev-list', '--count', base + '..' + branch) == '0':
             raise WorkflowError('Branch has no commits beyond its base; nothing to publish as a PR.')
+        self.private_guard(target, branch, base, title=title, body_file=body_file)
         self.gh('auth', 'status')
         self.git('push', '-u', 'origin', branch, cwd=target)
         info = self.pr_info(slug)
@@ -359,25 +398,43 @@ class Workflow:
             running = self.verdict(info.get('statusCheckRollup') or [])
             if running: print(f'Still running, no verdict yet: {", ".join(running)}. Merging without waiting; '
                               'main\'s own run grades the merge.')
+        branch = self.validate(slug)
+        self.private_guard(target, branch)
+        self.origin_current()
         # Use the live gate if present so a branch cannot weaken its own landing gate.
         gate = self.live / 'scripts/preflight.sh'
         if not gate.exists(): gate = target / 'scripts/preflight.sh'
         run(['sh', str(gate), '--fast' if skip_checks else '--merge'], target, capture=False)
         with self.lock():
             self.gate(slug, skip_checks=skip_checks)
+            self.origin_current()
             if self.metadata(target): self.stop(slug)
-            branch = self.validate(slug)
+            before = self.git('rev-parse', 'main', cwd=self.live)
             try: self.git('merge', '--no-ff', branch, '-m', f'Merge branch {branch}', cwd=self.live)
             except WorkflowError:
                 run(['git', 'merge', '--abort'], self.live, check=False)
                 raise WorkflowError('Merge conflict; aborted. Resolve in the branch worktree and retest.')
-            self.git('push', 'origin', 'main', cwd=self.live)
+            try: self.git('push', 'origin', 'main', cwd=self.live)
+            except WorkflowError as exc:
+                # GitHub refused main: put the live checkout back where it was, so it never
+                # serves a main that GitHub does not have. The branch keeps every commit.
+                self.git('reset', '--hard', before, cwd=self.live)
+                raise WorkflowError(f'GitHub refused the push of main, so the merge was undone in the live checkout '
+                                    f'(main is back at {before[:8]}; the branch is untouched). {exc}')
         print(f'Merged and pushed {branch}. Live server was not restarted.')
         print('Now watch main\'s checks (gh run watch on the newest main run) and fix main if they fail.')
         if not keep:
             info = self.pr_info(slug)
             if info and info['state'] == 'MERGED': self.discard(slug, owner_approved=True)
             else: print('Keeping branch and worktree until GitHub confirms Merged. Run discard then.')
+
+    def origin_current(self):
+        """Fetch GitHub's main and refuse if it has commits the local main lacks."""
+        if not run(['git', 'remote', 'get-url', 'origin'], self.live, check=False): return
+        self.git('fetch', '--quiet', 'origin', 'main', cwd=self.live)
+        if subprocess.run(['git', 'merge-base', '--is-ancestor', 'origin/main', 'main'], cwd=self.live).returncode:
+            raise WorkflowError('GitHub\'s main has commits the local main lacks. Bring the live checkout\'s main '
+                                'up to date with origin/main, update the branch onto it and retest; nothing was merged.')
 
     def discard(self, slug, owner_approved=False):
         if not owner_approved: raise WorkflowError('Discard requires the owner\'s instruction and --owner-approved.')
@@ -393,23 +450,49 @@ class Workflow:
             if subprocess.run(['git', 'merge-base', '--is-ancestor', head, 'main'], cwd=self.live).returncode == 0:
                 raise WorkflowError('PR head is already in main. Keep it open until GitHub confirms Merged; never close it.')
             self.gh('pr', 'close', branch)
-        # Archive ignored runtime before deletion; dirty source has already blocked.
+        # Archive ignored files before deletion; dirty source has already blocked.
         with self.lock():
             if self.metadata(target): self.stop(slug)
-            archive = self.records / 'archives' / (slug + '-' + str(time.time_ns()))
-            for name in ('.tiksi-state', '.tiksi-state-archive', '.tiksi-preview.log', 'AGENTS.local.md'):
+            stamp = str(time.time_ns())
+            archive = self.records / 'archives' / (slug + '-' + stamp)
+            for name in self.ignored(target):
                 source = target / name
-                if source.exists():
-                    archive.mkdir(parents=True, exist_ok=True)
-                    if source.is_dir(): shutil.copytree(source, archive / name)
-                    else: shutil.copyfile(source, archive / name)
+                if source.is_symlink() or not source.exists(): continue
+                archive.mkdir(parents=True, exist_ok=True)
+                (archive / name).parent.mkdir(parents=True, exist_ok=True)
+                if source.is_dir(): shutil.copytree(source, archive / name, symlinks=True)
+                else: shutil.copyfile(source, archive / name)
+            kept = self.keep_unshared(branch, slug, stamp)
             self.git('worktree', 'remove', '--force', str(target), cwd=self.live)
             self.git('branch', '-D', branch, cwd=self.live)
             if has_origin:
                 exists = subprocess.run(['git', 'show-ref', '--verify', '--quiet', 'refs/remotes/origin/' + branch], cwd=self.live).returncode == 0
                 if exists: self.git('push', 'origin', '--delete', branch, cwd=self.live)
             self.record(slug).unlink(missing_ok=True)
+        if kept:
+            ref, count = kept
+            print(f'{branch} had {count} commit(s) that are in neither main nor GitHub. They are kept, not deleted: '
+                  f'{ref} (restore with: git branch {branch} {ref}).')
         print(f'Discarded {branch}; private runtime, if present, preserved in {archive}')
+
+    # Ignored folders that are rebuilt by a command, so not worth copying; a symlink is never
+    # followed (a branch copy's node_modules and AGENTS.local.md point into the live checkout).
+    NOT_ARCHIVED = ('node_modules', 'tools/fixtures', 'test-results', 'playwright-report')
+
+    def ignored(self, target):
+        """Every ignored file and folder in a branch copy, as top-most paths."""
+        out = run(['git', 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'], target)
+        names = [name.rstrip('/') for name in out.split('\0') if name]
+        return [n for n in names if '__pycache__' not in Path(n).parts
+                and not any(n == skip or n.startswith(skip + '/') for skip in self.NOT_ARCHIVED)]
+
+    def keep_unshared(self, branch, slug, stamp):
+        """Keep commits that only this branch holds reachable under refs/tiksi-discarded/."""
+        count = int(self.git('rev-list', '--count', branch, '--not', 'main', '--remotes', cwd=self.live) or 0)
+        if not count: return None
+        ref = f'refs/tiksi-discarded/{slug}-{stamp}'
+        self.git('update-ref', ref, branch, cwd=self.live)
+        return ref, count
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
