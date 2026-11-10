@@ -816,17 +816,27 @@ export function polyArea(pts) {
 
 export function units() { return ws.data.settings.units; }
 
+// Lengths are shown as a tape reads them: feet, inches and sixteenths (2'-9 1/2"), or metres
+// to the millimetre (0.851 m). Stored values are metres and never rounded here.
+const M_PER_IN = M_PER_FT / 12;
+function sixteenthsText(n, afterFeet) {
+  const whole = Math.floor(n / 16);
+  let num = n % 16, den = 16;
+  while (num && num % 2 === 0) { num /= 2; den /= 2; }
+  if (!num) return String(whole);
+  return (whole || afterFeet ? whole + ' ' : '') + num + '/' + den;
+}
 export function fmtLen(m, opts) {
   if (m == null || isNaN(m)) return '-';
-  if (units() === 'metric') return (Math.round(m * 100) / 100) + ' m';
+  if (units() === 'metric') return (Math.round(m * 1000) / 1000 || 0) + ' m';
   // Below the datum (a basement floor) the sign covers feet and inches alike: -7'-7", not -8'-5".
-  const totalIn = Math.abs(m) / M_PER_FT * 12;
-  let ft = Math.floor(totalIn / 12);
-  let inch = Math.round(totalIn - ft * 12);
-  if (inch === 12) { ft += 1; inch = 0; }
-  const sign = m < 0 && (ft || inch) ? '-' : '';
+  let sixteenths = Math.round(Math.abs(m) / M_PER_IN * 16);
+  const ft = Math.floor(sixteenths / 192);
+  sixteenths -= ft * 192;
+  const sign = m < 0 && (ft || sixteenths) ? '-' : '';
+  const inch = sixteenthsText(sixteenths, ft > 0);
   if (ft === 0) return sign + inch + '"';
-  if (opts && opts.short && inch === 0) return sign + ft + "'";
+  if (opts && opts.short && sixteenths === 0) return sign + ft + "'";
   return sign + ft + "'-" + inch + '"';
 }
 
@@ -838,36 +848,56 @@ export function fmtArea(m2) {
 
 // Tape readings carry fractions: 33 1/2", 33-1/2", 2'-9 1/2", 9½", 1/4".
 const UNICODE_FRACTIONS = { '¼': ' 1/4', '½': ' 1/2', '¾': ' 3/4', '⅛': ' 1/8', '⅜': ' 3/8', '⅝': ' 5/8', '⅞': ' 7/8', '⅓': ' 1/3', '⅔': ' 2/3', '⅙': ' 1/6', '⅚': ' 5/6', '⅕': ' 1/5' };
-function inchPart(s) {
+const NUM = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
+const AMOUNT = String.raw`(?:\d+(?:\s+|\s*-\s*)\d+\s*/\s*\d+|\d+\s*/\s*\d+|${NUM})`;
+const FEET_INCHES = new RegExp(String.raw`^(?:(${AMOUNT})\s*')?\s*(?:-\s*)?(?:(${AMOUNT})\s*("?))?$`);
+function amount(s) {
   s = s.trim();
-  if (/^\d+(?:\.\d+)?$/.test(s)) return parseFloat(s);
+  if (new RegExp('^' + NUM + '$').test(s)) return parseFloat(s);
   const m = s.match(/^(?:(\d+)(?:\s+|\s*-\s*))?(\d+)\s*\/\s*(\d+)$/);
   return m && +m[3] ? (m[1] ? +m[1] : 0) + m[2] / m[3] : NaN;
 }
 
-export function parseLen(str) {
-  // Accepts: 12'6", 12'-6", 12.5', 30", 33 1/2", 2'-9 1/2", 3.8m, 85 cm, 850 mm, plain number
-  // (ft if imperial, m if metric).
-  if (typeof str === 'number') return units() === 'imperial' ? str * M_PER_FT : str;
-  str = String(str).trim().toLowerCase().replace(/[¼½¾⅛⅜⅝⅞⅓⅔⅙⅚⅕]/g, c => UNICODE_FRACTIONS[c]).replace(/[″”]/g, '"').replace(/[′’]/g, "'").trim();
-  if (!str) return NaN;
-  const mMatch = str.match(/^(-?\d+(?:\.\d+)?)\s*(m|cm|mm)$/);
-  if (mMatch) return parseFloat(mMatch[1]) / { m: 1, cm: 100, mm: 1000 }[mMatch[2]];
-  const ftIn = str.match(/^(-?\d+(?:\.\d+)?)\s*'\s*(?:-?\s*([\d\s./-]*?)\s*(?:"|in)?)?$/);
-  if (ftIn) {
-    // -7'-7" is seven feet seven inches below the datum: the inches take the sign of the feet.
-    const ft = parseFloat(ftIn[1]), inch = ftIn[2] ? inchPart(ftIn[2]) / 12 : 0;
-    if (Number.isNaN(inch)) return NaN;
-    return (ftIn[1].startsWith('-') ? ft - inch : ft + inch) * M_PER_FT;
+// The one rule for a number typed on its own, in every length field: inches in feet and
+// inches (what a tape blade shows, and how SketchUp reads it), metres in metric.
+export function bareLengthUnit() { return units() === 'metric' ? 'metres' : 'inches'; }
+
+// Reads a typed length. Returns { value } in metres, or { value: NaN, error } saying why it
+// cannot be read: nothing is guessed from part of the entry ("10x12", "2,5 m", "6 ft tall").
+// Accepts 12'-6", 12' 6", 12'6, 12.5', 6 ft 2 in, 6ft2in, 6 feet 2 inches, 30", 30 in,
+// 33 1/2", 33-1/2", 2'-9 1/2", 9½", 1/4", 3.8 m, 85 cm, 850 mm, a minus sign in front
+// (below the datum), and a bare number in the unit bareLengthUnit() names.
+export function readLength(text) {
+  const raw = typeof text === 'number' ? String(text) : String(text ?? '');
+  const refuse = why => ({ value: NaN, error: why });
+  const example = units() === 'metric' ? '3.2 m, 850 mm or 85 cm' : '12\'-6", 33 1/2", 6 ft 2 in or 3.2 m';
+  const cannot = () => refuse('"' + raw.trim() + '" is not a length. Type it like ' + example + '; a number on its own is ' + bareLengthUnit() + '.');
+  let s = raw.trim().toLowerCase()
+    .replace(/[¼½¾⅛⅜⅝⅞⅓⅔⅙⅚⅕]/g, c => UNICODE_FRACTIONS[c])
+    .replace(/[″”“]/g, '"').replace(/[′’‘]/g, "'").replace(/''/g, '"').trim();
+  if (!s) return refuse('Type a length.');
+  if (/\d,\d/.test(s)) return refuse('"' + raw.trim() + '" has a comma in it. Use a point for decimals (2.5 m) and no thousands separator.');
+  let sign = 1;
+  if (s.startsWith('-')) { sign = -1; s = s.slice(1).trim(); }
+  if (!s || /^-/.test(s)) return cannot();
+  const metric = s.match(new RegExp('^(' + NUM + ')\\s*(m|cm|mm|metres?|meters?|centimetres?|centimeters?|millimetres?|millimeters?)\\.?$'));
+  if (metric) {
+    const u = metric[2], div = u.startsWith('mm') || u.startsWith('milli') ? 1000 : u.startsWith('c') ? 100 : 1;
+    return { value: sign * parseFloat(metric[1]) / div };
   }
-  const inOnly = str.match(/^(-?)\s*(\d[\d\s./-]*?)\s*(?:"|in|inch|inches)$/);
-  if (inOnly) { const inch = inchPart(inOnly[2]); return (inOnly[1] ? -inch : inch) / 12 * M_PER_FT; }
-  const fraction = inchPart(str.replace(/^-/, ''));
-  if (/\//.test(str)) return Number.isNaN(fraction) ? NaN : (str.startsWith('-') ? -fraction : fraction) * (units() === 'imperial' ? M_PER_FT : 1);
-  const plain = parseFloat(str);
-  if (!isNaN(plain)) return units() === 'imperial' ? plain * M_PER_FT : plain;
-  return NaN;
+  // Words for feet and inches become the marks: 6 ft 2 in -> 6' 2".
+  s = s.replace(/\s*(?<![a-z])(?:feet|foot|ft)(?![a-z])\.?/g, "'").replace(/\s*(?<![a-z])(?:inches|inch|in)(?![a-z])\.?/g, '"').trim();
+  const m = s.match(FEET_INCHES);
+  if (!m || (!m[1] && !m[2])) return cannot();
+  const ft = m[1] ? amount(m[1]) : 0, inch = m[2] ? amount(m[2]) : 0;
+  if (!Number.isFinite(ft) || !Number.isFinite(inch)) return cannot();
+  // A number on its own (no mark at all): one rule everywhere.
+  if (!m[1] && !m[3]) return { value: sign * (units() === 'metric' ? inch : inch * M_PER_IN) };
+  return { value: sign * (ft * M_PER_FT + inch * M_PER_IN) };
 }
+
+// The value of readLength, NaN when the entry cannot be read.
+export function parseLen(str) { return readLength(str).value; }
 
 export function fmtMoney(n) {
   if (n == null || isNaN(n)) return '-';
@@ -877,9 +907,27 @@ export function fmtMoney(n) {
   return '$' + Math.round(n).toLocaleString('en-US');
 }
 
+// Reads a typed amount of money. Returns { value } in dollars (blank is 0), or
+// { value: NaN, error } when the entry cannot be read. Accepts 250000, 250,000, $250,000.50,
+// 250k, $1.2m, 1.2 million, a minus sign; refuses "10x12", "2,5", "about 300".
+export function readMoney(text) {
+  const raw = String(text ?? '').trim();
+  if (!raw) return { value: 0 };
+  let s = raw.toLowerCase().replace(/\s+/g, '');
+  let sign = 1;
+  if (/^-/.test(s)) { sign = -1; s = s.slice(1); }
+  s = s.replace(/^\$/, '').replace(/^-/, () => { sign = -sign; return ''; });
+  const mult = { k: 1e3, thousand: 1e3, m: 1e6, mm: 1e6, million: 1e6 };
+  const m = s.match(/^(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+)(k|thousand|mm|m|million)?$/);
+  if (!m) return { value: NaN, error: '"' + raw + '" is not an amount. Type it like 250000, $250,000, 250k or 1.2m.' };
+  return { value: sign * parseFloat(m[1].replace(/,/g, '')) * (m[2] ? mult[m[2]] : 1) };
+}
+
+// The value of readMoney, and 0 when the entry cannot be read (fields that do not show
+// readMoney's message keep this older contract).
 export function parseMoney(str) {
-  const n = parseFloat(String(str).replace(/[$,\s]/g, ''));
-  return isNaN(n) ? 0 : n;
+  const v = readMoney(str).value;
+  return Number.isNaN(v) ? 0 : v;
 }
 
 export function fmtBytes(n) {
