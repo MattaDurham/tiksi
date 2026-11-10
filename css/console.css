@@ -730,6 +730,10 @@ a.btn { text-decoration: none; }
   box-shadow: var(--lift), var(--shadow-1);
 }
 .gantt-svg { display: block; }
+.gantt-svg .g-item { cursor: pointer; outline: none; }
+.gantt-svg .g-item.on .g-row, .gantt-svg .g-item:focus-visible .g-row { fill: rgba(232, 151, 58, 0.09); }
+.gantt-detail { min-height: 44px; display: flex; align-items: center; margin-bottom: 8px; padding: 8px 12px; border-left: 2px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); font-size: 13px; line-height: 1.4; color: var(--ink); }
+.gantt-detail[hidden] { display: none; }
 .gantt-svg text { font-family: var(--mono); }
 .gantt-svg .g-row { fill: transparent; transition: fill var(--dur) var(--ease); }
 .gantt-svg .g-row:hover { fill: rgba(255, 255, 255, 0.035); }
@@ -1142,9 +1146,11 @@ kbd {
 .tb-menu-item:disabled:hover { border-color: transparent; color: var(--dim); }
 
 /* Small screens keep navigation and report editing within the actual viewport. The
-   model canvas remains a full-width work area; its tools and inspector scroll separately. */
+   model canvas remains a full-width work area; its tools and inspector scroll separately.
+   The query is the phone layout's own (SMALL in js/field.js; a test keeps them equal), so a
+   phone held sideways gets these page rules with its phone bar, not desktop columns. */
 #view, .editor-layout > *, .two-col > *, .sheet-layout > * { min-width: 0; min-height: 0; }
-@media (max-width: 760px) {
+@media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
   #app { grid-template: auto auto minmax(0, 1fr) / minmax(0, 1fr); grid-template-areas: "top" "rail" "view"; height: 100dvh; }
   #topbar { flex-wrap: wrap; gap: 8px; padding: 8px 10px; }
   .brand { margin-right: 0; }
@@ -1161,7 +1167,24 @@ kbd {
   .two-col { grid-template-columns: minmax(0, 1fr); height: auto; overflow: visible; }
   #proj-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
   #proj-detail { overflow-x: auto; }
-  #items-table { min-width: 860px; }
+  /* Scope items stack as cards: name and done on top, the numbers in labelled cells below. */
+  #items-table, #items-table tbody { display: block; width: 100%; }
+  #items-table thead { display: none; }
+  #items-table tr[data-item] {
+    display: grid; grid-template-columns: 44px repeat(3, minmax(0, 1fr)) 44px; align-items: end; gap: 4px 6px;
+    grid-template-areas: "check name name name del" "qty unit days deps deps" ". low likely high high";
+    padding: 8px 0; border-bottom: 1px solid var(--line);
+  }
+  #items-table tr[data-item] > td { display: block; width: auto !important; padding: 0; border: 0; min-width: 0; }
+  #items-table tr[data-item] > td[data-label]::before { content: attr(data-label); display: block; font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); margin-bottom: 2px; text-align: left; }
+  #items-table tr[data-item] input[data-money] { width: 100%; min-width: 0; }
+  #items-table .it-check { grid-area: check; align-self: center; }
+  #items-table .it-namecell { grid-area: name; }
+  #items-table .it-qty { grid-area: qty; } #items-table .it-unit { grid-area: unit; } #items-table .it-days { grid-area: days; }
+  #items-table .it-deps { grid-area: deps; } #items-table .it-low { grid-area: low; } #items-table .it-likely { grid-area: likely; } #items-table .it-high { grid-area: high; }
+  #items-table .it-del { grid-area: del; align-self: center; justify-self: end; }
+  #items-table tr.item-more, #items-table tr.item-money-problem, #items-table tr.total-row { display: block; }
+  #items-table tr.item-more > td, #items-table tr.item-money-problem > td, #items-table tr.total-row > td { display: block; }
   .proj-tools .search-input { width: 100%; }
   .item-panel { grid-template-columns: minmax(0, 1fr); padding-left: 14px; }
   .field-row { flex-wrap: wrap; }
@@ -1184,7 +1207,41 @@ kbd {
   .tool-btn .key { display: none; }
 }
 
-@media (max-width: 760px) { .products-layout { grid-template-columns: minmax(0, 1fr) !important; } .products-layout #prod-form { grid-row: 1; } }
+@media (max-width: 760px), (max-height: 500px) and (pointer: coarse) { .products-layout { grid-template-columns: minmax(0, 1fr) !important; } .products-layout #prod-form { grid-row: 1; } }
+
+/* ---------- finger-sized controls on a touch device ----------
+   html.touch is set by js/field.js from touchDevice() (render-quality.js), whatever the layout
+   and the window width, so a narrow Mac window keeps its mouse sizes. PLAN and MODEL size their
+   own tools. 44 points per target, 16-point fields (iPhone Safari zooms into smaller ones). */
+html.touch:not([data-view=plan]):not([data-view=model]) #view :is(.btn, .tb-btn, .seg-btn, .ps-chip, .mv-chip-btn, .sl-item, .row-del, .it-toggle, .it-links, .dep-summary, select, summary, input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=color]), textarea) {
+  min-height: 44px;
+}
+html.touch:not([data-view=plan]):not([data-view=model]) #view :is(.btn, .tb-btn, .seg-btn, .ps-chip, .mv-chip-btn, .row-del, .it-toggle) { min-width: 44px; }
+html.touch:not([data-view=plan]):not([data-view=model]) #view :is(input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea),
+html.touch dialog :is(input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea) { font-size: 16px !important; }
+html.touch:not([data-view=plan]):not([data-view=model]) #view :is(.btn, .seg-btn, .ps-chip, .mv-chip-btn) { display: inline-flex; align-items: center; justify-content: center; }
+/* A small checkbox gets a finger-sized label around it to tap. */
+html.touch #view :is(.it-done-tap, .bd-sel-tap) { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; margin: -6px 0; cursor: pointer; }
+html.touch #view :is(.it-done-tap, .bd-sel-tap) input { width: 22px; height: 22px; margin: 0; }
+/* Nothing a finger needs is shown only under a mouse. */
+html.touch table.grid .row-del, html.touch #items-table .it-links.none { opacity: 1; }
+/* Inline links that act as buttons (PRODUCTS' maker and vendor links). */
+html.touch #view a.p-link { display: inline-flex; align-items: center; min-height: 44px; min-width: 44px; }
+html.touch dialog .btn { min-height: 44px; }
+html.touch .file-dialog select { min-height: 44px; }
+html.touch .file-dialog input[type=checkbox] { width: 22px; height: 22px; }
+html.touch .file-dialog label { min-height: 44px; }
+/* A checkbox in a label of its own words (PROJECTS' "In the program only"), and a row of radio
+   choices (MEASURE's confidence): the whole label is the target. */
+html.touch #view :is(.pv-check, .ms-seg label) { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+html.touch #view :is(.pv-check, .ms-seg label) input { width: 20px; height: 20px; }
+/* The GUIDE's map of the views: each name is a link to that view. */
+html.touch #view .guide-view-map a { display: inline-flex; align-items: center; min-height: 44px; min-width: 44px; }
+
+@media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
+  /* BUDGET's project tables keep the name, the three totals and the checkbox on a phone. */
+  .bd-projects :is(th, td):is(:nth-child(3), :nth-child(4), :nth-child(8)) { display: none; }
+}
 
 /* A single file/settings surface, using the console's existing colour/type roles. */
 .file-dialog { width:min(680px,calc(100vw - 24px)); max-height:calc(100dvh - 32px); overflow:auto; padding:24px; border:1px solid var(--line-2); border-radius:8px; background:var(--panel); color:var(--ink); }

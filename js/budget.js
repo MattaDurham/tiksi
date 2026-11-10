@@ -72,7 +72,7 @@ function render() {
       </div>
 
       <div class="kicker">PROGRAM (SELECTED)</div>
-      <table class="grid" style="max-width:980px">
+      <table class="grid bd-projects" style="max-width:980px">
         <thead><tr><th></th><th>Project</th><th>Status</th><th>Category</th>
           <th class="num">Low</th><th class="num">Likely</th><th class="num">High</th><th style="width:26%"></th></tr></thead>
         <tbody>
@@ -93,7 +93,7 @@ function render() {
       </table>
 
       <div class="kicker" style="margin-top:26px">PARKED (NOT IN PROGRAM)</div>
-      <table class="grid" style="max-width:980px">
+      <table class="grid bd-projects" style="max-width:980px">
         <thead><tr><th></th><th>Project</th><th>Status</th><th>Category</th>
           <th class="num">Low</th><th class="num">Likely</th><th class="num">High</th><th style="width:26%"></th></tr></thead>
         <tbody>${parked.map(p => projRow(p, maxLikely)).join('') || '<tr><td colspan="8" class="muted">Everything is selected.</td></tr>'}</tbody>
@@ -119,7 +119,7 @@ function projRow(p, maxLikely) {
   const t = projectTotals(p);
   const w = Math.round(t.likely / maxLikely * 100);
   return `<tr>
-    <td style="width:30px"><input type="checkbox" ${p.selected ? 'checked' : ''} data-sel="${escapeHtml(p.id)}"></td>
+    <td style="width:30px"><label class="bd-sel-tap"><input type="checkbox" ${p.selected ? 'checked' : ''} data-sel="${escapeHtml(p.id)}" aria-label="${p.selected ? 'In the program' : 'Add to the program'}: ${escapeHtml(projectLabel(p))}"></label></td>
     <td><b>${escapeHtml(projectLabel(p))}</b></td>
     <td><span class="chip status-${escapeHtml(p.status)}">${escapeHtml(p.status)}</span></td>
     <td class="muted">${escapeHtml(p.category)}</td>

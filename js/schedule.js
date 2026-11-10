@@ -6,6 +6,8 @@ import {
 } from './store.js';
 import { icon } from './icons.js';
 import { programSchedule, lastWorkDay } from './program.js';
+import { smallScreen } from './screen.js';
+import { touchDevice } from './render-quality.js';
 
 let el = null;
 export function mount(root) { el = root; render(); }
@@ -60,6 +62,7 @@ function render() {
         <span><span class="sw" style="background:rgba(255,255,255,.06); border:1px solid var(--line-2)"></span>weekend</span>
         <span><span class="sw" style="background:var(--red); width:2px"></span>today</span>
       </div>
+      <div class="gantt-detail" id="gantt-detail" role="status" ${plans.length ? '' : 'hidden'}>${plans.length ? 'Tap a bar for its dates and slack.' : ''}</div>
       <div class="gantt-wrap" id="gantt"></div>
       ${plans.map(x => criticalPathLine(x)).join('')}
       ${plans.length === 0 ? `<div class="empty-state" style="margin-top:14px"><span class="empty-ic">${icon('schedule')}</span><b>No schedulable work</b>
@@ -71,8 +74,19 @@ function render() {
     touch(); render();
   };
 
-  if (plans.length) el.querySelector('#gantt').innerHTML = ganttSvg(plans, start, chartEnd);
-  else el.querySelector('#gantt').remove();
+  if (plans.length) {
+    const gantt = el.querySelector('#gantt');
+    gantt.innerHTML = ganttSvg(plans, start, chartEnd, smallScreen(), touchDevice());
+    // A bar's dates and slack were a hover tooltip only: a tap (or Enter) shows them above the chart.
+    const pick = row => {
+      if (!row) return;
+      gantt.querySelector('.g-item.on')?.classList.remove('on');
+      row.classList.add('on');
+      el.querySelector('#gantt-detail').textContent = row.dataset.detail;
+    };
+    gantt.onclick = e => pick(e.target.closest('[data-detail]'));
+    gantt.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { const row = e.target.closest('[data-detail]'); if (row) { e.preventDefault(); pick(row); } } };
+  } else el.querySelector('#gantt').remove();
 }
 
 function criticalPathLine(x) {
@@ -88,8 +102,10 @@ function criticalPathLine(x) {
   </div>`;
 }
 
-function ganttSvg(plans, startIso, programEnd) {
-  const LABELW = 236, AXISH = 46, ROWH = 26, PROJH = 30, GAP = 10, PAD = 8;
+// narrow: a small screen, where the name column gives way to the chart. finger: a touch
+// device, where each item row is tall enough to tap.
+function ganttSvg(plans, startIso, programEnd, narrow = false, finger = false) {
+  const LABELW = narrow ? 128 : 236, AXISH = 46, ROWH = finger ? 44 : 26, PROJH = 30, GAP = 10, PAD = 8, NAMECH = narrow ? 15 : 30;
   const span = programEnd + 7;
   const dayW = span <= 45 ? 18 : span <= 90 ? 11 : span <= 180 ? 6.5 : span <= 365 ? 3.4 : 1.8;
   const width = LABELW + span * dayW + 24;
@@ -170,8 +186,9 @@ function ganttSvg(plans, startIso, programEnd) {
       const off = r.x.offset;
       const x0 = X(off + s.es), x1 = X(off + s.ef);
       const yc = y + ROWH / 2;
-      const name = r.it.name.length > 30 ? r.it.name.slice(0, 29) + '…' : r.it.name;
-      svg += `<g class="g-rowg"><rect class="g-row" x="0" y="${y}" width="${width}" height="${ROWH}"/>`;
+      const name = r.it.name.length > NAMECH ? r.it.name.slice(0, NAMECH - 1) + '…' : r.it.name;
+      const detail = `${r.it.name}: ${r.it.durationDays} day${Number(r.it.durationDays) === 1 ? '' : 's'}, ${fmtDate(addDays(startIso, off + s.es))} to ${fmtDate(lastWorkDay(startIso, off + s.ef))}, ${s.critical ? 'on the critical path' : 'slack ' + Math.round(s.slack * 10) / 10 + ' day' + (Math.round(s.slack * 10) / 10 === 1 ? '' : 's')}`;
+      svg += `<g class="g-rowg g-item" data-detail="${escapeHtml(detail)}" tabindex="0" role="button" aria-label="${escapeHtml(detail)}"><rect class="g-row" x="0" y="${y}" width="${width}" height="${ROWH}"/>`;
       svg += `<text class="g-label" x="24" y="${yc + 3.5}" fill="#8f9ca8" font-size="10.5">${escapeHtml(name)}</text>`;
       // Slack whisker.
       if (s.slack > 0.001) {
@@ -180,17 +197,17 @@ function ganttSvg(plans, startIso, programEnd) {
         svg += `<line x1="${lx1}" y1="${yc - 4}" x2="${lx1}" y2="${yc + 4}" stroke="#5d6a76" stroke-width="1.2"/>`;
       }
       const bw = Math.max(x1 - x0, 3);
-      const bh = ROWH - 10;
+      const bh = Math.min(ROWH - 10, 18), by = yc - bh / 2;
       const dur = escapeHtml(r.it.durationDays);
       const title = `${escapeHtml(r.it.name)}: ${dur}d, ${fmtDate(addDays(startIso, off + s.es))} to ${fmtDate(lastWorkDay(startIso, off + s.ef))}${s.critical ? ' (CRITICAL)' : ', slack ' + s.slack + 'd'}`;
       if (s.critical) {
         svg += `<g class="g-bar"><title>${title}</title>` +
-          `<rect x="${x0}" y="${y + 5}" width="${bw}" height="${bh}" rx="4" fill="url(#g-crit)" stroke="rgba(255,205,140,0.7)" stroke-width="1" filter="url(#g-glow)"/>` +
-          `<rect x="${x0 + 1}" y="${y + 6}" width="${Math.max(bw - 2, 1)}" height="${Math.max(bh / 2 - 1, 1)}" rx="3" fill="rgba(255,255,255,0.12)"/></g>`;
+          `<rect x="${x0}" y="${by}" width="${bw}" height="${bh}" rx="4" fill="url(#g-crit)" stroke="rgba(255,205,140,0.7)" stroke-width="1" filter="url(#g-glow)"/>` +
+          `<rect x="${x0 + 1}" y="${by + 1}" width="${Math.max(bw - 2, 1)}" height="${Math.max(bh / 2 - 1, 1)}" rx="3" fill="rgba(255,255,255,0.12)"/></g>`;
       } else {
         svg += `<g class="g-bar"><title>${title}</title>` +
-          `<rect x="${x0}" y="${y + 5}" width="${bw}" height="${bh}" rx="4" fill="url(#g-float)" stroke="rgba(95,179,201,0.55)" stroke-width="1"/>` +
-          `<rect x="${x0 + 1}" y="${y + 6}" width="${Math.max(bw - 2, 1)}" height="${Math.max(bh / 2 - 1, 1)}" rx="3" fill="rgba(255,255,255,0.06)"/></g>`;
+          `<rect x="${x0}" y="${by}" width="${bw}" height="${bh}" rx="4" fill="url(#g-float)" stroke="rgba(95,179,201,0.55)" stroke-width="1"/>` +
+          `<rect x="${x0 + 1}" y="${by + 1}" width="${Math.max(bw - 2, 1)}" height="${Math.max(bh / 2 - 1, 1)}" rx="3" fill="rgba(255,255,255,0.06)"/></g>`;
       }
       if (dayW >= 6) {
         const inside = bw > 34;
