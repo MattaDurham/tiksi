@@ -92,6 +92,18 @@ def open_in_folder(folder, relative, run=subprocess.run):
     return target, action
 
 
+def write_whole(destination, data):
+    """Write bytes through a spare file of its own (hidden, uniquely named) and rename it into
+    place, so the file is whole or unchanged, and two writes at once never share a spare file."""
+    destination = Path(destination)
+    with tempfile.NamedTemporaryFile(dir=destination.parent, prefix='.' + destination.name + '.', suffix='.tmp', delete=False) as out:
+        temp = Path(out.name)
+        try: out.write(data); out.flush(); os.fsync(out.fileno())
+        except BaseException: out.close(); temp.unlink(missing_ok=True); raise
+    try: os.replace(temp, destination)
+    except BaseException: temp.unlink(missing_ok=True); raise
+
+
 def project_file_base(name):
     """A property's name as a file name: no path or reserved characters, at most 80 long."""
     return re.sub(r'[\\/:*?"<>|\x00-\x1f]', ' ', str(name)).strip(' .')[:80] or 'Project'
@@ -398,7 +410,7 @@ class WorkspaceService:
             if self.path.exists():
                 # Keep every committed revision for recovery; assets are never garbage-collected here.
                 history = self.root / 'history' / (str(self.state['revision']) + '.json')
-                if not history.exists(): history.write_bytes(self.path.read_bytes())
+                self.keep_history(history)
             slices = request.get('projectData')
             # A project file the client did not change since the revision it saved against
             # is named instead of sent; the server already holds exactly that file.
@@ -484,6 +496,17 @@ class WorkspaceService:
                 for temp, _, _ in staged:
                     if temp.exists() and not (self.root / 'pending.json').exists(): temp.unlink()
             return saved
+
+    def keep_history(self, history):
+        """Copy the catalog into history, whole or not at all. A copy left half written by an
+        earlier failure is set aside (never deleted) and written again."""
+        if history.exists():
+            try:
+                json.loads(history.read_text(encoding='utf-8'))
+                return
+            except (ValueError, UnicodeDecodeError):
+                os.replace(history, history.with_name(history.stem + '.unreadable-' + str(time.time_ns()) + '.json'))
+        write_whole(history, self.path.read_bytes())
 
     def archive_copy(self, record, label='conflict'):
         """Preserve a declined/uncommitted variant without changing canonical data."""
@@ -602,8 +625,8 @@ class WorkspaceService:
                 elif action == 'state':
                     if h.command == 'PUT':
                         value = json.loads(self.read(h, MAX_JSON))
-                        temp = state_path.with_suffix('.tmp'); temp.write_text(json.dumps(value)); os.replace(temp, state_path)
-                    value = json.loads(state_path.read_text()) if state_path.exists() else {'file': source.name}
+                        write_whole(state_path, json.dumps(value).encode('utf-8'))
+                    value = json.loads(state_path.read_text(encoding='utf-8')) if state_path.exists() else {'file': source.name}
                     self.reply(h, 200, value)
                 elif action == 'open' and h.command == 'POST':
                     if not at_this_mac(h.client_address[0], h.headers.get('Host')): raise WorkspaceError('Open SketchUp on the Mac; the model remains viewable here', 403)
@@ -624,7 +647,7 @@ class WorkspaceService:
                     with self.lock:
                         before = str(model.stat().st_mtime_ns) if model.exists() else '0'
                         if h.headers.get('X-File-Mtime') != before: raise WorkspaceError('SketchUp model changed; retry before overwriting', 409)
-                        temp = model.with_suffix('.skp.tmp'); temp.write_bytes(value); os.replace(temp, model)
+                        write_whole(model, value)
                     self.reply(h, 200, {})
                 else: raise WorkspaceError('Mirror endpoint not found', 404)
             elif path.startswith('/api/workspace/open/') and h.command == 'POST':

@@ -277,6 +277,43 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual([p['name'] for p in snapshot['data']['properties']], ['B'])
         self.assertEqual(snapshot['unavailable'][0]['id'], 'prop-a')
 
+    def test_a_half_written_history_copy_is_set_aside_and_written_again(self):
+        self.commit(workspace('First'))
+        revision = self.service.snapshot()['revision']
+        catalog = (self.service.root / 'current.json').read_bytes()
+        history = self.service.root / 'history' / (str(revision) + '.json')
+        history.write_bytes(catalog[:len(catalog) // 2])   # as an earlier failed copy left it
+        self.commit(workspace('Second'))
+        self.assertEqual(history.read_bytes(), catalog, 'the history copy for that revision is whole')
+        aside = list(history.parent.glob(str(revision) + '.unreadable-*.json'))
+        self.assertEqual([p.read_bytes() for p in aside], [catalog[:len(catalog) // 2]], 'the broken copy is kept, not deleted')
+        self.assertEqual(list(history.parent.glob('*.tmp')), [])
+
+    def test_sketchup_mirror_files_are_written_through_their_own_spare_files(self):
+        self.commit(workspace())
+        source = Path(self.service.paths['prop-a'])
+        # A spare file left in the way by another save, under the old fixed names.
+        for name in ('.' + source.stem + '.mirror.tmp', source.stem + '.skp.tmp'): (source.parent / name).mkdir()
+        def call(path, command, body=b'', headers=None):
+            service = self.service
+            class Handler:
+                client_address = ('127.0.0.1', 1234); connection = Mock()
+                def __init__(self):
+                    self.path, self.command = path, command
+                    self.headers = {'Host': 'localhost:8888', 'X-Tiksi-Workspace': '1', 'X-Tiksi-Token': service.token, 'Content-Length': str(len(body)), **(headers or {})}
+                    self.rfile, self.wfile = io.BytesIO(body), io.BytesIO()
+                def send_response(self, status): self.status = status
+                def send_header(self, *args): pass
+                def end_headers(self): pass
+            h = Handler(); service.dispatch(h)
+            return h.status, h.wfile.getvalue()
+        state = json.dumps({'file': source.name, 'mirror': {'sig': 'synthetic'}}).encode()
+        self.assertEqual(call('/api/workspace/mirror/prop-a/state', 'PUT', state)[0], 200)
+        self.assertEqual(json.loads((source.parent / ('.' + source.stem + '.mirror.json')).read_text()), json.loads(state))
+        self.assertEqual(call('/api/workspace/mirror/prop-a', 'PUT', b'synthetic skp', {'X-File-Mtime': '0'})[0], 200)
+        self.assertEqual(source.with_suffix('.skp').read_bytes(), b'synthetic skp')
+        self.assertEqual([p.name for p in source.parent.glob('.*.tmp') if p.is_file()], [])
+
     def test_http_reads_require_trusted_peer_same_origin_and_custom_header(self):
         class Handler:
             path = '/api/workspace'; command = 'GET'; client_address = ('100.80.1.2', 1234)
