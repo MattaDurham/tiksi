@@ -32,6 +32,7 @@ const DEG = Math.PI / 180;
 export const DEFAULTS = {
   cell: 0.02,             // raster cell, meters
   maxCells: 8e6,          // raster cells over all levels (about 17 bytes each); a larger site uses coarser cells
+  maxCell: 0.05,          // the coarsest cell: past it walls are only a cell or two thick, so a larger site is refused
   slice: 0.1,             // coverage slice height
   sliceFrom: 0.25,        // first slice starts this far above the floor
   sliceBelowCeil: 0.15,   // last slice ends this far below the ceiling
@@ -216,10 +217,15 @@ export function findLevels(pos, idx, tri, o) {
 // The raster cell for a site of spanX by spanZ metres with `nLevels` levels: the requested
 // cell, grown by a quarter at a time until every level's raster together stays within
 // o.maxCells, so working memory is bounded on a very large scan (as fixture detection does).
+// A site that would need cells coarser than o.maxCell is refused with a message saying why.
 export function rasterCell(spanX, spanZ, nLevels, o) {
   let cell = o.cell;
-  const limit = o.maxCells || DEFAULTS.maxCells, n = Math.max(1, nLevels);
+  const limit = o.maxCells || DEFAULTS.maxCells, n = Math.max(1, nLevels), coarsest = Math.max(o.cell, o.maxCell || DEFAULTS.maxCell);
   while (Math.ceil(spanX / cell) * Math.ceil(spanZ / cell) * n > limit) cell *= 1.25;
+  if (cell > coarsest + 1e-9) {
+    throw new Error('This scan covers ' + Math.round(spanX) + ' by ' + Math.round(spanZ) + ' m' + (n > 1 ? ' over ' + n + ' levels' : '') +
+      ', too large to read as a plan: it would need cells coarser than ' + (coarsest * 100).toFixed(0) + ' cm. Use a scan of the building alone, or of one part of it.');
+  }
   return cell;
 }
 
@@ -1100,6 +1106,8 @@ export function scanToPlan(posIn, idx, options, progress) {
   return {
     rotationDeg: deg, manhattanShare, baseY: base, minY, maxY,
     grid: { W: grid.W, H: grid.H, ox: grid.ox, oz: grid.oz, cell: grid.cell },
+    // Coarser cells than asked for, because of the scan's size: said in the proposal summary.
+    cellNote: grid.cell > o.cell + 1e-9 ? 'analysed at ' + +(grid.cell * 100).toFixed(1) + ' cm cells because of the model\'s size' : '',
     levels: outLevels,
     surfaces,
     review: { required: !detection.signed || outLevels.some(l => l.datum.confidence === 'review') ||

@@ -88,6 +88,10 @@ const coarse = scanToPlan(pos, idx, { maxCells: 2e5 });
 check(coarse.grid.cell > 0.02 && coarse.grid.W * coarse.grid.H * coarse.levels.length <= 2e5,
   'over the cell limit the cells grow (' + coarse.grid.cell.toFixed(4) + ' m, ' + coarse.grid.W * coarse.grid.H * coarse.levels.length + ' level cells)');
 check(coarse.levels.length === 2 && coarse.levels.every(L => L.rooms.length === 2), 'coarse cells still find both levels and their rooms');
+check(coarse.cellNote === 'analysed at 2.5 cm cells because of the model\'s size' && res.cellNote === '', 'the result says when cells were made coarser (' + JSON.stringify(coarse.cellNote) + ')');
+let refused = '';
+try { scanToPlan(pos, idx, { maxCells: 1e4 }); } catch (e) { refused = e.message; }
+check(/too large to read as a plan: it would need cells coarser than 5 cm/.test(refused), 'a site needing cells coarser than 5 cm is refused and says why (' + refused + ')');
 check(rasterCell(60.8, 60.8, 1, DEFAULTS) > 0.02 && Math.ceil(60.8 / rasterCell(60.8, 60.8, 1, DEFAULTS)) ** 2 <= DEFAULTS.maxCells,
   'a 60 by 60 m site stays within the default cell limit (' + rasterCell(60.8, 60.8, 1, DEFAULTS).toFixed(4) + ' m cells)');
 
