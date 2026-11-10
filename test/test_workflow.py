@@ -421,6 +421,9 @@ class SERVICE:
     def test_pr_and_merge_refuse_private_words_before_pushing(self):
         remote = self.add_origin()
         (self.root / '.tiksi-private-patterns').write_text('# synthetic list\nSynthetic Lane\n', encoding='utf-8')
+        # The synthetic live checkout's own guard predates the push check, as main's does today.
+        (self.root / 'scripts/check-private.py').write_text('import sys\nsys.exit(0)\n', encoding='utf-8')
+        self.git('add', '.'); self.git('commit', '-qm', 'Older guard')
         cases = [('synthetic-lane-fix', 'Plain message', 'Plain title'),
                  ('plain-one', 'Fix the door at 12 synthetic LANE', 'Plain title'),
                  ('plain-two', 'Plain message', 'Floors for Synthetic Lane')]

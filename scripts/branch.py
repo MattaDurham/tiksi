@@ -292,8 +292,10 @@ class Workflow:
         """Refuse before a push that would make a private word public: the branch name, the
         branch's commit messages, and the PR title and text. The live checkout's guard and
         word list are used, so every branch copy is held to the same list."""
-        guard = self.live / 'scripts/check-private.py'
-        if not guard.exists(): guard = Path(__file__).resolve().parent / 'check-private.py'
+        # The live copy, once it has the push check; until then, the copy beside this file.
+        candidates = [self.live / 'scripts/check-private.py', Path(__file__).resolve().parent / 'check-private.py']
+        guard = next((c for c in candidates if c.is_file() and "'--push'" in c.read_text(encoding='utf-8')), None)
+        if guard is None: raise WorkflowError('No private-data check with the push check was found; nothing was pushed.')
         args = [sys.executable, str(guard), '--push', branch, '--base', base]
         if title: args += ['--text', title]
         if body_file: args += ['--text-file', str(Path(body_file).resolve())]
