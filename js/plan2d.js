@@ -6,7 +6,7 @@ import { floorReviewText } from './scan-surfaces.js';
 // swings, glazing lines, dimension strings with ticks, rulers, a north arrow and a scale bar.
 
 import {
-  ws, activeProperty, uid, touch, onChange, fmtLen, parseLen, fmtArea, polyArea, roomsFloorArea, countsAsFloor,
+  ws, activeProperty, uid, touch, onChange, fmtLen, readLength, fmtArea, polyArea, roomsFloorArea, countsAsFloor,
   escapeHtml, itemById, getFile, projectLabel, propertyProjects,
   ensureLevels, activeLevel, setActiveLevel, sortLevels, wallsOn, roomsOn, openingsOn,
   addLevel, deleteLevel, levelHeight, wallHeightOf, levelOfWall, fmtDate, isoToday,
@@ -1172,12 +1172,13 @@ function selectOpening(id) {
 function editScheduleSize(id, key, inp) {
   const o = prop.openings.find(o => o.id === id), row = schedule().find(r => r.id === id);
   if (!o || !row) return renderSchedule();
-  const v = parseLen(inp.value, 'feet');
-  if (!(v >= MIN_SIZE)) {
+  const read = readLength(inp.value, 'feet'), v = read.value;
+  if (read.error || !(v >= MIN_SIZE)) {
     inp.value = fmtLen(o[key]);
-    setHint(`Could not read that ${key} for ${row.number}. Try 32", 2'8" or 0.81m.`);
+    sayNote(`${row.number} ${key}: ` + (read.error || `must be at least ${fmtLen(MIN_SIZE)}.`));
     return;
   }
+  note = null;
   const wall = prop.walls.find(w => w.id === o.wallId);
   pushUndo('resize ' + row.number);
   const got = resizeOpening(prop, o, { [key]: v }, wallHeightOf(prop, wall));
@@ -1726,6 +1727,7 @@ function onPointerDown(e) {
   if (e.button === 2) return;
   invalidate();
   inputSeen = true;
+  note = null;
   if (touchInput) { touchInput = false; updateHint(); }
   canvas.setPointerCapture(e.pointerId);
   const [sx, sy] = canvasPos(e);
@@ -1982,6 +1984,7 @@ function onFingerDown(e) {
   if (drag) return;
   invalidate();
   inputSeen = true;
+  note = null;
   if (!touchInput) { touchInput = true; updateHint(); }
   try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* already released */ }
   const pos = canvasPos(e);
@@ -2150,14 +2153,27 @@ function onKeyUp(e) {
 
 // ---------- tool column / hint ----------
 function setTool(t) {
-  tool = t;
+  tool = t; note = null;
   drawing = null; roomDraft = null; hover = null;
   if (t !== 'calibrate') calib = null;
   renderToolCol(); updateHint(); renderInspector(); updateCursor(); invalidate();
 }
 
 function setHint(text) { if (hintEl) hintEl.textContent = text; }
+// Why a typed value was refused stays in the hint until the next press on the canvas, tool
+// change or successful entry, even though the inspector redraws (and would reset the hint).
+let note = null;
+function sayNote(text) { note = text; setHint(text); }
+// A length field's text read the way every length in the app is read: the metres, or NaN after
+// saying in the hint why it is not a length (the field then shows its stored value again).
+function typedLength(text) {
+  const r = readLength(text, 'feet');
+  if (r.error) { sayNote(r.error); return NaN; }
+  note = null;
+  return r.value;
+}
 function updateHint() {
+  if (note) { setHint(note); return; }
   const hints = {
     select: selection && selection.kind === 'room'
       ? 'Floors follow their walls. Drag a corner to reshape this floor; it snaps to walls. Dragging elsewhere pans.'
@@ -2252,7 +2268,7 @@ function renderToolCol() {
     <label class="tool-check" title="${layerHasMembers(prop, 'furnishings') ? 'Show furniture, cabinet and fixture footprints on this level (K)' : 'No furniture or fixtures model in this property. Import one and set its LAYER in MODEL.'}">${icon('products')}<span>FURNITURE</span><input type="checkbox" ${showFurniture ? 'checked' : ''} data-chk="furniture"></label>
     <div class="tool-sep"></div>
     <label class="tool-check" title="Snap to wall ends, wall centre lines, floor corners, axes and 15 degree angles">${icon('snap')}<span>SNAP</span><input type="checkbox" ${snapOn ? 'checked' : ''} data-chk="snap"></label>
-    <label class="tool-check" title="Show a dimension string on every wall">${icon('dims')}<span>DIMS</span><input type="checkbox" ${dimsOn ? 'checked' : ''} data-chk="dims"></label>
+    <label class="tool-check" title="Show a dimension string on every wall, measured on the wall centre lines">${icon('dims')}<span>DIMS</span><input type="checkbox" ${dimsOn ? 'checked' : ''} data-chk="dims"></label>
     <label class="tool-check" title="Number every door and window (D1, W1...) and list their sizes to check, edit, print or send">${icon('door')}<span>NUMBER OPENINGS</span><input type="checkbox" ${numbersOn ? 'checked' : ''} data-chk="numbers"></label>
     <div class="tool-sep"></div>
     ${toolBtn('data-act="fit"', 'fit', 'FIT VIEW', 'F', false)}
@@ -2418,8 +2434,8 @@ function renderInspector() {
     const apply = () => {
       const pl = curPlan();
       if (!pl) { calib = null; renderInspector(); return; }   // underlay removed while the form was open
-      const real = parseLen(input.value, 'feet');
-      if (isNaN(real) || real <= 0) { alert('Could not parse that distance. Try 12\'6", 150", or 3.8m.'); return; }
+      const read = readLength(input.value, 'feet'), real = read.value;
+      if (read.error || !(real > 0)) { alert(read.error || 'The distance must be more than zero.'); return; }
       const ratio = real / measured;
       if (!(measured > 0) || !Number.isFinite(ratio) || !(Number.isFinite(pl.mPerPx * ratio) && pl.mPerPx * ratio > 0)) { calib = null; renderInspector(); setHint('Those two points are too close together to set a scale. Click two points further apart.'); return; }
       // Rescale the underlay mapping about its own origin so image geometry matches reality.
@@ -2474,13 +2490,13 @@ function renderInspector() {
       touch(); renderToolCol(); updateLevelBadge();
     };
     insp.querySelector('[data-len=elev]').onchange = e => {
-      const v = parseLen(e.target.value, 'feet');
+      const v = typedLength(e.target.value);
       // Any finite elevation is fair (a basement sits below zero); the stack re-sorts around it.
       if (!isNaN(v)) { pushUndo('change level elevation'); L.elevation = v; sortLevels(prop); touch(); renderToolCol(); }
       renderInspector();
     };
     insp.querySelector('[data-len=lvlHeight]').onchange = e => {
-      const v = parseLen(e.target.value, 'feet');
+      const v = typedLength(e.target.value);
       if (!isNaN(v) && v > 0.5) { pushUndo('change level height'); L.height = v; touch(); }
       renderInspector();
     };
@@ -2504,7 +2520,7 @@ function renderInspector() {
     const L = Math.hypot(w.bx - w.ax, w.by - w.ay);
     const wl = levelOfWall(prop, w);
     insp.innerHTML = `${head('wall', 'WALL')}
-      ${lenField('Length', L, 'len')}
+      ${lenField('Length (on the centre line)', L, 'len')}
       <div class="field-row">
         ${lenField('Thickness', w.thickness, 'th')}
         ${lenField('Height', w.height, 'h', fmtLen(levelHeight(prop, wl.id)) + ' (level)')}
@@ -2517,7 +2533,7 @@ function renderInspector() {
       <div class="stat-line"><span>Openings</span><b>${prop.openings.filter(o => o.wallId === w.id).length}</b></div>
       <button class="btn danger" data-del>${icon('trash')}DELETE WALL</button>`;
     insp.querySelector('[data-len=len]').onchange = e => {
-      const v = parseLen(e.target.value, 'feet');
+      const v = typedLength(e.target.value);
       // A wall with no length has no direction to grow along (left over from older files).
       if (!(L >= 0.001)) { setHint('This wall has no length, so it has no direction to grow along. Delete it and draw it again.'); renderInspector(); return; }
       if (!isNaN(v) && v > 0.05) {
@@ -2535,13 +2551,13 @@ function renderInspector() {
       renderInspector();
     };
     insp.querySelector('[data-len=th]').onchange = e => {
-      const v = parseLen(e.target.value, 'feet');
+      const v = typedLength(e.target.value);
       if (!isNaN(v) && v > 0.02 && v < 1) { pushUndo(); w.thickness = v; touch(); }
       renderInspector();
     };
     insp.querySelector('[data-len=h]').onchange = e => {
       if (!e.target.value.trim()) { pushUndo('change wall height'); w.height = null; touch(); renderInspector(); return; }
-      const v = parseLen(e.target.value, 'feet');
+      const v = typedLength(e.target.value);
       if (!isNaN(v) && v > 0.3) { pushUndo('change wall height'); w.height = v; touch(); }
       renderInspector();
     };
@@ -2583,7 +2599,7 @@ function renderInspector() {
     const num = (key, fn, min = 0.05) => {
       const elx = insp.querySelector(`[data-len=${key}]`);
       if (elx) elx.onchange = e => {
-        const v = parseLen(e.target.value, 'feet');
+        const v = typedLength(e.target.value);
         if (!isNaN(v) && (min === 0 ? v >= 0 : v > min)) { pushUndo(); fn(v); touch(); }
         renderInspector();
       };

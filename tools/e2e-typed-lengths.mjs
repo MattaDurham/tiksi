@@ -104,6 +104,23 @@ try {
     if (typed === '8"') assert.equal(shown, '8"', 'eight inches reads back as 8"');
   }
 
+  // The Length field says it is measured on the wall's centre line.
+  assert.match(await page.locator('.inspector').innerText(), /LENGTH \(ON THE CENTRE LINE\)/i);
+  // Text that is not a length is refused with the reason in the hint; the stored length and
+  // the field stay as they were. A number on its own is feet.
+  {
+    const before = (await read()).walls.angled, shownBefore = await page.locator('.inspector [data-len=len]').inputValue();
+    const shown = await typeInto('len', '10x12');
+    assert.deepEqual((await read()).walls.angled, before, 'unreadable text changes nothing');
+    assert.equal(shown, shownBefore, 'the field shows the stored length again');
+    assert.match(await page.locator('.canvas-hint').innerText(), /"10x12" is not a length\. Type it like .*a number on its own is feet/, 'the hint says why');
+    const ok = await typeInto('len', '12');
+    const [ax, ay, bx, by] = (await read()).walls.angled;
+    assert.ok(Math.abs(Math.hypot(bx - ax, by - ay) - 12 * 0.3048) < TOL, 'a bare 12 is 12 feet');
+    assert.equal(ok, (await expect("12'")).text);
+    assert.doesNotMatch(await page.locator('.canvas-hint').innerText(), /is not a length/, 'a good entry clears the reason');
+  }
+
   // An opening width.
   await page.keyboard.press('Escape');
   await page.mouse.click(...at(3, 0));
@@ -113,6 +130,14 @@ try {
     const { v, text } = await expect(typed);
     assert.ok(Math.abs((await read()).win - v) < TOL, `${typed}: stored width ${(await read()).win} m, typed ${v} m`);
     assert.equal(shown, text, `${typed}: the width field shows the typed width`);
+  }
+
+  // A sill at the floor: typed as 0 (a bare number, so 0 feet) it is stored as 0.
+  {
+    const shown = await typeInto('s', '0');
+    const sill = await page.evaluate(async () => (await import('/js/store.js')).activeProperty().openings.find(o => o.id === 'win').sill);
+    assert.equal(sill, 0, 'a sill of 0 is stored');
+    assert.equal(shown, (await expect('0')).text, 'and shown');
   }
 
   // A level elevation.
