@@ -191,6 +191,31 @@ matching currency and unit. Claims are extracted by agents, so confirm final
 fit and purchasing details with the source. Saving retains the research history
 in project files; it does not purchase anything.
 
+## From a folder
+
+Back from a site visit with a scan, photos, a video and a few PDFs in one folder:
+**FILE → Project → NEW PROPERTY FROM A FOLDER** (or **CHOOSE A FOLDER** in the New
+Property dialog).
+
+- Tiksi lists what the folder holds before anything is made: every file that will
+  come in, each with a tick, a tick for each subfolder, and every file that stays
+  behind with the reason (audio recordings, office files, anything over 600 MB, a
+  Polycam raw export, an earlier `.tiksi`). Hidden files are counted, not listed.
+- A note in the folder (`.rtf`, `.txt`, `.md`, `.webloc`, `.url`, `.html`) holding a
+  Polycam share link brings that scan in the way a pasted link does.
+- A `.gltf` or `.obj` takes the buffers, materials and textures it names with it;
+  photos beside it stay photos.
+- Scans, photos, PDFs and videos go through the same importers as FILE → Import,
+  so each keeps its original bytes. A file that cannot be read is named with the
+  reason. The plan is proposed from the first mesh.
+
+With the local Mac server, the server opens the Mac's own folder window (only for a
+browser on that Mac), reads the files where they are and writes the project file to
+`<the folder>/Tiksi/<name>.tiksi`. Nothing else in the folder is moved, renamed or
+deleted. From another device, or on static hosting, the browser's folder picker
+hands the files over instead and the project is kept where projects normally are.
+The service is `server/folder_intake.py`; the sorting is `js/folder-intake.js`.
+
 ## From a Polycam link
 
 Share a capture from Polycam (link sharing on), then hand the link to tiksi:

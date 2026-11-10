@@ -61,7 +61,7 @@ The same sample property appears throughout this guide. The left rail changes vi
 
 ### A useful first session
 
-1. Choose FILE → Project → NEW PROPERTY, or keep the demo property while you learn.
+1. Choose FILE → Project → NEW PROPERTY, or keep the demo property while you learn. Back from a site visit with everything in one folder? Choose NEW PROPERTY FROM A FOLDER instead and skip the next step.
 2. Use FILE → Import for a scan, Polycam link or photos. If you already have a floorplan image, use PLAN → UPLOAD IMAGE.
 3. In PLAN, check the scale and review or draw walls, rooms, doors and windows. Open MODEL to inspect the result.
 4. In PHOTOS, add reference images and pin them to the model. In MATERIALS, choose the proposed finishes.
@@ -141,6 +141,8 @@ FILE → Import offers CHOOSE FILES, POLYCAM LINK and PHOTOS → 3D.
 **Propose plan later.** In MODEL, select a mesh scan and choose PROPOSE PLAN FROM SCAN. The PLAN property inspector also offers the action for its available source mesh.
 
 **Fixtures from the scan.** After a plan proposal, or later with PROPOSE FIXTURES FROM SCAN (MODEL mesh inspector or the PLAN scan card), Tiksi reads counter runs, wall cabinets, tall appliances, beds, sofas, tables, desks and storage from the mesh. Each proposal shows its confidence and the heights it rests on; tick the ones that are really there. Click a fixture in MODEL to correct its sizes or mark it tape measured; ADD FIXTURE HERE adds one by hand. Fixtures save with the project, follow Undo, show as outlines in PLAN and become tagged groups in the SketchUp mirror, where moving, turning, stretching or deleting one comes back to Tiksi.
+
+**A whole folder at once.** FILE → Project → NEW PROPERTY FROM A FOLDER (or CHOOSE A FOLDER in the New Property dialog) makes a property from the folder of a site visit. Tiksi first lists what the folder holds: every scan, photo, PDF and video that will come in, each with a tick you can clear, with a tick for each subfolder as well, and every file that stays behind with the reason. Nothing is made until you press CREATE. A note in the folder holding a Polycam share link brings that scan in, and the plan is proposed from the first mesh. With the local server on the Mac, the Mac’s own folder window opens, the files are read where they are, and the project file is kept in a Tiksi folder inside the folder you picked; nothing else in it is moved, renamed or deleted. Audio recordings, office files and anything over 600 MB stay in the folder and are listed.
 
 **Multi-file imports.** Keep OBJ/MTL/images and glTF/buffers/images together. Choose their complete package rather than a model that refers to missing texture files.
 

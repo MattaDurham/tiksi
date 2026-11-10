@@ -1021,6 +1021,8 @@ kbd {
 }
 .modal-body { padding: 16px 18px 6px; overflow: auto; }
 .modal-foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px 14px; border-top: 1px solid var(--line); }
+/* A button's own display would otherwise show it while it is marked hidden (CREATE during a run). */
+.modal-foot .btn[hidden] { display: none; }
 .np-hint { font-size: 12.5px; color: var(--dim); line-height: 1.5; margin: -2px 0 12px; }
 .np-hint b { color: var(--ink); font-weight: 600; }
 .np-relay { padding: 6px 8px; margin: 0 -8px 4px; }
