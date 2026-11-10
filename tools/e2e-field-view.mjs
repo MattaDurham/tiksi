@@ -1,12 +1,14 @@
 // Phone layout: on a phone the console opens on the model with no toolbars, and one side panel
 // moves the camera, flips what shows and reaches the other pages. Desktop is unchanged.
 // Synthetic demo project in a temporary state directory; live 8642 is never used.
+// E2E_BROWSER=webkit runs it on Safari's engine (node scripts/e2e.mjs --webkit), the engine the
+// phone uses; otherwise Chromium.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import net from 'node:net';
-import { chromium, devices } from 'playwright';
+import { chromium, devices, webkit } from 'playwright';
 
 const state = await mkdtemp(tmpdir() + '/tiksi-field-view-test-');
 const socket = net.createServer();
@@ -24,13 +26,53 @@ let browser;
 const shown = (page, sel) => page.locator(sel).first().evaluate(e => getComputedStyle(e).display !== 'none' && getComputedStyle(e).visibility !== 'hidden' && !!e.getClientRects().length);
 // Wait for MODEL to settle (first frame, models, textures and shader warm-up) before tapping it:
 // on a software GL the warm-up blocks the page for a long time and a tap lands only after it.
+const ENGINE = process.env.E2E_BROWSER === 'webkit' ? 'webkit' : 'chromium';
+// One finger on the screen: down at the first point, through the rest, up at the last, holding
+// for holdMs before lifting. Chromium gets real touches through its protocol. Playwright can only
+// tap on WebKit, so there the same touch reaches the page as the pointer events Safari sends for
+// a finger, and setPointerCapture is told to accept that pointer as Safari would for a real one.
+async function finger(page, points, { holdMs = 0, stepMs = 16 } = {}) {
+  if (ENGINE === 'chromium') {
+    const cdp = await page.context().newCDPSession(page);
+    const at = ([x, y]) => [{ x, y, id: 1, radiusX: 4, radiusY: 4, force: 1 }];
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at(points[0]) });
+    for (const point of points.slice(1)) { await page.waitForTimeout(stepMs); await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at(point) }); }
+    if (holdMs) await page.waitForTimeout(holdMs);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await cdp.detach();
+    return;
+  }
+  const send = (type, [x, y]) => page.evaluate(({ type, x, y }) => {
+    if (!window.__fingerCapture) {
+      window.__fingerCapture = true;
+      for (const name of ['setPointerCapture', 'releasePointerCapture']) {
+        const real = Element.prototype[name];
+        Element.prototype[name] = function (id) { if (id === 77) return; return real.call(this, id); };
+      }
+    }
+    const target = type === 'pointerdown' ? document.elementFromPoint(x, y) : (window.__fingerTarget || document.elementFromPoint(x, y));
+    window.__fingerTarget = type === 'pointerup' ? null : target;
+    const init = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, pointerId: 77, pointerType: 'touch', isPrimary: true, button: type === 'pointermove' ? -1 : 0, buttons: type === 'pointerup' ? 0 : 1, width: 8, height: 8, pressure: type === 'pointerup' ? 0 : 0.5 };
+    target.dispatchEvent(new PointerEvent(type, init));
+  }, { type, x, y });
+  await send('pointerdown', points[0]);
+  for (const point of points.slice(1)) { await page.waitForTimeout(stepMs); await send('pointermove', point); }
+  if (holdMs) await page.waitForTimeout(holdMs);
+  await send('pointerup', points.at(-1));
+}
+// Where the camera stands, read the way the app itself saves it: as a saved view.
+const cameraNow = page => page.evaluate(async () => {
+  (await import('/js/viewer3d.js')).fieldAction('save-view');
+  return (await import('/js/store.js')).activeProperty().savedViews.at(-1).camera;
+});
+const moved = (a, b) => Math.hypot(...a.position.map((v, i) => v - b.position[i]));
 const settled = async (pg, ms = 240000) => { const end = Date.now() + ms; while (!(await pg.evaluate(async () => (await import('/js/viewer3d.js')).viewerIdle()))) { assert.ok(Date.now() < end, 'MODEL did not settle: ' + JSON.stringify(await pg.evaluate(async () => ({ ...(await import('/js/viewer3d.js')).viewerIdleState(), textures: (await import('/js/textures.js')).textureStats().filter(t => t.status !== 'ready') })))); await pg.waitForTimeout(250); } };
 try {
   for (let i = 0; i < 100; i++) {
     try { if ((await fetch(url)).ok) break; } catch {}
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+  browser = ENGINE === 'webkit' ? await webkit.launch() : await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   const errors = [];
 
   // ---------- phone, no property yet ----------
@@ -112,9 +154,30 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('fd-open')), false, 'choosing Walk closes the panel');
   assert.equal((await state3d()).mode, 'walk');
   assert.equal(await shown(page, '.fd-walk'), true, 'the walk pad shows while walking');
+  // Hold a walk button with a finger: the camera walks while it is held and stops on lifting.
+  await settled(page);
+  const standing = await cameraNow(page);
+  const pad = await page.locator('.fd-walk [data-walk=forward]').boundingBox();
+  const padAt = [pad.x + pad.width / 2, pad.y + pad.height / 2];
+  await finger(page, [padAt, padAt], { holdMs: 1200 });
+  assert.equal(await page.locator('.fd-walk [data-walk=forward]').evaluate(b => b.classList.contains('down')), false, 'the button lets go when the finger lifts');
+  const walked = await cameraNow(page);
+  assert.ok(moved(standing, walked) > 0.1, 'holding Walk forward walks: ' + JSON.stringify([standing.position, walked.position]));
+  await page.waitForTimeout(400);
+  assert.ok(moved(walked, await cameraNow(page)) < 1e-6, 'and the walk stops when the finger lifts');
   await page.locator('.fd-frame').click();
   assert.equal((await state3d()).mode, 'orbit', 'the overview button leaves walk');
   assert.equal(await shown(page, '.fd-walk'), false, 'and the pad goes away');
+  // One finger dragged across the model turns the camera around it.
+  await settled(page);
+  const before = await cameraNow(page);
+  const mid = [vp.width / 2, vp.height / 2];
+  await finger(page, Array.from({ length: 13 }, (_, i) => [mid[0] - 90 + i * 15, mid[1] + i * 3]));
+  await settled(page);
+  const after = await cameraNow(page);
+  assert.ok(moved(before, after) > 0.25, 'a one-finger drag orbits the model: ' + JSON.stringify([before.position, after.position]));
+  assert.ok(Math.abs(Math.hypot(...before.position.map((v, i) => v - before.target[i])) - Math.hypot(...after.position.map((v, i) => v - after.target[i]))) < 0.05 * Math.hypot(...before.position.map((v, i) => v - before.target[i])),
+    'and keeps its distance from the point it turns around');
 
   // Other pages keep a slim bar with the menu; the panel links there.
   await page.locator('.fd-menu').click();
@@ -175,7 +238,7 @@ try {
   assert.equal(await shown(desk, '[data-field-layout=phone]'), true, 'FIELD VIEW is offered in the rail');
 
   assert.deepEqual(errors, []);
-  console.log('Phone layout passed: opens on a full-screen model with no toolbars; the side panel switches section and x-ray, walks with a pad, frames the model and reaches other pages; desktop layout is remembered and FIELD VIEW returns; desktop is unchanged.');
+  console.log(`Phone layout passed on ${ENGINE}: opens on a full-screen model with no toolbars; the side panel switches section and x-ray; holding the walk pad walks and lifting stops; a one-finger drag orbits; the overview button frames the model; the panel reaches other pages; desktop layout is remembered and FIELD VIEW returns; desktop is unchanged.`);
 } finally {
   if (browser) await browser.close();
   child.kill();
