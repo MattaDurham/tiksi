@@ -335,7 +335,7 @@ function openFileMenu(initialTab = 'project', selected) {
     const opStatus=dialog.querySelector('[data-op-file-status]');if(prop){const st=onePagerStatus(prop,projectSlice(prop.id));opStatus.textContent=st.text;opStatus.dataset.state=st.state;}else opStatus.textContent='Open a property to see its one-pager.';dialog.querySelector('[data-one-pager]').disabled=!prop;
     if (diskWorkspace) {
       dialog.querySelector('[data-own-folder-label]').textContent = prop ? (diskWorkspace.paths[prop.id] || 'A project folder is created on its first save.') : diskWorkspace.folder;
-      dialog.querySelector('[data-folder-label]').textContent = 'All projects are files on this Mac. Desktop and Tailscale clients use the same project folders. Browser storage is not used.';
+      dialog.querySelector('[data-folder-label]').textContent = 'All projects are files on this Mac. Desktop and Tailscale clients use the same project folders. A phone or another computer keeps only what it has not sent yet in its browser, until the Mac has it.';
       for (const selector of ['[data-own-folder-link]', '[data-own-folder-unlink]', '[data-folder-open]', '[data-folder-link]', '[data-folder-unlink]', '[data-storage]']) dialog.querySelector(selector).hidden = true;
     }
   };
