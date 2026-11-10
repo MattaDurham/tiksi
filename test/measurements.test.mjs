@@ -38,7 +38,7 @@ test('a reading attached to an opening applies through history; undo shows the m
   const targets = ms.elementTargets(p);
   const door = targets.find(t => t.kind === 'opening' && t.dim === 'width');
   assert.match(door.label, /^Door 1 \(Kitchen\) on wall 3 · width$/);
-  assert.ok(targets.some(t => t.kind === 'wall' && t.label === 'Wall 1 (Kitchen) · length'));
+  assert.ok(targets.some(t => t.kind === 'wall' && t.label === 'Wall 1 (Kitchen) · centre-line length'), 'a wall length says it is on the centre line');
   const m = ms.addMeasurement(p, { videoId: 'vid-walk', seconds: 12.4, input: '33 1/2', text: 'pantry door leaf', direction: 'width', confidence: 'clear', element: door, frameAssetId: 'mf-1', crop: [0.2, 0.3, 0.4, 0.1] });
   assert.equal(m.status, 'assigned'); assert.ok(Math.abs(m.value - 33.5 * IN) < 1e-12); assert.deepEqual(m.crop, [0.2, 0.3, 0.4, 0.1]);
   assert.equal(ms.readingState(p, m), 'assigned');
@@ -67,6 +67,9 @@ test('wall length moves the far end like PLAN; impossible or unreadable readings
   const loose = ms.addMeasurement(p, { videoId: 'vid-walk', seconds: 6, input: '24', text: 'sink base' });
   assert.throws(() => ms.applyMeasurement(p, loose.id), /Attach the reading/);
   assert.equal(p.openings[0].height, 2.03, 'refused readings leave the model unchanged');
+  const tooTall = ms.addMeasurement(p, { videoId: 'vid-walk', seconds: 7, input: "9'", text: 'door head', confidence: 'clear', element: { kind: 'opening', id: 'o-door', dim: 'height' } });
+  assert.throws(() => ms.applyMeasurement(p, tooTall.id), /taller than its wall \(8'-0 1\/16" at most under a 8'-0 1\/16" wall\)/);
+  assert.equal(p.openings[0].height, 2.03, 'a reading taller than the wall is refused, not written into the opening');
   assert.equal(ms.addMeasurement(p, { input: '1', element: { kind: 'room', id: 'r-k', dim: 'width' } }).element, null, 'only openings and walls are targets');
 });
 

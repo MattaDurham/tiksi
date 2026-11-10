@@ -6,7 +6,8 @@
 //     status: 'unassigned'|'assigned'|'applied', applied: { previous, at } | null, note, createdAt }
 // Applying a reading edits the model through the same geometry history as a typed edit in
 // PLAN, so UNDO reverts it; the reading then reports that the model no longer matches.
-import { uid, touch, units, parseLen, wallsOn, roomsOn, openingsOn, levelOfWall, fmtLen } from './store.js';
+import { uid, touch, units, readLength, wallsOn, roomsOn, openingsOn, levelOfWall, fmtLen, wallHeightOf } from './store.js';
+import { resizeOpening } from './opening-schedule.js';
 import { beginGeometryEdit } from './edit-history.js';
 import { planCornerMove, applyCornerMove } from './wallmove.js';
 import { pointInPolygon } from './roomfill.js';
@@ -14,16 +15,12 @@ import { pointInPolygon } from './roomfill.js';
 export const DIRECTIONS = ['width', 'height', 'depth'];
 export const CONFIDENCE = ['clear', 'probable', 'unreadable'];
 const IN = 0.0254, TOLERANCE = 0.001;
-const UNIT_WORD = /\s*(?:in|inch|inches|ft|m|cm|mm)$/i;
 
-// A reading as typed. Bare numbers are inches in imperial (that is what a tape blade shows)
-// and metres in metric, as everywhere else; the form echoes the parsed value so an
-// ambiguous entry is visible. Anything with stray text is refused rather than guessed.
+// A reading as typed, read by the same rule as every length field (store.js readLength): a
+// bare number is inches in imperial (what a tape blade shows) and metres in metric; the form
+// echoes the parsed value so an ambiguous entry is visible. Stray text is refused, not guessed.
 export function parseReading(text) {
-  const s = String(text == null ? '' : text).trim();
-  if (!s || !/^[-\d\s./'"½¼¾⅛⅜⅝⅞⅓⅔⅙⅚⅕′″’”]+$/.test(s.replace(UNIT_WORD, ''))) return NaN;
-  const bare = /^(?:\d+(?:\.\d+)?|\d+(?:\s+|\s*-\s*)\d+\s*\/\s*\d+|\d+\s*\/\s*\d+|\d*\s*[½¼¾⅛⅜⅝⅞⅓⅔⅙⅚⅕])$/.test(s);
-  const value = parseLen(bare && units() === 'imperial' ? s + '"' : s);
+  const value = readLength(text).value;
   return Number.isFinite(value) && value > 0 && value < 100 ? value : NaN;
 }
 
@@ -109,6 +106,8 @@ function roomOfWall(prop, w) {
 }
 
 // Every attachable dimension, labelled so an owner can tell them apart without the plan.
+// A wall's length is on its centre line, as PLAN draws it: a tape along the room-side face
+// reads shorter by half of each joining wall's thickness, so the label says which it is.
 export function elementTargets(prop) {
   const out = [], multi = (prop.levels || []).length > 1;
   for (const level of prop.levels || []) {
@@ -123,7 +122,7 @@ export function elementTargets(prop) {
     }
     for (const w of walls) {
       const room = roomOfWall(prop, w);
-      out.push({ kind: 'wall', id: w.id, dim: 'length', group: 'Walls', label: 'Wall ' + wallNo.get(w.id) + (room ? ' (' + room + ')' : '') + suffix + ' · length', current: wallLength(w) });
+      out.push({ kind: 'wall', id: w.id, dim: 'length', group: 'Walls', label: 'Wall ' + wallNo.get(w.id) + (room ? ' (' + room + ')' : '') + suffix + ' · centre-line length', current: wallLength(w) });
     }
   }
   return out;
@@ -153,8 +152,15 @@ export function canApply(prop, m) {
   if (current == null) return 'That element is no longer in the model.';
   if (m.element.kind === 'opening') {
     const o = prop.openings.find(x => x.id === m.element.id), w = prop.walls.find(x => x.id === o.wallId);
-    if (m.element.dim === 'width' && w && m.value > wallLength(w)) return 'The opening would be wider than its wall (' + fmtLen(wallLength(w)) + ').';
     if (m.value < 0.05) return 'Too small for an opening.';
+    // PLAN's rule for a typed size (the opening schedule's resize): try it on a copy, and refuse
+    // a reading the rule would have to cut down rather than store a different number.
+    const trial = Object.assign({}, o);
+    if (w && resizeOpening(prop, trial, { [m.element.dim]: m.value }, wallHeightOf(prop, w)) && Math.abs(trial[m.element.dim] - m.value) > TOLERANCE) {
+      if (m.element.dim === 'width') return 'The opening would be wider than its wall allows (' + fmtLen(trial.width) + ' at most on a ' + fmtLen(wallLength(w)) + ' wall).';
+      const sill = o.type === 'window' ? Number(o.sill) || 0 : 0;
+      return 'The opening would be taller than its wall (' + fmtLen(trial.height) + ' at most under a ' + fmtLen(wallHeightOf(prop, w)) + ' wall' + (sill ? ' above a ' + fmtLen(sill) + ' sill' : '') + ').';
+    }
   } else if (m.value < 0.05) return 'Too short for a wall.';
   return '';
 }
@@ -165,7 +171,11 @@ export function applyMeasurement(prop, id) {
   if (problem) throw new Error(problem);
   const previous = currentValue(prop, m.element), e = m.element;
   beginGeometryEdit(prop, 'apply tape reading');
-  if (e.kind === 'opening') prop.openings.find(o => o.id === e.id)[e.dim] = m.value;
+  if (e.kind === 'opening') {
+    // Through the same resize rule as a size typed in PLAN, so a wider opening stays on its wall.
+    const o = prop.openings.find(x => x.id === e.id), w = prop.walls.find(x => x.id === o.wallId);
+    if (!w || !resizeOpening(prop, o, { [e.dim]: m.value }, wallHeightOf(prop, w))) o[e.dim] = m.value;
+  }
   else {
     // As PLAN's length field: the b end moves along the wall, joined walls and floors follow.
     const w = prop.walls.find(x => x.id === e.id), L = wallLength(w), level = levelOfWall(prop, w).id;
