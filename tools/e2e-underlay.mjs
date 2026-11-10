@@ -22,6 +22,8 @@ try {
   await new Promise(r => server.listen(0, 'localhost', r));
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
   await page.goto(`http://localhost:${server.address().port}/`);
   await page.waitForSelector('#view canvas');
   const result = await page.evaluate(async () => {
@@ -160,6 +162,7 @@ try {
     await review.locator('summary').click();
     await page.screenshot({ path: process.env.E2E_SHOTS + '/mixed-floor-review.png' });
   }
+  assert.deepEqual(errors, [], 'no page errors');
   console.log('Mixed underlay passed: indoor floor, yard and lower landing pixels retained; review report persists.');
 
 } finally {

@@ -210,7 +210,8 @@ try {
   check((await page.locator('.dc-pager').textContent()).includes('Page 1 of 2'), 'the saved PDF opens in SAVED DOCUMENTS with its two pages');
 
   // The set is part of the property: it is still there after a reload.
-  await page.waitForTimeout(800);
+  // Reload once the browser's saved copy holds the revision (autosave runs a moment after a change).
+  await page.waitForFunction(() => { try { return JSON.parse(localStorage.getItem('tiksi.workspace.v1')).properties.some(p => p.docSets?.[0]?.revisions.length === 1); } catch { return false; } });
   await page.reload();
   await page.locator('[data-set]').first().waitFor();
   const kept = await prop('return { sheets: p.docSets[0].sheets.length, views: p.docSets[0].sheets.flatMap(s => s.viewports).length, revs: p.docSets[0].revisions.length }');

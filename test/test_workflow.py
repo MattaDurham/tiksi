@@ -123,7 +123,10 @@ class WorkflowTests(unittest.TestCase):
 
     def test_stale_pid_and_active_jobs_never_signalled(self):
         target = self.start()
-        stale = {'pid': os.getpid(), 'port': 8642, 'instanceId': 'not-real'}
+        # A spare port nothing listens on: the check reads the port, and must never reach the live app.
+        with socket.socket() as spare:
+            spare.bind(('127.0.0.1', 0)); port = spare.getsockname()[1]
+        stale = {'pid': os.getpid(), 'port': port, 'instanceId': 'not-real'}
         branch.atomic_json(target / '.tiksi-instance.json', stale)
         with patch.object(self.workflow, 'probe', return_value=None), patch.object(branch.os, 'kill') as kill:
             with self.assertRaises(branch.WorkflowError): self.workflow.stop('feature')
