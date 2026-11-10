@@ -362,7 +362,7 @@ class SERVICE:
             # and takes a fresh lock of its own.
             verdict = real(self.workflow, lock_path)
             other.claim_stale(lock_path)
-            (lock_path / 'owner.json').write_text(json.dumps({'pid': os.getpid(), 'created': 1}), encoding='utf-8')
+            self.assertTrue(other.take(lock_path, {'pid': os.getpid(), 'created': 1, 'id': 'other'}))
             return verdict
         with patch.object(self.workflow, 'stale_lock', side_effect=slow_check):
             with self.assertRaisesRegex(branch.WorkflowError, 'took the lock just now'):

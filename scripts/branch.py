@@ -82,41 +82,51 @@ class Workflow:
         except PermissionError: return False
         return False
 
+    def take(self, lock, owner):
+        """Make the lock with its owner record already inside: the folder is filled under a
+        temporary name and renamed into place, so a lock never exists without its owner."""
+        if lock.exists(): return False
+        temp = lock.with_name(f'lock.new-{owner["id"]}')
+        temp.mkdir()
+        (temp / 'owner.json').write_text(json.dumps(owner), encoding='utf-8')
+        try:
+            if lock.exists(): raise FileExistsError
+            os.rename(temp, lock)
+            return True
+        except OSError:
+            shutil.rmtree(temp, ignore_errors=True)
+            return False
+
     def claim_stale(self, lock):
-        """Take over a lock whose owner is gone. The stale lock is first renamed aside, which only
-        one command can do; a command that finds it renamed a different (live) lock puts it
-        back and stops. Then the new lock is made."""
-        try: seen = lock.stat().st_ino
-        except FileNotFoundError: seen = None
-        if seen is not None and not self.stale_lock(lock):
+        """Clear a lock whose owner is gone. The stale lock is first renamed aside, which only
+        one command can do; a command that finds it renamed a different lock (its owner record
+        differs from the one it judged) puts that lock back and stops."""
+        if not lock.exists(): return
+        seen = read_json(lock / 'owner.json')
+        if not self.stale_lock(lock):
             raise WorkflowError('Another workflow command owns the lock. Inspect it; never clear a live lock.')
-        if seen is not None:
-            owner = read_json(lock / 'owner.json') or {}
-            aside = lock.with_name(f'lock.stale-{os.getpid()}-{uuid.uuid4().hex}')
-            try: os.rename(lock, aside)
-            except FileNotFoundError:
-                raise WorkflowError('Another workflow command is clearing the same stale lock. Retry.')
-            if aside.stat().st_ino != seen:
-                # The lock was cleared and retaken between the check and the rename: it is live.
-                try: os.rename(aside, lock)
-                except OSError: pass
-                raise WorkflowError('Another workflow command took the lock just now. Retry.')
-            shutil.rmtree(aside, ignore_errors=True)
-            print(f'Cleared a lock left by a command that is no longer running (process {owner.get("pid", "unknown")}).')
-        try: lock.mkdir()
-        except FileExistsError:
+        aside = lock.with_name(f'lock.stale-{os.getpid()}-{uuid.uuid4().hex}')
+        try: os.rename(lock, aside)
+        except FileNotFoundError:
+            raise WorkflowError('Another workflow command is clearing the same stale lock. Retry.')
+        if read_json(aside / 'owner.json') != seen:
+            # The stale lock was cleared and a new one taken between the check and the rename.
+            try: os.rename(aside, lock)
+            except OSError: pass
             raise WorkflowError('Another workflow command took the lock just now. Retry.')
+        shutil.rmtree(aside, ignore_errors=True)
+        print(f'Cleared a lock left by a command that is no longer running (process {(seen or {}).get("pid", "unknown")}).')
 
     @contextmanager
     def lock(self):
         self.records.mkdir(exist_ok=True)
         lock = self.records / 'lock'
-        try:
-            lock.mkdir()
-        except FileExistsError:
+        owner = {'pid': os.getpid(), 'created': time.time(), 'id': uuid.uuid4().hex}
+        if not self.take(lock, owner):
             self.claim_stale(lock)
+            if not self.take(lock, owner):
+                raise WorkflowError('Another workflow command took the lock just now. Retry.')
         try:
-            (lock / 'owner.json').write_text(json.dumps({'pid': os.getpid(), 'created': time.time()}), encoding='utf-8')
             yield
         finally:
             shutil.rmtree(lock)
