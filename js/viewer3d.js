@@ -2983,7 +2983,9 @@ async function addScanToScene(scan) {
   const token = mountId;
   setScanState(scan.id, 'loading');
   let obj = null;
-  try { obj = await loadScanObject(scan, hooks); }
+  // Still wanted? Asked once the bytes are here, before the costly parse: a visit that has ended
+  // (another property, a remount after a save) stops there.
+  try { obj = await loadScanObject(scan, hooks, () => token === mountId && !!scene); }
   catch (e) { if (token === mountId) setScanState(scan.id, 'failed'); throw e; }
   if (token !== mountId || !scene) { disposeScanObject(obj); return null; }
   if (!prop.scans.some(s => s.id === scan.id)) { disposeScanObject(obj); delete scanState[scan.id]; return null; }
@@ -4387,6 +4389,7 @@ function openModel(root) {
   for (const k of Object.keys(scanState)) delete scanState[k];
   for (const k of Object.keys(notices)) delete notices[k];
   appliedQuality = null; renderFailed = false;
+  scanQueue = Promise.resolve();   // this visit's own queue (see loadScans)
   mountId++;
 
   ensureRenderer();

@@ -406,8 +406,11 @@ async function buildSplat(buffer, e, scan, inner, wrapper, hooks) {
   return { count, label: count.toLocaleString() + ' splats' };
 }
 
-export async function loadScanObject(scan, hooks) {
+// `wanted`, when given, is asked once the bytes have arrived: answering false (the view that
+// asked is gone) ends the load there, before anything is parsed, and resolves null.
+export async function loadScanObject(scan, hooks, wanted) {
   const rec = await getFile(scan.id);
+  if (wanted && !wanted()) return null;
   if (!rec || !rec.buffer) {
     hooks && hooks.toast && hooks.toast('Scan "' + scan.name + '" is missing from browser storage; re-import it.', 'warn');
     return null;
