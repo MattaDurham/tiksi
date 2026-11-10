@@ -94,7 +94,14 @@ try {
   const box = await boxOf(hit);
   const inch = box.width / plan.w;
   await page.mouse.move(box.x + 20, box.y + 20); await page.mouse.down();
-  await page.mouse.move(box.x + 20 + inch * 0.5, box.y + 20 + inch * 0.25, { steps: 5 }); await page.mouse.up();
+  // While dragging, the view moves on screen and the sheet is not rebuilt for each step.
+  const groupAt = id => page.evaluate(id => document.querySelector(`.dc-paper svg g[data-vp-group="${id}"]`).getAttribute('transform'), plan.id);
+  const startAt = await groupAt(plan.id);
+  await page.evaluate(() => { window.__dragSvg = document.querySelector('.dc-paper svg'); });
+  await page.mouse.move(box.x + 20 + inch * 0.5, box.y + 20 + inch * 0.25, { steps: 5 });
+  const during = await page.evaluate(() => window.__dragSvg === document.querySelector('.dc-paper svg'));
+  check(during && (await groupAt(plan.id)) !== startAt, 'a drag moves the view on screen without rebuilding the sheet');
+  await page.mouse.up();
   list = await vps();
   check(Math.abs(list[0].x - (plan.x + 0.5)) < 0.13 && Math.abs(list[0].y - (plan.y + 0.25)) < 0.13 && (list[0].x * 8) % 1 === 0, `dragging moves the plan half an inch right and a quarter down (${plan.x} -> ${list[0].x})`);
   const handle = page.locator(`.dc-vp-handle[data-handle="${plan.id}"]`);
@@ -102,6 +109,8 @@ try {
   await page.mouse.move(hb.x + 4, hb.y + 4); await page.mouse.down();
   await page.mouse.move(hb.x + 4 + inch, hb.y + 4, { steps: 5 }); await page.mouse.up();
   list = await vps();
+  const drawnW = await page.evaluate(id => +document.querySelector(`.dc-paper svg g[data-vp-group="${id}"] clipPath rect`).getAttribute('width'), plan.id);
+  check(Math.abs(drawnW - list[0].w * 72) < 0.5, 'after a resize the sheet is redrawn at the new size');
   check(Math.abs(list[0].w - (plan.w + 1)) < 0.13, `the corner handle makes the plan an inch wider (${plan.w} -> ${list[0].w})`);
 
   // Double-click to adjust: scrolling steps the scale, Esc finishes.
