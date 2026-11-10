@@ -81,6 +81,14 @@ export function deviceLimits({ touch, quality } = {}) {
     roomLights: 4, pointBudget: 500000, scanBytes: 150 * MB };
 }
 
+// Whether a scan file of `bytes` is over this device's limit (`limit` 0: there is none). A scan
+// whose size is not known yet is not: it is checked again once its bytes have arrived.
+export function scanTooLarge(bytes, limit) {
+  return Number.isFinite(limit) && limit > 0 && Number.isFinite(bytes) && bytes > limit;
+}
+// "152 MB", for the message that says so.
+export function megabytes(bytes) { return Math.max(1, Math.round(bytes / MB)) + ' MB'; }
+
 // The size a picture is shrunk to so its longest side fits `limit`, keeping its shape.
 // Returns null when it already fits.
 export function shrunkSize(width, height, limit) {

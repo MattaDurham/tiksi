@@ -36,7 +36,7 @@ import { proposeFixtures, openFixtureReview, fixtureInspectorHtml, bindFixtureIn
 import { openNewPropertyDialog } from './newproperty.js';
 import { materialSelectHtml } from './materials.js';
 import { pendingTextureJobs, setTextureQuality, setTextureLimits, beginTextureBuild, setTextureUse } from './textures.js';
-import { qualityProfile, stillDimensions, effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, touchDevice, QUALITY_NAMES } from './render-quality.js';
+import { qualityProfile, stillDimensions, effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, touchDevice, scanTooLarge, megabytes, QUALITY_NAMES } from './render-quality.js';
 import { icon } from './icons.js';
 import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
 import { SECTION_KINDS, SECTION_LABELS, MAX_SECTIONS, TURN_SNAP_DEG, moveSnapStep, snapTo, quatRotate, planeNormal, planeOf, flipped, rangeAlong, movedTo, makeSection, normalizeSections, levelHeightOf } from './section-planes.js';
@@ -107,7 +107,7 @@ const ORBIT_POLAR = Math.PI * 0.495, MATCH_POLAR = Math.PI - 0.01, BASE_FOV = 50
 let measureDraft = null;       // first measure point
 const measures = [];           // {a, b, line, label}
 const scanObjs = {};           // scanId -> Object3D
-const scanState = {};          // scanId -> 'loading' | 'ready' | 'missing' | 'failed' | 'hidden' (not loaded: it has not been shown yet)
+const scanState = {};          // scanId -> 'loading' | 'ready' | 'missing' | 'failed' | 'hidden' (not loaded: it has not been shown yet) | 'too-large' (not loaded: over this device's size limit)
 const pinObjs = {};            // photoId -> {group, sprite, line, dot, aspect}
 const noteObjs = {};           // noteId -> {group, sprite, aspect, place}
 const cameraObjs = {};         // photoId -> camera pyramid group
@@ -2575,6 +2575,13 @@ async function lineUpModel() {
     if (token !== mountId) return null;
     setHint('');
   }
+  // A device that loads a scan reduced, or not at all, would compute (and save) a different
+  // answer from the same data: the line-up is left to a device that loads everything.
+  const reduced = prop.scans.filter(s => scanState[s.id] === 'too-large' || (scanObjs[s.id] && scanStats(scanObjs[s.id]).reducedForDevice));
+  if (reduced.length) {
+    toast('Line the sessions up on a computer. This device loads ' + reduced.map(s => s.name).join(', ') + ' reduced or not at all, and the result would differ.', 'warn', 9000);
+    return null;
+  }
   return { ...sampleModelPoints(), init: scanPlacementMatrix() };
 }
 // For the browser checks: what a line-up would be computed against right now.
@@ -3086,9 +3093,44 @@ const hooks = {
   get scene() { return scene; },
   // The longest side a texture inside an imported model may have on this device.
   get textureLimit() { return memoryLimits().importedTextureSize; },
+  // The most points of a cloud this device draws, and the largest scan file it loads (0: no limit).
+  get pointBudget() { return memoryLimits().pointBudget; },
+  get scanBytes() { return memoryLimits().scanBytes; },
+  scanSize(scan, bytes) { rememberScanSize(scan.id, bytes); },
   requestRender() { requestRender(3); },
 };
 const errMsg = e => String(e && e.message || e);
+// How big each scan's file is, as far as this device has seen: new scans carry their size, and
+// for older ones it is remembered here (this browser only) the first time their bytes arrive.
+// With it, a scan over this device's limit is not downloaded again on every open just to be
+// turned away.
+const SCAN_SIZES_KEY = 'tiksi.device.scanBytes';
+let scanSizes = null;
+const forcedScans = new Set();   // scans the person chose to load anyway, for this page's life
+function sizeMemo() {
+  if (!scanSizes) { try { scanSizes = JSON.parse(browserStorage().getItem(SCAN_SIZES_KEY)) || {}; } catch (e) { scanSizes = {}; } }
+  return scanSizes;
+}
+const recordedSize = scan => (Number.isFinite(scan.bytes) && scan.bytes > 0 ? scan.bytes : 0);
+function knownScanSize(scan) { return recordedSize(scan) || sizeMemo()[scan.id] || 0; }
+function rememberScanSize(id, bytes) {
+  const scan = prop && prop.scans.find(s => s.id === id);
+  const memo = sizeMemo();
+  if (!scan || recordedSize(scan) || memo[id] === bytes) return;
+  memo[id] = bytes;
+  const ids = Object.keys(memo);
+  for (const old of ids.slice(0, Math.max(0, ids.length - 300))) delete memo[old];
+  try { browserStorage().setItem(SCAN_SIZES_KEY, JSON.stringify(memo)); } catch (e) { /* this visit only */ }
+}
+function tooLargeHere(scan) { return !forcedScans.has(scan.id) && scanTooLarge(knownScanSize(scan), memoryLimits().scanBytes); }
+function tooLargeText(scan) { return 'too large for this device (' + megabytes(knownScanSize(scan)) + '; it loads scans up to ' + megabytes(memoryLimits().scanBytes) + ')'; }
+function loadScanAnyway(id) {
+  const scan = prop.scans.find(s => s.id === id);
+  if (!scan || scanState[id] !== 'too-large') return;
+  forcedScans.add(id);
+  delete scanState[id];
+  loadShownScans();
+}
 function scanSelected(id) { return selection && selection.kind === 'scan' && selection.id === id; }
 function setScanState(id, state) {
   scanState[id] = state;
@@ -3103,8 +3145,8 @@ async function addScanToScene(scan) {
   let obj = null;
   // Still wanted? Asked once the bytes are here, before the costly parse: a visit that has ended
   // (another property, a remount after a save) stops there.
-  try { obj = await loadScanObject(scan, hooks, () => token === mountId && !!scene); }
-  catch (e) { if (token === mountId) setScanState(scan.id, 'failed'); throw e; }
+  try { obj = await loadScanObject(scan, hooks, () => token === mountId && !!scene, forcedScans.has(scan.id)); }
+  catch (e) { if (token === mountId) setScanState(scan.id, e && e.tooLarge ? 'too-large' : 'failed'); throw e; }
   if (token !== mountId || !scene) { disposeScanObject(obj); return null; }
   if (!prop.scans.some(s => s.id === scan.id)) { disposeScanObject(obj); delete scanState[scan.id]; return null; }
   if (!obj) { setScanState(scan.id, 'missing'); return null; }
@@ -3146,6 +3188,13 @@ function loadShownScans() { return loadScans(false); }
 function loadScans(every) {
   const token = mountId;
   for (const scan of prop.scans) if (scan.visible === false && !scanObjs[scan.id] && !scanState[scan.id]) scanState[scan.id] = 'hidden';
+  // A scan known to be over this device's size limit is not fetched at all: it says so, once
+  // per visit, and waits for LOAD ANYWAY.
+  for (const scan of prop.scans) {
+    if (!(every || scan.visible !== false) || scanObjs[scan.id] || (scanState[scan.id] && scanState[scan.id] !== 'hidden') || !tooLargeHere(scan)) continue;
+    setScanState(scan.id, 'too-large');
+    toast(scan.name + ' is ' + tooLargeText(scan) + '. It was not loaded.', 'warn', 7000);
+  }
   const wanted = prop.scans.filter(scan => (every || scan.visible !== false) && !scanObjs[scan.id] && (!scanState[scan.id] || scanState[scan.id] === 'hidden'));
   // Marked now, so a second call before the queue reaches them does not queue them twice.
   for (const scan of wanted) setScanState(scan.id, 'loading');
@@ -3157,7 +3206,10 @@ function loadScans(every) {
       if (!prop.scans.some(s => s.id === scan.id)) { delete scanState[scan.id]; continue; }
       if (!every && scan.visible === false) { setScanState(scan.id, 'hidden'); continue; }
       try { await addScanToScene(scan); }
-      catch (e) { console.error(e); if (token === mountId) toast('Could not load scan ' + scan.name + ': ' + errMsg(e), 'error'); }
+      catch (e) {
+        if (e && e.tooLarge) { if (token === mountId) toast(errMsg(e) + ' It was not loaded.', 'warn', 7000); continue; }
+        console.error(e); if (token === mountId) toast('Could not load scan ' + scan.name + ': ' + errMsg(e), 'error');
+      }
     }
     if (token === mountId && scene && wanted.length) renderToolCol();
   }).catch(e => console.error(e));
@@ -4073,7 +4125,7 @@ function renderInspectorBody() {
     if (!s) { selection = null; tagPicks = []; return renderInspectorBody(); }
     const obj = scanObjs[s.id] || null;
     const state = obj ? 'ready' : (scanState[s.id] || 'loading');
-    const st = obj ? scanStats(obj) : { label: { missing: 'missing from storage - re-import it', failed: 'could not be loaded', loading: 'loading', hidden: 'not loaded while hidden' }[state] || 'loading' };
+    const st = obj ? scanStats(obj) : { label: { missing: 'missing from storage - re-import it', failed: 'could not be loaded', loading: 'loading', hidden: 'not loaded while hidden', 'too-large': tooLargeText(s) }[state] || 'loading' };
     const rot = s.rot || [0, s.rotY || 0, 0];
     const isPts = s.kind === 'points', isSplat = s.kind === 'splat';
     // Nothing to frame, drop or centre until the object exists; deleting mid-parse would race the loader.
@@ -4085,6 +4137,7 @@ function renderInspectorBody() {
       <div class="stat-line"><span>Kind</span><b>${escapeHtml(s.kind || '?')} &middot; ${escapeHtml((s.format || '').toUpperCase())}</b></div>
       <div class="stat-line"><span>${isSplat ? 'Splats' : (isPts ? 'Points' : 'Triangles')}</span><b>${escapeHtml(st.label)}</b></div>
       ${state === 'missing' ? '<div class="empty" style="margin:6px 0">The file bytes are not in this browser\'s storage (they do not travel in a .json export). Import the file again, or delete this record.</div>' : ''}
+      ${state === 'too-large' ? '<div class="empty" style="margin:6px 0">This scan was not loaded: it is over the size this device loads, and trying could close the page.</div><button class="btn" data-load-anyway>LOAD ANYWAY</button>' : ''}
       <div class="field-row">
         <div class="field"><label>X</label><input type="number" step="0.1" data-p="0" value="${finiteNum(s.pos[0], 0)}"></div>
         <div class="field"><label>Y (up)</label><input type="number" step="0.1" data-p="1" value="${finiteNum(s.pos[1], 0)}"></div>
@@ -4130,6 +4183,8 @@ function renderInspectorBody() {
     const flip = inspEl.querySelector('[data-flip]');
     if (flip) flip.onclick = () => { s.flip = !s.flip; upd(); };
     inspEl.querySelector('[data-vis]').onchange = e => { s.visible = e.target.checked; upd(); loadShownScans(); renderToolCol(); };
+    const anyway = inspEl.querySelector('[data-load-anyway]');
+    if (anyway) anyway.onclick = () => loadScanAnyway(s.id);
     inspEl.querySelector('[data-frame]').onclick = () => { if (obj) frameObject(obj); };
     inspEl.querySelector('[data-floor]').onclick = () => { if (obj) { dropScanToFloor(s, obj); upd(); renderInspector(); } };
     inspEl.querySelector('[data-center]').onclick = () => { if (obj) { centerScanOnModel(s, obj, modelBounds(prop)); upd(); renderInspector(); } };
@@ -4315,7 +4370,7 @@ function renderToolCol() {
   const tb = (act, ic, label, key, active) =>
     `<button class="tool-btn ${active ? 'active' : ''}" data-act="${act}" title="${label}${key ? ' (' + key + ')' : ''}">` +
     `${icon(ic)}<span class="tb-text">${label}</span>${key ? `<kbd class="key">${key}</kbd>` : ''}</button>`;
-  const scanBadge = s => scanObjs[s.id] ? (s.kind || '').toUpperCase().slice(0, 5) : ({ missing: 'GONE', failed: 'ERR', hidden: 'OFF' }[scanState[s.id]] || '...');
+  const scanBadge = s => scanObjs[s.id] ? (s.kind || '').toUpperCase().slice(0, 5) : ({ missing: 'GONE', failed: 'ERR', hidden: 'OFF', 'too-large': 'BIG' }[scanState[s.id]] || '...');
   const scanRows = prop.scans.map(s => `<button class="tool-btn v-scan-row ${scanSelected(s.id) ? 'active' : ''}" data-scan="${escapeHtml(s.id)}" title="${escapeHtml(s.name)}${scanObjs[s.id] ? '' : ' (' + escapeHtml(scanState[s.id] || 'loading') + ')'}">${icon(s.kind === 'splat' ? 'splat' : s.kind === 'mesh' ? 'model' : 'scan')}<span class="tb-text">${escapeHtml(s.name.length > 14 ? s.name.slice(0, 12) + '..' : s.name)}</span><kbd class="key">${escapeHtml(scanBadge(s))}</kbd></button>`).join('');
   // One toggle per storey, lit while the level is shown; the key badge is its floor elevation.
   const hidden = hiddenLevels();
