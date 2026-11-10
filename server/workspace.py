@@ -144,6 +144,16 @@ def file_state(path):
     return 'file' if stat.S_ISREG(info.st_mode) else 'missing'
 
 
+def replace_in_place(records, belongs, replacement):
+    """records with those that belong replaced by replacement, at the place of the first of them."""
+    out, placed = [], False
+    for record in records:
+        if not belongs(record): out.append(record)
+        elif not placed: out.extend(replacement); placed = True
+    if not placed: out.extend(replacement)
+    return out
+
+
 def project_file_base(name):
     """A property's name as a file name: no path or reserved characters, at most 80 long."""
     return re.sub(r'[\\/:*?"<>|\x00-\x1f]', ' ', str(name)).strip(' .')[:80] or 'Project'
@@ -172,8 +182,12 @@ class WorkspaceService:
         self.state = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {'revision': 0, 'data': None, 'assets': {}}
         self.paths = self.state.get('paths', {})
         # Registered projects whose file is missing or cannot be read: id -> (path, reason).
-        # Only these are left out; every other project keeps loading and saving.
-        self.unavailable = {}
+        # Only these are left out; every other project keeps loading and saving. Kept with the
+        # catalog, so a restart with the same file still missing is no change.
+        self.unavailable = {i: tuple(v) for i, v in (self.state.get('unavailable') or {}).items()}
+        # Project files as this server last wrote or read them: path -> [mtime_ns, size]. A file
+        # that still matches at start is not fingerprinted again, original by original.
+        self.known = {name: tuple(v) for name, v in (self.state.get('stamps') or {}).items()}
         # Unreadable registered files and their (mtime, size), so one is not re-read every poll.
         self.unreadable = {}
         self.has_pictures = bool(picture_refs(self.state.get('data')))
@@ -292,6 +306,7 @@ class WorkspaceService:
             self.state = json.loads(self.path.read_text(encoding='utf-8'))
             self.paths = self.state['paths']
             self.stamps, self.parts, self.part_assets = {}, {}, {}
+            self.known = {name: tuple(v) for name, v in (self.state.get('stamps') or {}).items()}
         self.finish_files()
         # A registered file that is not there, or cannot be looked at, marks only its own
         # project unavailable.
@@ -310,6 +325,7 @@ class WorkspaceService:
             candidates.update(str(p) for p in directory.glob('*.tiksi'))
             candidates.update(str(p) for p in (directory / 'Tiksi').glob('*.tiksi'))
         changed = False
+        before = None
         for name in sorted(candidates):
             path = Path(name)
             if file_state(name) != 'file': continue
@@ -342,11 +358,16 @@ class WorkspaceService:
                     if len(members) > 10000: raise WorkspaceError('Project contains too many original files', 413)
                     if sum(archive.getinfo(item['path']).file_size for item in members) > 4 * 1024 ** 3: raise WorkspaceError('Project originals exceed 4 GB', 413)
                     assets = {}
+                    # This server wrote or read the file at exactly this time and size, so the
+                    # fingerprints in its manifest are the ones it checked then.
+                    trusted = self.known.get(name) == stamp
                     for item in members:
                         member = archive.getinfo(item['path'])
                         if member.file_size > MAX_BLOB: raise WorkspaceError('Project asset exceeds 600 MB', 413)
-                        with archive.open(member) as source:
-                            digest, size = self.store_blob(source)
+                        held = self.root / 'blobs' / str(item.get('hash', ''))
+                        if trusted and HASH.fullmatch(str(item.get('hash', ''))) and held.is_file() and held.stat().st_size == member.file_size:
+                            digest, size = item['hash'], member.file_size
+                        else: digest, size = self.store_member(archive, member)
                         assets[item['id']] = {k: v for k, v in item.items() if k in ('name', 'format', 'mime', 'kind')}
                         assets[item['id']].update(hash=digest, size=size)
             except (zipfile.BadZipFile, KeyError, ValueError, AttributeError, TypeError, OSError) as error:
@@ -359,12 +380,15 @@ class WorkspaceService:
                 continue
             self.unreadable.pop(name, None)
             unavailable.pop(identifier, None)
+            # Whether anything really changed is decided at the end, against the catalog as it was.
+            if before is None: before = json.dumps([self.state['data'], self.state['assets'], self.paths], sort_keys=True)
             current = self.state['data']
             if current is None:
                 current = {**data, 'properties': [], 'projects': [], 'materials': [], 'products': []}
                 self.state['data'] = current
-            current['properties'] = [p for p in current['properties'] if p['id'] != identifier] + props
-            current['projects'] = [p for p in current['projects'] if p.get('propertyId') != identifier] + data.get('projects', [])
+            # A property read again keeps its place in the list; a new one goes at the end.
+            current['properties'] = replace_in_place(current['properties'], lambda p: p['id'] == identifier, props)
+            current['projects'] = replace_in_place(current['projects'], lambda p: p.get('propertyId') == identifier, data.get('projects', []))
             for key in ('materials', 'products'):
                 records = {r['id']: r for r in current[key]}
                 records.update({r['id']: r for r in data.get(key, [])})
@@ -374,7 +398,12 @@ class WorkspaceService:
             self.parts[identifier] = data
             self.part_assets[identifier] = assets
             self.stamps[name] = stamp
+            self.known[name] = stamp
             changed = True
+        if changed and before == json.dumps([self.state['data'], self.state['assets'], self.paths], sort_keys=True):
+            # Files read again (after a restart, say) with the same contents: devices need not reload.
+            self.persist_catalog()
+            changed = False
         for identifier, (name, _) in unavailable.items():
             # Read again in full when it comes back, even with the same time and size.
             self.stamps.pop(name, None)
@@ -396,12 +425,25 @@ class WorkspaceService:
 
     def persist_catalog(self):
         self.state['paths'] = self.paths
+        self.state['unavailable'] = {i: list(v) for i, v in self.unavailable.items()}
+        live = set(self.paths.values())
+        self.state['stamps'] = {name: list(v) for name, v in self.known.items() if name in live}
         temp = self.root / 'current.tmp'
         with temp.open('w', encoding='utf-8') as out:
             json.dump(self.state, out, ensure_ascii=False)
             out.flush()
             os.fsync(out.fileno())
         os.replace(temp, self.path)
+
+    def store_member(self, archive, member):
+        """Fingerprint one original in a project file; copy it into the blob store only when the
+        store does not hold it yet."""
+        digest = hashlib.sha256()
+        with archive.open(member) as source:
+            while chunk := source.read(1024 * 1024): digest.update(chunk)
+        held = self.root / 'blobs' / digest.hexdigest()
+        if held.is_file() and held.stat().st_size == member.file_size: return digest.hexdigest(), member.file_size
+        with archive.open(member) as source: return self.store_blob(source)
 
     def store_blob(self, source):
         digest = hashlib.sha256()
@@ -591,7 +633,7 @@ class WorkspaceService:
                     if note.exists(): note.unlink()
                 for temp, dest, identifier in staged:
                     os.replace(temp, dest)
-                    self.stamps[str(dest)] = (dest.stat().st_mtime_ns, dest.stat().st_size)
+                    self.stamps[str(dest)] = self.known[str(dest)] = (dest.stat().st_mtime_ns, dest.stat().st_size)
                 self.state, self.paths = value, value['paths']
                 for i in destinations: self.planned.pop(i, None)
                 self.has_pictures = bool(pictures)

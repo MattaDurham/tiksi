@@ -49,6 +49,48 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(restored.snapshot()['data']['properties'], data['properties'])
         self.assertEqual((restored.root / 'blobs' / digest).read_bytes(), payload)
 
+    def two_with_originals(self):
+        """Two properties, listed Zed before Alpha (the reverse of their file paths), each with an original."""
+        data = {**workspace(), 'properties': []}; assets = {}
+        for identifier, name in (('prop-z', 'Zed'), ('prop-a', 'Alpha')):
+            digest, size = self.service.store_blob(io.BytesIO(name.encode() * 50000))
+            data['properties'].append({'id': identifier, 'name': name, 'scans': [{'id': 'scan-' + identifier, 'name': 'Scan'}], 'photos': []})
+            assets['scan-' + identifier] = {'hash': digest, 'size': size, 'format': 'glb', 'name': 'room.glb'}
+        self.commit(data, assets)
+        return data
+
+    def test_a_restart_with_nothing_changed_copies_nothing_and_changes_no_revision(self):
+        data = self.two_with_originals()
+        before = self.service.snapshot()
+        with patch.object(WorkspaceService, 'store_blob', side_effect=AssertionError('an original was copied again')):
+            restarted = WorkspaceService(self.root / 'runtime', self.root / 'projects')
+            after = restarted.snapshot()
+        self.assertEqual(after['revision'], before['revision'], 'open pages do not reload')
+        self.assertEqual([p['name'] for p in after['data']['properties']], ['Zed', 'Alpha'], 'the order is kept')
+        self.assertEqual(after['data'], before['data']); self.assertEqual(after['assets'], before['assets'])
+        # Saving after the restart still works and the next restart is still quiet.
+        self.service = restarted
+        data['properties'][0]['name'] = 'Zed revised'
+        self.commit(data, before['assets'])
+        revision = restarted.snapshot()['revision']
+        self.assertEqual(WorkspaceService(self.root / 'runtime', self.root / 'projects').snapshot()['revision'], revision)
+
+    def test_a_project_file_changed_elsewhere_is_fingerprinted_without_copying_originals_already_held(self):
+        self.two_with_originals()
+        path = Path(self.service.paths['prop-a'])
+        os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 10 ** 9))  # touched by another program
+        with patch.object(WorkspaceService, 'store_blob', side_effect=AssertionError('an original already held was copied again')):
+            restarted = WorkspaceService(self.root / 'runtime', self.root / 'projects')
+        self.assertEqual([p['name'] for p in restarted.snapshot()['data']['properties']], ['Zed', 'Alpha'])
+
+    def test_a_restart_with_a_project_still_missing_changes_no_revision(self):
+        self.two_with_originals()
+        Path(self.service.paths['prop-a']).unlink()
+        revision = self.service.snapshot()['revision']
+        restarted = WorkspaceService(self.root / 'runtime', self.root / 'projects')
+        self.assertEqual(restarted.snapshot()['revision'], revision)
+        self.assertEqual([u['id'] for u in restarted.snapshot()['unavailable']], ['prop-a'])
+
     def test_videos_and_measurement_frames_travel_in_the_project_bundle(self):
         video, frame, stray = b'\x00\x00\x00\x18ftypmp42 synthetic video', b'\xff\xd8 synthetic frame', b'unreferenced'
         assets = {}
