@@ -15,7 +15,7 @@ import threading
 import tempfile
 import time
 import zipfile
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from server.peers import trusted_peer
 from server.ranges import Part, byte_range
@@ -923,6 +923,29 @@ class WorkspaceService:
         ids.update(picture_refs(data))
         return ids
 
+    def forget(self, identifier):
+        """Take a project whose file is gone for good off the Mac's list. Only a project listed as
+        unavailable can be taken off, and no file anywhere is deleted, moved or written: the
+        project's record stays in the server's saved catalog copies. If its file turns up in the
+        projects folder later, it is found again like any other project file."""
+        with self.lock:
+            self.refresh()
+            if identifier not in self.unavailable:
+                raise WorkspaceError('Only a project whose file is missing or cannot be read can be taken off the list', 409)
+            if self.path.exists(): self.keep_history(self.root / 'history' / (str(self.state['revision']) + '.json'))
+            path, _ = self.unavailable.pop(identifier)
+            self.paths.pop(identifier, None)
+            for table in (self.parts, self.part_assets): table.pop(identifier, None)
+            for table in (self.stamps, self.known, self.unreadable): table.pop(path, None)
+            data = self.state.get('data')
+            if data:
+                data['properties'] = [p for p in data.get('properties', []) if p.get('id') != identifier]
+                data['projects'] = [p for p in data.get('projects', []) if p.get('propertyId') != identifier]
+            self.state['revision'] += 1
+            self.persist_catalog()
+            log.info('Took a project off the list at the owner\'s request; its file was at %s and nothing was deleted.', path)
+            return self.state['revision']
+
     def check_available(self, identifier):
         with self.lock:
             self.refresh()
@@ -1064,6 +1087,10 @@ class WorkspaceService:
                     received, size, done = self.upload_piece(digest, size, offset, h.rfile, length)
                     self.reply(h, 200, {'hash': digest, 'size': size, 'received': received, 'done': done})
                 else: raise WorkspaceError('Upload endpoint not found', 404)
+            elif path.startswith('/api/workspace/unavailable/') and path.endswith('/forget') and h.command == 'POST':
+                identifier = unquote(path.removeprefix('/api/workspace/unavailable/').removesuffix('/forget'))
+                revision = self.forget(identifier)
+                with self.lock: self.reply(h, 200, {'revision': revision, 'unavailable': self.unavailable_projects()})
             elif path == '/api/workspace/blobs/held' and h.command == 'POST':
                 # Which of these stored originals the Mac already holds, in one question.
                 try: asked = json.loads(self.read(h, 2 * 1024 * 1024)).get('hashes')

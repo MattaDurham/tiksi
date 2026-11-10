@@ -786,6 +786,37 @@ class UnavailableProjectTests(unittest.TestCase):
                 names, snapshot = self.visible(restarted)
                 self.assertEqual(sorted(names), ['A', 'B ' + label], 'it returns once readable')
 
+    def test_a_project_gone_for_good_can_be_taken_off_the_list_and_no_file_is_touched(self):
+        self.a.rename(self.away)
+        self.assertEqual([u['id'] for u in self.service.snapshot()['unavailable']], ['prop-a'])
+        with self.assertRaises(WorkspaceError) as refused: self.service.forget('prop-b')
+        self.assertEqual(refused.exception.status, 409, 'a project whose file is there cannot be taken off')
+        files = {p: p.read_bytes() for p in self.root.rglob('*.tiksi')}
+        def call(identifier):
+            class Handler:
+                path = '/api/workspace/unavailable/' + identifier + '/forget'; command = 'POST'; client_address = ('127.0.0.1', 1)
+                headers = {'Host': 'localhost:8888', 'X-Tiksi-Workspace': '1', 'X-Tiksi-Token': self.service.token}
+                def send_response(self, status): self.status = status
+                def send_header(self, *args): pass
+                def end_headers(self): pass
+            h = Handler(); h.wfile = io.BytesIO(); self.service.dispatch(h)
+            return h.status, json.loads(h.wfile.getvalue())
+        before = self.service.snapshot()['revision']
+        status, reply = call('prop-a')
+        self.assertEqual((status, reply['unavailable']), (200, []))
+        self.assertGreater(reply['revision'], before, 'every device sees it leave on its next poll')
+        names, snapshot = self.visible()
+        self.assertEqual((names, snapshot['unavailable']), (['B'], []))
+        self.assertNotIn('prop-a', snapshot['paths'])
+        self.assertEqual({p: p.read_bytes() for p in self.root.rglob('*.tiksi')}, files, 'no project file was deleted, moved or written')
+        self.assertTrue(any(b'prop-a' in p.read_bytes() for p in (self.root / 'workspace' / 'history').glob('*.json')), 'its record stays in the saved copies')
+        restarted = WorkspaceService(self.root / 'workspace', self.root / 'projects')
+        self.assertEqual(restarted.snapshot()['unavailable'], [])
+        self.assertEqual(call('prop-a')[0], 409, 'nothing left to take off')
+        data = two('A', 'B again'); data['properties'] = data['properties'][1:]
+        self.commit(data, service=restarted)
+        self.assertEqual(project_name(self.b), 'B again', 'the rest keep saving')
+
     def test_open_and_mirror_requests_for_a_missing_project_name_the_file(self):
         self.a.unlink()
         service = self.service
