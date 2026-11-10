@@ -428,7 +428,6 @@ class WorkspaceService:
                 self.archive_copy(migration, 'browser-migration')
             staged = []
             destinations = {}
-            set_aside = []
             try:
                 for prop in data['properties']:
                     identifier = prop['id']
@@ -441,7 +440,7 @@ class WorkspaceService:
                         destinations[identifier] = self.paths[identifier]
                         relevant = {i: assets[i] for i in self.referenced(part) if i in assets}
                         if self.parts.get(identifier) != part or self.part_assets.get(identifier) != relevant:
-                            set_aside.append(self.archive_copy({'data': part, 'assets': relevant}, 'unavailable-project'))
+                            self.archive_copy({'data': part, 'assets': relevant}, 'unavailable-project')
                         continue
                     base = project_file_base(prop.get('name', 'Project'))
                     folder = self.projects_dir / (base + '-' + hashlib.sha256(identifier.encode()).hexdigest()[:8])
