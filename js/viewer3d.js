@@ -8,7 +8,7 @@ import { environmentSun, dayOfYear, dateForDay, daysInYear, validTimeZone } from
 import { setModelXray } from './model-xray.js';
 import * as THREE from 'three';
 import { modelPanelHtml, bindModelPanel, partComponentName } from './model-panel.js';
-import { beginGeometryEdit, restoreGeometryEdit } from './edit-history.js';
+import { beginGeometryEdit, restoreGeometryEdit, revertGeometryEdit } from './edit-history.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
@@ -1629,7 +1629,14 @@ function commitGizmoMove() {
     // As in PLAN: a slide that squeezes a joined wall under 5 cm (or turns one over) is refused.
     const before = movedWallLengths(mv);
     applyWallMove(mv, r(normalOffset(mv, dx, dz)));
-    if (moveLeavesShortWall(before, 0.05)) { applyWallMove(mv, 0); toast('A wall cannot be shorter than ' + fmtLen(0.05) + '. Delete it instead.', 'warn'); }
+    if (moveLeavesShortWall(before, 0.05)) {
+      // Refused: put everything back bit for bit with no undo entry and no change to save; the
+      // rebuild snaps the handle back.
+      revertGeometryEdit(prop);
+      toast('A wall cannot be shorter than ' + fmtLen(0.05) + '. Delete it instead.', 'warn');
+      rebuildModel(); renderInspector();
+      return;
+    }
   } else { w.ax = r(w.ax + dx); w.ay = r(w.ay + dz); w.bx = r(w.bx + dx); w.by = r(w.by + dz); }
   touch();
   rebuildModel();

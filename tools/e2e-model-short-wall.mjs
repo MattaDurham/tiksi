@@ -31,6 +31,7 @@ try {
     p.id = 'short-wall-house'; p.env.quality = 'low';
     const level = p.levels[0].id, wall = (id, ax, ay, bx, by, thickness = .1) => ({ id, level, ax, ay, bx, by, thickness, height: null, material: 'mat-drywall' });
     p.walls.push(wall('mover', -2, 0, 2, 0, .2), wall('left', -2, 0, -2, -0.3), wall('right', 2, 0, 2, -0.3), wall('base', -2, -0.3, 2, -0.3), wall('far', -2, 0.3, 2, 0.3));
+    p.openings.push({ id: 'vent', wallId: 'left', t: 0.4731, type: 'window', width: 0.08, height: 0.3, sill: 1 });
     s.ws.data.settings.sketchupMirror = false;
     s.ws.data.properties.push(p); s.ws.data.settings.activePropertyId = p.id; s.touch();
     await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
@@ -39,12 +40,15 @@ try {
   await page.locator('canvas.v-canvas').waitFor();
   await page.locator('.v-modes [data-mode=top]').click();
   await page.waitForTimeout(900);
+  // The view has settled (camera tween, model build) before anything is clicked.
+  await page.waitForFunction(async () => (await import('/js/viewer3d.js')).viewerIdle(), null, { polling: 200, timeout: 30000 });
   const canvas = page.locator('canvas.v-canvas'), box = await canvas.boundingBox();
   // Click up and down the middle of the view until the 20 cm thick wall ('mover') is selected.
   const want = await page.evaluate(() => window.testStore.fmtLen(.2));
   let picked = false;
   for (let dy = 0; dy <= 120 && !picked; dy = dy > 0 ? -dy : -dy + 4) {
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2 + dy);
+    await page.waitForTimeout(150);
     const th = page.locator('.inspector [data-th]');
     picked = (await th.count()) > 0 && (await th.inputValue()) === want;
   }
@@ -86,9 +90,17 @@ try {
   const toward = moved < 0 ? 1 : -1;   // screen direction that lowers y, toward the base wall
   // A long drag toward the base wall, well past it.
   const before = now;
+  const state = () => page.evaluate(async () => {
+    const h = await import('/js/edit-history.js'), p = window.testStore.activeProperty();
+    return { undo: h.editHistoryState(p).undo, vent: p.openings.find(o => o.id === 'vent').t };
+  });
+  const stateBefore = await state();
+  await page.evaluate(() => { window.__changes = 0; window.testStore.onChange(() => { window.__changes++; }); });
   await dragBy(toward * 220);
   now = await walls();
   assert.deepEqual(now, before, 'a slide past the opposite wall is refused: no wall moved');
+  assert.deepEqual(await state(), stateBefore, 'no undo entry, and the window on a joined wall is exactly where it was');
+  assert.equal(await page.evaluate(() => window.__changes), 0, 'the project is not marked changed');
   for (const id of ['left', 'right']) {
     const [ax, ay, bx, by] = now[id];
     assert.ok(Math.hypot(bx - ax, by - ay) >= 0.05, `${id} keeps its length`);
