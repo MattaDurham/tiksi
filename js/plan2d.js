@@ -2327,18 +2327,25 @@ function renderInspector() {
       if (o.type === 'window' && o.sill == null) o.sill = WINDOW_DEFAULT.sill;
       touch(); renderInspector();
     };
-    const num = (key, fn) => {
+    // Widths and heights must be real sizes; a sill may sit at the floor (0).
+    const num = (key, fn, min = 0.05) => {
       const elx = insp.querySelector(`[data-len=${key}]`);
       if (elx) elx.onchange = e => {
         const v = parseLen(e.target.value);
-        if (!isNaN(v) && v > 0.05) { pushUndo(); fn(v); touch(); }
+        if (!isNaN(v) && (min === 0 ? v >= 0 : v > min)) { pushUndo(); fn(v); touch(); }
         renderInspector();
       };
     };
     // Through the schedule's rule, so a typed width or height still fits the wall.
     num('w', v => resizeOpening(prop, o, { width: v }, wallHeightOf(prop, ow)));
     num('h', v => resizeOpening(prop, o, { height: v }, wallHeightOf(prop, ow)));
-    num('s', v => o.sill = v);
+    // The sill keeps the window inside its wall: it stops MIN_SIZE below the top, and the
+    // height then shrinks to fit under the wall top, by the same rule a typed height follows.
+    num('s', v => {
+      const wallH = wallHeightOf(prop, ow);
+      o.sill = Math.max(0, Math.min(v, wallH - MIN_SIZE));
+      resizeOpening(prop, o, { height: o.height }, wallH);
+    }, 0);
     const leavesSel = insp.querySelector('[data-leaves]');
     if (leavesSel) leavesSel.onchange = e => { pushUndo('change door leaves'); o.leaves = Number(e.target.value); touch(); renderInspector(); };
     let slidingOpening = false;
