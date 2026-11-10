@@ -58,7 +58,7 @@ assert.equal(phoneQualityChoice(null), null);
 const MB = 1024 * 1024;
 for (const quality of ['low', 'medium', 'high', 'ultra']) {
   const desk = deviceLimits({ phone: false, quality }), phone = deviceLimits({ phone: true, quality });
-  assert.deepEqual(desk, { textureBytes: 256 * MB, textureSets: 56, textureQuality: quality, importedTextureSize: 4096 });
+  assert.deepEqual(desk, { textureBytes: 256 * MB, textureSets: 56, textureQuality: quality, importedTextureSize: 8192 });
   assert.ok(phone.textureBytes < desk.textureBytes && phone.textureSets < desk.textureSets && phone.importedTextureSize < desk.importedTextureSize, quality + ': every phone limit is lower');
 }
 assert.equal(deviceLimits({ phone: true, quality: 'medium' }).textureQuality, 'low', 'at its default the phone makes the small material textures');

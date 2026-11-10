@@ -50,14 +50,15 @@ export function effectiveQuality({ phone, shared, choice } = {}) {
 
 // ---------- memory limits by device ----------
 // A phone browser page has a fraction of a desktop's memory and loses its graphics context when
-// it runs short. The desktop row is what every device used before.
+// it runs short. The desktop row is what every device used before; its 8192 pixel limit on a
+// model's own textures is above what scan and SketchUp exports carry, so nothing it shows changes.
 //   textureBytes / textureSets   the generated material textures kept at once (textures.js)
 //   textureQuality               which size row those textures are made at (textures.js resFor)
 //   importedTextureSize          longest side, in pixels, of a texture inside an imported model
 const MB = 1024 * 1024;
 export function deviceLimits({ phone, quality } = {}) {
   const q = known(quality) ? quality : 'high';
-  if (!phone) return { textureBytes: 256 * MB, textureSets: 56, textureQuality: q, importedTextureSize: 4096 };
+  if (!phone) return { textureBytes: 256 * MB, textureSets: 56, textureQuality: q, importedTextureSize: 8192 };
   const light = q === 'low' || q === 'medium';
   return { textureBytes: 96 * MB, textureSets: 24, textureQuality: light ? 'low' : q, importedTextureSize: q === 'low' ? 1024 : 2048 };
 }
