@@ -149,11 +149,75 @@ async function transfersTakeAsLongAsTheyNeed() {
   console.log('ok   slow transfers finish (upload ' + uploadSeconds.toFixed(1) + ' s, download ' + downloadSeconds.toFixed(1) + ' s against a ' + limits.stallMs / 1000 + ' s stall limit); a stalled round resends only what the Mac lacks');
 }
 
+// A save the Mac refuses for good reads differently from one that is being retried, says
+// why, and is not sent again and again. A lost connection with nothing to save is not
+// reported as unsaved work.
+async function refusedAndRetriedSavesReadDifferently() {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await openPage(context);
+  const statusLine = () => page.evaluate(() => { const el = document.querySelector('#save-status'); return { text: el.textContent, kind: el.dataset.saveState, detail: el.title }; });
+  const puts = []; page.on('request', r => { if (r.method() === 'PUT' && new URL(r.url()).pathname === '/api/workspace') puts.push(Date.now()); });
+  await page.evaluate(async () => {
+    const store = await import('/js/store.js'); window.saveTestStore = store;
+    const p = store.propertyTemplate('Refusals'); p.id = 'prop-refusals';
+    store.ws.data.properties.push(p); store.ws.data.settings.activePropertyId = p.id; store.touch();
+    await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
+  });
+
+  // 1. The Mac really refuses this one: its records come to more than the 32 MB it accepts.
+  puts.length = 0;
+  await page.evaluate(() => { window.saveTestStore.ws.data.properties.find(p => p.id === 'prop-refusals').notes = 'n'.repeat(33 * 1024 * 1024); window.saveTestStore.touch(); });
+  await page.waitForFunction(() => document.querySelector('#save-status').dataset.saveState === 'refused', null, { timeout: 60000 });
+  const refused = await statusLine();
+  assert.match(refused.text, /^NOT SAVED: .*32 MB/, 'the status line gives the Mac\'s own reason');
+  assert.doesNotMatch(refused.text, /RETRYING/, 'a refused save does not claim to be retrying');
+  const sentBefore = puts.length;
+  await page.waitForTimeout(9000);   // more than three of the old 2.5 s retries
+  assert.equal(puts.length, sentBefore, 'a save the Mac refused is not sent again by itself');
+  assert.equal((await statusLine()).kind, 'refused');
+  // Putting it right is an edit, and an edit is tried at once.
+  await page.evaluate(() => { window.saveTestStore.ws.data.properties.find(p => p.id === 'prop-refusals').notes = 'Short again'; window.saveTestStore.touch(); });
+  await page.waitForFunction(SAVED, null, { timeout: 60000 });
+  assert.equal((await onTheMac()).data.properties.find(p => p.id === 'prop-refusals').notes, 'Short again');
+  assert.equal((await statusLine()).kind, 'saved');
+
+  // 2. The Mac cannot be reached and there is nothing to save: not unsaved work, no
+  // "leave page?" question, and no extra save when the connection returns.
+  puts.length = 0;
+  await context.setOffline(true);
+  await page.waitForFunction(() => document.querySelector('#save-status').dataset.saveState === 'waiting', null, { timeout: 20000 });
+  const idle = await statusLine();
+  assert.match(idle.text, /CANNOT REACH THE MAC/); assert.doesNotMatch(idle.text, /NOT SAVED/, 'nothing was unsaved');
+  // What the leave-page question and the dot on FILE both go by.
+  const unsaved = () => page.evaluate(async () => (await import('/js/disk-workspace.js')).diskWorkspace.pending);
+  assert.equal(await unsaved(), false, 'a lost connection alone is not unsaved work, so nothing asks to stay on the page');
+  // 3. An edit while unreachable: now it is unsaved, it is being retried, and it says why.
+  await page.evaluate(() => { window.saveTestStore.ws.data.properties.find(p => p.id === 'prop-refusals').notes = 'Written while the Mac was away'; window.saveTestStore.touch(); });
+  await page.waitForFunction(() => /^NOT SAVED TO DISK — RETRYING/.test(document.querySelector('#save-status').textContent), null, { timeout: 20000 });
+  const retrying = await statusLine();
+  assert.match(retrying.text, /CANNOT REACH THE MAC/); assert.equal(retrying.kind, 'waiting');
+  assert.notEqual(retrying.kind, refused.kind, 'retrying and refused are different states');
+  assert.equal(await unsaved(), true, 'an edit the Mac has not got is unsaved work');
+  await context.setOffline(false);
+  await page.waitForFunction(SAVED, null, { timeout: 20000 });
+  assert.equal((await onTheMac()).data.properties.find(p => p.id === 'prop-refusals').notes, 'Written while the Mac was away');
+  // 4. Unreachable again with nothing to save, then back: the line returns to saved without a save.
+  puts.length = 0;
+  await context.setOffline(true);
+  await page.waitForFunction(() => document.querySelector('#save-status').dataset.saveState === 'waiting', null, { timeout: 20000 });
+  await context.setOffline(false);
+  await page.waitForFunction(SAVED, null, { timeout: 20000 });
+  assert.equal(puts.length, 0, 'a connection that dropped and returned with nothing to save sends no save');
+  await context.close();
+  console.log('ok   a refused save says why and stops; a retried one says it is retrying; a dropped connection alone is not unsaved work');
+}
+
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(url)).ok) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
   browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   await sketchupSaveUnderAnOpenPage();
   await transfersTakeAsLongAsTheyNeed();
+  await refusedAndRetriedSavesReadDifferently();
   assert.deepEqual(errors, []);
 } catch (error) {
   // The failure first: a browser that will not close must not hide it.

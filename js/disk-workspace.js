@@ -14,6 +14,8 @@ const copy = value => mapStrings(value, s => s);
 // direction, for `stallMs`; `answerMs` is the wait for the Mac's answer once everything was
 // sent (it may be writing a large project file).
 export const transferLimits = { stallMs: 45000, answerMs: 120000 };
+// The largest original the Mac stores (MAX_BLOB in server/workspace.py).
+const MAX_FILE_BYTES = 600 * 1024 * 1024;
 function stalled(ms) {
   const error = new Error('The connection to the Mac stopped: nothing moved for ' + Math.round(ms / 1000) + ' seconds');
   error.stalled = true; return error;
@@ -130,17 +132,54 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   // new ones still inline (the next save stores them).
   const savedFormNow = () => pictures ? pictures.slim(ws.data).data : copy(ws.data);
   const pictureAssets = data => pictures ? pictures.assetsFor(pictureRefs(data).keys()) : {};
-  function status(text, busy = false) { setSaveStatus(text, busy); }
+  // The status line also says which kind of state it shows, for the phone bar and for
+  // styling: saved, sending, waiting (not saved yet, tried again by itself) or refused (not
+  // saved, and trying again cannot help). `detail` is the full explanation, shown on hover.
+  // Other parts of the app write the same line; the kind holds only for the text set here.
+  const statusLine = document.getElementById('save-status');
+  let statusText = null;
+  if (statusLine) new MutationObserver(() => {
+    if (statusLine.textContent !== statusText) { delete statusLine.dataset.saveState; statusLine.removeAttribute('title'); }
+  }).observe(statusLine, { childList: true, characterData: true, subtree: true });
+  function status(text, busy = false, kind = busy ? 'sending' : 'saved', detail = '') {
+    statusText = text; setSaveStatus(text, busy);
+    if (!statusLine) return;
+    statusLine.dataset.saveState = kind;
+    if (detail) statusLine.title = detail; else statusLine.removeAttribute('title');
+  }
+  const settledText = () => cleanupNotice ? 'SAVED TO DISK — CLOSE OLDER TIKSI TABS' : pending ? 'SAVING TO DISK' : 'SAVED TO DISK';
+  // The last round that failed: { hold, tries, retryAt }. `hold` is a save the Mac refused for
+  // a reason that sending it again cannot change; it waits for an edit or for the person.
+  let failure = null;
   function changed() {
     edits++;
     if (applying) return;
-    pending = true; status('SAVING TO DISK', true);
+    pending = true; failure = null; status('SAVING TO DISK', true);
     clearTimeout(timer); timer = setTimeout(() => sync().catch(failed), 700);
   }
+  const brief = text => { const t = String(text || '').trim(); return t.length > 72 ? t.slice(0, 71).trimEnd() + '…' : t; };
   function failed(error) {
-    pending = true;
-    status('NOT SAVED TO DISK — RETRYING', true);
     console.error('project-file sync:', error);
+    // Edits kept arriving while saving: nothing failed, the next round finishes them.
+    if (error.unfinished) { status('SAVING TO DISK', true); return; }
+    // `pending` is left as it was: a lost connection with nothing to save is not unsaved work.
+    const answered = typeof error.status === 'number';
+    const refused = answered && error.status >= 400 && error.status < 500 && ![403, 408, 409, 429].includes(error.status);
+    const tries = (failure && !failure.hold ? failure.tries : 0) + 1;
+    // A Mac that answers with a fault is sent the same save less and less often, up to once a
+    // minute. One that cannot be reached is asked again at the usual pace: reconnecting is cheap.
+    const wait = (answered || error.stalled) && tries > 1 ? Math.min(60000, 2500 * 2 ** (tries - 1)) : 0;
+    failure = { hold: refused && pending, tries, retryAt: Date.now() + wait };
+    if (refused) status((pending ? 'NOT SAVED: ' : 'PROJECT FILES: ') + brief(error.message), true, 'refused', error.message + (pending ? ' Sending the same save again cannot help, so it is not retried until something changes here.' : ''));
+    else {
+      const reason = answered ? brief(error.message) : error.stalled ? 'THE MAC STOPPED ANSWERING' : 'CANNOT REACH THE MAC';
+      status(pending ? 'NOT SAVED TO DISK — RETRYING: ' + reason : reason + ' — RETRYING', true, 'waiting', error.message);
+    }
+  }
+  // A round that went through after a failed one: the failure text must not stay up.
+  function recovered() {
+    if (!failure) return;
+    failure = null; status(settledText(), pending || cleanupNotice);
   }
   async function read(id, local) {
     const remote = assets[id];
@@ -162,6 +201,11 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       const local = await getCachedFile(id);
       if (starting[id] && !changedFiles.has(id) && (!migration || !local?.buffer)) { out[id] = starting[id]; continue; }
       if (!local?.buffer) { if (starting[id]) out[id] = starting[id]; continue; }
+      if (local.buffer.byteLength > MAX_FILE_BYTES) {
+        // Said here, in words, instead of as an upload the Mac cuts off again and again.
+        const error = new Error((local.name || 'A file') + ' is ' + Math.round(local.buffer.byteLength / 1048576) + ' MB; the Mac accepts files up to ' + MAX_FILE_BYTES / 1048576 + ' MB');
+        error.status = 413; throw error;
+      }
       const held = heldByMac.get(id);
       let uploaded = held && held.buffer === local.buffer ? held.entry : null;
       if (!uploaded) {
@@ -323,7 +367,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       migration = false; migrationPack = null;
       await cleanupMigration();
     }
-    status(cleanupNotice ? 'SAVED TO DISK — CLOSE OLDER TIKSI TABS' : pending ? 'SAVING TO DISK' : 'SAVED TO DISK', pending || cleanupNotice);
+    status(settledText(), pending || cleanupNotice);
   }
   async function sync() {
     if (running) return running;
@@ -331,9 +375,10 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       for (let round = 0; round < 4; round++) {
         try { await cycle(); }
         catch (error) { if (![403, 409].includes(error.status) || round === 3) throw error; continue; }
-        if (!pending) return;
+        if (!pending) { recovered(); return; }
       }
-      throw new Error('More edits arrived during saving; the next sync will finish them.');
+      const error = new Error('More edits arrived during saving; the next sync will finish them.');
+      error.unfinished = true; throw error;
     })().finally(() => { running = null; });
     return running;
   }
@@ -440,10 +485,16 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     await finishBrowserMigration({ clearFiles: false });
   }
   onChange(changed);
-  setInterval(() => sync().catch(failed), 2500);
+  setInterval(() => {
+    // A refused save waits for a change; a faulting Mac is asked again after a growing pause.
+    if (failure && (failure.hold || Date.now() < failure.retryAt)) return;
+    sync().catch(failed);
+  }, 2500);
   setInterval(pollMirrors, 10000);
-  window.addEventListener('online', () => sync().catch(failed));
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') sync().catch(failed); });
+  // Coming back online, or back to this page, is a reason to try at once whatever happened before.
+  const tryNow = () => { if (failure) { failure.hold = false; failure.retryAt = 0; } sync().catch(failed); };
+  window.addEventListener('online', tryNow);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tryNow(); });
   window.addEventListener('beforeunload', e => { if (pending) { e.preventDefault(); e.returnValue = ''; } });
   return diskWorkspace;
 }

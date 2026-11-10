@@ -144,3 +144,9 @@ html.phone.fd-open .fd-panel { transform: none; visibility: visible; transition:
 @media print {
   .fd-bar, .fd-frame, .fd-walk, .fd-scrim, .fd-panel { display: none !important; }
 }
+
+/* ---------- save state, both layouts ----------
+   js/disk-workspace.js marks the status line with what it shows. A save the Mac refused is
+   red and still; one being retried keeps the amber pulse of a save in progress. */
+.save-status[data-save-state="refused"] { color: var(--red); }
+.save-status.busy[data-save-state="refused"]::before { background: var(--red); box-shadow: 0 0 6px rgba(224, 82, 82, 0.6); animation: none; }
