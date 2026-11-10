@@ -121,6 +121,43 @@ export function migrateMaterialKeys(scan, root) {
   return changed;
 }
 
+// Every texture a material holds, whatever property it sits on (three has more than twenty map
+// kinds across its material types), each once.
+export function materialTextures(material) {
+  const out = new Set();
+  if (material) for (const key of Object.keys(material)) { const v = material[key]; if (v && v.isTexture) out.add(v); }
+  return [...out];
+}
+
+// The textures a model's material may free when the model goes. A material read from the file
+// owns every picture it holds, except an environment map. A copy standing in for a library record owns only the texture
+// copies applyModelMaterials made for it (TEXTURE_KEYS); anything else on it is the library's.
+export function ownedTextures(material) {
+  if (!material) return [];
+  // An environment map is the scene's lighting, shared by everything: never a model's to free.
+  if (!(material.userData && material.userData.modelReplacement)) return materialTextures(material).filter(t => t !== material.envMap);
+  return [...new Set(TEXTURE_KEYS.map(k => material[k]).filter(t => t && t.isTexture))];
+}
+
+// Sharpen the model's own textures at glancing angles. The copies standing in for a library
+// record (applyModelMaterials) are left exactly as the library made them: a copy with the same
+// settings shares the library's upload on the graphics card, while one with a different
+// sharpness is stored there a second time.
+export function sharpenModelTextures(root, anisotropy) {
+  const seen = new Set();
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+      if (!m || seen.has(m) || (m.userData && m.userData.modelReplacement)) continue;
+      seen.add(m);
+      for (const key of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) {
+        const t = m[key];
+        if (t && t.anisotropy !== anisotropy) { t.anisotropy = anisotropy; t.needsUpdate = true; }
+      }
+    }
+  });
+}
+
 // The library record a model material is shown as: an explicit binding, else none (identities
 // recognise a material without replacing how it looks).
 export function boundRecord(scan, key) {

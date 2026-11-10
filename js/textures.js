@@ -21,9 +21,12 @@ const FALLBACK = { id: '', name: 'Fallback', color: '#d8d4cc', pattern: 'flat', 
 const SWATCH_RES = 256;          // texture resolution behind a swatch; the chip is tiny
 const HI_RES = new Set(['wood', 'stone', 'marble']);
 const SLICE_MS = 12;             // per-tick CPU budget of the synthesis scheduler
-const MAX_TEX_BYTES = 256 * 1024 * 1024; // GPU mip chains + retained albedo; higher resolution sets need a byte cap.
+// GPU mip chains + retained albedo; higher resolution sets need a byte cap. These are the desktop
+// limits; a touch device is given lower ones through setTextureLimits (render-quality.js deviceLimits).
+const DESKTOP_TEX_BYTES = 256 * 1024 * 1024, DESKTOP_TEX_ENTRIES = 56;
+let MAX_TEX_BYTES = DESKTOP_TEX_BYTES;
 let textureQuality = 'high';
-const MAX_TEX_ENTRIES = 56;      // LRU cap on full texture sets (a 1024 set is ~16 MB of maps)
+let MAX_TEX_ENTRIES = DESKTOP_TEX_ENTRIES;      // LRU cap on full texture sets (a 1024 set is ~16 MB of maps)
 const MAX_TRANSIENT_ENTRIES = 8; // of which editor-preview variants: the current one and a few recent
 const MAX_SWATCHES = 200;        // cached swatch PNGs (~50 KB each); a long editing session mints many
 
@@ -913,6 +916,36 @@ export function pendingTextureJobs() { return [...texCache.values()].filter(e =>
 
 export function setTextureQuality(quality) { textureQuality = quality; }
 
+// How much generated texture this device keeps at once: `bytes` of maps and `sets` of them.
+// Lowering a limit frees the least recently shown sets straight away.
+export function setTextureLimits({ bytes, sets } = {}) {
+  const newBytes = Number.isFinite(bytes) && bytes > 0 ? bytes : DESKTOP_TEX_BYTES;
+  const newSets = Number.isFinite(sets) && sets > 0 ? Math.floor(sets) : DESKTOP_TEX_ENTRIES;
+  if (newBytes !== MAX_TEX_BYTES || newSets !== MAX_TEX_ENTRIES) overLimitLogged = false;   // a new limit may be said once too
+  MAX_TEX_BYTES = newBytes; MAX_TEX_ENTRIES = newSets;
+  evictTextures();
+}
+export function textureLimits() { return { bytes: MAX_TEX_BYTES, sets: MAX_TEX_ENTRIES }; }
+
+// ---------- what the model is showing ----------
+// The limits are for sets nobody is looking at. A set in the model the 3D view has built is
+// never evicted: it is on a surface on screen, so freeing it saves nothing (it would be uploaded
+// again for the next frame and synthesised again on the next rebuild) and only adds work. If
+// the model alone needs more than the device's limit, all of it is kept and that is logged once.
+//
+// The 3D view says what its model holds in two ways. beginTextureBuild() marks the start of a
+// model build: every non-transient set asked for from then on belongs to it (and sets left
+// over from before are trimmed to the limit there). setTextureUse(fn) gives a function that
+// returns the sources of the colour maps on the surfaces in the scene right now; it covers the
+// ground and the imported models, which are not rebuilt with the model. setTextureUse(null)
+// (the view closed) ends both.
+let buildMark = Infinity, texturesInUse = null, overLimitLogged = false;
+export function beginTextureBuild() { buildMark = clock; evictTextures(); }
+export function setTextureUse(fn) {
+  texturesInUse = typeof fn === 'function' ? fn : null;
+  if (!texturesInUse) buildMark = Infinity;
+}
+
 // Debug aid: synthesis cost per cached texture set.
 export function textureStats() {
   return [...texCache.values()].map(e => ({ key: e.key, res: e.res, status: e.status, cpuMs: Math.round(e.cpuMs || 0) }));
@@ -974,15 +1007,18 @@ function ensureTextures(mat, res, transient) {
 function whenReady(entry, cb) { if (entry.status === 'ready') cb(entry); else entry.waiters.push(cb); }
 
 // Only ready entries are candidates (a pending one has a job and waiters on it), never `keep` (the
-// set that just finished, whose consumers were handed it a moment ago) and never a set a swatch
-// render is still queued for. Editor variants go first, oldest first, and never more than
+// set that just finished, whose consumers were handed it a moment ago), never a set a swatch
+// render is still queued for and never a set in the model the 3D view is showing (see above). Editor variants go first, oldest first, and never more than
 // MAX_TRANSIENT_ENTRIES of them survive; the model's sets are touched on every rebuild, so among
 // the rest the LRU order really is "least recently shown".
 function evictTextures(keep) {
   const byAge = (a, b) => a.lastUsed - b.lastUsed;
   const awaited = new Set();
   for (const k of swatchPending.keys()) awaited.add(k.slice(0, k.lastIndexOf('#')));
-  const ready = [...texCache.values()].filter(e => e.status === 'ready' && e !== keep && !awaited.has(e.key));
+  let onScreen = null;
+  if (texturesInUse) { try { onScreen = texturesInUse(); } catch (e) { console.error(e); } }
+  const shown = e => !e.transient && (e.lastUsed > buildMark || !!(onScreen && e.maps && onScreen.has(e.maps.map.source)));
+  const ready = [...texCache.values()].filter(e => e.status === 'ready' && e !== keep && !awaited.has(e.key) && !shown(e));
   const transient = ready.filter(e => e.transient).sort(byAge);
   let drop = transient.slice(0, Math.max(0, transient.length - MAX_TRANSIENT_ENTRIES));
   const over = texCache.size - drop.length - MAX_TEX_ENTRIES;
@@ -1000,6 +1036,14 @@ function evictTextures(keep) {
   for (const e of drop) {
     disposeEntry(e);
     texCache.delete(e.key);
+  }
+  if (!overLimitLogged) {
+    const held = [...texCache.values()].filter(e => e.status === 'ready' && shown(e));
+    const heldBytes = held.reduce((sum, e) => sum + bytes(e), 0);
+    if (held.length > MAX_TEX_ENTRIES || heldBytes > MAX_TEX_BYTES) {
+      overLimitLogged = true;
+      console.warn('textures: the model on screen uses ' + held.length + ' texture sets (' + Math.round(heldBytes / 1048576) + ' MB), over this device\'s limit of ' + MAX_TEX_ENTRIES + ' sets and ' + Math.round(MAX_TEX_BYTES / 1048576) + ' MB. They are on screen, so all are kept.');
+    }
   }
 }
 function disposeEntry(e) {
