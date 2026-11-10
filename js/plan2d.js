@@ -1943,6 +1943,9 @@ const TAP_SLOP = 10;          // px a finger may wander and still tap
 const DOUBLE_TAP_MS = 350, DOUBLE_TAP_PX = 30;
 function onFingerDown(e) {
   e.preventDefault();
+  // A finger resting on the screen while a mouse or a pen drags (a tablet with a pen, a
+  // touchscreen laptop) is ignored: it must not select, place or pan under that drag.
+  if (drag) return;
   invalidate();
   if (!touchInput) { touchInput = true; updateHint(); }
   try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* already released */ }
@@ -1995,7 +1998,7 @@ function onFingerUp(e, cancelled = false) {
   if (!g) return;
   if (g.kind === 'tap' && g.id === e.pointerId) {
     gesture = null;
-    if (!cancelled) tap(pos[0], pos[1], e.timeStamp);
+    if (!cancelled && !drag) tap(pos[0], pos[1], e.timeStamp);   // not under a mouse or pen drag
     return;
   }
   if (g.kind === 'pinch') {
