@@ -16,7 +16,9 @@ const ARROWS = { forward: 'm6 15 6-6 6 6', back: 'm6 9 6 6 6-6', left: 'm15 6-6 
 const ARROW_LABELS = { forward: 'Walk forward', back: 'Walk back', left: 'Step left', right: 'Step right' };
 
 // What the bar says for each state of the save status line (js/disk-workspace.js marks it).
-const SAVE_LABELS = { saved: 'Saved', sending: 'Sending', waiting: 'Waiting for the Mac', refused: 'Not saved' };
+// One or two short words, so the state is never cut off on a phone; the tap gives the rest.
+// "Keep open" is for originals that are in this open page and nowhere else yet.
+const SAVE_LABELS = { saved: 'Saved', sending: 'Sending', waiting: 'Waiting', refused: 'Not saved', open: 'Keep open' };
 
 let media = null, viewName = '', els = null, open = false, noteTimer = null;
 
@@ -163,7 +165,8 @@ function watchSave() {
     // Other parts of the app write the line without marking it: go by what it shows.
     const state = line.dataset.saveState || (/FAILED|NOT SAVED/.test(text) ? 'refused' : line.classList.contains('busy') ? 'sending' : 'saved');
     els.save.dataset.state = state;
-    els.save.querySelector('span').textContent = SAVE_LABELS[state] || SAVE_LABELS.sending;
+    const keepOpen = !!line.dataset.keepOpen && (state === 'sending' || state === 'waiting');
+    els.save.querySelector('span').textContent = keepOpen ? SAVE_LABELS.open : SAVE_LABELS[state] || SAVE_LABELS.sending;
     els.save.setAttribute('aria-label', 'Save state: ' + text);
     if (!els.note.hidden) els.note.textContent = words();
   };
@@ -176,7 +179,7 @@ function watchSave() {
     clearTimeout(noteTimer); noteTimer = setTimeout(hide, 8000);
   };
   document.addEventListener('pointerdown', e => { if (!els.note.hidden && !els.save.contains(e.target) && !els.note.contains(e.target)) hide(); });
-  new MutationObserver(update).observe(line, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class', 'data-save-state', 'title'] });
+  new MutationObserver(update).observe(line, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class', 'data-save-state', 'data-keep-open', 'title'] });
   update();
 }
 

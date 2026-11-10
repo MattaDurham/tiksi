@@ -107,7 +107,7 @@ async function run(name, type, profile) {
     return { id: rec.id, size: blob.size };
   }, id);
   await phone.waitForFunction(() => document.querySelector('.fd-save').dataset.state === 'waiting', null, { timeout: 20000 });
-  assert.equal((await barState(phone)).label, 'Waiting for the Mac');
+  assert.equal((await barState(phone)).label, 'Waiting');
   await phone.waitForFunction(() => /kept on this device/.test(document.querySelector('#save-status').title), null, { timeout: 20000 });
   await phone.locator('.fd-save').click();
   assert.match(await phone.locator('.fd-save-note').textContent(), /cannot reach the Mac.*kept on this device/i, 'a tap on the save state says what is happening');

@@ -52,6 +52,10 @@ html.phone .fd-save[data-state=sending] i, html.phone .fd-save[data-state=waitin
 html.phone .fd-save[data-state=refused] { color: var(--red); }
 html.phone .fd-save[data-state=refused] i { background: var(--red); box-shadow: 0 0 6px rgba(224, 82, 82, 0.6); }
 html.phone .fd-bar .fd-save ~ .history-actions { margin-left: 0; }
+/* In the bar UNDO and REDO are their arrows alone (the words stay for screen readers), so the
+   page name and the save state both fit an iPhone's width in full. */
+html.phone .fd-bar .history-actions .tb-btn span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+html.phone .fd-bar .history-actions .tb-btn { position: relative; min-width: 44px; justify-content: center; }
 /* Over the model the bar is see-through: the state sits on a dark chip, and shrinks to its
    dot while everything is saved. */
 html.phone.fd-model .fd-save {

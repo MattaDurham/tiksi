@@ -25,6 +25,14 @@ async function onTheMac() {
   return (await fetch(url + '/api/workspace', { headers: auth })).json();
 }
 
+async function untilOnTheMac(check, what, ms = 20000) {
+  for (const end = Date.now() + ms; ;) {
+    const mac = await onTheMac();
+    if (check(mac)) return mac;
+    if (Date.now() > end) assert.fail(what + ' did not reach the Mac within ' + ms / 1000 + ' s');
+    await new Promise(r => setTimeout(r, 150));
+  }
+}
 async function openPage(context, hash = '') {
   const page = await context.newPage();
   page.on('pageerror', e => errors.push(e.message));
@@ -184,6 +192,11 @@ async function refusedAndRetriedSavesReadDifferently() {
   await page.waitForTimeout(9000);   // more than three of the old 2.5 s retries
   assert.equal(puts.length, sentBefore, 'a save the Mac refused is not sent again by itself');
   assert.equal((await statusLine()).kind, 'refused');
+  // Another part of the app writes its own message on the line (an export does). The refusal
+  // must come back by itself: it is still the state of this page's work.
+  await page.evaluate(() => window.saveTestStore.setSaveStatus('EXPORTED 3 FILES', false));
+  await page.waitForFunction(() => document.querySelector('#save-status').dataset.saveState === 'refused' && /^NOT SAVED: /.test(document.querySelector('#save-status').textContent), null, { timeout: 10000 });
+  assert.equal(puts.length, sentBefore, 'showing the refusal again sends nothing');
   // Putting it right is an edit, and an edit is tried at once.
   await page.evaluate(() => { window.saveTestStore.ws.data.properties.find(p => p.id === 'prop-refusals').notes = 'Short again'; window.saveTestStore.touch(); });
   await page.waitForFunction(SAVED, null, { timeout: 60000 });
@@ -217,8 +230,41 @@ async function refusedAndRetriedSavesReadDifferently() {
   await context.setOffline(false);
   await page.waitForFunction(SAVED, null, { timeout: 20000 });
   assert.equal(puts.length, 0, 'a connection that dropped and returned with nothing to save sends no save');
+  // 5. The Mac answers that a project file cannot be read just now (another program is still
+  // writing it). That passes by itself, so the save is tried again without anyone touching it.
+  let unreadable = 1;
+  await page.route('**/api/workspace', route => route.request().method() === 'PUT' && unreadable-- > 0
+    ? route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ error: 'A project file cannot be read; its original has been preserved' }) }) : route.continue());
+  await page.evaluate(() => { window.saveTestStore.ws.data.properties.find(p => p.id === 'prop-refusals').notes = 'Saved once the file could be read'; window.saveTestStore.touch(); });
+  await untilOnTheMac(mac => mac.data.properties.find(p => p.id === 'prop-refusals').notes === 'Saved once the file could be read', 'A save first answered with "cannot be read"');
+  await page.waitForFunction(SAVED, null, { timeout: 20000 });
+  await page.unroute('**/api/workspace');
+
+  // 6. The Mac will not take a save that carries a new original. The first round fails on
+  // the way; the second counts on the original it already uploaded and is refused, so the
+  // original is uploaded once more; the third is refused again and that is the answer. It
+  // must then read as refused, and stop uploading.
+  let seen = 0;
+  const originals = [];
+  await page.route('**/api/workspace', route => {
+    if (route.request().method() !== 'PUT') return route.continue();
+    return ++seen === 1 ? route.abort() : route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'Synthetic: the Mac will not take these records' }) });
+  });
+  page.on('request', r => { if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/workspace/blobs' && r.postDataBuffer()?.length === 64000) originals.push(Date.now()); });
+  await page.evaluate(async () => {
+    const store = window.saveTestStore, bytes = new Uint8Array(64000); for (let i = 0; i < bytes.length; i += 97) bytes[i] = i & 255;
+    await store.putFile('refused-original', bytes.buffer, { kind: 'photo', mime: 'image/jpeg', name: 'Refused.jpg' });
+    store.ws.data.properties.find(p => p.id === 'prop-refusals').photos.push({ id: 'refused-original', name: 'Refused', thumb: '', notes: '', kind: 'photo' }); store.touch();
+  });
+  await page.waitForFunction(() => document.querySelector('#save-status').dataset.saveState === 'refused', null, { timeout: 60000 });
+  assert.match((await statusLine()).text, /^NOT SAVED: Synthetic/, 'a refusal that repeats after the originals were sent again reads as refused');
+  assert.equal(originals.length, 2, 'the original was uploaded once, and once more after the first refusal');
+  const putsThen = seen;
+  await page.waitForTimeout(7000);
+  assert.equal(originals.length, 2, 'a refused save does not go on uploading its originals'); assert.equal(seen, putsThen, 'and is not sent again');
+  await page.unroute('**/api/workspace');
   await context.close();
-  console.log('ok   a refused save says why and stops; a retried one says it is retrying; a dropped connection alone is not unsaved work');
+  console.log('ok   a refused save says why, stops and stays visible; a retried one says it is retrying; "cannot be read" passes by itself; a dropped connection alone is not unsaved work');
 }
 
 try {

@@ -7,14 +7,20 @@
 // removed once the Mac confirms. IndexedDB is used because it also works on the plain-http
 // address a phone opens over Tailscale, where service workers do not.
 //
-// Every page writes under its own name (`owner`), so two tabs never overwrite each other.
-// Nothing here may stop a save: when the storage is missing, full or refused, every
-// function answers false or an empty list and the page carries on as before.
+// Two stores. `states` holds one record per page, under the page's own name: its unsent
+// records and the list of `spaces` its originals are in. `files` holds originals under
+// [space, id], where the space is the name of the page that wrote them. A page writes only
+// under its own name and removes only the exact records it wrote or sent, so two pages
+// never overwrite or clear each other's copy.
+//
+// Nothing here may stop a save: when the storage is missing, full or refused, a write
+// answers false and a read answers null (not an empty list: "could not read" must never be
+// taken for "nothing kept"), and the page carries on as before.
 
 const DATABASE = 'tiksi-unsent';
 // Larger originals are not copied here: the copy would not fit beside the original in a
-// phone's memory. They stay in the page until they are sent, as before.
-export const MAX_KEPT_FILE_BYTES = 100 * 1024 * 1024;
+// phone's memory. They exist only in the open page until they are sent, and the page says so.
+export const keptLimits = { maxFileBytes: 100 * 1024 * 1024 };
 
 export function unsentStore(factory = globalThis.indexedDB) {
   let opening = null;
@@ -39,16 +45,16 @@ export function unsentStore(factory = globalThis.indexedDB) {
     opening.catch(() => { opening = null; });
     return opening;
   }
-  // One write at a time, in the order asked: a file kept and then confirmed is never
-  // removed before it was written.
+  // One operation at a time, in the order asked: a file kept and then confirmed is never
+  // removed before it was written. `failed` is what a failure answers.
   let queue = Promise.resolve();
-  function inOrder(work) {
+  function inOrder(work, failed = false) {
     const result = queue.then(work).catch(error => {
       console.warn('unsent changes:', error && error.message || error);
-      // The connection may be the thing that failed: the next write starts with a new one.
+      // The connection may be the thing that failed: the next operation starts with a new one.
       const stale = opening; opening = null;
       if (stale) stale.then(db => db.close(), () => {});
-      return false;
+      return failed;
     });
     queue = result; return result;
   }
@@ -57,6 +63,7 @@ export function unsentStore(factory = globalThis.indexedDB) {
     tx.onerror = tx.onabort = () => reject(tx.error || new Error('Browser storage write failed'));
   });
   const all = request => new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result || []); request.onerror = () => reject(request.error); });
+  const one = request => new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
 
   return {
     // Open the storage ahead of need: when a page is being hidden there is no time to wait for it.
@@ -65,49 +72,50 @@ export function unsentStore(factory = globalThis.indexedDB) {
     keepState(owner, state) {
       return inOrder(async () => { const tx = (await open()).transaction('states', 'readwrite'); tx.objectStore('states').put({ ...state, owner }); return done(tx); });
     },
-    keepFile(owner, id, record) {
-      if (!record || !record.buffer || record.buffer.byteLength > MAX_KEPT_FILE_BYTES) return Promise.resolve(false);
-      return inOrder(async () => { const tx = (await open()).transaction('files', 'readwrite'); tx.objectStore('files').put({ owner, id, record }); return done(tx); });
+    // One original, under the name of the page that adds it. False when it was not kept.
+    keepFile(space, id, record) {
+      if (!record || !record.buffer || record.buffer.byteLength > keptLimits.maxFileBytes) return Promise.resolve(false);
+      return inOrder(async () => { const tx = (await open()).transaction('files', 'readwrite'); tx.objectStore('files').put({ owner: space, id, record }); return done(tx); });
     },
-    // The Mac has confirmed everything except the files named in `stillUnsent`.
-    confirmed(owner, stillUnsent = new Set(), { state = true } = {}) {
+    // Remove a page's state and the named originals ([space, id]) in one step. With `at`,
+    // the state goes only if it is still the one written at that moment: a page that has
+    // written again since keeps its copy.
+    settle(owner, { state = false, at, files = [] } = {}) {
       return inOrder(async () => {
         const tx = (await open()).transaction(['states', 'files'], 'readwrite');
-        if (state) tx.objectStore('states').delete(owner);
-        const files = tx.objectStore('files');
-        for (const key of await all(files.index('owner').getAllKeys(owner))) if (!stillUnsent.has(key[1])) files.delete(key);
+        const states = tx.objectStore('states'), store = tx.objectStore('files');
+        if (state) {
+          if (at === undefined) states.delete(owner);
+          else { const now = await one(states.get(owner)); if (now && now.at === at) states.delete(owner); }
+        }
+        for (const key of files) store.delete(key);
         return done(tx);
       });
     },
-    // Everything kept on this device: [{ owner, state, files: [{ id, record }] }], oldest first.
-    everything() {
+    // What is kept on this device, without the originals' bytes: { states, fileKeys } with
+    // fileKeys as [space, id]. Null when it could not be read.
+    list() {
       return inOrder(async () => {
         const tx = (await open()).transaction(['states', 'files']);
-        const [states, files] = await Promise.all([all(tx.objectStore('states').getAll()), all(tx.objectStore('files').getAll())]);
-        const byOwner = new Map(states.map(state => [state.owner, { owner: state.owner, state, files: [] }]));
-        for (const file of files) {
-          if (!byOwner.has(file.owner)) byOwner.set(file.owner, { owner: file.owner, state: null, files: [] });
-          byOwner.get(file.owner).files.push({ id: file.id, record: file.record });
-        }
-        return [...byOwner.values()].sort((a, b) => (a.state?.at || 0) - (b.state?.at || 0));
-      }).then(found => found || []);
+        const [states, fileKeys] = await Promise.all([all(tx.objectStore('states').getAll()), all(tx.objectStore('files').getAllKeys())]);
+        return { states, fileKeys };
+      }, null);
     },
-    // Remove the storage itself, for a browser that keeps nothing and found nothing kept.
+    // The originals in these spaces: [{ space, id, record }]. Null when they could not be read.
+    filesIn(spaces) {
+      return inOrder(async () => {
+        const index = (await open()).transaction('files').objectStore('files').index('owner');
+        const found = await Promise.all(spaces.map(space => all(index.getAll(space))));
+        return found.flat().map(file => ({ space: file.owner, id: file.id, record: file.record }));
+      }, null);
+    },
+    // Remove the storage itself, for a browser that keeps nothing and read that nothing is kept.
     forget() {
       return inOrder(async () => {
         const stale = opening; opening = null;
         if (stale) (await stale).close();
         await new Promise((resolve, reject) => { const request = factory.deleteDatabase(DATABASE); request.onsuccess = request.onblocked = () => resolve(); request.onerror = () => reject(request.error); });
         return true;
-      });
-    },
-    remove(owner) {
-      return inOrder(async () => {
-        const tx = (await open()).transaction(['states', 'files'], 'readwrite');
-        tx.objectStore('states').delete(owner);
-        const files = tx.objectStore('files');
-        for (const key of await all(files.index('owner').getAllKeys(owner))) files.delete(key);
-        return done(tx);
       });
     },
   };

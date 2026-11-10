@@ -108,17 +108,32 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   // The Mac stores a file by its content and keeps it, so a round that failed part-way sends
   // only the files the Mac does not hold yet.
   const heldByMac = new Map();
+  // The same note from an earlier page's kept copy, not yet checked with the Mac: id -> entry.
+  const heldHints = new Map();
+  // Save rounds are numbered, to tell an original acknowledged in this round from one counted
+  // on from an earlier round.
+  let round = 0, reusedEarlier = false;
   // Away from the Mac, what has not reached it is also kept in this browser's storage, so a
   // locked phone, a switched app or a dropped tab loses nothing; the next page opened on
   // this device sends it (sendKept below). The browser on the Mac keeps nothing here.
   let unsent = awayFromTheMac() ? unsentStore() : null;
-  // The name this page keeps under. A page that takes over what an earlier page kept takes its name too.
-  let owner = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  // The name this page keeps under, for as long as it lives. It carries the time the page
+  // opened, so originals a long-gone page left behind can be told from a live page's.
+  const owner = 'page-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  // Kept originals this page wrote or took over from an earlier page: id -> the space they
+  // are in. Each is removed, by its own key, once the Mac has confirmed it; nothing else is.
+  const mine = new Map();
+  // Originals that could not be kept (too large, or the browser's storage refused): id ->
+  // name. They exist only in this open page until they are sent, and the status line says so.
+  const notKept = new Map();
+  const onlyHere = () => unsent ? [...notKept].filter(([id]) => changedFiles.has(id)).map(([, name]) => name) : [];
   let keepTimer, keeping = null, keepAgain = false, keptHere = false, keptMark = '', keptBase, baseJson = { of: undefined, text: 'null' };
   // True from taking a new agreed copy until the open workspace shows it. In between, `base`
   // holds other devices' changes that the workspace does not have yet: a copy kept then
   // would, when sent later, undo them. The copy kept before stays as it is meanwhile.
   let settling = false;
+  // True while an earlier page's kept copy is being put into this page (takeNext below).
+  let taking = false;
   // Bring the kept copy up to date: the last copy agreed with the Mac, this page's records
   // as they would be saved, and which originals the Mac already holds. Nothing is written
   // when nothing changed since the last time, and nothing is kept once the Mac has it all.
@@ -129,35 +144,51 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     keeping = (async () => {
       do {
         keepAgain = false;
-        if (settling) continue;   // the round in progress brings the kept copy up to date when it ends
-        const mark = [owner, edits, pending, changedFiles.size, heldByMac.size].join('|'), agreed = base;
+        if (settling || taking) continue;   // the step in progress brings the kept copy up to date when it ends
+        for (const id of [...notKept.keys()]) if (!changedFiles.has(id)) notKept.delete(id);
+        const mark = [edits, pending, changedFiles.size, heldByMac.size, mine.size, notKept.size].join('|'), agreed = base;
         if (mark === keptMark && keptBase === agreed) continue;
         // While an older browser store is still being moved to the Mac, that store is the kept
         // copy. Without an agreed copy there is nothing to merge a kept one against later.
         const local = pending && !migration && agreed ? savedFormNow() : null;
+        // Originals the Mac has confirmed go; those still waiting for their save, or for the
+        // record that names them, stay.
+        const sent = [...mine].filter(([id]) => !changedFiles.has(id)), keys = sent.map(([id, space]) => [space, id]);
         let written;
         if (!local || !changedFiles.size && sameJson(local, agreed.data)) {
-          // Originals still waiting for the record that names them, or for their save, stay.
-          written = await unsent.confirmed(owner, changedFiles); keptHere = false;
+          written = await unsent.settle(owner, { state: true, files: keys }); keptHere = false;
         } else {
+          // An original that was not kept gets another try with every kept copy.
+          for (const id of [...notKept.keys()]) await keepFile(id, false);
           // The agreed copy is large and changes only with a confirmed save: serialized once each.
           if (baseJson.of !== agreed) baseJson = { of: agreed, text: JSON.stringify(agreed) };
           const held = {}; for (const [id, at] of heldByMac) held[id] = at.entry;
-          written = keptHere = await unsent.keepState(owner, { at: Date.now(), base: baseJson.text, assets: JSON.stringify(assets), local: JSON.stringify(local), held });
-          if (written) await unsent.confirmed(owner, changedFiles, { state: false });
+          written = keptHere = await unsent.keepState(owner, { at: Date.now(), base: baseJson.text, assets: JSON.stringify(assets), local: JSON.stringify(local), held,
+            spaces: [...new Set([owner, ...mine.values()])], notKept: Object.fromEntries([...notKept].filter(([id]) => changedFiles.has(id))) });
+          if (written) await unsent.settle(owner, { files: keys });
         }
         // A write that failed is tried again the next time round, not taken as done.
-        if (written) { keptMark = mark; keptBase = agreed; }
-        if (failure) showFailure();
+        if (written) { keptMark = mark; keptBase = agreed; for (const [id] of sent) mine.delete(id); }
+        keptChanged();
       } while (keepAgain);
     })().catch(error => console.warn('unsent changes:', error)).finally(() => { keeping = null; });
     return keeping;
   }
   const keepSoon = () => { if (unsent) { clearTimeout(keepTimer); keepTimer = setTimeout(keepUnsent, 150); } };
-  // An original is kept the moment it is added: it is the one thing that cannot be made again.
-  async function keepFile(id) {
+  // An original is kept the moment it is added: it is the one thing that cannot be made
+  // again. One that could not be kept is remembered, so the page can say it exists only here.
+  async function keepFile(id, say = true) {
     if (!unsent) return;
-    try { await unsent.keepFile(owner, id, await getCachedFile(id)); } catch (error) { console.warn('unsent changes:', error); }
+    let record = null, kept = false;
+    try { record = await getCachedFile(id); kept = await unsent.keepFile(owner, id, record); } catch (error) { console.warn('unsent changes:', error); }
+    if (kept) { mine.set(id, owner); notKept.delete(id); }
+    else if (record?.buffer && changedFiles.has(id)) notKept.set(id, typeof record.name === 'string' && record.name ? record.name : 'an original');
+    if (say) keptChanged();
+  }
+  // What is kept changed: the line says so where it speaks of it (a failure, or originals
+  // that exist only in this open page). Any other text on the line is left alone.
+  function keptChanged() {
+    if (failure || onlyHere().length !== Number(statusLine?.dataset.keepOpen || 0)) repaint();
   }
   // What a newer server can do: keep pictures as files, take only the project files and
   // property records that changed, and answer a save with the project paths.
@@ -198,23 +229,40 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   const statusLine = document.getElementById('save-status');
   let statusText = null;
   if (statusLine) new MutationObserver(() => {
-    if (statusLine.textContent !== statusText) { delete statusLine.dataset.saveState; statusLine.removeAttribute('title'); }
+    if (statusLine.textContent !== statusText) { delete statusLine.dataset.saveState; delete statusLine.dataset.keepOpen; statusLine.removeAttribute('title'); }
   }).observe(statusLine, { childList: true, characterData: true, subtree: true });
   function status(text, busy = false, kind = busy ? 'sending' : 'saved', detail = '') {
     statusText = text; setSaveStatus(text, busy);
     if (!statusLine) return;
     statusLine.dataset.saveState = kind;
-    detail = detail || { 'SAVED TO DISK': 'Everything here is saved in the Mac’s project files.', 'SAVING TO DISK': 'Sending what changed to the Mac.' }[text] || '';
+    detail = detail || { 'SAVED TO DISK': 'Everything here is saved in the Mac’s project files.', 'SAVING TO DISK': 'Sending what changed to the Mac.',
+      'SENDING WHAT THIS DEVICE KEPT': 'Sending what this device kept from the last time Tiksi was open here.' }[text] || '';
+    // Originals that are in this open page and nowhere else: the person must know not to close it.
+    const only = kind === 'saved' ? [] : onlyHere();
+    if (only.length) {
+      detail += (detail ? ' ' : '') + (only.length === 1 ? only[0] + ' is' : only.length + ' originals (' + only.slice(0, 3).join(', ') + (only.length > 3 ? ', …' : '') + ') are') +
+        ' only in this open page until the Mac has ' + (only.length === 1 ? 'it' : 'them') + ': keep this page open.';
+      statusLine.dataset.keepOpen = String(only.length);
+    } else delete statusLine.dataset.keepOpen;
     if (detail) statusLine.title = detail; else statusLine.removeAttribute('title');
   }
-  const settledText = () => cleanupNotice ? 'SAVED TO DISK — CLOSE OLDER TIKSI TABS' : pending ? 'SAVING TO DISK' : 'SAVED TO DISK';
+  // True while a copy an earlier page kept is on its way to the Mac.
+  let replaying = false;
+  const savingText = () => replaying ? 'SENDING WHAT THIS DEVICE KEPT' : 'SAVING TO DISK';
+  const settledText = () => cleanupNotice ? 'SAVED TO DISK — CLOSE OLDER TIKSI TABS' : pending ? savingText() : 'SAVED TO DISK';
+  // Put this module's own state back on the line: after another part of the app wrote its
+  // message there, or when what the line should say has changed under an unchanged text.
+  function repaint() {
+    if (failure) showFailure();
+    else if (pending) status(savingText(), true);
+  }
   // The last round that failed: { hold, tries, retryAt }. `hold` is a save the Mac refused for
   // a reason that sending it again cannot change; it waits for an edit or for the person.
   let failure = null;
   function changed() {
     edits++;
     if (applying) return;
-    pending = true; failure = null; status('SAVING TO DISK', true);
+    pending = true; failure = null; status(savingText(), true);
     clearTimeout(timer); timer = setTimeout(() => sync().catch(failed), 700);
     keepSoon();
   }
@@ -223,10 +271,13 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     if (failure && failure.error === error) return;   // one failed round, reported to several callers
     console.error('project-file sync:', error);
     // Edits kept arriving while saving: nothing failed, the next round finishes them.
-    if (error.unfinished) { status('SAVING TO DISK', true); return; }
+    if (error.unfinished) { status(savingText(), true); return; }
     // `pending` is left as it was: a lost connection with nothing to save is not unsaved work.
     const answered = typeof error.status === 'number';
-    const refused = answered && error.status >= 400 && error.status < 500 && ![403, 408, 409, 429].includes(error.status) && !error.resend;
+    // Refused for good: records the Mac will not take (400), too large (413), a tab too old
+    // to save (426). Anything else it answers may pass by itself, a project file another
+    // program is still writing for one (422), and is tried again.
+    const refused = answered && [400, 413, 426].includes(error.status) && !error.resend;
     const tries = (failure && !failure.hold ? failure.tries : 0) + 1;
     // A Mac that answers with a fault is sent the same save less and less often, up to once a
     // minute. One that cannot be reached is asked again at the usual pace: reconnecting is cheap.
@@ -236,7 +287,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   }
   function showFailure() {
     const { refused, error } = failure;
-    const here = pending && keptHere ? ' What changed here is kept on this device until the Mac has it.' : '';
+    const here = pending && keptHere ? (onlyHere().length ? ' The records changed here are kept on this device until the Mac has them.' : ' What changed here is kept on this device until the Mac has it.') : '';
     const said = String(error.message || '').replace(/[.\s]+$/, '') + '.';
     if (refused) status((pending ? 'NOT SAVED: ' : 'PROJECT FILES: ') + brief(error.message), true, 'refused', said + (pending ? ' Sending the same save again cannot help, so it is not retried until something changes here.' : '') + here);
     else {
@@ -276,10 +327,17 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       }
       const held = heldByMac.get(id);
       let uploaded = held && held.buffer === local.buffer ? held.entry : null;
+      if (uploaded && held.round !== round) reusedEarlier = true;
+      // An earlier page noted that the Mac acknowledged this original: ask the Mac, once.
+      const hint = !uploaded && heldHints.get(id);
+      if (hint) {
+        heldHints.delete(id);
+        if (hint.size === local.buffer.byteLength && await macHolds(hint.hash)) { uploaded = hint; reusedEarlier = true; heldByMac.set(id, { buffer: local.buffer, entry: hint, round: 0 }); }
+      }
       if (!uploaded) {
         uploaded = await (await request('/blobs', { method: 'POST', body: local.buffer })).json();
         if (uploaded.size !== local.buffer.byteLength) throw new Error('An upload was incomplete');
-        heldByMac.set(id, { buffer: local.buffer, entry: uploaded });
+        heldByMac.set(id, { buffer: local.buffer, entry: uploaded, round });
         keepSoon();
       }
       out[id] = { ...uploaded };
@@ -334,6 +392,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     catch (error) { cleanupNotice = true; console.warn(error); }
   }
   async function cycle() {
+    round++; reusedEarlier = false;
     await whenHydrated();
     const head = await (await request('/head')).json();
     if (!pending && head.revision === revision) {
@@ -375,7 +434,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       // again with the bytes the Mac already names is as confirmed as it can be.
       for (const [id, buffer] of uploadedFiles) if ((await getCachedFile(id))?.buffer === buffer) { changedFiles.delete(id); heldByMac.delete(id); }
       pending = listAllFileIds(accepted.data).some(id => changedFiles.has(id)) || !sameJson(savedFormNow(), sentData);
-      status(pending ? 'SAVING TO DISK' : 'SAVED TO DISK', pending);
+      status(pending ? savingText() : 'SAVED TO DISK', pending);
       return;
     }
     // Each project file is serialized once: the text is both what is sent and what the
@@ -403,9 +462,10 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       reply = await (await request('', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body })).json();
     } catch (error) {
       savedSlices = { revision: -1, json: {} };
-      // The Mac did not accept the save while this page counted on originals uploaded in an
-      // earlier round: upload them again and try once more before taking it as refused.
-      if (error.status === 400 && heldByMac.size) { heldByMac.clear(); error.resend = true; }
+      // The Mac did not accept the save, and this round counted on originals acknowledged in
+      // an earlier one: upload them again and try once more. A round that uploaded every
+      // original itself has nothing to send again, so its refusal stands.
+      if (error.status === 400 && reusedEarlier) { heldByMac.clear(); error.resend = true; }
       if (error.code === 'resend-projects') throw error;   // retried at once with every project file
       if ([403, 409].includes(error.status)) {
         // Carry the reviewed choice into the retry. Re-ask only if the remote
@@ -419,7 +479,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
           const current = savedFormNow(), retry = mergeShared(sentData, current, accepted.data).value;
           if (!sameJson(retry, current)) await apply(retry);
         } finally { settling = false; }
-        status('SAVING TO DISK', true);
+        status(savingText(), true);
       }
       throw error;
     }
@@ -454,7 +514,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       for (let round = 0; round < 4; round++) {
         try { await cycle(); }
         catch (error) { if (![403, 409].includes(error.status) || round === 3) throw error; continue; }
-        if (!pending) { recovered(); return; }
+        if (!pending) { if (replaying) { replaying = false; status(settledText(), cleanupNotice); } recovered(); return; }
       }
       const error = new Error('More edits arrived during saving; the next sync will finish them.');
       error.unfinished = true; throw error;
@@ -568,21 +628,21 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   // Mac as the base, its own records as the open workspace, its originals as changed files.
   // The save that follows is the ordinary one: if the Mac has moved on the two are merged,
   // and a record changed on both sides is put to the person with both copies preserved first.
+  // The app does not wait for that save: it opens on the kept records while they are sent.
   async function macHolds(hash) {
     try { return [200, 304].includes((await readBody('/api/workspace/blobs/' + hash, 'GET', { ...headers, 'If-None-Match': '"' + hash + '"' }, 'no-store')).status); }
     catch (error) { return false; }
   }
-  // Pages of this browser that are open now answer with the name they keep under: what they
-  // kept is theirs to send.
+  // Pages of this browser that are open now say so: what they kept is theirs to send.
   const pages = typeof BroadcastChannel === 'function' ? new BroadcastChannel('tiksi-unsent') : null;
   const openNames = new Set();
   if (pages) pages.onmessage = event => {
-    if (event.data?.ask) { if (unsent) pages.postMessage({ here: owner }); }
-    else if (event.data?.here) openNames.add(event.data.here);
+    if (event.data?.here) openNames.add(event.data.here);
+    if (event.data?.ask) pages.postMessage({ here: owner });
   };
   async function openElsewhere() {
     if (!pages) return openNames;
-    openNames.clear(); pages.postMessage({ ask: true });
+    pages.postMessage({ ask: true, here: owner });
     await new Promise(resolve => setTimeout(resolve, 250));
     return openNames;
   }
@@ -590,50 +650,112 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     try { return typeof indexedDB.databases === 'function' && (await indexedDB.databases()).some(d => d.name === 'tiksi-unsent'); }
     catch (error) { return false; }
   }
+  const openedAt = name => parseInt(String(name).split('-')[1], 36) || 0;
+  // Kept copies of earlier pages still to send, oldest first; one is taken up at a time.
+  const waiting = [];
   async function sendKept() {
     // A window that was narrow when it kept something may be wide now: it still sends it.
     const store = unsent || (await keptDatabaseExists() ? unsentStore() : null);
     if (!store || !await store.ready()) return;
-    const entries = await store.everything();
-    if (!entries.length) { if (!unsent) await store.forget(); return; }
-    unsent = store;
+    const listed = await store.list();
+    // Not read is not empty: what could not be read is left exactly as it is.
+    if (!listed) return;
+    if (!listed.states.length && !listed.fileKeys.length) { if (!unsent) await store.forget(); return; }
     const open = await openElsewhere();
-    for (const entry of entries) {
-      if (open.has(entry.owner)) continue;
-      let kept = null;
-      try { const s = entry.state; if (s) kept = { base: JSON.parse(s.base), assets: JSON.parse(s.assets), local: JSON.parse(s.local), held: s.held || {} }; } catch (ignored) {}
-      const files = entry.files.filter(file => file.record?.buffer);
-      // Nothing to send: an original whose record was never kept cannot be placed, and a kept
-      // state that merges into the Mac's copy without changing it is already there.
-      const nothing = !kept || !kept.local || !files.length && base && (() => {
-        const merged = mergeShared(kept.base?.data, kept.local, base.data);
-        return !merged.conflicts.length && sameJson(merged.value, base.data);
-      })();
-      if (nothing) { await unsent.remove(entry.owner); continue; }
-      // Take the earlier page's name: what it kept stays where it is, under a page that is
-      // open again, until the Mac confirms it. Nothing is copied and nothing is removed first.
-      owner = entry.owner;
-      for (const { id, record } of files) {
-        await cacheFile(id, record.buffer, record); changedFiles.add(id);
-        const held = kept.held[id];
-        if (held && held.size === record.buffer.byteLength && await macHolds(held.hash)) heldByMac.set(id, { buffer: record.buffer, entry: held });
-      }
-      await fetchPictures(kept.local, { ...assets, ...(kept.assets || {}) });
-      // Without the copy it last agreed with the Mac there is no common ancestor: every
-      // difference is then put to the person instead of being decided either way.
-      base = kept.base || undefined;
-      assets = kept.assets || {}; revision = -1; savedSlices = { revision: -1, json: {} };
-      await apply(kept.local);
-      pending = true; edits++; status('SENDING WHAT THIS DEVICE KEPT', true);
-      await sync();
-      await keepUnsent();   // confirmed: the kept copy is cleared before the next one is taken up
+    // Originals no kept state names, left by a page that opened over a week ago and is not
+    // open now: the record that would have named them never got as far as this storage.
+    const named = new Set(listed.states.flatMap(state => state.spaces || [state.owner]));
+    const stale = listed.fileKeys.filter(([space]) => space !== owner && !named.has(space) && !open.has(space) && Date.now() - openedAt(space) > 7 * 86400000);
+    if (stale.length) await store.settle(owner, { files: stale });
+    const states = listed.states.filter(state => state.owner !== owner && !open.has(state.owner)).sort((a, b) => (a.at || 0) - (b.at || 0));
+    if (!states.length) return;
+    unsent = store;
+    waiting.push(...states);
+    await takeNext();
+  }
+  // Take up the next kept copy, when nothing in this page is unsent: the copy becomes the
+  // open workspace, so anything unsent here goes to the Mac first.
+  async function takeNext() {
+    while (waiting.length && !pending && !running && !settling && !taking) {
+      const entry = waiting[0], spaces = entry.spaces || [entry.owner];
+      let kept = null, lost = [];
+      taking = true;
+      try {
+        try { kept = { base: JSON.parse(entry.base), assets: JSON.parse(entry.assets), local: JSON.parse(entry.local), held: entry.held || {} }; } catch (ignored) {}
+        const files = await unsent.filesIn(spaces);
+        if (!files) { waiting.shift(); continue; }   // not readable now: it stays kept for the next time Tiksi opens
+        const usable = files.filter(file => file.record?.buffer);
+        // Nothing to send: a kept state that merges into the Mac's copy without changing it
+        // is already there.
+        const nothing = !kept || !kept.local || !usable.length && base && (() => {
+          const merged = mergeShared(kept.base?.data, kept.local, base.data);
+          return !merged.conflicts.length && sameJson(merged.value, base.data);
+        })();
+        if (nothing) {
+          // Unreadable records are left where they are; a copy the Mac already has is cleared.
+          if (kept && kept.local) await unsent.settle(entry.owner, { state: true, at: entry.at, files: files.map(file => [file.space, file.id]) });
+          waiting.shift(); continue;
+        }
+        await fetchPictures(kept.local, { ...assets, ...(kept.assets || {}) });
+        // Something was changed here while the copy was being read: it is sent first.
+        if (pending || running || settling) return;
+        // Originals the kept records name for the first time whose bytes are nowhere: not in
+        // this storage, not on the Mac. They were only in the page that closed.
+        // (A photo record says whether it ever had an original; a model or a video always has.)
+        const before = new Set(kept.base ? listAllFileIds(kept.base.data) : []), have = new Set(usable.map(file => file.id));
+        const gone = id => !before.has(id) && !have.has(id) && !assets[id] && !(kept.assets || {})[id];
+        lost = kept.local.properties.flatMap(p => [...(p.photos || []).filter(r => r.original === true), ...(p.videos || []), ...(p.scans || [])])
+          .filter(r => gone(r.id) || r.originalFileId && gone(r.originalFileId)).map(r => (entry.notKept || {})[r.id] || r.name || 'an original');
+        // From here the open records, the copy they are merged against and the changed
+        // originals change together, with nothing else running in between.
+        for (const { id, space, record } of usable) {
+          await cacheFile(id, record.buffer, record); changedFiles.add(id); mine.set(id, space);
+          if (kept.held[id]) heldHints.set(id, kept.held[id]);
+        }
+        // Without the copy it last agreed with the Mac there is no common ancestor: every
+        // difference is then put to the person instead of being decided either way.
+        base = kept.base || undefined;
+        assets = kept.assets || {}; revision = -1; savedSlices = { revision: -1, json: {} };
+        await apply(kept.local);
+        pending = true; edits++; replaying = true; status(savingText(), true);
+      } finally { taking = false; }
+      waiting.shift();
+      // Under this page's own name first; only then does the earlier page's state go, and
+      // only if it is still the one read here. At no moment is the copy in neither place.
+      await keepUnsent();
+      if (keptHere) await unsent.settle(entry.owner, { state: true, at: entry.at });
+      else confirmedLater.push(entry);
+      if (lost.length) tellLost(lost);
+      sync().catch(failed);
+      return;
     }
   }
-  try { await sendKept(); } catch (error) { failed(error); }
+  // Earlier pages' states that could not be copied under this page's name: they stay until
+  // the Mac has confirmed what they hold.
+  const confirmedLater = [];
+  // Say plainly which originals did not survive the page that closed.
+  function tellLost(names) {
+    const dialog = document.createElement('dialog'); dialog.className = 'file-dialog'; dialog.dataset.lostOriginals = '';
+    dialog.innerHTML = '<h2>Some originals were not kept</h2><p data-what></p><p>Their records are in the project without a file. Add the files again from the device they came from.</p><div class="file-actions"><button class="btn primary" data-ok>OK</button></div>';
+    dialog.querySelector('[data-what]').textContent = (names.length === 1 ? 'One original was' : names.length + ' originals were') +
+      ' only in the page that closed and could not be kept on this device: ' + names.join(', ') + '.';
+    document.body.append(dialog); dialog.showModal();
+    dialog.querySelector('[data-ok]').onclick = () => { dialog.close(); dialog.remove(); };
+  }
+  try { await sendKept(); } catch (error) { console.warn('unsent changes:', error); }
   onChange(changed);
   setInterval(() => {
+    // Another part of the app may have written its own message over this module's state
+    // (an export, a "save as"): a save that failed, or is still on its way, shows again.
+    if (statusLine && statusLine.textContent !== statusText && (failure || pending)) repaint();
     // A refused save waits for a change; a faulting Mac is asked again after a growing pause.
     if (running || failure && (failure.hold || Date.now() < failure.retryAt)) return;
+    // Everything here is on the Mac: an earlier page's state that could not be copied under
+    // this page's name can go now, and the next kept copy can be taken up.
+    if (!pending && !failure) {
+      for (const entry of confirmedLater.splice(0)) unsent?.settle(entry.owner, { state: true, at: entry.at });
+      if (waiting.length) { takeNext().catch(error => console.warn('unsent changes:', error)); return; }
+    }
     sync().catch(failed);
   }, 2500);
   setInterval(pollMirrors, 10000);
