@@ -6,16 +6,27 @@
 // not let other sites read its files unless a relay helps), the property still exists with
 // its link, the embedded Polycam viewer shows the capture, and the same pipeline runs on
 // the file the user downloads from Polycam and drops here.
+//
+// CHOOSE A FOLDER makes the property from a folder of site-visit files instead: it lists what
+// the folder holds, the person names the property and unticks what should stay out, and the
+// scans, photos, PDFs and videos come in through the same importers the rest of Tiksi uses.
+// A note in the folder holding a Polycam link brings that scan in as above.
 
 import { ws, touch, propertyTemplate, escapeHtml, fmtBytes, fmtLen, fmtArea, roomsFloorArea, getFile, activeProperty } from './store.js';
 import { parseCaptureUrl, resolveCapture, downloadAsset, fetchCover, fetchCaptureDirect, fetchCoverDirect, relaysFor, DEFAULT_RELAYS } from './polycam.js';
-import { importScanBytes, SCAN_ACCEPT } from './scans.js';
+import { importScanBytes, importScanFile, SCAN_ACCEPT } from './scans.js';
 import { placeScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import { proposeFixtures, openFixtureReview } from './fixtures-ui.js';
 import { chooseScanPlacement } from './scanplace.js';
 import { addPhotoFromFile } from './photos-store.js';
 import { icon } from './icons.js';
 import { makeFirstOnePager, openOnePagerEditor } from './one-pager-dialog.js';
+import { addDocumentFromFile } from './documents.js';
+import { addVideoFromFile } from './videos.js';
+import {
+  classifyFolder, inspectFolder, summarize, suggestName, folderService, folderServiceKnown, chooseFolderOnMac, pickFolderInBrowser,
+  IMPORTED, baseName, dirName,
+} from './folder-intake.js';
 
 let app = { remount() {}, refresh() {}, toast() {} };
 let dlg = null;          // the open dialog element
@@ -66,6 +77,10 @@ export function openNewPropertyDialog(opts) {
           <small class="np-small" data-np-into-note></small>
         </div>` : ''}
         <p class="np-hint" data-np-hint></p>
+        ${linkOnly ? '' : `<div class="np-folder" data-np-folder-row>
+          <button type="button" class="btn" data-np-folder>${icon('folder')}CHOOSE A FOLDER…</button>
+          <small class="np-small">Or pick the folder you put a site visit in: its scans, photos, videos and PDFs come in together, and you choose what stays out before anything is made.</small>
+        </div>`}
         <label class="tool-check np-relay" title="Browsers cannot read another site's files unless that site allows it. A relay adds that permission for a public link; it sees the link and returns the public bytes, nothing else. Your workspace never leaves this browser.">
           ${icon('link')}<span>USE A PUBLIC RELAY IF POLYCAM BLOCKS THE BROWSER</span><input type="checkbox" data-np-relay ${relay === 'off' ? '' : 'checked'}>
         </label>
@@ -97,6 +112,12 @@ export function openNewPropertyDialog(opts) {
   el.querySelector('[data-np-relay-url]').onchange = e => { const v = e.target.value.trim(); if (el.querySelector('[data-np-relay]').checked) setRelaySetting(v || 'auto'); };
   const create = () => submit(input.value, into, linkOnly);
   el.querySelector('[data-np-create]').onclick = create;
+  const folderBtn = el.querySelector('[data-np-folder]');
+  if (folderBtn) {
+    // Learn now whether the Mac's folder window is on offer, so the click itself need not wait.
+    folderService();
+    folderBtn.onclick = () => startFolder(input.value);
+  }
   input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); create(); } });
   const refresh = () => {
     const link = parseCaptureUrl(input.value);
@@ -124,11 +145,14 @@ export function openNewPropertyDialog(opts) {
   input.focus();
   if (opts.url) input.select();
   if (opts.autoStart && parseCaptureUrl(opts.url || '')) submit(opts.url, into, linkOnly);
+  if (opts.folder && folderBtn) startFolder('');
 }
 
 function closeDialog() {
   if (!dlg) return;
   if (dlg._cleanup) dlg._cleanup();
+  // The server forgets a picked folder once its dialog is gone.
+  if (dlg._folder) dlg._folder.forget();
   dlg.remove();
   dlg = null;
 }
@@ -162,9 +186,10 @@ function submit(value, into, linkOnly) {
 
 // ---------- the pipeline ----------
 function relays() {
-  const on = dlg ? dlg.querySelector('[data-np-relay]').checked : relaySetting() !== 'off';
+  const box = dlg && dlg.querySelector('[data-np-relay]');
+  const on = box ? box.checked : relaySetting() !== 'off';
   if (!on) return [];
-  const custom = dlg ? dlg.querySelector('[data-np-relay-url]').value.trim() : '';
+  const custom = box ? dlg.querySelector('[data-np-relay-url]').value.trim() : '';
   return relaysFor(custom || relaySetting());
 }
 
@@ -260,89 +285,12 @@ async function startLinkImport(link, intoId) {
       finish(prop, null, null);
       return;
     }
-    let bytes = null;
-    // 0. Try public viewer compatibility artifacts before reading the share page.
-    if (!scan) {
-      const step0 = log('Fetching the model from Polycam', 'run', 'public viewer artifacts; availability depends on the capture');
-      try {
-        bytes = await fetchCaptureDirect(link, {
-          signal,
-          onProgress: (label, got, total) => progress('Downloading ' + label + ': ' + fmtBytes(got) + (total ? ' of ' + fmtBytes(total) : ''), total ? got / total : 0.5),
-        });
-        progress(null);
-        step0.ok(fmtBytes(bytes.size) + (bytes.textures ? ', textured' : ''));
-        if (!prop.photos.some(ph => ph.source === 'polycam-cover')) {
-          const file = await fetchCoverDirect(link, { signal });
-          if (file) {
-            try { const ph = await addPhotoFromFile(prop, file); ph.source = 'polycam-cover'; ph.notes = 'Cover image from Polycam.'; touch(); log('Kept the cover image as a site photo', 'ok'); }
-            catch (e) { /* not important */ }
-          }
-        }
-      } catch (e) {
-        if (signal.aborted) throw e;
-        progress(null);
-        step0.warn(e.status === 404 ? 'No public mesh artifact. Share or download access may be disabled; an exported file also works.' : String(e && e.message || e));
-      }
+    // A mesh already kept from this capture, with no plan yet, goes straight to the plan.
+    if (scan) { src.status = 'resolved'; touch(); }
+    else {
+      scan = await fetchLinkScan(link, prop, src, created, signal, relayList);
+      if (!scan) { showFallback(link, prop); return; }
     }
-    // 1-3. Otherwise the share page: title, cover, model (direct, then through a relay if allowed).
-    let page = null;
-    if (!bytes && !scan) {
-      const step1 = log('Reading the share page', 'run');
-      try {
-        page = await resolveCapture(link, { relays: relayList, signal, onRoute: via => step1.detail(via === 'direct' ? 'asking Polycam directly' : 'through a relay') });
-        if (page.title) {
-          src.title = page.title;
-          if (created) { prop.name = page.title; app.refresh(); dlg.querySelector('[data-np-name]').textContent = prop.name; }
-          touch();
-        }
-        step1.ok((page.title ? '"' + page.title + '"' : 'no title') + (page.via === 'direct' ? '' : ' via relay') + (page.assets.length ? ', model found' : ', no model link on the page'));
-      } catch (e) {
-        if (signal.aborted) throw e;
-        step1.warn(e.blocked ? 'blocked by the browser (' + e.message + ')' : e.message);
-      }
-      if (page && page.assets.length) {
-        // A page can expose multiple exports. Skip unsupported ones and keep trying when
-        // a signed URL expired or a preferred model fails, rather than taking only slot 0.
-        const supported = page.assets.filter(a => /^(glb|gltf|ply|obj|stl|zip|spz|splat|ksplat|sog|las|pcd|xyz|pts|bin)$/.test(a.ext));
-        for (const asset of supported) {
-          const step2 = log('Downloading the model', 'run', asset.url.replace(/^https?:\/\//, '').slice(0, 80));
-          try {
-            const candidate = await downloadAsset(asset, link, {
-              relays: relayList, signal,
-              onRoute: via => step2.detail(via === 'direct' ? 'direct from Polycam storage' : 'through a relay'),
-              onProgress: (got, total) => progress('Downloading ' + fmtBytes(got) + (total ? ' of ' + fmtBytes(total) : ''), total ? got / total : 0.5),
-            });
-            // Validate and store now so a corrupt candidate does not prevent the next one.
-            scan = await importScanBytes(candidate.buffer, candidate.name, prop, { ...hooks, signal }, { source: { kind: 'polycam', url: link.url, captureId: link.captureId } });
-            if (!scan) throw new Error('Not a supported scan');
-            progress(null); step2.ok(fmtBytes(candidate.size) + (candidate.via === 'direct' ? '' : ' via relay')); break;
-          } catch (e) { if (signal.aborted) throw e; progress(null); step2.warn(e.message); }
-        }
-      }
-      if (page && page.image && !prop.photos.some(ph => ph.source === 'polycam-cover')) {
-        const file = await fetchCover(page.image, { relays: relayList, signal });
-        if (file) {
-          try { const ph = await addPhotoFromFile(prop, file); ph.source = 'polycam-cover'; ph.notes = 'Cover image from Polycam.'; touch(); log('Kept the cover image as a site photo', 'ok'); }
-          catch (e) { /* not important */ }
-        }
-      }
-    }
-    if (!bytes && !scan) {
-      src.status = 'blocked';
-      touch();
-      log('The model could not be fetched from here', 'warn', 'Polycam did not give the browser a readable file');
-      showFallback(link, prop);
-      return;
-    }
-    // 4. Keep the model, square it up, propose the plan.
-    if (bytes) {
-      const step4 = log('Storing the scan in this browser', 'run');
-      scan = await importScanBytes(bytes.buffer, bytes.name, prop, { ...hooks, signal }, { source: { kind: 'polycam', url: link.url, captureId: link.captureId } });
-      if (!scan) throw new Error('the file is not a scan tiksi can read');
-      step4.ok(scan.name + ', ' + fmtBytes(bytes.size));
-    }
-    src.status = 'resolved';
-    touch();
     await proposePlan(prop, scan, signal);
   } catch (e) {
     console.error(e);
@@ -352,6 +300,97 @@ async function startLinkImport(link, intoId) {
     run = null;
     showCloseOnly();
   }
+}
+
+// Steps 0 to 4 of a link: the public viewer artifacts, else the share page (title, cover,
+// model), then the model kept as a scan of `prop`. Returns the scan, or null when Polycam gave
+// the browser no readable file (`src.status` is then 'blocked'). `created` is true when the
+// property was just made from this link and takes the capture's title as its name.
+async function fetchLinkScan(link, prop, src, created, signal, relayList) {
+  let scan = null;
+  let bytes = null;
+  // 0. Try public viewer compatibility artifacts before reading the share page.
+  if (!scan) {
+    const step0 = log('Fetching the model from Polycam', 'run', 'public viewer artifacts; availability depends on the capture');
+    try {
+      bytes = await fetchCaptureDirect(link, {
+        signal,
+        onProgress: (label, got, total) => progress('Downloading ' + label + ': ' + fmtBytes(got) + (total ? ' of ' + fmtBytes(total) : ''), total ? got / total : 0.5),
+      });
+      progress(null);
+      step0.ok(fmtBytes(bytes.size) + (bytes.textures ? ', textured' : ''));
+      if (!prop.photos.some(ph => ph.source === 'polycam-cover')) {
+        const file = await fetchCoverDirect(link, { signal });
+        if (file) {
+          try { const ph = await addPhotoFromFile(prop, file); ph.source = 'polycam-cover'; ph.notes = 'Cover image from Polycam.'; touch(); log('Kept the cover image as a site photo', 'ok'); }
+          catch (e) { /* not important */ }
+        }
+      }
+    } catch (e) {
+      if (signal.aborted) throw e;
+      progress(null);
+      step0.warn(e.status === 404 ? 'No public mesh artifact. Share or download access may be disabled; an exported file also works.' : String(e && e.message || e));
+    }
+  }
+  // 1-3. Otherwise the share page: title, cover, model (direct, then through a relay if allowed).
+  let page = null;
+  if (!bytes && !scan) {
+    const step1 = log('Reading the share page', 'run');
+    try {
+      page = await resolveCapture(link, { relays: relayList, signal, onRoute: via => step1.detail(via === 'direct' ? 'asking Polycam directly' : 'through a relay') });
+      if (page.title) {
+        src.title = page.title;
+        if (created) { prop.name = page.title; app.refresh(); dlg.querySelector('[data-np-name]').textContent = prop.name; }
+        touch();
+      }
+      step1.ok((page.title ? '"' + page.title + '"' : 'no title') + (page.via === 'direct' ? '' : ' via relay') + (page.assets.length ? ', model found' : ', no model link on the page'));
+    } catch (e) {
+      if (signal.aborted) throw e;
+      step1.warn(e.blocked ? 'blocked by the browser (' + e.message + ')' : e.message);
+    }
+    if (page && page.assets.length) {
+      // A page can expose multiple exports. Skip unsupported ones and keep trying when
+      // a signed URL expired or a preferred model fails, rather than taking only slot 0.
+      const supported = page.assets.filter(a => /^(glb|gltf|ply|obj|stl|zip|spz|splat|ksplat|sog|las|pcd|xyz|pts|bin)$/.test(a.ext));
+      for (const asset of supported) {
+        const step2 = log('Downloading the model', 'run', asset.url.replace(/^https?:\/\//, '').slice(0, 80));
+        try {
+          const candidate = await downloadAsset(asset, link, {
+            relays: relayList, signal,
+            onRoute: via => step2.detail(via === 'direct' ? 'direct from Polycam storage' : 'through a relay'),
+            onProgress: (got, total) => progress('Downloading ' + fmtBytes(got) + (total ? ' of ' + fmtBytes(total) : ''), total ? got / total : 0.5),
+          });
+          // Validate and store now so a corrupt candidate does not prevent the next one.
+          scan = await importScanBytes(candidate.buffer, candidate.name, prop, { ...hooks, signal }, { source: { kind: 'polycam', url: link.url, captureId: link.captureId } });
+          if (!scan) throw new Error('Not a supported scan');
+          progress(null); step2.ok(fmtBytes(candidate.size) + (candidate.via === 'direct' ? '' : ' via relay')); break;
+        } catch (e) { if (signal.aborted) throw e; progress(null); step2.warn(e.message); }
+      }
+    }
+    if (page && page.image && !prop.photos.some(ph => ph.source === 'polycam-cover')) {
+      const file = await fetchCover(page.image, { relays: relayList, signal });
+      if (file) {
+        try { const ph = await addPhotoFromFile(prop, file); ph.source = 'polycam-cover'; ph.notes = 'Cover image from Polycam.'; touch(); log('Kept the cover image as a site photo', 'ok'); }
+        catch (e) { /* not important */ }
+      }
+    }
+  }
+  if (!bytes && !scan) {
+    src.status = 'blocked';
+    touch();
+    log('The model could not be fetched from here', 'warn', 'Polycam did not give the browser a readable file');
+    return null;
+  }
+  // 4. Keep the model.
+  if (bytes) {
+    const step4 = log('Storing the scan in this browser', 'run');
+    scan = await importScanBytes(bytes.buffer, bytes.name, prop, { ...hooks, signal }, { source: { kind: 'polycam', url: link.url, captureId: link.captureId } });
+    if (!scan) throw new Error('the file is not a scan tiksi can read');
+    step4.ok(scan.name + ', ' + fmtBytes(bytes.size));
+  }
+  src.status = 'resolved';
+  touch();
+  return scan;
 }
 
 async function proposePlan(prop, scan, signal) {
@@ -500,6 +539,253 @@ export async function attachScanFileToProperty(prop, file, viewHooks) {
     if (project) { ws.data.projects.push(project); touch(); }
   }
   return Object.assign({ scan }, out);
+}
+
+// ---------- a property from a folder ----------
+let folderBusy = false;
+const onDisk = () => document.querySelector('meta[name="tiksi-storage"]')?.content === 'project-files';
+const STAYS = {
+  audio: 'Tiksi does not keep audio recordings yet.',
+  cameras: 'Attach it from MODEL once the scan is in: its keyframes place the photos.',
+  project: 'Already a Tiksi project: FILE > OPEN / IMPORT opens it.',
+  other: 'Tiksi does not read this kind of file.',
+};
+
+async function startFolder(typedName) {
+  if (run || folderBusy || !dlg) return;
+  folderBusy = true;
+  const el = dlg;
+  let source = null;
+  try {
+    // The browser's own picker must open while the click still counts, so what the server
+    // offers is taken from what is already known, or waited for only briefly.
+    const known = folderServiceKnown() || await Promise.race([folderService(), new Promise(r => setTimeout(() => r(null), 1500))]);
+    if (known && known.choose) {
+      setStatus('Choose the folder in the window that opened on the Mac.', '');
+      el.querySelectorAll('[data-np-folder], [data-np-create]').forEach(b => { b.disabled = true; });
+      source = await chooseFolderOnMac();
+    } else source = await pickFolderInBrowser();
+    if (dlg !== el) { if (source) source.forget(); return; }
+    if (!source) { setStatus('No folder chosen; nothing changed.', 'warn'); return; }
+    setStatus('Reading ' + source.name + '…', '');
+    const items = await inspectFolder(classifyFolder(source.files), async path => (await source.read(path)).text());
+    if (dlg !== el) { source.forget(); return; }
+    renderFolderReview(source, items, typedName);
+  } catch (e) {
+    console.error(e);
+    if (source) source.forget();
+    if (dlg === el) setStatus(String(e && e.message || e), 'fail');
+  } finally {
+    folderBusy = false;
+    if (dlg === el && el.dataset.state === 'idle') el.querySelectorAll('[data-np-folder], [data-np-create]').forEach(b => { b.disabled = false; });
+  }
+}
+
+// What the folder holds, before anything is made: a name, every file that would come in (each
+// can be unticked), and every file that stays where it is with the reason.
+function renderFolderReview(source, items, typedName) {
+  dlg._folder = source;
+  dlg.dataset.state = 'review';
+  const typed = String(typedName || '').trim();
+  const name = (typed && !parseCaptureUrl(typed) ? typed : '') || suggestName(source.name);
+  const groups = summarize(items);
+  const coming = groups.filter(g => g.imported), staying = groups.filter(g => !g.imported);
+  const usable = i => IMPORTED.has(i.kind) && !i.tooLarge;
+  const subfolders = [...new Set(items.filter(i => usable(i) && i.group).map(i => i.group))].sort((a, b) => a.localeCompare(b));
+  const index = new Map(items.map((item, n) => [item, n]));
+  const where = source.where === 'mac'
+    ? 'The project file will be kept in this folder, in a <b>Tiksi</b> folder that Tiksi adds. The files are copied into the project; nothing in the folder is moved, renamed or deleted.'
+    : onDisk() ? 'The files are copied to Tiksi\'s projects folder on the Mac. The folder you picked is not changed.'
+    : 'The files are copied into this browser; SAVE PROJECT writes them to a .tiksi file. The folder you picked is not changed.';
+  const row = item => {
+    const label = item.kind === 'link' ? item.link.url.replace(/^https?:\/\//, '') + '  (in ' + item.path + ')' : item.path;
+    const extra = item.tooLarge ? 'over 600 MB: stays in the folder'
+      : [item.kind === 'link' ? 'the scan is downloaded from Polycam' : fmtBytes(item.size),
+        item.companions && item.companions.length ? '+ ' + item.companions.length + ' companion file' + (item.companions.length === 1 ? '' : 's') : '',
+        item.missing && item.missing.length ? 'names ' + item.missing.length + ' file' + (item.missing.length === 1 ? '' : 's') + ' not in the folder' : ''].filter(Boolean).join(' · ');
+    return `<li><label><input type="checkbox" data-nf-item="${index.get(item)}" ${item.tooLarge ? 'disabled' : 'checked'}><span class="nf-path">${escapeHtml(label)}</span><small>${escapeHtml(extra)}</small></label></li>`;
+  };
+  const body = dlg.querySelector('.np-body');
+  body.innerHTML = `
+    <div class="nf-review">
+      <div class="field"><label>Property name</label><input type="text" data-nf-name autocomplete="off" spellcheck="false" value="${escapeHtml(name)}"></div>
+      <p class="np-hint"><b>${escapeHtml(source.path || source.name)}</b><br>${where}</p>
+      ${subfolders.length ? `<div class="nf-groups"><span class="np-kicker">SUBFOLDERS</span>${subfolders.map(g =>
+        `<label class="tool-check"><input type="checkbox" data-nf-group="${escapeHtml(g)}" checked><span>${escapeHtml(g)}</span><small>${items.filter(i => usable(i) && i.group === g).length} to import</small></label>`).join('')}</div>` : ''}
+      ${coming.length ? coming.map(g => `<details class="nf-kind" ${g.count <= 12 ? 'open' : ''}>
+        <summary><input type="checkbox" data-nf-kind="${g.kind}" checked aria-label="${escapeHtml(g.label)}"><b>${escapeHtml(g.label)}</b><span data-nf-count="${g.kind}"></span></summary>
+        <ul>${g.items.map(row).join('')}</ul></details>`).join('') : '<p class="np-hint">Nothing in this folder is a kind of file Tiksi imports. CREATE makes an empty property kept here.</p>'}
+      ${staying.length ? `<div class="nf-stay"><span class="np-kicker">STAYS IN THE FOLDER, NOT IMPORTED</span>${staying.map(g => `<details class="nf-kind">
+        <summary><b>${escapeHtml(g.label)}</b><span>${g.count} · ${escapeHtml(fmtBytes(g.bytes))}</span></summary>
+        <ul>${g.items.map(item => `<li><span class="nf-path">${escapeHtml(item.path)}${item.kind === 'cameras' ? ' (' + item.count + ' camera frames)' : ''}</span><small>${escapeHtml(item.note || STAYS[item.kind])}</small></li>`).join('')}</ul></details>`).join('')}</div>` : ''}
+      ${source.truncated ? '<p class="np-hint nf-warn">This folder holds more files than Tiksi lists at once; only the first 20,000 are shown. Pick the folder of one site visit.</p>' : ''}
+      ${source.skipped && source.skipped.hidden ? `<small class="np-small">${source.skipped.hidden} hidden file${source.skipped.hidden === 1 ? ' was' : 's were'} left out.</small>` : ''}
+    </div>`;
+  const boxes = () => Array.from(body.querySelectorAll('[data-nf-item]'));
+  const chosen = () => boxes().filter(b => b.checked && !b.disabled).map(b => items[Number(b.dataset.nfItem)]);
+  const createBtn = dlg.querySelector('[data-np-create]');
+  const refresh = () => {
+    const picked = chosen();
+    for (const g of coming) {
+      const mine = boxes().filter(b => items[Number(b.dataset.nfItem)].kind === g.kind), on = mine.filter(b => b.checked && !b.disabled);
+      body.querySelector(`[data-nf-count="${g.kind}"]`).textContent = on.length + ' of ' + g.count + ' · ' + fmtBytes(on.reduce((n, b) => n + items[Number(b.dataset.nfItem)].size, 0));
+      const all = body.querySelector(`[data-nf-kind="${g.kind}"]`);
+      all.checked = on.length > 0; all.indeterminate = on.length > 0 && on.length < mine.filter(b => !b.disabled).length;
+    }
+    for (const box of body.querySelectorAll('[data-nf-group]')) {
+      const mine = boxes().filter(b => !b.disabled && items[Number(b.dataset.nfItem)].group === box.dataset.nfGroup), on = mine.filter(b => b.checked);
+      box.checked = on.length > 0; box.indeterminate = on.length > 0 && on.length < mine.length;
+    }
+    createBtn.innerHTML = icon('plus') + (picked.length ? 'CREATE FROM ' + picked.length + ' FILE' + (picked.length === 1 ? '' : 'S') : 'CREATE EMPTY');
+  };
+  const setAll = (test, on) => { for (const b of boxes()) if (!b.disabled && test(items[Number(b.dataset.nfItem)])) b.checked = on; refresh(); };
+  body.querySelectorAll('[data-nf-item]').forEach(b => { b.onchange = refresh; });
+  body.querySelectorAll('[data-nf-kind]').forEach(b => { b.onchange = () => setAll(i => i.kind === b.dataset.nfKind, b.checked); b.onclick = e => e.stopPropagation(); });
+  body.querySelectorAll('[data-nf-group]').forEach(b => { b.onchange = () => setAll(i => i.group === b.dataset.nfGroup, b.checked); });
+  const nameInput = body.querySelector('[data-nf-name]');
+  dlg.querySelector('[data-np-title]').innerHTML = icon('folder') + 'NEW PROPERTY FROM A FOLDER';
+  createBtn.hidden = false; createBtn.disabled = false;
+  createBtn.onclick = () => {
+    const value = nameInput.value.trim();
+    if (!value) { setStatus('Give the property a name.', 'warn'); nameInput.focus(); return; }
+    runFolder(source, value, chosen(), items);
+  };
+  nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); createBtn.click(); } });
+  refresh();
+  setStatus('Nothing is made until you press CREATE.', '');
+  nameInput.focus(); nameInput.select();
+}
+
+function renderFolderRunning(source, prop) {
+  const body = dlg.querySelector('.np-body');
+  body.innerHTML = `
+    <div class="np-run solo">
+      <div class="np-left">
+        <div class="np-target"><span class="np-kicker">FROM A FOLDER</span><b data-np-name>${escapeHtml(prop.name)}</b>
+          <span class="np-link">${escapeHtml(source.path || source.name)}</span></div>
+        <ol class="np-log" data-np-log></ol>
+        <div class="np-progress" data-np-progress hidden><div class="np-prog-label"></div><div class="np-prog-bar"><div class="np-prog-fill"></div></div></div>
+        <div data-np-fallback hidden></div>
+        <div data-np-result hidden></div>
+      </div>
+    </div>`;
+  dlg.querySelector('[data-np-create]').hidden = true;
+}
+
+// A model and the files it names, as one package the scan importer unpacks.
+async function modelFile(source, item) {
+  const file = await source.read(item.path);
+  if (!item.companions || !item.companions.length) return file;
+  const { zipSync } = await import('three/addons/libs/fflate.module.js');
+  const dir = dirName(item.path), entries = {};
+  const inside = path => dir && path.startsWith(dir + '/') ? path.slice(dir.length + 1) : baseName(path);
+  entries[baseName(item.path)] = new Uint8Array(await file.arrayBuffer());
+  for (const path of item.companions) entries[inside(path)] = new Uint8Array(await (await source.read(path)).arrayBuffer());
+  return new File([zipSync(entries, { level: 0 })], baseName(item.path) + '.zip');
+}
+
+function whyNot(e, item) {
+  const said = e && e.message ? e.message : '';
+  // The photo importer only knows that the browser could not decode the bytes.
+  if (item.kind === 'photo' && (!said || /decode/i.test(said))) return /\.(heic|heif)$/i.test(item.path) ? 'this browser cannot read HEIC photos; export it as JPEG' : 'this browser cannot read the picture; the file may be damaged';
+  return said || String(e || 'could not be read');
+}
+
+async function runFolder(source, name, chosen, items) {
+  if (run || !dlg) return;
+  const el = dlg, prop = propertyTemplate(name);
+  el.querySelectorAll('[data-np-create], [data-nf-name]').forEach(b => { b.disabled = true; });
+  // Where the project file goes is settled before the property exists, so its first save
+  // already writes to the picked folder.
+  let keptAt = null, keepError = null;
+  if (source.keepIn) { try { keptAt = await source.keepIn(prop.id, name); } catch (e) { keepError = e; } }
+  if (dlg !== el) return;
+  ws.data.properties.push(prop);
+  ws.data.settings.activePropertyId = prop.id;
+  touch();
+  app.refresh();
+  const relayList = relays();
+  run = { abort: new AbortController(), prop };
+  dlg.dataset.state = 'running';
+  renderFolderRunning(source, prop);
+  setStatus('Working. The property already exists; cancelling keeps what is in so far.', '');
+  const signal = run.abort.signal;
+  // A disk save may replace the property object while a file is being read.
+  const live = () => ws.data.properties.find(p => p.id === prop.id) || prop;
+  const stop = () => { if (signal.aborted) throw signal.reason || new Error('cancelled'); };
+  const failed = [];
+  let planScan = null;
+  try {
+    if (keptAt) log('The project file will be kept in the folder', 'ok', keptAt);
+    else if (keepError) log('The project file could not be placed in the folder; it goes to Tiksi\'s projects folder', 'warn', keepError.message || String(keepError));
+    for (const item of chosen.filter(i => i.kind === 'link')) {
+      stop();
+      const link = item.link, p = live();
+      if (!p.source) { p.source = { kind: 'polycam', url: link.url, captureId: link.captureId, embedUrl: link.embedUrl, title: '', status: 'pending', addedAt: new Date().toISOString() }; touch(); }
+      const src = p.source.captureId === link.captureId ? p.source : { status: 'pending' };
+      log('Polycam link in ' + item.path, 'ok', link.url);
+      const scan = await fetchLinkScan(link, p, src, false, signal, relayList);
+      if (scan) { if (!planScan && scan.kind === 'mesh') planScan = scan; }
+      else failed.push({ item, reason: 'Polycam did not give the browser the model. Download it from Polycam into the folder, or use FILE > Import > POLYCAM LINK.' });
+    }
+    for (const item of chosen.filter(i => i.kind === 'model')) {
+      stop();
+      const step = log('Reading ' + item.path, 'run', fmtBytes(item.size));
+      try {
+        const scan = await importScanFile(await modelFile(source, item), live(), { ...hooks, signal });
+        if (!scan) throw new Error('not a scan or model Tiksi can read');
+        progress(null);
+        step.ok(scan.kind + ' kept' + (item.companions && item.companions.length ? ' with ' + item.companions.length + ' companion file' + (item.companions.length === 1 ? '' : 's') : ''));
+        if (!planScan && scan.kind === 'mesh') planScan = scan;
+      } catch (e) {
+        if (signal.aborted) throw e;
+        progress(null);
+        const reason = whyNot(e, item);
+        step.fail(reason); failed.push({ item, reason, shown: true });
+      }
+    }
+    const batch = async (kind, label, add) => {
+      const list = chosen.filter(i => i.kind === kind);
+      if (!list.length) return;
+      const step = log(label, 'run', '0 of ' + list.length + ' in');
+      let ok = 0;
+      for (let i = 0; i < list.length; i++) {
+        stop();
+        const item = list[i];
+        progress(label + ': ' + baseName(item.path) + ' (' + (i + 1) + ' of ' + list.length + ')', i / list.length);
+        try { await add(await source.read(item.path), item); ok++; }
+        catch (e) { if (signal.aborted) throw e; console.error(e); failed.push({ item, reason: whyNot(e, item) }); }
+        step.detail(ok + ' of ' + list.length + ' in');
+      }
+      progress(null);
+      if (ok === list.length) step.ok(ok + ' of ' + list.length + ' in');
+      else step.warn(ok + ' of ' + list.length + ' in; ' + (list.length - ok) + ' could not be read');
+    };
+    await batch('photo', 'Photos', async (file, item) => {
+      const rec = await addPhotoFromFile(live(), file);
+      // A photo from a subfolder says so, since the gallery is one list.
+      if (item.group) { rec.notes = 'From the folder ' + dirName(item.path) + '.'; touch(); }
+    });
+    await batch('document', 'PDFs', file => addDocumentFromFile(live(), file));
+    await batch('video', 'Videos', file => addVideoFromFile(live(), file));
+    for (const f of failed) if (!f.shown && f.item.kind !== 'link') log('Not imported: ' + f.item.path, 'fail', f.reason);
+    for (const f of failed) if (f.item.kind === 'link') log('The Polycam scan is not in yet', 'warn', f.reason);
+    const left = items.filter(i => !chosen.includes(i));
+    if (left.length) {
+      const kinds = summarize(left).map(g => g.count + ' ' + g.label.toLowerCase()).join(', ');
+      log(left.length + ' file' + (left.length === 1 ? ' was' : 's were') + ' left in the folder, unchanged', 'ok', kinds);
+    }
+    stop();
+    if (planScan) await proposePlan(live(), planScan, signal);
+    else finish(live(), null, null);
+  } catch (e) {
+    console.error(e);
+    if (signal.aborted) { log('Cancelled', 'warn'); setStatus('Cancelled. The property stays with what was imported so far.', 'warn'); }
+    else { log('Failed', 'fail', String(e && e.message || e)); setStatus('Something went wrong; the property was kept with what was imported so far.', 'fail'); }
+    dlg.dataset.state = 'failed';
+    run = null;
+    showCloseOnly();
+  }
 }
 
 export function dialogOpen() { return !!dlg; }
