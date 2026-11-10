@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import stat
 import subprocess
 import sys
@@ -174,6 +175,22 @@ def prune_history(folder, now=None):
             continue
         path.unlink(missing_ok=True); removed.append(path)
     return removed
+
+
+RECORDS = ('manifest.json', 'workspace.json')
+
+
+def clone(source, destination):
+    """Copy source to a new file destination. On the Mac's own disks (APFS) this is a clone: the
+    copy shares the original's data until one of them is written, so it costs nothing."""
+    if sys.platform == 'darwin':
+        try:
+            libc = ctypes.CDLL(None, use_errno=True)
+            libc.clonefile.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32)
+            if libc.clonefile(os.fsencode(source), os.fsencode(destination), 0) == 0: return True
+        except (OSError, AttributeError): pass
+    shutil.copyfile(source, destination)
+    return False
 
 
 def replace_in_place(records, belongs, replacement):
@@ -669,7 +686,10 @@ class WorkspaceService:
                     with tempfile.NamedTemporaryFile(dir=dest.parent, suffix='.tmp', delete=False) as out:
                         temp = Path(out.name)
                     staged.append((temp, dest, identifier))
-                    self.bundle(temp, part, relevant)
+                    # Only the records changed: the new file is the old one with new records, its
+                    # originals left where they are. Otherwise the whole file is written afresh.
+                    same_originals = {i: a.get('hash') for i, a in (self.part_assets.get(identifier) or {}).items()} == {i: a.get('hash') for i, a in relevant.items()}
+                    if not (same_originals and self.rewrite_records(dest, temp, part, relevant)): self.bundle(temp, part, relevant)
                     # History stores metadata revisions against immutable original blobs,
                     # avoiding a full copy of a large scan on every note/geometry edit.
                 # All files are complete before replacing any canonical file. A durable
@@ -742,13 +762,61 @@ class WorkspaceService:
                     if temp.exists(): temp.unlink()
             return destination.name
 
+    @staticmethod
+    def entries(assets):
+        return [{**asset, 'id': i, 'path': 'files/' + hashlib.sha256(i.encode()).hexdigest() + '.bin'} for i, asset in assets.items()]
+
     def bundle(self, destination, data, assets, format='tiksi-project'):
-        entries = [{**asset, 'id': i, 'path': 'files/' + hashlib.sha256(i.encode()).hexdigest() + '.bin'} for i, asset in assets.items()]
+        # The originals come first and the two small records last, so a later save that changes
+        # only the records can rewrite just the end of the file (rewrite_records).
+        entries = self.entries(assets)
         with zipfile.ZipFile(destination, 'w', zipfile.ZIP_STORED) as archive:
-            archive.writestr('workspace.json', json.dumps(data, ensure_ascii=False))
-            archive.writestr('manifest.json', json.dumps({'format': format, 'version': 1, 'app': 'tiksi', 'files': entries}))
             for entry in entries: archive.write(self.root / 'blobs' / entry['hash'], entry['path'])
+            archive.writestr('manifest.json', json.dumps({'format': format, 'version': 1, 'app': 'tiksi', 'files': entries}))
+            archive.writestr('workspace.json', json.dumps(data, ensure_ascii=False))
         with Path(destination).open('rb') as saved: os.fsync(saved.fileno())
+
+    def rewrite_records(self, source, temp, data, assets, format='tiksi-project'):
+        """Make temp a copy of the project file source with new records (workspace.json and
+        manifest.json) and the same originals, writing only the end of the file. It applies when
+        source is exactly as this server last wrote or read it, holds exactly these originals,
+        and has its records after them. Returns False, with temp untouched, when it does not; the
+        caller then writes the whole file. temp is renamed into place by the caller, so the
+        project file is replaced whole or not at all either way."""
+        source, temp = Path(source), Path(temp)
+        try:
+            found = source.stat()
+            if self.stamps.get(str(source)) != (found.st_mtime_ns, found.st_size): return False
+            with zipfile.ZipFile(source) as old: infos = old.infolist()
+        except (OSError, zipfile.BadZipFile): return False
+        entries = self.entries(assets)
+        tail = [i for i in infos if i.filename in RECORDS]
+        body = [i for i in infos if i.filename not in RECORDS]
+        if len(tail) != 2 or sorted(i.filename for i in body) != sorted(e['path'] for e in entries): return False
+        start = min(i.header_offset for i in tail)
+        if any(i.header_offset > start for i in body): return False
+        try:
+            temp.unlink(missing_ok=True)
+            clone(source, temp)
+            with temp.open('r+b') as handle:
+                with zipfile.ZipFile(handle, 'a') as archive:
+                    # Forget the old records and write the new ones where they began; closing
+                    # writes the list of members after them and cuts the file there.
+                    archive.filelist = [i for i in archive.filelist if i.filename not in RECORDS]
+                    for name in RECORDS: archive.NameToInfo.pop(name, None)
+                    archive.start_dir = start
+                    archive.writestr('manifest.json', json.dumps({'format': format, 'version': 1, 'app': 'tiksi', 'files': entries}))
+                    archive.writestr('workspace.json', json.dumps(data, ensure_ascii=False))
+                handle.flush(); os.fsync(handle.fileno())
+            # The originals must be exactly where they were, and the records read back as written.
+            with zipfile.ZipFile(temp) as new:
+                kept = {i.filename: (i.header_offset, i.CRC, i.compress_size) for i in new.infolist() if i.filename not in RECORDS}
+                if kept != {i.filename: (i.header_offset, i.CRC, i.compress_size) for i in body} or json.loads(new.read('workspace.json')) != data: raise ValueError('records rewrite did not read back')
+            return True
+        except (OSError, ValueError, zipfile.BadZipFile, AttributeError, KeyError):
+            log.warning('Wrote %s in full: its records could not be rewritten on their own.', source.name, exc_info=True)
+            with temp.open('wb'): pass
+            return False
 
     @staticmethod
     def referenced(data):

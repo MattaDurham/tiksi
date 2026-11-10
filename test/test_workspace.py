@@ -15,6 +15,11 @@ from server.peers import Tailnet
 from server.workspace import WorkspaceService, WorkspaceError, MAX_JSON
 
 
+def fresh(data):
+    """A copy, as a save request arrives: never the same objects the server already holds."""
+    return json.loads(json.dumps(data))
+
+
 def workspace(name='A'):
     return {'version': 2, 'settings': {}, 'properties': [{'id': 'prop-a', 'name': name, 'scans': [], 'photos': []}], 'projects': [], 'materials': [], 'products': []}
 
@@ -139,6 +144,76 @@ class WorkspaceTests(unittest.TestCase):
         self.assertNotIn(stray_old, held)
         self.assertTrue({in_history, stray_new, *kept} <= held)
         self.commit(data, self.service.state['assets'])
+
+    def scanned(self, payload=b'synthetic scan ' * 200000):
+        digest, size = self.service.store_blob(io.BytesIO(payload))
+        data = workspace(); data['properties'][0]['scans'] = [{'id': 'scan-a', 'name': 'Scan'}]
+        assets = {'scan-a': {'hash': digest, 'size': size, 'format': 'glb', 'name': 'room.glb'}}
+        self.commit(data, assets)
+        return data, assets, payload
+
+    def test_a_save_that_changes_only_records_rewrites_only_the_end_of_the_project_file(self):
+        data, assets, payload = self.scanned()
+        path = Path(self.service.paths['prop-a'])
+        with zipfile.ZipFile(path) as archive: before = {i.filename: i.header_offset for i in archive.infolist()}
+        data = fresh(data); data['properties'][0]['notes'] = 'one word'
+        with patch.object(WorkspaceService, 'bundle', side_effect=AssertionError('the whole project file was written again')):
+            self.commit(data, assets)
+        with zipfile.ZipFile(path) as archive:
+            self.assertIsNone(archive.testzip())
+            self.assertEqual(json.loads(archive.read('workspace.json'))['properties'][0]['notes'], 'one word')
+            item = json.loads(archive.read('manifest.json'))['files'][0]
+            self.assertEqual(archive.read(item['path']), payload)
+            self.assertEqual(archive.getinfo(item['path']).header_offset, before[item['path']], 'the scan stays where it was')
+        # A restart reads it back the same, and a second records-only save works too.
+        restarted = WorkspaceService(self.root / 'runtime', self.root / 'projects')
+        self.assertEqual(restarted.snapshot()['data']['properties'][0]['notes'], 'one word')
+        self.service = restarted
+        data = fresh(data); data['properties'][0]['notes'] = 'two words'
+        with patch.object(WorkspaceService, 'bundle', side_effect=AssertionError('the whole project file was written again')):
+            self.commit(data, assets)
+        self.assertEqual(WorkspaceService(self.root / 'runtime', self.root / 'projects').snapshot()['data']['properties'][0]['notes'], 'two words')
+
+    def test_a_save_that_changes_originals_or_meets_a_file_changed_elsewhere_writes_the_whole_file(self):
+        data, assets, payload = self.scanned()
+        path = Path(self.service.paths['prop-a'])
+        digest, size = self.service.store_blob(io.BytesIO(b'a photo'))
+        data = fresh(data); data['properties'][0]['photos'] = [{'id': 'photo-a', 'name': 'Photo'}]
+        assets['photo-a'] = {'hash': digest, 'size': size, 'mime': 'image/jpeg'}
+        real = WorkspaceService.bundle; calls = []
+        def counted(*args, **kwargs): calls.append(1); return real(*args, **kwargs)
+        with patch.object(WorkspaceService, 'bundle', counted): self.commit(data, assets)
+        self.assertEqual(len(calls), 1, 'a new original: the whole file')
+        # A file another program rewrote is read again before the save, whatever its layout.
+        with zipfile.ZipFile(path) as archive: members = {i.filename: archive.read(i) for i in archive.infolist()}
+        with zipfile.ZipFile(path, 'w') as archive:
+            for name in ('workspace.json', 'manifest.json'): archive.writestr(name, members[name])
+            for name, value in members.items():
+                if name not in ('workspace.json', 'manifest.json'): archive.writestr(name, value)
+        data = fresh(data); data['properties'][0]['notes'] = 'after an outside change'
+        with patch.object(WorkspaceService, 'bundle', counted): self.commit(data, assets)
+        self.assertEqual(len(calls), 2, 'records ahead of the originals: the whole file')
+        with zipfile.ZipFile(path) as archive:
+            self.assertEqual(json.loads(archive.read('workspace.json'))['properties'][0]['notes'], 'after an outside change')
+            self.assertEqual(archive.namelist()[-1], 'workspace.json', 'written afresh with the records last')
+
+    def test_a_records_rewrite_that_fails_leaves_the_project_file_whole_and_the_save_still_goes_through(self):
+        data, assets, payload = self.scanned()
+        path = Path(self.service.paths['prop-a']); before = path.read_bytes()
+        real = zipfile.ZipFile.writestr; seen = []
+        def failing(archive, name, *args, **kwargs):
+            seen.append(name)
+            if archive.mode == 'a' and name == 'workspace.json': raise OSError(28, 'No space left on device')
+            return real(archive, name, *args, **kwargs)
+        data = fresh(data); data['properties'][0]['notes'] = 'after a failed rewrite'
+        with patch.object(zipfile.ZipFile, 'writestr', failing), self.assertLogs('tiksi.workspace', 'WARNING'):
+            self.commit(data, assets)
+        self.assertIn('workspace.json', seen)
+        with zipfile.ZipFile(path) as archive:
+            self.assertEqual(json.loads(archive.read('workspace.json'))['properties'][0]['notes'], 'after a failed rewrite')
+            self.assertEqual(archive.read(json.loads(archive.read('manifest.json'))['files'][0]['path']), payload)
+        self.assertEqual([p.name for p in path.parent.iterdir() if p.suffix == '.tmp'], [])
+        self.assertNotEqual(path.read_bytes(), before)
 
     def test_videos_and_measurement_frames_travel_in_the_project_bundle(self):
         video, frame, stray = b'\x00\x00\x00\x18ftypmp42 synthetic video', b'\xff\xd8 synthetic frame', b'unreferenced'
@@ -682,7 +757,7 @@ class UnavailableProjectTests(unittest.TestCase):
             self.a.chmod(0)
         real_zip = zipfile.ZipFile
         def failing(path, *args, **kwargs):
-            if Path(path) == self.a: raise OSError(5, 'Input/output error')
+            if isinstance(path, (str, os.PathLike)) and Path(path) == self.a: raise OSError(5, "Input/output error")
             return real_zip(path, *args, **kwargs)
         cases = {'no read permission': (no_permission, None),
                  'workspace.json is a list': (zipped('[]'), None),
