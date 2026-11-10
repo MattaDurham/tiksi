@@ -14,12 +14,15 @@ export function geometrySnapshot(prop) {
 
 export class GeometryHistory {
   constructor(limit = 80) { this.limit = limit; this.undo = []; this.redo = []; this.pending = null; }
-  begin(prop, label = 'geometry edit') {
-    this.commit(prop);
-    this.pending = { before: geometrySnapshot(prop), label };
+  // A held edit (a drag in progress) is not closed by the change events that arrive while it
+  // runs; only its owner ends the hold, or a new edit or an undo/redo closes it.
+  begin(prop, label = 'geometry edit', { hold = false } = {}) {
+    this.commit(prop, true);
+    this.pending = { before: geometrySnapshot(prop), label, hold };
   }
-  commit(prop) {
-    if (!this.pending) return;
+  release() { if (this.pending) this.pending.hold = false; }
+  commit(prop, force = false) {
+    if (!this.pending || (this.pending.hold && !force)) return;
     const { before, label } = this.pending; this.pending = null;
     const after = geometrySnapshot(prop);
     if (before.data.id !== after.data.id || equal(before.data, after.data)) return;
@@ -62,7 +65,7 @@ export class GeometryHistory {
     return true;
   }
   restore(prop, direction) {
-    this.commit(prop);
+    this.commit(prop, true);
     const result = this.candidate(prop, direction);
     if (!result || result.conflicts.length) return false;
     const plans = Object.fromEntries(prop.levels.map(level => [level.id, level.plan || null]));

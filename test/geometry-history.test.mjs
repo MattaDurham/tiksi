@@ -82,3 +82,15 @@ test('reverting a cancelled drag puts every moved piece back and leaves no undo 
   assert.equal(h.states(p).undo.available, false, 'nothing to undo after a reverted drag');
   assert.equal(h.revert(p), false, 'a second revert has nothing to put back');
 });
+test('a held edit survives change events until its owner lets go, so a cancel can still put it back', () => {
+  const p = house(), h = new GeometryHistory(), before = geometrySnapshot(p).data;
+  h.begin(p, 'move wall', { hold: true });
+  p.walls[1].ax = 7;
+  h.commit(p);                                   // a change event mid-drag
+  assert.equal(h.states(p).undo.available, false, 'not closed by the change event');
+  assert.equal(h.revert(p), true); assert.deepEqual(geometrySnapshot(p).data, before);
+  h.begin(p, 'move wall', { hold: true }); p.walls[1].ax = 7.5;
+  h.release(); h.commit(p);
+  assert.equal(h.states(p).undo.available, true, 'closed once released');
+  assert.equal(h.restore(p, 'undo'), true); assert.equal(p.walls[1].ax, 6);
+});

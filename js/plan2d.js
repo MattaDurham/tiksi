@@ -16,7 +16,7 @@ import { doorSwings } from './wall-solids.js';
 import { materialSelectHtml } from './materials.js';
 import { safeUrl } from './material-identity.js';
 import { icon } from './icons.js';
-import { beginGeometryEdit, cancelGeometryEdit, restoreGeometryEdit, revertGeometryEdit } from './edit-history.js';
+import { beginGeometryEdit, cancelGeometryEdit, restoreGeometryEdit, revertGeometryEdit, endGeometryHold } from './edit-history.js';
 import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import {
   planWallMove, applyWallMove, normalOffset, planCornerMove, applyCornerMove,
@@ -1856,7 +1856,10 @@ function onPointerMove(e) {
   if (!drag.moved) {
     if (!travelled) return;
     // First real movement: snapshot the pre-drag state (the underlay is not in the snapshot).
-    if (drag.kind !== 'underlay') pushUndo();
+    // The edit stays open (held) until the drag ends: another change arriving meanwhile, such
+    // as a save from another device, must not close it half way, or a cancel could not put
+    // the geometry back and undo would hold only part of the drag.
+    if (drag.kind !== 'underlay') beginGeometryEdit(prop, 'plan edit', { hold: true });
     drag.moved = true;
   }
   if (drag.kind === 'handle') {
@@ -1909,8 +1912,11 @@ function release() {
     selection = c.kind === 'none' ? null : c.kind === 'underlay' ? { kind: 'underlay' } : { kind: c.kind, id: c.id };
     renderInspector();
   }
-  if (drag && drag.moved) { touch(); renderInspector(); }
+  // The drag ends before the store hears of it, so the schedule panel and inspector that the
+  // change rebuilds number the openings as they are now, not as they were when it began.
+  const moved = !!(drag && drag.moved);
   drag = null;
+  if (moved) { endGeometryHold(prop); touch(); renderInspector(); }
   if (hoverPt && tool === 'select') hover = hitTest(hoverPt[0], hoverPt[1]);
   updateCursor();
 }
@@ -1920,12 +1926,15 @@ function release() {
 function onPointerCancel(e) {
   if (e && e.pointerType === 'touch') { onFingerUp(e, true); return; }
   invalidate();
-  if (drag && drag.moved) {
-    if (drag.kind === 'underlay') { drag.pl.offsetX = drag.ox; drag.pl.offsetY = drag.oy; }
-    else revertGeometryEdit(prop);
+  const d = drag;
+  drag = null;
+  if (d && d.moved) {
+    // The store hears of the put-back geometry too, so an autosave that ran during the drag
+    // is overwritten with what the screen shows.
+    if (d.kind === 'underlay') { d.pl.offsetX = d.ox; d.pl.offsetY = d.oy; touch(); }
+    else if (revertGeometryEdit(prop)) touch();
     renderInspector();
   }
-  drag = null;
   updateCursor(); updateHint();
 }
 
@@ -2725,6 +2734,7 @@ export function unmount() {
   if (offChange) { offChange(); offChange = null; }
   drawing = null; roomDraft = null; drag = null; hover = null; hoverPt = null; facesCache = null;
   fingers.clear(); gesture = null; lastTap = null; joints = null;
+  if (prop) endGeometryHold(prop);   // a drag cut short by a remount: the next change closes its edit
   el = null; canvas = null; ctx = null; wrapEl = null; inspEl = null; hintEl = null; badgeEl = null; levelEl = null; scheduleEl = null;
   scheduleCache = null;
 }

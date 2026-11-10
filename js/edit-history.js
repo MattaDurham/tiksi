@@ -16,7 +16,9 @@ function history(prop, create = false) {
   if (map && !map.has(prop.id) && create) map.set(prop.id, new GeometryHistory());
   return map?.get(prop.id) || null;
 }
-export function beginGeometryEdit(prop, label) { revision++; history(prop, true)?.begin(prop, label); }
+export function beginGeometryEdit(prop, label, opts) { revision++; history(prop, true)?.begin(prop, label, opts); }
+// The held edit's owner (a drag) is done: the next change closes it as usual.
+export function endGeometryHold(prop) { history(prop)?.release(); }
 export function cancelGeometryEdit(prop) { const h = history(prop); if (h) h.pending = null; }
 // Undo an edit that was begun but never finished (a cancelled drag), leaving no history entry.
 export function revertGeometryEdit(prop) { revision++; return !!history(prop)?.revert(prop); }
