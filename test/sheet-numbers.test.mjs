@@ -80,6 +80,9 @@ test('plans, room schedules and cut sheets say their lengths and areas are on wa
   const sheet = compose.sheetSvg(p, set, set.sheets[0], new Map(), { index: 0, count: 1 });
   assert.match(sheet, />DIMENSIONS AND AREAS TO WALL CENTRE LINES</);
   assert.match(sheet, />AREA TO WALL CL</);
+  plan.showTitle = false;
+  const untitled = compose.sheetSvg(p, set, set.sheets[0], new Map(), { index: 0, count: 1 });
+  assert.match(untitled, />DIMENSIONS AND AREAS TO WALL CENTRE LINES</, 'a plan with its title hidden still says so');
   store.ws.data.projects.push({ id: 'pr', name: 'Den', propertyId: p.id, category: 'interior', status: 'idea', selected: true, items: [{ id: 'it', name: 'Paint', qty: 1, unit: 'ls', low: 0, likely: 0, high: 0, durationDays: 0, deps: [], elementIds: ['w-s', 'r-1'], notes: '', status: 'todo' }] });
   const html = cut.itemSheetHtml(store.ws.data.projects[0], store.ws.data.projects[0].items[0]);
   assert.match(html, /Length \(wall CL\)/);

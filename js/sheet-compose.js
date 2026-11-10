@@ -151,10 +151,12 @@ function titleBlock(prop, set, sheet, paper, opts) {
 }
 
 function label(v) {
-  if (!v.showTitle || v.kind === 'text') return '';
+  if (v.kind === 'text') return '';
   const y = v.h * PT + 12;
-  // A plan's wall dimensions and room areas are measured on wall centre lines: say so.
+  // A plan's wall dimensions and room areas are measured on wall centre lines: say so, also
+  // when the view's title is hidden.
   const cl = v.kind === 'plan' && v.layers && (v.layers.dims || v.layers.rooms) ? (v.layers.dims && v.layers.rooms ? 'DIMENSIONS AND AREAS' : v.layers.dims ? 'DIMENSIONS' : 'AREAS') + ' TO WALL CENTRE LINES' : '';
+  if (!v.showTitle) return cl ? `<g>${text(0, y - 5, cl, { size: 5, fill: '#333' })}</g>` : '';
   const sc = ['plan', 'section', 'elevation'].includes(v.kind) ? 'SCALE: ' + scaleLabel(v.scale) : '';
   const t = v.title.toUpperCase();
   const tw = Math.min(textWidth(t, 8) + 4, v.w * PT - 22);
