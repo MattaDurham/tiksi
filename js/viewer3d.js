@@ -192,7 +192,8 @@ function ensureDefaults(p) {
 // ---------- renderer ----------
 function ensureRenderer() {
   if (renderer) return renderer;
-  renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', stencil: false });
+  try { renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', stencil: false }); }
+  catch (e) { renderer = null; throw Object.assign(new Error('This browser could not start 3D graphics.'), { cause: e, graphics: true }); }
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.AgXToneMapping || THREE.ACESFilmicToneMapping;
   renderer.shadowMap.enabled = true;
@@ -1165,9 +1166,18 @@ function tick(time) {
   if (contextLost) return;
   if (framesLeft > 0) {
     framesLeft--;
-    // One bad frame must not kill the animation loop for the rest of the session.
-    try { renderFrame(); }
-    catch (e) { if (!renderFailed) { renderFailed = true; console.error('render failed', e); } }
+    // One bad frame must not kill the animation loop for the rest of the session. It must not
+    // leave a stale picture looking current either: say so until a frame draws again.
+    try {
+      renderFrame();
+      if (renderFailed) { renderFailed = false; hideNotice('draw'); }
+    } catch (e) {
+      if (!renderFailed) {
+        renderFailed = true;
+        console.error('render failed', e);
+        showNotice('draw', 'MODEL could not draw this view (' + errMsg(e) + '). Reload to try again.', true);
+      }
+    }
   }
 }
 let renderFailed = false;
@@ -4274,7 +4284,25 @@ function onPointerLeave() { if (hoverTarget) { hoverTarget = null; updateOutline
 function onContextMenu(e) { e.preventDefault(); }
 
 // ---------- mount / unmount ----------
+// A MODEL page that cannot open says so in its own place, with a way to try again, instead of
+// leaving the layout empty. The other pages keep working.
 export function mount(root) {
+  try { openModel(root); }
+  catch (e) {
+    console.error('MODEL could not open', e);
+    try { unmount(); } catch (err) { console.error(err); }
+    // Whatever the failed open left half-built must not be torn down twice or drawn.
+    if (renderer) { renderer.setAnimationLoop(null); renderer.domElement.remove(); }
+    scene = null; camera = null; composer = null; passes = {}; controls = null; modelGroup = null; groundGroup = null; batches = null;
+    el = null; wrapEl = null; inspEl = null; hud = {};
+    const why = e && e.graphics
+      ? 'This browser could not start 3D graphics, so MODEL cannot be shown. Close other tabs or apps that use 3D, then reload. The other pages still work.'
+      : 'MODEL could not open (' + errMsg(e) + '). Reload to try again. The other pages still work.';
+    root.innerHTML = `<div class="view-scroll v-open-failed" role="alert"><div class="kicker">MODEL</div>${noticeHtml(why, true).replace('<p style="margin:0;', '<p class="muted" style="margin:0 0 14px;')}</div>`;
+    root.querySelector('[data-reload]').onclick = () => location.reload();
+  }
+}
+function openModel(root) {
   const resumed = matchResume && performance.now() - matchResume.at < 1500 ? matchResume : null;
   matchResume = null;
   prop = activeProperty();
