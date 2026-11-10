@@ -1,6 +1,7 @@
 """Bounded local model conversion, using installed authoring engines and isolated files."""
 import io
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -15,6 +16,7 @@ from urllib.parse import urlsplit
 import zipfile
 
 ROOT=Path(__file__).resolve().parent.parent
+log=logging.getLogger('tiksi.model_conversion')
 MAX_BYTES=600*1024*1024
 CAD={'.ifc','.step','.stp','.iges','.igs','.dxf','.laz','.3dm','.e57'}
 BLENDER={'.blend','.usd','.usda','.usdc','.usdz'}
@@ -217,6 +219,7 @@ class ModelConversionService:
             h.close_connection=True
             self.reply(h,e.status,json.dumps({'error':str(e),'jobId':getattr(e,'job_id',None)}).encode(),'application/json');return True
         except Exception:
+            log.exception('Model conversion failed (%s %s)',h.command,path)
             h.close_connection=True;self.reply(h,500,b'{"error":"Local converter failed; source and diagnostics retained."}','application/json');return True
     @staticmethod
     def reply(h,status,data,mime,extra=None):

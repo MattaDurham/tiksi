@@ -184,6 +184,23 @@ class ServiceCallers(unittest.TestCase):
             self.assertNotEqual(status, 200, path); self.assertNotIn(b'token', body, path)
         self.assertEqual(self.answered, [])
 
+    def test_a_service_that_fails_writes_the_real_error_to_the_server_log(self):
+        token = json.loads(self.call('/api/workspace/capabilities', headers=PAGE_HEADERS['workspace'])[1])['token']
+        cases = (('workspace', 'snapshot', OSError, '/api/workspace', {'X-Tiksi-Workspace': '1', 'X-Tiksi-Token': token}),
+                 ('model_conversion', 'capabilities', RuntimeError, '/api/model-conversion/capabilities', {}),
+                 ('video_frames', 'capabilities', RuntimeError, '/api/video/capabilities', PAGE_HEADERS['video']),
+                 ('photo_placement', 'capabilities', RuntimeError, '/api/photo-placement/capabilities', {}))
+        for name, method, kind, path, headers in cases:
+            fault = 'synthetic fault in ' + name
+            with patch.object(getattr(self.server, name), method, side_effect=kind(fault)), self.assertLogs('tiksi.' + name, 'ERROR') as logged:
+                status, body = self.call(path, headers=headers)
+            self.assertEqual(status, 500, name)
+            self.assertNotIn(fault, body.decode(), 'the page still gets a plain sentence')
+            record = '\n'.join(logged.output)
+            self.assertIn(fault, record, name)
+            self.assertIn('Traceback', record, 'where it happened is logged too: ' + name)
+            self.assertIn(path, record, name)
+
     def test_the_page_itself_still_loads_for_any_device(self):
         # The page holds no project data; the caller check is about the services behind it.
         self.caller = '192.168.1.9'

@@ -666,6 +666,8 @@ class WorkspaceService:
             h.close_connection = True
             self.reply(h, error.status, {'error': str(error), **({'code': error.code} if getattr(error, 'code', None) else {})})
         except (OSError, ValueError, TypeError, KeyError):
+            # The page gets a plain sentence; the server log gets the real error and where it happened.
+            log.exception('Project files could not be updated (%s %s)', h.command, path)
             h.close_connection = True
             self.reply(h, 500, {'error': 'Project files could not be updated. Existing copies and recovery data have been preserved.'})
         finally:
