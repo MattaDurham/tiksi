@@ -362,7 +362,7 @@ async function buildMesh(buffer, e, scan, inner, hooks) {
   return { count, texturesReduced: shrunk, label: Math.round(count).toLocaleString() + ' triangles' + reduced };
 }
 // Shrink every picture inside a loaded model whose longest side is over `limit` pixels, so a
-// phone is not asked to hold (and mip) 4096 or 8192 pixel atlases. Each picture is handled once
+// phone or tablet is not asked to hold (and mip) 4096 or 8192 pixel atlases. Each picture is handled once
 // however many materials use it; the full-size decode is released. Returns how many were shrunk.
 export async function capModelTextures(root, limit) {
   if (!(limit > 0)) return 0;
@@ -408,6 +408,23 @@ async function buildSplat(buffer, e, scan, inner, wrapper, hooks) {
 
 // `wanted`, when given, is asked once the bytes have arrived: answering false (the view that
 // asked is gone) ends the load there, before anything is parsed, and resolves null.
+// After a lost graphics context comes back, a splat draws nothing: the splat renderer keeps its
+// unpacked splats and their draw order in buffers on the graphics card, and those came back
+// empty. Mark the scan's splat data, and the renderer's sort, to be made again from the bytes
+// it still holds in memory (nothing is read from storage). Other kinds of scan need nothing:
+// three sends their geometry and pictures again by itself. Returns whether there was a splat.
+export function redoSplatAfterContextLoss(obj) {
+  const mesh = obj && obj.userData && obj.userData.splat;
+  if (!mesh) return false;
+  try {
+    if (mesh.packedSplats) mesh.packedSplats.needsUpdate = true;
+    mesh.generatorDirty = true;
+    if (typeof mesh.updateVersion === 'function') mesh.updateVersion();
+    for (const spark of splatDrawables()) { spark.dirty = true; spark.sortDirty = true; }
+  } catch (e) { console.error('splat redo after a lost context failed', e); }
+  return true;
+}
+
 export async function loadScanObject(scan, hooks, wanted) {
   const rec = await getFile(scan.id);
   if (wanted && !wanted()) return null;

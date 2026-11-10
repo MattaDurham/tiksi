@@ -50,7 +50,7 @@ import { takenAtMs } from './photo-exif.js';
 import { KF, keyframeRow, keyframeModelPose, keyframeLens, nearestKeyframe, sharpKeyframes, segmentsOf, decodePng16, depthPoints, alignSession } from './polycam-cameras.js';
 import { addPosition, removePosition, picturesOf, positionLabel, renderingName, renderSize, ROLE_LABELS } from './positions.js';
 import {
-  loadScanObject, applyScanTransform, disposeScanObject,
+  loadScanObject, applyScanTransform, disposeScanObject, redoSplatAfterContextLoss,
   scanStats, dropScanToFloor, centerScanOnModel, releaseSplatRenderer, splatDrawables, splatBusy,
 } from './scans.js';
 import { attachSketchupNavigation } from './sketchup-nav.js';
@@ -290,7 +290,10 @@ function graphicsRestored() {
   programsWarm = false;
   regenEnvMap();
   invalidateShadows();
-  requestRender(4);
+  // Splats keep their unpacked data on the graphics card: have it made again (scans.js).
+  let splats = false;
+  for (const obj of Object.values(scanObjs)) splats = redoSplatAfterContextLoss(obj) || splats;
+  requestRender(splats ? 8 : 4);
 }
 
 // ---------- scene ----------
