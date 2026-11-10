@@ -86,7 +86,7 @@ try {
   assert.match(await page.locator('.inspector h3').textContent(), /WINDOW W2/, 'focusing a row selects its opening');
   await width('o-front').fill('wide'); await width('o-front').press('Tab');
   assert.equal((await prop()).openings.find(o => o.id === 'o-front').width, 0.9, 'an unreadable size changes nothing');
-  assert.match(await page.locator('.canvas-hint').textContent(), /Could not read/);
+  assert.match(await page.locator('.canvas-hint').textContent(), /^[DW]\d+ width: "wide" is not a length\./, 'the hint names the opening and says why');
   await width('o-front').fill('40\''); await width('o-front').press('Tab');
   p = await prop(); const front = p.openings.find(o => o.id === 'o-front');
   assert.ok(Math.abs(front.width - 6.96) < 1e-6 && Math.abs(front.t - 0.5) < 1e-6, 'a too-wide door is held to its wall');
