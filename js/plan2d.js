@@ -14,6 +14,7 @@ import {
 import { openingSchedule, connectsLabel, resizeOpening, MIN_SIZE } from './opening-schedule.js';
 import { doorSwings } from './wall-solids.js';
 import { materialSelectHtml } from './materials.js';
+import { safeUrl } from './material-identity.js';
 import { icon } from './icons.js';
 import { beginGeometryEdit, cancelGeometryEdit, restoreGeometryEdit } from './edit-history.js';
 import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
@@ -2074,9 +2075,13 @@ function sourceCardHtml() {
   const src = prop.source;
   const scan = meshScan();
   const label = src && src.kind === 'polycam' ? 'FROM POLYCAM' : 'SCAN';
+  // Only a web address becomes a link: a javascript: or data: one from an imported file
+  // shows as plain text and can never run.
+  const href = src && safeUrl(src.url);
+  const srcText = src && src.url ? escapeHtml(src.title || String(src.url).replace(/^https?:\/\//, '')) : '';
   return `<div class="src-card">
     <span class="np-kicker">${label}</span>
-    ${src && src.url ? `<a href="${escapeHtml(src.url)}" target="_blank" rel="noopener" title="${escapeHtml(src.url)}">${escapeHtml(src.title || src.url.replace(/^https?:\/\//, ''))}</a>` : ''}
+    ${href ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener" title="${escapeHtml(href)}">${srcText}</a>` : srcText ? `<span class="src-link-text">${srcText}</span>` : ''}
     ${scan ? `<button class="btn" data-src-plan title="Square the scan up and propose walls, rooms, doors, windows and the underlay again">${icon('scan')}PROPOSE PLAN FROM SCAN</button>
     <button class="btn" data-src-fixtures title="Read counter runs, wall cabinets, tall appliances and furniture from the scan, for review">${icon('scan')}PROPOSE FIXTURES FROM SCAN</button>` : ''}
     <div class="empty">Add captures in FILE → Import.</div>
