@@ -14,6 +14,7 @@ let root = null, property = null, capabilities = null, job = null, jobs = [];
 let serverToken = '';
 let files = [], galleryIds = new Set(), busy = false, message = '', poll = null, mountEpoch = 0;
 let preview = null, modelBytes = null, modelId = null;
+let jobsKey = '', jobKey = '', cameraShots = 0;   // what the list and the job panel last showed; photos taken this visit
 const importingModels = new Set();
 const terminal = new Set(['complete', 'failed', 'cancelled', 'interrupted']);
 const humanBytes = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1024).toFixed(0) + ' KB';
@@ -64,11 +65,13 @@ function renderGallery() {
 }
 function renderJobs() {
   if (!root) return;
+  jobsKey = listKey();
   const select = root.querySelector('.rc-job-select');
   select.innerHTML = '<option value="">Choose a previous reconstruction</option>' + jobs.slice().sort((a, b) => b.createdAt - a.createdAt).map(j => `<option value="${j.id}" ${job?.id === j.id ? 'selected' : ''}>${escapeHtml(j.name)} · ${escapeHtml(j.quality)} · ${escapeHtml(j.state)}</option>`).join('');
 }
 function renderJob() {
   if (!root) return;
+  jobKey = oneKey();
   const area = root.querySelector('.rc-job');
   if (!job) { area.innerHTML = '<p>Your reconstruction will appear here. You can leave this view while the Mac processes it.</p>'; return; }
   const active = ['running', 'converting', 'draft'].includes(job.state);
@@ -179,13 +182,23 @@ async function reconstruct() {
   } catch (error) { setMessage(err(error)); await refresh().catch(() => {}); }
   finally { busy = false; renderSelection(); renderGallery(); }
 }
+// What the job list and the job panel show, so a poll redraws only what changed: a redraw
+// closes an open job picker and drops a tap that lands during it.
+const listKey = () => JSON.stringify(jobs.map(j => [j.id, j.name, j.quality, j.state, j.createdAt]));
+const oneKey = () => job ? JSON.stringify({ ...job, progress: null }) : '';
 async function refresh() {
   const epoch = mountEpoch;
   const data = await json('/jobs');
   if (!root || epoch !== mountEpoch) return;
   jobs = data.jobs;
   if (job) job = jobs.find(j => j.id === job.id) || null;
-  renderJobs(); renderJob();
+  if (listKey() !== jobsKey) renderJobs();
+  if (oneKey() !== jobKey) renderJob();
+  else if (job && job.state === 'running') {
+    // Only the progress moved: update the bar and its words in place.
+    const bar = root.querySelector('.rc-job progress');
+    if (bar) { bar.value = job.progress || 0; const words = bar.nextElementSibling; if (words) words.textContent = Math.round((job.progress || 0) * 100) + '% · Native reconstruction on your Mac'; }
+  }
 }
 function clearPreview() {
   if (preview) {
@@ -246,7 +259,7 @@ export function mount(container) {
       <p class="rc-note">Full and raw require more memory and processing time. No input photos are resized by Tiksi. The engine reports any automatic downsampling.</p>
       <div class="rc-actions"><button class="btn" data-action=upload>Choose original photos</button><button class="btn" data-action=camera>Take a photo</button><button class="btn" data-action=clear>Clear selection</button></div>
       <input type="file" class="hidden-file rc-upload" accept=".jpg,.jpeg,.png,.heic,.heif,.tif,.tiff" multiple>
-      <input type="file" class="hidden-file rc-camera" accept="image/*" capture="environment">
+      <input type="file" class="hidden-file rc-camera" accept="image/*" capture="environment" multiple>
       <p class="rc-selection"></p><p class="rc-file-list"></p>
       <details><summary>Choose photos from this property's library</summary><p>Older saved photos may have been reduced to 2048 pixels; use original files for better reconstruction.</p><div class="rc-gallery"></div></details>
       <button class="btn primary rc-start" data-action=start>RECONSTRUCT 3D MODEL</button>
@@ -257,7 +270,15 @@ export function mount(container) {
   const upload = root.querySelector('.rc-upload'), camera = root.querySelector('.rc-camera');
   root.querySelector('[data-action=upload]').onclick = () => upload.click();
   root.querySelector('[data-action=camera]').onclick = () => camera.click();
-  for (const input of [upload, camera]) input.onchange = () => { if (!busy) addFiles(input.files); input.value = ''; };
+  for (const input of [upload, camera]) input.onchange = () => {
+    if (!busy) {
+      addFiles(input.files);
+      // A phone camera hands back one photo a trip: the button says how many so far and goes
+      // straight back for the next.
+      if (input === camera && input.files.length) { cameraShots += input.files.length; root.querySelector('[data-action=camera]').textContent = 'Take another photo (' + cameraShots + ' taken)'; }
+    }
+    input.value = '';
+  };
   root.querySelector('[data-action=clear]').onclick = () => { files = []; galleryIds.clear(); renderSelection(); renderGallery(); };
   root.querySelector('[data-action=start]').onclick = reconstruct;
   root.querySelector('.rc-job-select').onchange = event => { clearPreview(); job = jobs.find(j => j.id === event.target.value) || null; renderJob(); };
@@ -275,7 +296,7 @@ export function mount(container) {
   }).catch(error => { if (root && epoch === mountEpoch) root.querySelector('.rc-engine').textContent = err(error); });
 }
 export function unmount() {
-  mountEpoch++; clearInterval(poll); poll = null; clearPreview();
+  mountEpoch++; clearInterval(poll); poll = null; clearPreview(); jobsKey = jobKey = ''; cameraShots = 0;
   if (root) root.classList.remove('reconstruction-view');
   root = null; property = null;
 }
