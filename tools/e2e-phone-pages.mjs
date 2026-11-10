@@ -293,7 +293,7 @@ async function run(label, engine, profile) {
       await page.locator('.ph-card').first().tap();
       await page.locator('.ph-detail [data-act=zoom]').tap();
       const close = await page.locator('.ph-lb-close').boundingBox();
-      check(close && close.width >= 44 && close.height >= 44 && close.y >= 0, label + ': the viewer\'s close button is a 44-point target on screen');
+      check(close && close.width >= 44 && close.height >= 44 && close.y >= 0, label + ': the viewer\'s close button is a 44-point target on screen (' + JSON.stringify(close) + ')');
       await page.locator('.ph-lb-close').tap();
       // One new card per import: the cards already there stay the same elements.
       await page.evaluate(() => { window.__firstCard = document.querySelector('.ph-card'); });
