@@ -2172,6 +2172,15 @@ function typedLength(text) {
   note = null;
   return r.value;
 }
+// The same, refused with the allowed range (in the user's units) when the value is outside it:
+// above `lo` (or at least `lo` with loIncl) and below `hi`.
+function typedLengthIn(text, what, lo, hi = Infinity, loIncl = false) {
+  const v = typedLength(text);
+  if (isNaN(v) || ((loIncl ? v >= lo : v > lo) && v < hi)) return v;
+  sayNote(hi < Infinity ? `${what} must be between ${fmtLen(lo)} and ${fmtLen(hi)}; it was left as it was.`
+    : `${what} must be ${loIncl ? 'at least' : 'more than'} ${fmtLen(lo)}; it was left as it was.`);
+  return NaN;
+}
 function updateHint() {
   if (note) { setHint(note); return; }
   const hints = {
@@ -2496,8 +2505,8 @@ function renderInspector() {
       renderInspector();
     };
     insp.querySelector('[data-len=lvlHeight]').onchange = e => {
-      const v = typedLength(e.target.value);
-      if (!isNaN(v) && v > 0.5) { pushUndo('change level height'); L.height = v; touch(); }
+      const v = typedLengthIn(e.target.value, 'A level height', 0.5);
+      if (!isNaN(v)) { pushUndo('change level height'); L.height = v; touch(); }
       renderInspector();
     };
     insp.querySelector('[data-del-level]').onclick = () => {
@@ -2533,10 +2542,10 @@ function renderInspector() {
       <div class="stat-line"><span>Openings</span><b>${prop.openings.filter(o => o.wallId === w.id).length}</b></div>
       <button class="btn danger" data-del>${icon('trash')}DELETE WALL</button>`;
     insp.querySelector('[data-len=len]').onchange = e => {
-      const v = typedLength(e.target.value);
       // A wall with no length has no direction to grow along (left over from older files).
-      if (!(L >= 0.001)) { setHint('This wall has no length, so it has no direction to grow along. Delete it and draw it again.'); renderInspector(); return; }
-      if (!isNaN(v) && v > 0.05) {
+      if (!(L >= 0.001)) { sayNote('This wall has no length, so it has no direction to grow along. Delete it and draw it again.'); renderInspector(); return; }
+      const v = typedLengthIn(e.target.value, 'A wall length', 0.05);
+      if (!isNaN(v)) {
         pushUndo();
         // The b end moves along the wall like a corner drag: walls joined there and the floor
         // corners on it come along, all to the same exact point. A typed length is stored as
@@ -2545,20 +2554,21 @@ function renderInspector() {
         const cm = planCornerMove(w, 'b', curWalls(), curRooms(), curOpenings()), lengths = movedWallLengths(cm);
         applyCornerMove(cm, w.ax + ux * v, w.ay + uy * v);
         // A wall joined at that end must not be squeezed to nothing either.
-        if (moveLeavesShortWall(lengths, MIN_WALL)) { applyCornerMove(cm, cm.x0, cm.y0); cancelGeometryEdit(prop); setHint(`That length would leave a joined wall shorter than ${fmtLen(MIN_WALL)}.`); }
+        // Refused: everything goes back bit for bit, with no undo entry.
+        if (moveLeavesShortWall(lengths, MIN_WALL)) { revertGeometryEdit(prop); sayNote(`That length would leave a joined wall shorter than ${fmtLen(MIN_WALL)}; it was left as it was.`); }
         else touch();
       }
       renderInspector();
     };
     insp.querySelector('[data-len=th]').onchange = e => {
-      const v = typedLength(e.target.value);
-      if (!isNaN(v) && v > 0.02 && v < 1) { pushUndo(); w.thickness = v; touch(); }
+      const v = typedLengthIn(e.target.value, 'A wall thickness', 0.02, 1);
+      if (!isNaN(v)) { pushUndo(); w.thickness = v; touch(); }
       renderInspector();
     };
     insp.querySelector('[data-len=h]').onchange = e => {
       if (!e.target.value.trim()) { pushUndo('change wall height'); w.height = null; touch(); renderInspector(); return; }
-      const v = typedLength(e.target.value);
-      if (!isNaN(v) && v > 0.3) { pushUndo('change wall height'); w.height = v; touch(); }
+      const v = typedLengthIn(e.target.value, 'A wall height', 0.3);
+      if (!isNaN(v)) { pushUndo('change wall height'); w.height = v; touch(); }
       renderInspector();
     };
     insp.querySelector('[data-mat]').onchange = e => { pushUndo('change wall material'); w.material = e.target.value || null; touch(); };
@@ -2596,11 +2606,12 @@ function renderInspector() {
       touch(); renderInspector();
     };
     // Widths and heights must be real sizes; a sill may sit at the floor (0).
+    const what = { w: 'A width', h: 'A height', s: 'A sill height' };
     const num = (key, fn, min = 0.05) => {
       const elx = insp.querySelector(`[data-len=${key}]`);
       if (elx) elx.onchange = e => {
-        const v = typedLength(e.target.value);
-        if (!isNaN(v) && (min === 0 ? v >= 0 : v > min)) { pushUndo(); fn(v); touch(); }
+        const v = typedLengthIn(e.target.value, what[key], min, Infinity, min === 0);
+        if (!isNaN(v)) { pushUndo(); fn(v); touch(); }
         renderInspector();
       };
     };
