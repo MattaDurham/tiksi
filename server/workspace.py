@@ -90,6 +90,11 @@ class WorkspaceService:
         # A damaged store must fail visibly, never become an empty workspace.
         self.state = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {'revision': 0, 'data': None, 'assets': {}}
         self.paths = self.state.get('paths', {})
+        # Registered projects whose file is missing or cannot be read: id -> (path, reason).
+        # Only these are left out; every other project keeps loading and saving.
+        self.unavailable = {}
+        # Unreadable registered files and their (mtime, size), so one is not re-read every poll.
+        self.unreadable = {}
         self.has_pictures = bool(picture_refs(self.state.get('data')))
         self.stamps = {}
         self.parts = {}
@@ -144,6 +149,10 @@ class WorkspaceService:
             self.state = json.loads(self.path.read_text(encoding='utf-8'))
             self.paths = self.state['paths']
             self.stamps, self.parts, self.part_assets = {}, {}, {}
+        # A registered file that is not there marks only its own project unavailable. If the
+        # same project turns up at another path the server scans, that path takes its place.
+        unavailable = {i: (name, 'missing') for i, name in self.paths.items() if not Path(name).is_file()}
+        registered = {name: i for i, name in self.paths.items()}
         candidates = set(self.paths.values())
         for directory in (self.projects_dir, *[p for p in self.projects_dir.iterdir() if p.is_dir()]):
             candidates.update(str(p) for p in directory.glob('*.tiksi'))
@@ -151,10 +160,10 @@ class WorkspaceService:
         changed = False
         for name in sorted(candidates):
             path = Path(name)
-            if not path.exists():
-                if name in self.paths.values(): raise WorkspaceError('A project file is missing; restore it before saving', 409)
-                continue
+            if not path.is_file(): continue
             stamp = (path.stat().st_mtime_ns, path.stat().st_size)
+            if name in registered and self.unreadable.get(name) == stamp:
+                unavailable[registered[name]] = (name, 'unreadable'); continue
             if self.stamps.get(name) == stamp: continue
             try:
                 with zipfile.ZipFile(path) as archive:
@@ -165,8 +174,9 @@ class WorkspaceService:
                     if len(props) != 1 or not isinstance(props[0], dict) or not isinstance(props[0].get('id'), str): continue
                     identifier = props[0]['id']
                     if identifier in self.state.get('archived', {}): continue
-                    # Explicitly registered file wins over a duplicate backup in another folder.
-                    if identifier in self.paths and self.paths[identifier] != name: continue
+                    # Explicitly registered file wins over a duplicate backup in another folder,
+                    # unless the registered file is gone: then this copy is where it went.
+                    if identifier in self.paths and self.paths[identifier] != name and unavailable.get(identifier, ('', ''))[1] != 'missing': continue
                     if archive.getinfo('manifest.json').file_size > MAX_JSON: raise WorkspaceError('Project manifest exceeds 32 MB', 413)
                     manifest = json.loads(archive.read('manifest.json'))
                     members = manifest.get('files', [])
@@ -180,9 +190,14 @@ class WorkspaceService:
                             digest, size = self.store_blob(source)
                         assets[item['id']] = {k: v for k, v in item.items() if k in ('name', 'format', 'mime', 'kind')}
                         assets[item['id']].update(hash=digest, size=size)
-            except (zipfile.BadZipFile, KeyError, ValueError) as error:
-                if name in self.paths.values(): raise WorkspaceError('A project file cannot be read; its original has been preserved', 422) from error
+            except (zipfile.BadZipFile, KeyError, ValueError):
+                # The file is left exactly as it is, and only its own project is set aside.
+                if name in registered:
+                    unavailable[registered[name]] = (name, 'unreadable')
+                    self.unreadable[name] = stamp
                 continue
+            self.unreadable.pop(name, None)
+            unavailable.pop(identifier, None)
             current = self.state['data']
             if current is None:
                 current = {**data, 'properties': [], 'projects': [], 'materials': [], 'products': []}
@@ -198,6 +213,13 @@ class WorkspaceService:
             self.parts[identifier] = data
             self.part_assets[identifier] = assets
             self.stamps[name] = stamp
+            changed = True
+        for identifier, (name, _) in unavailable.items():
+            # Read again in full when it comes back, even with the same time and size.
+            self.stamps.pop(name, None)
+        if unavailable != self.unavailable:
+            # Every device sees the change on its next poll: the project leaves, or returns.
+            self.unavailable = unavailable
             changed = True
         if changed:
             self.state['revision'] += 1
@@ -247,10 +269,33 @@ class WorkspaceService:
             entries[identifier] = {'mime': mime, 'kind': 'picture', **(given or {}), 'hash': digest, 'size': path.stat().st_size}
         return entries
 
+    def unavailable_projects(self):
+        """What the page is told about each project left out: its name, the path, and why."""
+        names = {p.get('id'): p.get('name') for p in (self.state.get('data') or {}).get('properties', []) if isinstance(p, dict)}
+        out = []
+        for identifier, (path, reason) in sorted(self.unavailable.items()):
+            name = names.get(identifier) or Path(path).stem
+            if reason == 'missing': message = name + ': the project file is not at ' + path + '. Put it back, or reconnect the drive it is on; the other projects keep saving.'
+            else: message = name + ': the project file at ' + path + ' cannot be read. It has been left exactly as it is; the other projects keep saving.'
+            out.append({'id': identifier, 'name': name, 'path': path, 'reason': reason, 'message': message})
+        return out
+
+    def visible_paths(self):
+        return {i: name for i, name in self.paths.items() if i not in self.unavailable}
+
     def snapshot(self):
         with self.lock:
             self.refresh()
-            return {k: json.loads(json.dumps(self.state.get(k))) for k in ('revision', 'data', 'assets', 'paths')}
+            value = {k: json.loads(json.dumps(self.state.get(k))) for k in ('revision', 'data', 'assets')}
+            value['paths'] = self.visible_paths()
+            data = value['data']
+            if data and self.unavailable:
+                # A project whose file is not readable is left out, so no device can edit a copy
+                # of it that would have nowhere to be saved. It comes back when its file does.
+                data['properties'] = [p for p in data.get('properties', []) if p.get('id') not in self.unavailable]
+                data['projects'] = [p for p in data.get('projects', []) if p.get('propertyId') not in self.unavailable]
+            value['unavailable'] = self.unavailable_projects()
+            return value
 
     @staticmethod
     def check_records(data):
@@ -329,11 +374,21 @@ class WorkspaceService:
                 self.archive_copy(migration, 'browser-migration')
             staged = []
             destinations = {}
+            set_aside = []
             try:
                 for prop in data['properties']:
                     identifier = prop['id']
                     part = slices[identifier]
                     if not isinstance(part, dict) or part.get('properties') != [prop]: raise WorkspaceError('Project file does not match workspace')
+                    if identifier in self.unavailable:
+                        # Its file is missing or unreadable: nothing is written at that path. A
+                        # device that still had the project and changed it gets its copy kept
+                        # in the server's recovery copies; the rest of the save goes ahead.
+                        destinations[identifier] = self.paths[identifier]
+                        relevant = {i: assets[i] for i in self.referenced(part) if i in assets}
+                        if self.parts.get(identifier) != part or self.part_assets.get(identifier) != relevant:
+                            set_aside.append(self.archive_copy({'data': part, 'assets': relevant}, 'unavailable-project'))
+                        continue
                     base = project_file_base(prop.get('name', 'Project'))
                     folder = self.projects_dir / (base + '-' + hashlib.sha256(identifier.encode()).hexdigest()[:8])
                     dest = Path(self.paths.get(identifier) or self.state.get('archived', {}).get(identifier) or self.planned.get(identifier) or str(folder / (base + '.tiksi')))
@@ -352,8 +407,9 @@ class WorkspaceService:
                     # avoiding a full copy of a large scan on every note/geometry edit.
                 # All files are complete before replacing any canonical file. A durable
                 # journal lets startup finish a multi-project commit after interruption.
-                value['paths'] = destinations
-                value['archived'] = {**self.state.get('archived', {}), **{i: name for i, name in self.paths.items() if i not in slices}}
+                # A project left out while its file is unavailable keeps its registered path.
+                value['paths'] = {**{i: name for i, (name, _) in self.unavailable.items()}, **destinations}
+                value['archived'] = {**self.state.get('archived', {}), **{i: name for i, name in self.paths.items() if i not in slices and i not in self.unavailable}}
                 for i in slices: value['archived'].pop(i, None)
                 journal = self.root / 'pending.json'
                 with journal.open('w', encoding='utf-8') as out:
@@ -365,14 +421,20 @@ class WorkspaceService:
                 self.state, self.paths = value, value['paths']
                 for i in destinations: self.planned.pop(i, None)
                 self.has_pictures = bool(pictures)
-                self.parts = slices
-                self.part_assets = {i: {k: assets[k] for k in self.referenced(part) if k in assets} for i, part in slices.items()}
+                held_parts, held_assets = self.parts, self.part_assets
+                self.parts = {i: (held_parts[i] if i in self.unavailable and i in held_parts else part) for i, part in slices.items()}
+                self.part_assets = {i: (held_assets.get(i, {}) if i in self.unavailable and i in held_parts else {k: assets[k] for k in self.referenced(part) if k in assets}) for i, part in slices.items()}
+                saved = value['revision']
+                if any(i in self.unavailable for i in slices):
+                    # One more revision, so the device that sent an unavailable project reads
+                    # the workspace again and sees that project left out, with its message.
+                    self.state = {**value, 'revision': saved + 1}
                 self.persist_catalog()
                 journal.unlink()
             finally:
                 for temp, _, _ in staged:
                     if temp.exists() and not (self.root / 'pending.json').exists(): temp.unlink()
-            return value['revision']
+            return saved
 
     def archive_copy(self, record, label='conflict'):
         """Preserve a declined/uncommitted variant without changing canonical data."""
@@ -418,6 +480,15 @@ class WorkspaceService:
         ids.update(picture_refs(data))
         return ids
 
+    def check_available(self, identifier):
+        with self.lock:
+            self.refresh()
+            if identifier in self.unavailable:
+                found = next(p for p in self.unavailable_projects() if p['id'] == identifier)
+                error = WorkspaceError(found['message'], 409)
+                error.code = 'project-unavailable'
+                raise error
+
     # One definition of a trusted caller, shared with the server's own check (tools/serve.py).
     trusted_peer = staticmethod(trusted_peer)
 
@@ -448,8 +519,8 @@ class WorkspaceService:
                 try: request = json.loads(payload)
                 except (ValueError, UnicodeDecodeError): raise WorkspaceError('Workspace must be JSON')
                 revision = self.commit(request)
-                with self.lock: paths = dict(self.paths)
-                self.reply(h, 200, {'revision': revision, 'paths': paths})
+                with self.lock: paths, unavailable = self.visible_paths(), self.unavailable_projects()
+                self.reply(h, 200, {'revision': revision, 'paths': paths, 'unavailable': unavailable})
             elif path == '/api/workspace/recovery' and h.command == 'POST':
                 payload = self.read(h, MAX_WORKSPACE_REQUEST)
                 try: record = json.loads(payload)
@@ -473,6 +544,7 @@ class WorkspaceService:
                 action = identifier.rsplit('/', 1)[-1]
                 if action in ('state', 'open', 'info'): identifier = identifier.rsplit('/', 1)[0]
                 if identifier not in self.paths: raise WorkspaceError('Project not found', 404)
+                self.check_available(identifier)
                 source = Path(self.paths[identifier])
                 model = source.with_suffix('.skp')
                 state_path = source.parent / ('.' + source.stem + '.mirror.json')
@@ -511,6 +583,7 @@ class WorkspaceService:
                 from server.sketchup_open import at_this_mac
                 identifier = path.removeprefix('/api/workspace/open/')
                 if identifier not in self.paths: raise WorkspaceError('This property has no project folder yet; save it to disk first', 404)
+                self.check_available(identifier)
                 if not at_this_mac(h.client_address[0], h.headers.get('Host')): raise WorkspaceError('Project files open on the Mac running Tiksi; use Tiksi at localhost on that Mac', 422)
                 try: request = json.loads(self.read(h, 64 * 1024))
                 except (ValueError, UnicodeDecodeError): raise WorkspaceError('Open request must be JSON')

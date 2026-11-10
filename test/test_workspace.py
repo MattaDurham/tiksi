@@ -176,11 +176,11 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(status, 422); self.assertIn('Mac running Tiksi', reply['error'])
         self.service.run.assert_not_called()
 
-    def test_missing_assets_and_missing_project_file_fail_without_overwrite(self):
+    def test_missing_assets_fail_without_overwrite(self):
         self.commit(workspace())
         with self.assertRaises(WorkspaceError): self.commit(workspace('Bad'), {'missing': {'hash': 'f' * 64, 'size': 4}})
-        path = Path(self.service.paths['prop-a']); self.assertTrue(path.exists()); path.unlink()
-        with self.assertRaises(WorkspaceError): self.service.snapshot()
+        path = Path(self.service.paths['prop-a']); self.assertTrue(path.exists())
+        with zipfile.ZipFile(path) as archive: self.assertEqual(json.loads(archive.read('workspace.json'))['properties'][0]['name'], 'A')
 
     def test_interrupted_commit_finishes_from_journal_without_losing_projects(self):
         self.commit(workspace())
@@ -220,6 +220,148 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(self.service.active_jobs(), 0)
         handler.client_address = ('192.168.1.2', 1234)
         self.service.dispatch(handler); self.assertEqual(handler.status, 403)
+
+
+def two(a='A', b='B'):
+    data = workspace(a); data['properties'].append({'id': 'prop-b', 'name': b, 'scans': [], 'photos': []})
+    return data
+
+
+def project_name(path):
+    with zipfile.ZipFile(path) as archive: return json.loads(archive.read('workspace.json'))['properties'][0]['name']
+
+
+class UnavailableProjectTests(unittest.TestCase):
+    """One project file moved, renamed, unplugged or damaged leaves the other projects working."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name).resolve()
+        self.service = WorkspaceService(self.root / 'workspace', self.root / 'projects')
+        self.commit(two())
+        self.a, self.b = Path(self.service.paths['prop-a']), Path(self.service.paths['prop-b'])
+        self.away = self.root / 'elsewhere' / 'A.tiksi'; self.away.parent.mkdir()
+
+    def tearDown(self): self.temp.cleanup()
+
+    def commit(self, data, revision=None, service=None, **extra):
+        service = service or self.service
+        revision = service.snapshot()['revision'] if revision is None else revision
+        return service.commit({'revision': revision, 'data': data, 'assets': {}, 'projectData': {p['id']: {**data, 'properties': [p]} for p in data['properties']}, **extra})
+
+    def visible(self, service=None):
+        snapshot = (service or self.service).snapshot()
+        return [p['name'] for p in snapshot['data']['properties']], snapshot
+
+    def test_a_moved_project_file_leaves_the_other_projects_loading_and_saving(self):
+        self.a.rename(self.away)
+        names, snapshot = self.visible()
+        self.assertEqual(names, ['B'], 'only the missing project is left out')
+        self.assertEqual([(u['id'], u['path'], u['reason']) for u in snapshot['unavailable']], [('prop-a', str(self.a), 'missing')])
+        self.assertIn(str(self.a), snapshot['unavailable'][0]['message'], 'the message names the file')
+        self.assertNotIn('prop-a', snapshot['paths'])
+        # A device that has seen the snapshot saves the rest as usual.
+        data = {**snapshot['data'], 'properties': [{**snapshot['data']['properties'][0], 'name': 'B revised'}]}
+        self.commit(data)
+        self.assertEqual(project_name(self.b), 'B revised')
+        self.assertFalse(self.a.exists(), 'nothing is written where the missing file was')
+        self.assertNotIn('prop-a', self.service.state.get('archived', {}), 'a missing project is not treated as deleted')
+        # Put back, it returns with its own contents, and both keep saving.
+        self.away.rename(self.a)
+        names, snapshot = self.visible()
+        self.assertEqual(sorted(names), ['A', 'B revised']); self.assertEqual(snapshot['unavailable'], [])
+        self.commit(two('A again', 'B revised'))
+        self.assertEqual((project_name(self.a), project_name(self.b)), ('A again', 'B revised'))
+
+    def test_the_server_starts_with_a_project_file_missing(self):
+        self.a.unlink()
+        restarted = WorkspaceService(self.root / 'workspace', self.root / 'projects')
+        names, snapshot = self.visible(restarted)
+        self.assertEqual(names, ['B']); self.assertEqual(snapshot['unavailable'][0]['path'], str(self.a))
+        data = {**snapshot['data'], 'properties': [{**snapshot['data']['properties'][0], 'name': 'B after restart'}]}
+        self.commit(data, service=restarted)
+        self.assertEqual(project_name(self.b), 'B after restart')
+        self.assertFalse(self.a.exists())
+
+    def test_the_real_server_starts_and_answers_with_a_project_file_missing(self):
+        import subprocess, sys, urllib.request
+        self.a.unlink()
+        root = Path(__file__).resolve().parent.parent
+        child = subprocess.Popen([sys.executable, str(root / 'tools/serve.py'), '--port', '0', '--state-dir', str(self.root),
+                                  '--projects-dir', str(self.root / 'projects')], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        try:
+            line = child.stdout.readline()
+            self.assertIn('listening on', line, 'the server started')
+            port = line.strip().rsplit(':', 1)[1]
+            def get(path, token=''):
+                request = urllib.request.Request('http://127.0.0.1:' + port + path, headers={'X-Tiksi-Workspace': '1', 'X-Tiksi-Token': token})
+                with urllib.request.urlopen(request, timeout=10) as response: return json.loads(response.read())
+            token = get('/api/workspace/capabilities')['token']
+            snapshot = get('/api/workspace', token)
+            self.assertEqual([p['name'] for p in snapshot['data']['properties']], ['B'])
+            self.assertEqual(snapshot['unavailable'][0]['path'], str(self.a))
+        finally:
+            child.terminate(); child.wait(timeout=10); child.stdout.close()
+
+    def test_the_same_project_found_at_a_new_path_takes_the_old_place(self):
+        moved = self.root / 'projects' / 'Moved here' / 'A renamed.tiksi'; moved.parent.mkdir()
+        self.a.rename(moved)
+        names, snapshot = self.visible()
+        self.assertEqual(sorted(names), ['A', 'B']); self.assertEqual(snapshot['unavailable'], [])
+        self.assertEqual(self.service.paths['prop-a'], str(moved))
+        self.commit(two('A at its new path'))
+        self.assertEqual(project_name(moved), 'A at its new path')
+        self.assertFalse(self.a.exists(), 'the old path is not written again')
+        restarted = WorkspaceService(self.root / 'workspace', self.root / 'projects')
+        self.assertEqual(restarted.snapshot()['paths']['prop-a'], str(moved))
+
+    def test_a_copy_beside_a_registered_file_that_is_still_there_stays_a_copy(self):
+        backup = self.root / 'projects' / 'Backup' / 'A.tiksi'; backup.parent.mkdir()
+        backup.write_bytes(self.a.read_bytes())
+        self.commit(two('A edited'))
+        self.assertEqual(self.service.paths['prop-a'], str(self.a))
+        self.assertEqual((project_name(self.a), project_name(backup)), ('A edited', 'A'))
+
+    def test_a_damaged_project_file_is_left_alone_and_the_rest_keep_saving(self):
+        damaged = b'not a project file any more'
+        self.a.write_bytes(damaged)
+        names, snapshot = self.visible()
+        self.assertEqual(names, ['B']); self.assertEqual(snapshot['unavailable'][0]['reason'], 'unreadable')
+        self.assertIn(str(self.a), snapshot['unavailable'][0]['message'])
+        data = {**snapshot['data'], 'properties': [{**snapshot['data']['properties'][0], 'name': 'B revised'}]}
+        self.commit(data)
+        self.assertEqual(self.a.read_bytes(), damaged, 'the damaged file is never replaced')
+        self.assertEqual(project_name(self.b), 'B revised')
+
+    def test_a_device_that_still_edits_a_missing_project_has_its_copy_kept_and_is_told(self):
+        before = self.service.snapshot()['revision']
+        self.a.unlink()
+        # A device that has not polled since sends both projects, the missing one edited.
+        revision = self.commit(two('A edited offline', 'B revised'), revision=self.service.snapshot()['revision'])
+        self.assertFalse(self.a.exists(), 'nothing is written at the missing path')
+        self.assertEqual(project_name(self.b), 'B revised')
+        kept = list((self.service.root / 'history').glob('unavailable-project-*.tiksi'))
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(project_name(kept[0]), 'A edited offline', 'the edit is kept, not lost')
+        self.assertGreater(self.service.snapshot()['revision'], revision, 'the device reads the workspace again and sees A left out')
+        self.assertGreater(revision, before)
+
+    def test_open_and_mirror_requests_for_a_missing_project_name_the_file(self):
+        self.a.unlink()
+        service = self.service
+        for path, command in (('/api/workspace/open/prop-a', 'POST'), ('/api/workspace/mirror/prop-a/info', 'GET'), ('/api/workspace/mirror/prop-a', 'PUT')):
+            class Handler:
+                client_address = ('127.0.0.1', 1234); connection = Mock()
+                headers = {'Host': 'localhost:8888', 'X-Tiksi-Workspace': '1', 'X-Tiksi-Token': service.token, 'Content-Length': '2', 'X-File-Mtime': '0'}
+                rfile = io.BytesIO(b'{}'); wfile = io.BytesIO()
+                def send_response(self, status): self.status = status
+                def send_header(self, *args): pass
+                def end_headers(self): pass
+            Handler.path, Handler.command = path, command
+            h = Handler(); service.dispatch(h)
+            reply = json.loads(h.wfile.getvalue())
+            self.assertEqual((h.status, reply.get('code')), (409, 'project-unavailable'), path)
+            self.assertIn(str(self.a), reply['error'])
+        self.assertFalse(self.a.with_suffix('.skp').exists())
 
 
 def picture(payload, mime='image/png'):
