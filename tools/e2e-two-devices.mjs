@@ -308,8 +308,8 @@ async function anOlderTabDoesNotSaveOverANewerCopy() {
   await context.close();
 }
 
-// Two devices open the same never-drafted property at the same moment and both write its
-// one-pager draft. That is not two people's work and must not raise a question.
+// Two devices open the same never-drafted property and both write its one-pager draft before
+// either has seen the other's. That is not two people's work and must not raise a question.
 async function twoDraftsAreNotAConflict() {
   step('drafts');
   const maker = await device({ hash: '' });
@@ -320,11 +320,22 @@ async function twoDraftsAreNotAConflict() {
     await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
   });
   await maker.context().close();
-  const [one, two] = await Promise.all([device({ ready: null }), device({ ready: null })]);
-  await untilOnTheMac(c => prop(c, 'prop-drafts').onePager?.draftedAt, 'The drafted one-pager');
-  for (const page of [one, two]) await page.waitForFunction(SAVED, null, { timeout: 30000 });
+  // Device one writes its draft, and its save is held on the way to the Mac.
+  let held, release; const sending = new Promise(r => { held = r; }), go = new Promise(r => { release = r; });
+  const one = await device({ ready: null, before: page => page.route(url + '/api/workspace', async route => {
+    if (route.request().method() !== 'PUT') return route.continue();
+    held(); await go; return route.continue();
+  }) });
+  await sending;
+  await one.waitForTimeout(50);   // the two drafts are written at different moments
+  // Device two opens meanwhile, drafts the same property, and its save arrives first.
+  const two = await device({ ready: null });
+  await untilOnTheMac(c => prop(c, 'prop-drafts').onePager?.draftedAt, 'The second device\'s draft');
+  release();
+  await one.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK' || !!document.querySelector('dialog[open]'), null, { timeout: 30000 });
   await one.waitForTimeout(3000);
   for (const page of [one, two]) assert.equal(await page.locator('dialog[open]').count(), 0, 'two drafts written a moment apart raise no "copies differ" question');
+  await one.waitForFunction(SAVED, null, { timeout: 30000 });
   await one.context().close(); await two.context().close();
 }
 
