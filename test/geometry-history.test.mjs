@@ -57,3 +57,15 @@ test('history stays bounded and does not undo into another project', () => {
   assert.equal(h.restore(p, 'undo'), true); assert.equal(h.restore(p, 'undo'), true);
   assert.equal(h.restore(p, 'undo'), false); assert.equal(p.walls[0].thickness, .2);
 });
+test('both buttons from one copy give the same answers as asking each direction', () => {
+  const p = house(), h = new GeometryHistory();
+  assert.deepEqual(h.states(p), { undo: h.state(p, 'undo'), redo: h.state(p, 'redo') });
+  move(p, h);
+  assert.deepEqual(h.states(p), { undo: h.state(p, 'undo'), redo: h.state(p, 'redo') });
+  assert.equal(h.states(p).undo.available, true); assert.equal(h.states(p).redo.available, false);
+  h.restore(p, 'undo');
+  assert.deepEqual(h.states(p), { undo: h.state(p, 'undo'), redo: h.state(p, 'redo') });
+  assert.equal(h.states(p).redo.available, true);
+  p.walls[1].ax = 9;   // a newer edit to the same wall blocks redo
+  assert.equal(h.states(p).redo.blocked, true);
+});

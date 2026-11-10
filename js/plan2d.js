@@ -585,13 +585,34 @@ function tracePoly(pts) {
 
 // At an L-corner two centreline rectangles leave a notch on the outside; extending each wall
 // by the neighbour's half thickness at a shared endpoint fills it (drawing only, no data change).
-function endExtension(wl, px, py) {
-  let ext = 0;
-  for (const o of curWalls()) {
-    if (o === wl) continue;
-    if ((Math.abs(o.ax - px) < 0.003 && Math.abs(o.ay - py) < 0.003) ||
-        (Math.abs(o.bx - px) < 0.003 && Math.abs(o.by - py) < 0.003)) ext = Math.max(ext, o.thickness / 2);
+// The joints are found once per frame through a grid of wall ends, not by searching every
+// wall again for each wall end.
+const JOIN = 0.003, JOIN_CELL = 0.01;
+let joints = null;   // {frame, walls, ext: Map(wall -> [at a, at b])}
+function wallEndExtensions() {
+  const walls = curWalls();
+  if (joints && joints.frame === frameNo && joints.walls === walls.length) return joints.ext;
+  const grid = new Map(), ext = new Map();
+  const cellKey = (x, y) => Math.floor(x / JOIN_CELL) + ',' + Math.floor(y / JOIN_CELL);
+  for (const w of walls) for (const [x, y] of [[w.ax, w.ay], [w.bx, w.by]]) {
+    const k = cellKey(x, y);
+    let list = grid.get(k);
+    if (!list) grid.set(k, list = []);
+    list.push([w, x, y]);
   }
+  for (const w of walls) {
+    const out = [0, 0];
+    [[w.ax, w.ay], [w.bx, w.by]].forEach(([px, py], end) => {
+      const ci = Math.floor(px / JOIN_CELL), cj = Math.floor(py / JOIN_CELL);
+      for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+        for (const [o, x, y] of grid.get((ci + di) + ',' + (cj + dj)) || []) {
+          if (o !== w && Math.abs(x - px) < JOIN && Math.abs(y - py) < JOIN) out[end] = Math.max(out[end], o.thickness / 2);
+        }
+      }
+    });
+    ext.set(w, out);
+  }
+  joints = { frame: frameNo, walls: walls.length, ext };
   return ext;
 }
 
@@ -600,7 +621,7 @@ function wallPoly(wl) {
   if (L < 0.001) return null;
   const ux = (wl.bx - wl.ax) / L, uy = (wl.by - wl.ay) / L;
   const nx = -uy * wl.thickness / 2, ny = ux * wl.thickness / 2;
-  const ea = endExtension(wl, wl.ax, wl.ay), eb = endExtension(wl, wl.bx, wl.by);
+  const [ea, eb] = wallEndExtensions().get(wl) || [0, 0];
   const ax = wl.ax - ux * ea, ay = wl.ay - uy * ea, bx = wl.bx + ux * eb, by = wl.by + uy * eb;
   return {
     L, ux, uy, nx, ny,
@@ -1026,18 +1047,27 @@ function drawOpening(o) {
 // Numbers come from opening-schedule.js and run over the whole property, so a tag reads the
 // same on screen, in the schedule panel and on the printed sheet.
 function schedule() {
+  // While a drag moves geometry the numbering stays as it was when the drag began (tags follow
+  // their openings live in drawOpeningTags); it is worked out again once, after the drag.
+  if (scheduleCache && drag && drag.moved && scheduleCache.level === lvl().id) return scheduleCache.rows;
   const key = lvl().id + '|' + JSON.stringify([prop.walls, prop.openings, prop.rooms, prop.levels.map(l => [l.id, l.elevation, l.name])]);
-  if (!scheduleCache || scheduleCache.key !== key) scheduleCache = { key, rows: openingSchedule(prop, lvl().id) };
+  if (!scheduleCache || scheduleCache.key !== key) scheduleCache = { key, level: lvl().id, rows: openingSchedule(prop, lvl().id) };
   return scheduleCache.rows;
 }
 function scheduleRow(id) { return numbersOn ? schedule().find(r => r.id === id) || null : null; }
 // A tag on the side of the wall away from the door swing, so it never sits on the leaf.
 function drawOpeningTags() {
+  const live = drag && drag.moved;
+  const openings = live ? new Map(curOpenings().map(o => [o.id, o])) : null;
   for (const row of schedule()) {
-    const w = prop.walls.find(w => w.id === row.wallId);
+    // During a drag the tag sits where its opening is now, not where the schedule last saw it.
+    const p = live ? (openings.get(row.id) && openingPos(openings.get(row.id))) : null;
+    if (live && !p) continue;
+    const w = live ? p.w : prop.walls.find(w => w.id === row.wallId);
     if (!w) continue;
     const off = w.thickness / 2 + 13 / vs.zoom;
-    const s = w2s([row.cx + row.uy * off, row.cy - row.ux * off]);
+    const [cx, cy, ux, uy] = live ? [p.cx, p.cy, p.ux, p.uy] : [row.cx, row.cy, row.ux, row.uy];
+    const s = w2s([cx + uy * off, cy - ux * off]);
     const sel = selection && selection.kind === 'opening' && selection.id === row.id;
     const col = sel ? C.accent : row.type === 'door' ? C.door : C.cyan;
     pill(row.number, s[0], s[1], col, { weight: 700, size: 10.5, bg: sel ? C.tagSelBg : C.tagBg, stroke: hexA(col, 0.9) });
@@ -1252,9 +1282,8 @@ function dimString(a, b, color, opts) {
   pill(text, (D1[0] + D2[0]) / 2, (D1[1] + D2[1]) / 2, color, { size: opts.size || 10 });
 }
 
-function dimSideFor(wl) {
+function dimSideFor(wl, b = bounds()) {
   // Put the string on the side of the wall facing away from the plan's centre.
-  const b = bounds();
   const cx = (b.minX + b.maxX) / 2, cy = (b.minY + b.maxY) / 2;
   const mx = (wl.ax + wl.bx) / 2, my = (wl.ay + wl.by) / 2;
   const L = Math.hypot(wl.bx - wl.ax, wl.by - wl.ay) || 1;
@@ -1263,6 +1292,7 @@ function dimSideFor(wl) {
 }
 
 function drawDims() {
+  let b = null;   // the plan's bounds, worked out once per frame for every string
   for (const wl of curWalls()) {
     const sel = selection && selection.kind === 'wall' && selection.id === wl.id;
     if (!sel && !dimsOn) continue;
@@ -1270,7 +1300,7 @@ function drawDims() {
     if (L < 0.01) continue;
     const gapPx = wl.thickness / 2 * vs.zoom + 5;
     dimString([wl.ax, wl.ay], [wl.bx, wl.by], sel ? C.accent : C.dimLine, {
-      side: dimSideFor(wl), gap: gapPx, offset: gapPx + 18, size: sel ? 10.5 : 9.5,
+      side: dimSideFor(wl, b || (b = bounds())), gap: gapPx, offset: gapPx + 18, size: sel ? 10.5 : 9.5,
     });
   }
 }

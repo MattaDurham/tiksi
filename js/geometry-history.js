@@ -27,21 +27,27 @@ export class GeometryHistory {
     if (this.undo.length > this.limit) this.undo.shift();
     this.redo.length = 0;
   }
-  candidate(prop, direction) {
+  // `current` lets one copy of the property's geometry serve both directions.
+  candidate(prop, direction, current = null) {
     const entry = this[direction].at(-1);
     if (!entry || entry.before.data.id !== prop.id) return null;
     const [base, target] = direction === 'undo' ? [entry.after, entry.before] : [entry.before, entry.after];
-    const current = geometrySnapshot(prop).data;
+    current = current || geometrySnapshot(prop).data;
     const result = mergeShared(base.data, target.data, current);
     const walls = new Set(result.value.walls.map(w => w.id)), levels = new Set(result.value.levels.map(l => l.id));
     for (const opening of result.value.openings) if (!walls.has(opening.wallId) && current.walls.some(w => w.id === opening.wallId)) result.conflicts.push('openings.' + opening.id);
     for (const record of [...result.value.walls, ...result.value.rooms, ...(result.value.fixtures || [])]) if (record.level && !levels.has(record.level) && current.levels.some(l => l.id === record.level)) result.conflicts.push('levels.' + record.level);
     return { entry, target, ...result };
   }
-  state(prop, direction) {
-    const result = this.candidate(prop, direction);
+  state(prop, direction, current = null) {
+    const result = this.candidate(prop, direction, current);
     return { available: !!result && !result.conflicts.length, label: result?.entry.label || '',
       blocked: !!result?.conflicts.length };
+  }
+  // Both buttons from a single copy of the geometry (none when both lists are empty).
+  states(prop) {
+    const current = this.undo.length || this.redo.length ? geometrySnapshot(prop).data : null;
+    return { undo: this.state(prop, 'undo', current), redo: this.state(prop, 'redo', current) };
   }
   restore(prop, direction) {
     this.commit(prop);
