@@ -1,6 +1,5 @@
 """Lifecycle and landing guards against disposable repositories, never real main."""
 import importlib.util
-import json
 import os
 from pathlib import Path
 import shutil
