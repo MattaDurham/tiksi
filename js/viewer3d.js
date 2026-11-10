@@ -35,7 +35,7 @@ import { chooseScanPlacement } from './scanplace.js';
 import { proposeFixtures, openFixtureReview, fixtureInspectorHtml, bindFixtureInspector, addFixtureHtml, addFixture } from './fixtures-ui.js';
 import { openNewPropertyDialog } from './newproperty.js';
 import { materialSelectHtml } from './materials.js';
-import { pendingTextureJobs, setTextureQuality, setTextureLimits } from './textures.js';
+import { pendingTextureJobs, setTextureQuality, setTextureLimits, beginTextureBuild, setTextureUse } from './textures.js';
 import { qualityProfile, stillDimensions, effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, touchDevice, QUALITY_NAMES } from './render-quality.js';
 import { icon } from './icons.js';
 import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
@@ -509,7 +509,20 @@ function configureRenderQuality(name, forExport = false) {
 }
 
 // ---------- model ----------
+// The colour maps on the surfaces in the scene now (walls and floors, the ground, imported
+// models): the texture store never frees a set that is on one of them (textures.js).
+function texturesOnScreen() {
+  const out = new Set();
+  const visit = o => {
+    if (!o.isMesh || !o.material) return;
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m && m.map) out.add(m.map.source);
+  };
+  for (const root of [modelGroup, groundGroup, scanRoot]) if (root) root.traverse(visit);
+  return out;
+}
+
 function rebuildModel() {
+  beginTextureBuild();   // the sets asked for from here on are this model's
   if (modelGroup) { scene.remove(modelGroup); disposeBuilt(modelGroup); }
   modelGroup = buildPropertyGroup(prop, { xray, xrayOpacity: prop.env.xrayOpacity, hiddenLevels: hiddenLevels() });
   modelGroup.visible = !prop.modelSourceId;
@@ -4360,6 +4373,7 @@ function openModel(root) {
   ensureDefaults(prop);
   section = sectionsByProp[prop.id] || (sectionsByProp[prop.id] = { on: false, planes: [], active: null });
   applyTextureLimits();
+  setTextureUse(texturesOnScreen);
   root.innerHTML = `
     <div class="editor-layout v-layout">
       <div class="tool-col"></div>
@@ -4554,6 +4568,7 @@ export function unmount() {
   // mount() bails out before building anything when there is no property; there is nothing to tear down.
   for (const k of Object.keys(notices)) hideNotice(k);
   appliedQuality = null;
+  setTextureUse(null);
   if (!scene) { el = wrapEl = inspEl = null; hud = {}; return; }
   window.removeEventListener('keydown', onKeyDown);
   window.removeEventListener('keyup', onKeyUp);
