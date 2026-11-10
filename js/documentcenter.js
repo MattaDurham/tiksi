@@ -26,7 +26,11 @@ import { openOnePagerEditor } from './one-pager-dialog.js';
 import { onePagerStatus, latestVersion } from './one-pager.js';
 
 const PT = 72;
-const EXPORT_DPI = 150;
+const EXPORT_DPI = 150;            // model renders and pictures inside views
+const SHEET_DPI = 300;             // the sheet itself: 6.5-point dimensions and schedules stay sharp
+const SHEET_MAX_PX = 40e6;         // a 36 x 24 in sheet would be 78 million pixels at 300 dpi
+// The sheet's resolution: 300 dpi, or less on the largest paper so the page fits in memory.
+export function sheetDpi(paper) { return Math.min(SHEET_DPI, Math.floor(Math.sqrt(SHEET_MAX_PX / (paper.w * paper.h)))); }
 
 let el = null, prop = null;
 let setId = '', sheetId = '', selectedId = '', adjustId = '';
@@ -749,14 +753,21 @@ async function exportPdf(saveToProject) {
     if (saveToProject) {
       const n = (set.revisions[set.revisions.length - 1]?.n || 0) + 1;
       const name = set.name + ' - rev ' + n + ' - ' + date + '.pdf';
-      // The title block of the saved copy shows the revision it becomes.
-      set.revisions.push({ n, date, note: 'Issued', documentId: '' });
-      let file;
-      try { file = new File([await setPdf(set, k => setStatus('Rendering sheet ' + k + ' of ' + set.sheets.length + ' for revision ' + n + '…'))], name, { type: 'application/pdf' }); }
-      catch (e) { set.revisions.pop(); throw e; }
-      const doc = await addDocumentFromFile(prop, file);
+      // The title block of the saved copy shows the revision it becomes. If drawing or storing
+      // the file fails, the revision goes again: no revision without its file.
+      const rev = { n, date, note: 'Issued', documentId: '' };
+      set.revisions.push(rev);
+      let doc;
+      try {
+        const file = new File([await setPdf(set, k => setStatus('Rendering sheet ' + k + ' of ' + set.sheets.length + ' for revision ' + n + '…'))], name, { type: 'application/pdf' });
+        doc = await addDocumentFromFile(prop, file);
+      } catch (e) {
+        const i = set.revisions.indexOf(rev);
+        if (i >= 0) set.revisions.splice(i, 1);
+        throw e;
+      }
       doc.notes = 'Drawing set "' + set.name + '", revision ' + n + ', saved ' + date + ' from DOCUMENTS (' + set.sheets.length + ' sheet' + (set.sheets.length === 1 ? '' : 's') + ').';
-      set.revisions[set.revisions.length - 1].documentId = doc.id;
+      rev.documentId = doc.id;
       touch();
       setStatus('Saved ' + name + ' to this property\'s documents.');
       renderLists(); renderInspector(); drawSheet();
@@ -773,7 +784,7 @@ async function exportPdf(saveToProject) {
   }
 }
 
-// Every sheet of a set rendered at EXPORT_DPI into one PDF.
+// Every sheet of a set into one PDF: the sheet at sheetDpi, the renders inside it at EXPORT_DPI.
 export async function setPdf(set, progress) {
   const paper = paperOf(set);
   const pages = [];
@@ -788,7 +799,7 @@ export async function setPdf(set, progress) {
       catch (e) { imgs.set(v.id, { href: '', error: 'Not rendered: ' + (e.message || e) }); }
     }
     const svg = sheetSvg(prop, set, sheet, imgs, { screen: false, index: i, count: set.sheets.length, date });
-    const W = Math.round(paper.w * EXPORT_DPI), H = Math.round(paper.h * EXPORT_DPI);
+    const dpi = sheetDpi(paper), W = Math.round(paper.w * dpi), H = Math.round(paper.h * dpi);
     const img = new Image();
     img.decoding = 'async';
     const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml' }));

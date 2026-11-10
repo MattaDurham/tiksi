@@ -139,6 +139,19 @@ try {
   await page.locator('[data-del]').click();
   check((await vps()).length === 5, 'REMOVE takes the text view off the sheet');
 
+  // A save whose file cannot be stored leaves no revision behind.
+  await page.evaluate(() => {
+    const put = IDBObjectStore.prototype.put;
+    window.__restorePut = () => { IDBObjectStore.prototype.put = put; };
+    IDBObjectStore.prototype.put = function (...args) { if (this.name === 'files') throw new DOMException('Synthetic full disk', 'QuotaExceededError'); return put.apply(this, args); };
+  });
+  await page.locator('[data-save]').click();
+  await page.waitForFunction(() => /could not be made/.test(document.querySelector('[data-status]')?.textContent || ''), null, { timeout: 120000 });
+  await page.evaluate(() => window.__restorePut());
+  const afterFail = await prop('return { revs: p.docSets[0].revisions.length, docs: p.photos.filter(x => x.kind === "document").length }');
+  check(afterFail.revs === 0 && afterFail.docs === 0 && /Synthetic full disk/.test(await page.locator('[data-status]').textContent()), 'a PDF that cannot be stored leaves no revision without a file, and says why');
+  check(/None saved yet/.test(await page.locator('.dc-paper svg').innerHTML()), 'the title block still lists no revision');
+
   // Save a PDF of the set into the property as revision 1.
   await page.locator('[data-save]').click();
   await page.waitForFunction(() => /Saved/.test(document.querySelector('[data-status]')?.textContent || ''), null, { timeout: 120000 });
@@ -146,10 +159,11 @@ try {
     const s = await import('/js/store.js'); const { photoBytes } = await import('/js/photos-store.js');
     const p = s.activeProperty(); const r = p.docSets[0].revisions[0]; const d = p.photos.find(x => x.id === r.documentId);
     const b = new Uint8Array(await photoBytes(d.id)); const t = new TextDecoder('latin1').decode(b);
-    return { n: r.n, name: d.name, mime: d.mime, pages: d.pageCount, head: t.slice(0, 8), count: (t.match(/\/Type \/Page /g) || []).length };
+    return { n: r.n, name: d.name, mime: d.mime, pages: d.pageCount, head: t.slice(0, 8), count: (t.match(/\/Type \/Page /g) || []).length, widths: [...t.matchAll(/\/Width (\d+)/g)].map(m => +m[1]) };
   });
   check(info.n === 1 && info.mime === 'application/pdf' && /rev 1/.test(info.name), 'SAVE PDF TO PROJECT stores revision 1 as a PDF document (' + info.name + ')');
   check(info.head === '%PDF-1.4' && info.count === 2 && info.pages === 2, 'the PDF has one page per sheet (' + info.count + ')');
+  check(info.widths.length === 2 && info.widths.every(w => w === 17 * 300), 'each tabloid sheet is drawn at 300 dpi, so small dimensions stay sharp (' + info.widths.join(', ') + ' px wide)');
   check(/>1 {3}\d{4}-\d{2}-\d{2} {3}Issued</.test(await page.locator('.dc-paper svg').innerHTML()), 'the title block lists revision 1');
   await page.locator('[data-doc]').first().click();
   await page.locator('.dc-viewer-page img').waitFor();
