@@ -1,4 +1,5 @@
 """The guard checks staged bytes and names, withholding private matches."""
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -14,9 +15,16 @@ class PrivateGuardTests(unittest.TestCase):
     def tearDown(self): self.temp.cleanup()
     def git(self, *args):
         subprocess.run(['git', *args], cwd=self.root, check=True, capture_output=True)
-    def guard(self, *args, cwd=None):
+    def guard(self, *args, cwd=None, github=False):
+        env = {k: v for k, v in os.environ.items() if k != 'GITHUB_ACTIONS'}
+        if github: env['GITHUB_ACTIONS'] = 'true'
         return subprocess.run(['python3', str(ROOT / 'scripts/check-private.py'), *(args or ['--staged'])],
-                              cwd=cwd or self.root, capture_output=True, text=True, encoding='utf-8')
+                              cwd=cwd or self.root, capture_output=True, text=True, encoding='utf-8', env=env)
+    def word_list(self, text='Synthetic Lane\n'):
+        path = Path(subprocess.check_output(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                                            cwd=self.root, text=True).strip()) / 'tiksi-private-patterns'
+        path.write_text(text, encoding='utf-8')
+        return path
     def commit(self, message, cwd=None):
         subprocess.run(['git', '-c', 'user.name=Synthetic Test', '-c', 'user.email=test@example.com',
                         'commit', '--allow-empty', '-qm', message], cwd=cwd or self.root, check=True)
@@ -93,5 +101,40 @@ class PrivateGuardTests(unittest.TestCase):
         self.assertNotEqual(self.guard('--staged', cwd=copy).returncode, 0)
         self.commit('A Synthetic Lane fix', cwd=copy)
         self.assertNotEqual(self.guard('--push', 'codex/feature', cwd=copy).returncode, 0)
+
+    def test_no_word_list_fails_the_tree_and_push_checks_on_this_mac_only(self):
+        self.stage('app.js', 'export const title = "Tiksi";')
+        self.commit('Root')
+        for args in (['--tree'], ['--push', 'main', '--base', 'main']):
+            result = self.guard(*args)
+            self.assertNotEqual(result.returncode, 0, args)
+            self.assertIn('no private word list was found', result.stderr)
+            self.assertIn('tiksi-private-patterns', result.stderr)
+            # GitHub's machines have no private list by design: noted, not failed.
+            online = self.guard(*args, github=True)
+            self.assertEqual(online.returncode, 0, online.stderr)
+            self.assertIn('Note: no private word list was found', online.stderr)
+        self.assertEqual(self.guard('--staged').returncode, 0)
+        listed = self.word_list('# only a comment\n')
+        result = self.guard('--tree')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('holds no words', result.stderr)
+        listed.write_text('Synthetic Lane\n', encoding='utf-8')
+        self.assertEqual(self.guard('--tree').returncode, 0)
+    def test_file_contents_and_paths_match_however_written(self):
+        self.word_list()
+        self.stage('notes.js', 'export const where = "12 SYNTHETIC-lane";')
+        result = self.guard('--staged')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn('SYNTHETIC', result.stderr)
+        self.git('rm', '-q', '--cached', 'notes.js')
+        self.stage('plans/synthetic_lane_floor.md', 'plain text')
+        result = self.guard('--staged')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('a file path names a private word', result.stderr)
+        self.assertNotIn('synthetic_lane', result.stderr)
+        self.git('rm', '-q', '--cached', 'plans/synthetic_lane_floor.md')
+        self.stage('plans/kitchen.md', 'synthetically plain')
+        self.assertEqual(self.guard('--staged').returncode, 0)
 
 if __name__ == '__main__': unittest.main()
