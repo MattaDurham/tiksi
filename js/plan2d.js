@@ -2476,7 +2476,7 @@ function renderInspector() {
     insp.querySelector('[data-len=elev]').onchange = e => {
       const v = parseLen(e.target.value, 'feet');
       // Any finite elevation is fair (a basement sits below zero); the stack re-sorts around it.
-      if (!isNaN(v)) { pushUndo('change level elevation'); L.elevation = Math.round(v * 1000) / 1000; sortLevels(prop); touch(); renderToolCol(); }
+      if (!isNaN(v)) { pushUndo('change level elevation'); L.elevation = v; sortLevels(prop); touch(); renderToolCol(); }
       renderInspector();
     };
     insp.querySelector('[data-len=lvlHeight]').onchange = e => {
@@ -2523,10 +2523,11 @@ function renderInspector() {
       if (!isNaN(v) && v > 0.05) {
         pushUndo();
         // The b end moves along the wall like a corner drag: walls joined there and the floor
-        // corners on it come along.
+        // corners on it come along, all to the same exact point. A typed length is stored as
+        // typed; the 5 mm grid is for drags only.
         const ux = (w.bx - w.ax) / L, uy = (w.by - w.ay) / L;
         const cm = planCornerMove(w, 'b', curWalls(), curRooms(), curOpenings()), lengths = movedWallLengths(cm);
-        applyCornerMove(cm, rnd(w.ax + ux * v), rnd(w.ay + uy * v));
+        applyCornerMove(cm, w.ax + ux * v, w.ay + uy * v);
         // A wall joined at that end must not be squeezed to nothing either.
         if (moveLeavesShortWall(lengths, MIN_WALL)) { applyCornerMove(cm, cm.x0, cm.y0); cancelGeometryEdit(prop); setHint(`That length would leave a joined wall shorter than ${fmtLen(MIN_WALL)}.`); }
         else touch();
