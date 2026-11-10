@@ -43,7 +43,8 @@ function scheduleRows(prop, v) {
   const d = ws.data;
   if (v.source === 'rooms') {
     const lv = new Map((prop.levels || []).map(l => [l.id, l.name]));
-    return { head: ['Room', 'Level', 'Area', 'Floor'], widths: [0.34, 0.22, 0.16, 0.28],
+    // Room corners sit on wall centre lines, so the area is to the centre lines and says so.
+    return { head: ['Room', 'Level', 'Area to wall CL', 'Floor'], widths: [0.3, 0.2, 0.22, 0.28],
       rows: (prop.rooms || []).filter(r => !v.levelId || r.level === v.levelId).map(r => {
         const mat = d.materials.find(m => m.id === r.material);
         return [r.name || 'Room', lv.get(r.level) || '', fmtArea(Math.abs(polyArea(r.pts || []))), mat ? mat.name : ''];
@@ -90,10 +91,19 @@ function scheduleSvg(prop, v) {
   return out.join('');
 }
 
-function textSvg(v) {
-  const W = v.w * PT;
+// Text that does not fit its box ends with a red note, as a schedule's extra rows do.
+export function textSvg(v) {
+  const W = v.w * PT, H = v.h * PT;
   const size = v.fontSize, lh = size * 1.3;
-  return wrapText(v.text, size, W).map((l, i) => text(0, size + i * lh, l, { size, weight: i === 0 && /^[A-Z0-9 ,.'-]{3,}$/.test(l) ? 700 : 400 })).join('');
+  const all = wrapText(v.text, size, W);
+  const fits = Math.max(0, Math.floor((H - size) / lh) + 1);
+  const shown = all.length > fits ? all.slice(0, Math.max(0, fits - 1)) : all;
+  const out = shown.map((l, i) => text(0, size + i * lh, l, { size, weight: i === 0 && /^[A-Z0-9 ,.'-]{3,}$/.test(l) ? 700 : 400 }));
+  if (shown.length < all.length) {
+    const more = all.length - shown.length;
+    out.push(text(0, Math.min(H - 1, size + shown.length * lh), more + ' more line' + (more === 1 ? '' : 's') + ': make this view taller', { size: Math.min(size, 6), fill: '#a33' }));
+  }
+  return out.join('');
 }
 
 // ---------- the sheet ----------
@@ -107,7 +117,10 @@ function titleBlock(prop, set, sheet, paper, opts) {
   const block = (label, value, size = 8, weight = 400) => {
     out.push(text(X + pad, cy + 6, label.toUpperCase(), { size: 5.5, weight: 700, fill: '#666' }));
     cy += 9;
-    for (const l of wrapText(value || '-', size, Wd - 2 * pad).slice(0, 4)) { cy += size + 1.5; out.push(text(X + pad, cy, l, { size, weight })); }
+    // Four lines at most; longer text says how much is left out instead of stopping silently.
+    const all = wrapText(value || '-', size, Wd - 2 * pad), shown = all.length > 4 ? all.slice(0, 3) : all;
+    for (const l of shown) { cy += size + 1.5; out.push(text(X + pad, cy, l, { size, weight })); }
+    if (shown.length < all.length) { cy += 7.5; out.push(text(X + pad, cy, (all.length - shown.length) + ' more lines not shown: shorten this', { size: 6, fill: '#a33' })); }
     cy += 6;
     out.push(`<line x1="${n2(X)}" y1="${n2(cy)}" x2="${n2(X + Wd)}" y2="${n2(cy)}" stroke="#111" stroke-width="0.5"/>`);
     cy += 4;
@@ -138,8 +151,12 @@ function titleBlock(prop, set, sheet, paper, opts) {
 }
 
 function label(v) {
-  if (!v.showTitle || v.kind === 'text') return '';
+  if (v.kind === 'text') return '';
   const y = v.h * PT + 12;
+  // A plan's wall dimensions and room areas are measured on wall centre lines: say so, also
+  // when the view's title is hidden.
+  const cl = v.kind === 'plan' && v.layers && (v.layers.dims || v.layers.rooms) ? (v.layers.dims && v.layers.rooms ? 'DIMENSIONS AND AREAS' : v.layers.dims ? 'DIMENSIONS' : 'AREAS') + ' TO WALL CENTRE LINES' : '';
+  if (!v.showTitle) return cl ? `<g>${text(0, y - 5, cl, { size: 5, fill: '#333' })}</g>` : '';
   const sc = ['plan', 'section', 'elevation'].includes(v.kind) ? 'SCALE: ' + scaleLabel(v.scale) : '';
   const t = v.title.toUpperCase();
   const tw = Math.min(textWidth(t, 8) + 4, v.w * PT - 22);
@@ -148,7 +165,18 @@ function label(v) {
     ${text(22, y + 1, fit(t, 8, v.w * PT - 22), { size: 8, weight: 700 })}
     <line x1="22" y1="${n2(y + 4)}" x2="${n2(22 + tw)}" y2="${n2(y + 4)}" stroke="#111" stroke-width="0.8"/>
     ${sc ? text(22, y + 12, sc, { size: 6, fill: '#333' }) : ''}
+    ${cl ? text(22, y + 19, cl, { size: 5, fill: '#333' }) : ''}
   </g>`;
+}
+
+// A picture placed in a view: a rendered or stored image (data:image/…, blob:), a web address,
+// or a path on this app. Anything else (javascript:, a data: page) is left out.
+export function safeImageHref(href) {
+  const s = String(href || '').trim();
+  if (!s) return '';
+  if (/^data:image\/(?:png|jpeg|jpg|gif|webp|svg\+xml|avif|bmp)[;,]/i.test(s) || /^blob:/i.test(s)) return s;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return /^https?:/i.test(s) ? s : '';
+  return s.startsWith('//') ? '' : s;
 }
 
 // images: Map vpId -> { href, aspect } for model renders and photo/document pages.
@@ -171,7 +199,8 @@ export function sheetSvg(prop, set, sheet, images, opts = {}) {
     if (v.kind === 'schedule') body = scheduleSvg(prop, v);
     else if (v.kind === 'text') body = textSvg(v);
     else {
-      if (img && img.href) body += `<image href="${img.href}" x="0" y="0" width="${n2(vw)}" height="${n2(vh)}" preserveAspectRatio="${v.kind === 'image' ? 'xMidYMid meet' : 'none'}"/>`;
+      const href = img && safeImageHref(img.href);
+      if (href) body += `<image href="${esc(href)}" x="0" y="0" width="${n2(vw)}" height="${n2(vh)}" preserveAspectRatio="${v.kind === 'image' ? 'xMidYMid meet' : 'none'}"/>`;
       if (v.kind === 'plan') body += planVectorSvg(prop, v) + planMarksSvg(v, all.filter(o => o.kind === 'section'));
       const problem = viewportProblems(prop, v) || (img && img.error) || '';
       if (!img && opts.screen && v.kind !== 'plan') body += text(vw / 2, vh / 2, 'Rendering…', { size: 8, anchor: 'middle', fill: '#999' });

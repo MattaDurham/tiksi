@@ -1172,7 +1172,7 @@ function selectOpening(id) {
 function editScheduleSize(id, key, inp) {
   const o = prop.openings.find(o => o.id === id), row = schedule().find(r => r.id === id);
   if (!o || !row) return renderSchedule();
-  const v = parseLen(inp.value);
+  const v = parseLen(inp.value, 'feet');
   if (!(v >= MIN_SIZE)) {
     inp.value = fmtLen(o[key]);
     setHint(`Could not read that ${key} for ${row.number}. Try 32", 2'8" or 0.81m.`);
@@ -2418,7 +2418,7 @@ function renderInspector() {
     const apply = () => {
       const pl = curPlan();
       if (!pl) { calib = null; renderInspector(); return; }   // underlay removed while the form was open
-      const real = parseLen(input.value);
+      const real = parseLen(input.value, 'feet');
       if (isNaN(real) || real <= 0) { alert('Could not parse that distance. Try 12\'6", 150", or 3.8m.'); return; }
       const ratio = real / measured;
       if (!(measured > 0) || !Number.isFinite(ratio) || !(Number.isFinite(pl.mPerPx * ratio) && pl.mPerPx * ratio > 0)) { calib = null; renderInspector(); setHint('Those two points are too close together to set a scale. Click two points further apart.'); return; }
@@ -2474,13 +2474,13 @@ function renderInspector() {
       touch(); renderToolCol(); updateLevelBadge();
     };
     insp.querySelector('[data-len=elev]').onchange = e => {
-      const v = parseLen(e.target.value);
+      const v = parseLen(e.target.value, 'feet');
       // Any finite elevation is fair (a basement sits below zero); the stack re-sorts around it.
       if (!isNaN(v)) { pushUndo('change level elevation'); L.elevation = Math.round(v * 1000) / 1000; sortLevels(prop); touch(); renderToolCol(); }
       renderInspector();
     };
     insp.querySelector('[data-len=lvlHeight]').onchange = e => {
-      const v = parseLen(e.target.value);
+      const v = parseLen(e.target.value, 'feet');
       if (!isNaN(v) && v > 0.5) { pushUndo('change level height'); L.height = v; touch(); }
       renderInspector();
     };
@@ -2517,7 +2517,7 @@ function renderInspector() {
       <div class="stat-line"><span>Openings</span><b>${prop.openings.filter(o => o.wallId === w.id).length}</b></div>
       <button class="btn danger" data-del>${icon('trash')}DELETE WALL</button>`;
     insp.querySelector('[data-len=len]').onchange = e => {
-      const v = parseLen(e.target.value);
+      const v = parseLen(e.target.value, 'feet');
       // A wall with no length has no direction to grow along (left over from older files).
       if (!(L >= 0.001)) { setHint('This wall has no length, so it has no direction to grow along. Delete it and draw it again.'); renderInspector(); return; }
       if (!isNaN(v) && v > 0.05) {
@@ -2534,13 +2534,13 @@ function renderInspector() {
       renderInspector();
     };
     insp.querySelector('[data-len=th]').onchange = e => {
-      const v = parseLen(e.target.value);
+      const v = parseLen(e.target.value, 'feet');
       if (!isNaN(v) && v > 0.02 && v < 1) { pushUndo(); w.thickness = v; touch(); }
       renderInspector();
     };
     insp.querySelector('[data-len=h]').onchange = e => {
       if (!e.target.value.trim()) { pushUndo('change wall height'); w.height = null; touch(); renderInspector(); return; }
-      const v = parseLen(e.target.value);
+      const v = parseLen(e.target.value, 'feet');
       if (!isNaN(v) && v > 0.3) { pushUndo('change wall height'); w.height = v; touch(); }
       renderInspector();
     };
@@ -2582,7 +2582,7 @@ function renderInspector() {
     const num = (key, fn, min = 0.05) => {
       const elx = insp.querySelector(`[data-len=${key}]`);
       if (elx) elx.onchange = e => {
-        const v = parseLen(e.target.value);
+        const v = parseLen(e.target.value, 'feet');
         if (!isNaN(v) && (min === 0 ? v >= 0 : v > min)) { pushUndo(); fn(v); touch(); }
         renderInspector();
       };
