@@ -96,7 +96,8 @@ export function checkerPng(size = 16, c1 = [150, 102, 60], c2 = [118, 78, 44]) {
 //   as the converter writes it, unless `sharedMaterial` is set)
 // nodes: [{ name, mesh, translation, rotation, scale, tag, extras, children }] under one root
 //   node; `children` nest (component instances over shared meshes, as the converter writes them)
-export function writeGlb({ looks, meshes, nodes, rootName = 'SketchUp model' }) {
+// texture: PNG bytes for the textured looks (default: a 16 pixel checker)
+export function writeGlb({ looks, meshes, nodes, rootName = 'SketchUp model', texture = null }) {
   const chunks = [];
   let byteLength = 0;
   const bufferViews = [], accessors = [];
@@ -170,7 +171,7 @@ export function writeGlb({ looks, meshes, nodes, rootName = 'SketchUp model' }) 
   };
   if (usesUnlit) json.extensionsUsed = ['KHR_materials_unlit'];
   if (usesTexture) {
-    const png = checkerPng();
+    const png = texture || checkerPng();
     json.images = [{ bufferView: view(png), mimeType: 'image/png' }];
     json.samplers = [{ magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 }];
     json.textures = [{ sampler: 0, source: 0 }];

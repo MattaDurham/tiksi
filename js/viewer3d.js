@@ -4463,6 +4463,19 @@ export function viewerIdleState() {
     graphics: !contextLost,
   };
 }
+// For the browser checks: the quality this device draws at and what was set from it, and where
+// each scan record stands ('hidden' is a scan that has not been loaded because it is not shown).
+export function qualityState() {
+  if (!scene || !composer || !sun || !prop) return null;
+  return {
+    quality: quality(), phone: fieldLayout(), shared: prop.env.quality, shadowMap: sun.shadow.mapSize.x, smoothingSamples: composer.renderTarget1.samples,
+    shading: aoWanted, glow: passes.bloom.enabled, pixelRatio: renderer.getPixelRatio(), limits: memoryLimits(),
+  };
+}
+export function scanStates() {
+  if (!scene || !prop) return null;
+  return Object.fromEntries(prop.scans.map(s => [s.id, { state: scanObjs[s.id] ? 'ready' : (scanState[s.id] || 'loading'), label: scanObjs[s.id] ? scanStats(scanObjs[s.id]).label : '' }]));
+}
 // Whether MODEL currently draws this part of a loaded model (tag key from tags.js); null when the
 // key names no loaded part. Grouped parts answer for their proxy, others for their own mesh.
 export function partDrawn(key) {
