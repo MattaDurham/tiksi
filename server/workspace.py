@@ -152,6 +152,9 @@ DAILY_DAYS = 90
 # A stored original nothing refers to is removed only after this long, so an upload whose save
 # has not arrived yet (a phone offline for a while) still finds it.
 BLOB_GRACE = 30 * 86400
+# Smaller copies of stored pictures, made on the Mac for a phone (longest side in pixels).
+PREVIEW_SIZES = (256, 512, 1024, 2048)
+PREVIEW_WORK = threading.BoundedSemaphore(2)
 # Save ids the Mac remembers having committed (newest kept), with the revision each commit made.
 KEEP_SAVE_IDS = 2000
 # An original sent in pieces: each piece at most this big, and an upload left unfinished this long is dropped.
@@ -514,12 +517,48 @@ class WorkspaceService:
                     if now - path.stat().st_mtime < BLOB_GRACE: continue
                     path.unlink(); removed += 1
                 except OSError: continue
+        previews = self.root / 'previews'
+        for path in (previews.iterdir() if previews.is_dir() else ()):
+            if not (self.root / 'blobs' / path.name.split('-')[0]).is_file(): path.unlink(missing_ok=True)
         for path in (self.root / 'uploads').iterdir():
             try:
                 if now - path.stat().st_mtime >= UPLOAD_KEEP: path.unlink()
             except OSError: continue
         if removed: log.info('Removed %d stored original(s) that nothing refers to any more.', removed)
         return removed
+
+    def preview(self, digest, longest):
+        """A JPEG copy of a stored picture, at most longest pixels on its longest side, made once
+        with the Mac's own image tool (sips) and kept. Returns the copy's path, or the original's
+        when the picture is no bigger than that. Raises WorkspaceError 415 when no copy can be
+        made (not a picture, or no image tool), so the page falls back to the original."""
+        source = self.root / 'blobs' / digest
+        if not source.is_file(): raise WorkspaceError('Asset not found', 404)
+        folder = self.root / 'previews'; folder.mkdir(exist_ok=True)
+        made = folder / (digest + '-' + str(longest) + '.jpg')
+        same = folder / (digest + '-' + str(longest) + '.original')
+        if made.is_file(): return made
+        if same.is_file(): return source
+        tool = shutil.which('sips') or ('/usr/bin/sips' if Path('/usr/bin/sips').is_file() else None)
+        def refused(reason):
+            error = WorkspaceError('No smaller copy of this file: ' + reason, 415); error.code = 'no-preview'; return error
+        if not tool: raise refused('this Mac has no image tool')
+        with PREVIEW_WORK:
+            if made.is_file(): return made
+            try:
+                found = self.run([tool, '-g', 'pixelWidth', '-g', 'pixelHeight', str(source)], capture_output=True, text=True, timeout=60)
+                sizes = [int(v) for v in re.findall(r'pixel(?:Width|Height): (\d+)', found.stdout)]
+                if found.returncode or len(sizes) != 2: raise refused('it is not a picture')
+                if max(sizes) <= longest:
+                    same.touch(); return source
+                with tempfile.NamedTemporaryFile(dir=folder, prefix='.', suffix='.jpg', delete=False) as out: temp = Path(out.name)
+                try:
+                    done = self.run([tool, '-Z', str(longest), '-s', 'format', 'jpeg', '-s', 'formatOptions', '80', str(source), '--out', str(temp)], capture_output=True, text=True, timeout=120)
+                    if done.returncode or not temp.is_file() or not temp.stat().st_size: raise refused('the picture could not be read')
+                    os.replace(temp, made)
+                finally: temp.unlink(missing_ok=True)
+            except (OSError, subprocess.TimeoutExpired, ValueError): raise refused('the image tool did not answer')
+        return made
 
     def upload_state(self, digest):
         """How far an original sent in pieces has come: (received bytes, declared size or None)."""
@@ -1105,6 +1144,25 @@ class WorkspaceService:
                 if not dest.is_file(): raise WorkspaceError('Asset not found', 404)
                 # A blob is named by its content and never changes: this browser may keep it.
                 tag = '"' + digest + '"'
+                asked = parse_qs(urlsplit(h.path).query).get('size', [None])[0]
+                if asked is not None:
+                    # ?size=<longest side>: a smaller copy of a picture for a phone, made on the Mac.
+                    if asked not in [str(n) for n in PREVIEW_SIZES]: raise WorkspaceError('Ask for size ' + ', '.join(map(str, PREVIEW_SIZES)))
+                    tag = '"' + digest + '-' + asked + '"'
+                    if tag in [t.strip() for t in h.headers.get('If-None-Match', '').split(',')]:
+                        h.send_response(304); h.send_header('ETag', tag); h.send_header('Cache-Control', 'private, max-age=31536000, immutable'); h.end_headers()
+                        return True
+                    copy = self.preview(digest, int(asked))
+                    h.send_response(200)
+                    h.send_header('Content-Type', 'image/jpeg' if copy != dest else 'application/octet-stream')
+                    h.send_header('Content-Length', str(copy.stat().st_size))
+                    h.send_header('ETag', tag)
+                    h.send_header('X-Tiksi-Preview', 'smaller' if copy != dest else 'original')
+                    h.send_header('Cache-Control', 'private, max-age=31536000, immutable')
+                    h.end_headers()
+                    if h.command == 'GET':
+                        with copy.open('rb') as source: shutil.copyfileobj(source, h.wfile, 1024 * 1024)
+                    return True
                 if tag in [t.strip() for t in h.headers.get('If-None-Match', '').split(',')]:
                     h.send_response(304)
                     h.send_header('ETag', tag)
