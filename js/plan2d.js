@@ -41,8 +41,8 @@ const CALIB_MIN_PX = 20;          // px: the shortest on-screen span CALIBRATE a
 const MIN_WALL = 0.05;            // m: a corner move never leaves a wall shorter than this
 const FONT = 'ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
 // Palette for the drawing surface (kept in sync with css/console.css tokens by hand:
-// canvas cannot read CSS variables cheaply every frame).
-const C = {
+// canvas cannot read CSS variables cheaply every frame). PAPER swaps it for printing.
+const SCREEN = {
   bg: '#0a0e12',
   gridMinor: 'rgba(255,255,255,0.032)',
   gridMajor: 'rgba(255,255,255,0.075)',
@@ -59,7 +59,39 @@ const C = {
   rulerBg: 'rgba(12,17,22,0.96)',
   rulerLine: 'rgba(255,255,255,0.12)',
   rulerText: '#7c8995',
+  grid: true,
+  pillBg: 'rgba(10,14,18,0.92)',
+  tagBg: 'rgba(10,14,18,0.94)',
+  tagSelBg: 'rgba(40,26,10,0.95)',
+  textShadow: 'rgba(0,0,0,0.55)',
+  underlayFill: 'rgba(255,255,255,0.03)',
+  underlayEdge: 'rgba(255,255,255,0.12)',
+  hudLine: 'rgba(233,238,243,0.9)',
 };
+// Dark ink on white for a printed sheet: no grid, and the light-on-dark colours darkened
+// so doors, windows and labels read on paper.
+const PAPER = Object.assign({}, SCREEN, {
+  bg: '#ffffff',
+  axis: 'rgba(0,0,0,0)',
+  wallLine: 'rgba(20,24,28,0.9)',
+  ink: '#16191c',
+  dim: '#4b545c',
+  faint: '#8a939b',
+  accent: '#b8650f',
+  cyan: '#1d6f86',
+  door: '#8a5a17',
+  dimLine: 'rgba(40,48,56,0.85)',
+  hover: 'rgba(0,0,0,0.6)',
+  grid: false,
+  pillBg: 'rgba(255,255,255,0.94)',
+  tagBg: 'rgba(255,255,255,0.96)',
+  tagSelBg: 'rgba(255,240,220,0.96)',
+  textShadow: 'rgba(0,0,0,0)',
+  underlayFill: 'rgba(0,0,0,0)',
+  underlayEdge: 'rgba(0,0,0,0.18)',
+  hudLine: 'rgba(20,24,28,0.9)',
+});
+let C = SCREEN;
 
 // Module-persistent editor state (survives view switches). Views are kept per property AND
 // per level (key prop.id + ':' + level.id): each storey remembers its own zoom and pan.
@@ -534,7 +566,7 @@ function pill(text, x, y, color, opts) {
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const w = textWidth(text) + 14, h = size + 9;
   roundRect(x - w / 2, y - h / 2, w, h, h / 2);
-  ctx.fillStyle = opts.bg || 'rgba(10,14,18,0.92)';
+  ctx.fillStyle = opts.bg || C.pillBg;
   ctx.fill();
   ctx.lineWidth = 1;
   ctx.strokeStyle = opts.stroke || hexA(color, 0.55);
@@ -624,6 +656,7 @@ function paint(w, h, exporting) {
 }
 
 function drawGrid(w, h) {
+  if (!C.grid) return;
   const { major, minor } = gridSteps();
   const minorPx = minor * vs.zoom;
   const fade = Math.max(0, Math.min(1, (minorPx - 5) / 22));
@@ -702,14 +735,14 @@ function drawUnderlay() {
   const hov = hover && hover.kind === 'underlay';
   ctx.save();
   if (sel || hov) { ctx.shadowColor = sel ? 'rgba(232,151,58,0.45)' : 'rgba(255,255,255,0.25)'; ctx.shadowBlur = 22; }
-  ctx.fillStyle = 'rgba(255,255,255,0.03)';
+  ctx.fillStyle = C.underlayFill;
   ctx.fillRect(sx, sy, sw, sh);
   ctx.restore();
   ctx.globalAlpha = pl.opacity;
   ctx.drawImage(underlayImg, sx, sy, sw, sh);
   ctx.globalAlpha = 1;
   ctx.lineWidth = sel ? 1.5 : 1;
-  ctx.strokeStyle = sel ? C.accent : (hov ? C.hover : 'rgba(255,255,255,0.12)');
+  ctx.strokeStyle = sel ? C.accent : (hov ? C.hover : C.underlayEdge);
   ctx.setLineDash(sel ? [6, 4] : []);
   ctx.strokeRect(crisp(sx), crisp(sy), sw, sh);
   ctx.setLineDash([]);
@@ -851,9 +884,9 @@ function drawRoomLabels() {
     const x0 = s[0] - (tw + 12) / 2;
     ctx.beginPath(); ctx.arc(x0 + 3.5, s[1] - 4, 3.5, 0, Math.PI * 2);
     ctx.fillStyle = col; ctx.fill();
-    ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.stroke();
+    ctx.lineWidth = 1; ctx.strokeStyle = C.textShadow; ctx.stroke();
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillStyle = C.textShadow;
     ctx.fillText(name, x0 + 12 + 0.5, s[1] - 4 + 1);
     ctx.fillStyle = sel ? C.accent : C.ink;
     ctx.fillText(name, x0 + 12, s[1] - 4);
@@ -1007,7 +1040,7 @@ function drawOpeningTags() {
     const s = w2s([row.cx + row.uy * off, row.cy - row.ux * off]);
     const sel = selection && selection.kind === 'opening' && selection.id === row.id;
     const col = sel ? C.accent : row.type === 'door' ? C.door : C.cyan;
-    pill(row.number, s[0], s[1], col, { weight: 700, size: 10.5, bg: sel ? 'rgba(40,26,10,0.95)' : 'rgba(10,14,18,0.94)', stroke: hexA(col, 0.9) });
+    pill(row.number, s[0], s[1], col, { weight: 700, size: 10.5, bg: sel ? C.tagSelBg : C.tagBg, stroke: hexA(col, 0.9) });
   }
 }
 function scheduleCounts(rows) {
@@ -1101,18 +1134,20 @@ function editScheduleSize(id, key, inp) {
 }
 
 // The active level drawn at its fitted view into a fresh canvas: what PRINT and SAVE PNG send.
-function planImage(W, H, scale) {
+// `paper` draws it dark on white, for printing.
+function planImage(W, H, scale, paper = false) {
   const saved = { canvas, ctx, vs, selection, hover, hoverPt, drawing, roomDraft, calib };
   const c = document.createElement('canvas');
   c.width = Math.round(W * scale); c.height = Math.round(H * scale);
   try {
     canvas = c; ctx = c.getContext('2d'); exportScale = scale; hatchCache.clear();
+    if (paper) C = PAPER;
     vs = Object.assign({}, vs, fitFor(W, H, 0));
     selection = hover = hoverPt = drawing = roomDraft = calib = null;
     paint(W, H, true);
   } finally {
     ({ canvas, ctx, vs, selection, hover, hoverPt, drawing, roomDraft, calib } = saved);
-    exportScale = 0; hatchCache.clear(); invalidate();
+    C = SCREEN; exportScale = 0; hatchCache.clear(); textWidthCache.clear(); invalidate();
   }
   return c;
 }
@@ -1120,10 +1155,15 @@ function scheduleTitle() { return (prop.name || 'Property') + ' - ' + (lvl().nam
 function scheduleFileName(ext) {
   return ('opening schedule ' + scheduleTitle()).replace(/[^\w\- ]+/g, ' ').trim().replace(/\s+/g, '-').toLowerCase() + '.' + ext;
 }
-function printSchedule() {
-  const rows = schedule(), img = planImage(1500, 1000, 2).toDataURL('image/png');
+// The sheet goes into #print-root, the browser prints once its plan image is decoded, and the
+// sheet is cleared after printing, so a later Cmd+P never prints this sheet again.
+let printing = false;
+async function printSchedule() {
+  if (printing) return;
+  const rows = schedule(), img = planImage(1500, 1000, 2, true).toDataURL('image/png');
+  const root = document.getElementById('print-root');
   const cell = v => `<td class="num">${v == null ? '' : escapeHtml(fmtLen(v))}</td>`;
-  document.getElementById('print-root').innerHTML = `<div class="sheet sheet-page opening-sheet">
+  root.innerHTML = `<div class="sheet sheet-page opening-sheet">
     <div class="s-head"><span class="s-brand">TIKSI</span><span class="s-doc">Opening schedule</span></div>
     <h1>${escapeHtml(scheduleTitle())}</h1>
     <div class="s-sub">${scheduleCounts(rows)} - ${escapeHtml(fmtDate(isoToday()))} - please correct any size by its number</div>
@@ -1133,6 +1173,13 @@ function printSchedule() {
       <tbody>${rows.map(r => `<tr><td><b>${r.number}</b></td><td>${r.type === 'door' ? 'Door' : 'Window'}</td><td>${escapeHtml(connectsLabel(r))}</td>${cell(r.width)}${cell(r.height)}${cell(r.sill)}</tr>`).join('')}</tbody></table>
     <div class="s-foot"><span>tiksi design console</span><span>${escapeHtml(fmtDate(isoToday()))}</span></div>
   </div>`;
+  const sheet = root.firstElementChild, plan = sheet.querySelector('.s-plan');
+  printing = true;
+  try { await plan.decode(); } catch (e) { /* print the table even if the image failed */ }
+  finally { printing = false; }
+  if (root.firstElementChild !== sheet) return;   // another print replaced it meanwhile
+  const clear = () => { if (root.firstElementChild === sheet) root.innerHTML = ''; };
+  window.addEventListener('afterprint', clear, { once: true });
   window.print();
 }
 // One image holding the numbered plan with the table under it, for a text or an email.
@@ -1561,7 +1608,7 @@ function drawHud(w, h) {
     ctx.fillRect(x0 + i * segW, y - 3, segW, 6);
   }
   ctx.restore();
-  ctx.strokeStyle = 'rgba(233,238,243,0.9)'; ctx.lineWidth = 1;
+  ctx.strokeStyle = C.hudLine; ctx.lineWidth = 1;
   ctx.strokeRect(crisp(x0), crisp(y - 3), px, 6);
   ctx.fillStyle = C.dim;
   ctx.font = `9px ${FONT}`;

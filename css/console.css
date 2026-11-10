@@ -985,7 +985,9 @@ kbd {
   @page { margin: 12mm; }
   html, body { height: auto; }
   body { overflow: visible; background: #fff; color: #111; }
-  #app { display: none; }
+  /* A prepared sheet replaces the app on paper. With none (Cmd+P outside a PRINT button)
+     the page prints as it is instead of a blank sheet or a sheet left from an earlier print. */
+  body:has(#print-root > *) #app { display: none; }
   #print-root { display: block; }
   #print-root .sheet { box-shadow: none; max-width: none; border-radius: 0; padding: 4mm 2mm; background: #fff; }
   #print-root .sheet-page { page-break-after: always; break-after: page; }
