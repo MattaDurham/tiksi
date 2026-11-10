@@ -1,16 +1,23 @@
 """Every service address refuses a caller that is neither this Mac nor on its Tailscale network."""
 import http.client
 import importlib.util
+import ipaddress
 import json
 from pathlib import Path
+import socket
+import subprocess
+import sys
 import tempfile
 import threading
+import time
 import unittest
+from unittest.mock import patch
 
 from server.folder_intake import FolderIntakeService
 from server.model_conversion import ModelConversionService
 from server.material_research import MaterialResearchService
-from server.peers import trusted_peer
+from server import peers
+from server.peers import Tailnet, trusted_peer
 from server.photo_placement import PhotoPlacementService
 from server.reconstruction import ReconstructionService
 from server.video_frames import VideoFrameService
@@ -25,8 +32,23 @@ SERVICES = ('workspace', 'reconstruction', 'material-research', 'model-conversio
 PAGE_HEADERS = {'workspace': {'X-Tiksi-Workspace': '1'}, 'video': {'X-Tiksi-Video': '1'}, 'folder-intake': {'X-Tiksi-Folder': '1'}}
 
 
+def tailnet(*addresses):
+    """A tailnet as the local Tailscale daemon would describe it."""
+    return Tailnet(ask=lambda: frozenset(ipaddress.ip_address(a) for a in addresses))
+
+
+class Clock:
+    def __init__(self): self.now = 1000.0
+    def __call__(self): return self.now
+
+
 class PeerRule(unittest.TestCase):
-    def test_this_mac_and_tailscale_are_trusted_and_everything_else_is_not(self):
+    def test_when_tailscale_cannot_be_asked_the_range_decides_and_the_log_says_so_once(self):
+        with patch.object(peers, 'TAILNET', Tailnet(ask=lambda: None)), self.assertLogs('tiksi.peers', 'WARNING') as logged:
+            self.check_range_rule()
+        self.assertEqual(len(logged.records), 1, 'the fallback is logged once, not per request')
+
+    def check_range_rule(self):
         for address in ('127.0.0.1', '::1', '::ffff:127.0.0.1', '100.64.0.1', '100.101.102.103', '100.127.255.254', 'fd7a:115c:a1e0::1', '::ffff:100.80.1.2'):
             self.assertTrue(trusted_peer(address), address)
         for address in ('192.168.1.9', '10.0.0.4', '172.16.5.5', '169.254.10.10', '100.63.255.255', '100.128.0.1', '8.8.8.8',
@@ -35,6 +57,38 @@ class PeerRule(unittest.TestCase):
         self.assertTrue(WorkspaceService.trusted_peer('100.80.1.2'), 'the project-file service uses the same rule')
         self.assertFalse(WorkspaceService.trusted_peer('192.168.1.2'))
 
+    def test_when_tailscale_answers_only_its_devices_are_trusted(self):
+        clock = Clock(); asked = []
+        devices = {'100.101.102.103', 'fd7a:115c:a1e0::5'}
+        def ask():
+            asked.append(clock.now)
+            return frozenset(ipaddress.ip_address(a) for a in devices)
+        with patch.object(peers, 'TAILNET', Tailnet(ask=ask, clock=clock)):
+            for address in ('127.0.0.1', '::1', '100.101.102.103', '::ffff:100.101.102.103', 'fd7a:115c:a1e0::5'):
+                self.assertTrue(trusted_peer(address), address)
+            # Another device in the same range, such as a neighbour on a hotel or mobile network.
+            for address in ('100.64.0.1', '100.101.102.104', 'fd7a:115c:a1e0::6', '192.168.1.9'):
+                self.assertFalse(trusted_peer(address), address)
+            self.assertEqual(len(asked), 1, 'one answer serves many requests')
+            for _ in range(50): trusted_peer('100.64.0.1')
+            self.assertEqual(len(asked), 1, 'a stranger does not make the server ask on every request')
+            # A phone just added to the tailnet is let in within a few seconds.
+            devices.add('100.90.0.7')
+            clock.now += Tailnet.RETRY
+            self.assertTrue(trusted_peer('100.90.0.7'))
+            self.assertEqual(len(asked), 2)
+            # A device removed from the tailnet is refused once the answer is old.
+            devices.discard('100.101.102.103')
+            clock.now += Tailnet.FRESH
+            self.assertFalse(trusted_peer('100.101.102.103'))
+
+    def test_tailscale_status_is_read_for_this_mac_and_its_devices(self):
+        status = {'BackendState': 'Running', 'Self': {'TailscaleIPs': ['100.70.0.1', 'fd7a:115c:a1e0::1']},
+                  'Peer': {'key1': {'TailscaleIPs': ['100.70.0.2', 'fd7a:115c:a1e0::2']}, 'key2': {'TailscaleIPs': None}}}
+        self.assertEqual(peers.tailnet_addresses(status), {ipaddress.ip_address(a) for a in ('100.70.0.1', 'fd7a:115c:a1e0::1', '100.70.0.2', 'fd7a:115c:a1e0::2')})
+        self.assertEqual(peers.this_mac_tailscale_address(status), '100.70.0.1')
+        self.assertEqual(peers.tailnet_addresses({'BackendState': 'Stopped', 'Self': {}, 'Peer': None}), frozenset(), 'a stopped Tailscale trusts no address in its range')
+
 
 class ServiceCallers(unittest.TestCase):
     """The real server with all seven real services; only the caller's address is set by the test."""
@@ -42,6 +96,8 @@ class ServiceCallers(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); state = Path(self.temp.name)
         self.caller = '127.0.0.1'
+        # The tailnet has one other device; the Mac's real Tailscale is never asked.
+        trusted = patch.object(peers, 'TAILNET', tailnet('100.101.102.103')); trusted.start(); self.addCleanup(trusted.stop)
         test = self
         class Handler(serve.AppHandler):
             def setup(self):
@@ -96,7 +152,7 @@ class ServiceCallers(unittest.TestCase):
         self.caller = '127.0.0.1'
         tokens = {service: json.loads(self.call('/api/' + service + '/capabilities', headers=PAGE_HEADERS.get(service))[1])['token'] for service in SERVICES}
         self.seen.clear()
-        for caller in ('192.168.1.9', '10.0.0.4', '100.128.0.1', '169.254.10.10'):
+        for caller in ('192.168.1.9', '10.0.0.4', '100.128.0.1', '169.254.10.10', '100.64.9.9'):
             self.caller = caller
             for service in SERVICES:
                 status, body = self.call('/api/' + service + '/capabilities', headers=PAGE_HEADERS.get(service))
@@ -134,6 +190,51 @@ class ServiceCallers(unittest.TestCase):
         status, body = self.call('/')
         self.assertEqual(status, 200); self.assertIn(b'<html', body.lower())
         self.assertEqual(self.call('/js/main.js')[0], 200)
+
+
+class ListeningAddresses(unittest.TestCase):
+    """The real server, started as the Mac starts it, listening on more than one named address."""
+
+    def start(self, *hosts):
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        args = [sys.executable, str(ROOT / 'tools/serve.py'), '--port', '0', '--state-dir', self.temp.name, '--projects-dir', self.temp.name + '/projects']
+        for host in hosts: args += ['--host', host]
+        child = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        def stop():
+            child.terminate(); child.wait(timeout=10); child.stdout.close(); child.stderr.close()
+        self.addCleanup(stop)
+        line = child.stdout.readline()
+        self.assertIn('listening on', line)
+        return child, int(line.strip().rsplit(':', 1)[1])
+
+    def status(self, host, port):
+        connection = http.client.HTTPConnection(host, port, timeout=5)
+        try:
+            connection.request('GET', '/api/instance'); return connection.getresponse().status
+        finally: connection.close()
+
+    def test_one_server_listens_on_every_address_it_is_given(self):
+        try: socket.create_server(('::1', 0), family=socket.AF_INET6).close()
+        except OSError: self.skipTest('this machine has no IPv6 loopback')
+        child, port = self.start('127.0.0.1', '::1')
+        self.assertIn('::1:' + str(port), child.stdout.readline())
+        self.assertEqual(self.status('127.0.0.1', port), 200)
+        self.assertEqual(self.status('::1', port), 200)
+
+    def test_an_address_not_on_this_mac_yet_does_not_stop_the_start(self):
+        # 192.0.2.1 is reserved for documentation, so no machine has it (as Tailscale's address before it is up).
+        child, port = self.start('127.0.0.1', '192.0.2.1')
+        self.assertEqual(self.status('127.0.0.1', port), 200)
+        deadline = time.time() + 10
+        lines = []
+        while time.time() < deadline:
+            lines.append(child.stderr.readline())
+            if 'Cannot listen on 192.0.2.1' in lines[-1]: break
+        self.assertIn('Cannot listen on 192.0.2.1', lines[-1], 'the log says which address is waiting')
+
+    def test_by_default_only_this_mac_can_reach_the_server(self):
+        child, port = self.start()
+        self.assertEqual(self.status('127.0.0.1', port), 200)
 
 
 if __name__ == '__main__': unittest.main()

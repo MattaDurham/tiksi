@@ -136,6 +136,37 @@ serves app assets and a private project-file API; repository files and directory
 are excluded. Every service address under `/api/` (project files, photo to 3D, model conversion, material research, video frames, photo placement) answers only this Mac and Tailscale peers; the server checks the caller once, before any service sees the request. The project API also requires same-origin requests and does not enable CORS. Binding to `0.0.0.0` makes the page reachable on the local network
 and through the Mac's Tailscale address; a device on the local network that is not on Tailscale gets the page but no service.
 
+A caller on this Mac is always trusted. Any other caller must be one of this
+tailnet's devices: the server asks the Mac's own Tailscale (`tailscale status`)
+which addresses those are, keeps the answer for a minute, and asks again at most
+every five seconds when an unknown address calls, so a newly added phone gets in
+within seconds. The Tailscale address range on its own is not enough, because some
+internet providers, hotels and mobile networks hand out addresses from it. When
+Tailscale cannot be asked (not installed or not running), the range alone decides,
+as before, and the server log says so once.
+
+To keep the app off the local network entirely, give `--host` once for each
+address to listen on instead of `0.0.0.0`. `tailscale` stands for the Mac's own
+Tailscale address:
+
+```
+python3 tools/serve.py --host 127.0.0.1 --host tailscale --port 8642 --projects-dir "$HOME/Documents/Tiksi Projects"
+```
+
+The first address must be on the Mac when the server starts (list `127.0.0.1`
+first). A later one that is not there yet, such as the Tailscale address before
+Tailscale has connected, is tried again every ten seconds and served as soon as it
+appears; the server log says which address is waiting. A service manager that
+starts Tiksi with `--host 0.0.0.0` keeps working unchanged; switching it to these
+two addresses is a change to that service's arguments followed by a restart.
+
+When a project file is moved, renamed, on a drive that is not connected or cannot
+be read, only that project is left out: the workspace answer lists it under
+`unavailable` with its path and the reason, every other project keeps loading and
+saving, and nothing is written at the missing path. It returns when its file does,
+and if the same project file turns up at another path the server scans, that path
+replaces the old one.
+
 For automatic startup, use your operating system's service manager. Keep the
 installation's paths, service label and restart instructions in the private
 `AGENTS.local.md` file, rather than in public source code.

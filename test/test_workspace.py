@@ -1,11 +1,13 @@
 """Disk project sharing: synthetic bundles and temporary directories only."""
 import io
+import ipaddress
 import json
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
 import zipfile
+from server.peers import Tailnet
 from server.workspace import WorkspaceService, WorkspaceError, MAX_JSON
 
 
@@ -15,6 +17,9 @@ def workspace(name='A'):
 
 class WorkspaceTests(unittest.TestCase):
     def setUp(self):
+        # 100.80.1.2 is a phone on this tailnet; the Mac's real Tailscale is never asked.
+        trusted = patch('server.peers.TAILNET', Tailnet(ask=lambda: frozenset({ipaddress.ip_address('100.80.1.2')})))
+        trusted.start(); self.addCleanup(trusted.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.service = WorkspaceService(self.root / 'runtime', self.root / 'projects')
