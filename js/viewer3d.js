@@ -59,7 +59,7 @@ import { ModelBatches } from './model-batch.js';
 import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown } from './tags.js';
 import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags } from './saved-views.js';
 import { onScreen, setOnScreen, onScreenChange, setMenuProvider } from './tiksi-menu.js';
-import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility, partKeyForObject, partByKey, partName, planKeyOf } from './tags-scene.js';
+import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility, partKeyForObject, partByKey, partName, planKeyOf, modelParts, partKey } from './tags-scene.js';
 
 // ---------- persistent GPU state (one context for the life of the page) ----------
 let renderer = null, pmrem = null;
@@ -92,7 +92,7 @@ let batches = null;
 // edges); the full frame follows once it has been still this long.
 const SETTLE_MS = 150;
 let lastMotion = -Infinity, lastFrameFast = false, aoWanted = true;
-const frameCounts = { fastFrames: 0, fullFrames: 0, shadowRefreshes: 0 };
+const frameCounts = { fastFrames: 0, fullFrames: 0, shadowRefreshes: 0, skyBakes: 0, modelBuilds: 0 };
 function markMotion() { lastMotion = performance.now(); }
 const moving = () => performance.now() - lastMotion < SETTLE_MS;
 // The sun's shadow map is drawn only when something it depends on changed (the sun, the
@@ -525,7 +525,13 @@ function texturesOnScreen() {
   return out;
 }
 
+// A slider sends a step for every pixel it moves: the model is rebuilt once, for the frame
+// that will show it, however many steps arrived since the last one.
+let rebuildQueued = false;
+function rebuildModelSoon() { rebuildQueued = true; requestRender(1); }
 function rebuildModel() {
+  rebuildQueued = false;
+  frameCounts.modelBuilds++;
   beginTextureBuild();   // the sets asked for from here on are this model's
   if (modelGroup) { scene.remove(modelGroup); disposeBuilt(modelGroup); }
   modelGroup = buildPropertyGroup(prop, { xray, xrayOpacity: prop.env.xrayOpacity, hiddenLevels: hiddenLevels() });
@@ -717,17 +723,20 @@ function applyEnvironment() {
     g.emissive.setHex(0xffcf9a);
     g.emissiveIntensity = 0.5 * lampMix;
   }
-  // Background / IBL per sky mode.
+  // Background / IBL per sky mode. The sky lighting is baked again only when what it is baked
+  // from has changed (skyBakeKey): this runs for every slider step, and for walking in or out
+  // of a room, which changes the fill light and nothing in the sky.
+  const stale = !envRT || skyBakeKey() !== skyBaked;
   if (env.sky === 'studio') {
     scene.background = new THREE.Color(0x171d23);
-    scheduleEnvMap(0);
+    if (stale) scheduleEnvMap(0);
   } else if (env.sky === 'pano') {
     if (usePano) scene.background = panoTex;
     else { scene.background = null; loadPano(env.panoPhotoId); }
-    scheduleEnvMap(usePano ? 0 : 120);
+    if (stale) scheduleEnvMap(usePano ? 0 : 120);
   } else {
     scene.background = null;
-    scheduleEnvMap(120);
+    if (stale) scheduleEnvMap(120);
   }
   envDirty = false;
   // The shadow map depends on where the sun is, not on its colour or the exposure.
@@ -735,6 +744,15 @@ function applyEnvironment() {
   requestRender(3);
 }
 
+// What the sky lighting is baked from, as text: the studio room, a panorama, or the sky's own
+// settings (where the sun is and how hazy it is).
+let skyBaked = null;
+function skyBakeKey() {
+  if (prop.env.sky === 'studio') return 'studio';
+  if (panoReady()) return 'pano:' + panoId;
+  const u = envSky.material.uniforms, d = u.sunPosition.value;
+  return 'sky:' + [d.x, d.y, d.z, u.turbidity.value, u.rayleigh.value, u.mieCoefficient.value, u.mieDirectionalG.value].map(v => v.toFixed(5)).join(',');
+}
 // PMREM from the sky is a few ms; throttle it while a slider drags.
 function scheduleEnvMap(delay) {
   clearTimeout(pmremTimer);
@@ -756,6 +774,8 @@ function regenEnvMap() {
   }
   if (envRT) envRT.dispose();
   envRT = rt;
+  skyBaked = skyBakeKey();
+  frameCounts.skyBakes++;
   scene.environment = rt.texture;
   // Shader variants depend on the environment map being present, so the first bake is the
   // earliest moment the warm-up compiles the programs the frames will actually use.
@@ -1191,6 +1211,7 @@ function stepWalk(dt) {
 function tick(time) {
   if (!scene) return;
   if (exportingStill) return;
+  if (rebuildQueued) rebuildModel();
   const dt = Math.min(0.05, (time - (lastT || time)) / 1000);
   lastT = time;
   let active = false;
@@ -1573,13 +1594,26 @@ function findGroupFor(kind, id) {
 // The scene object a tag key names: a plan element's group, or one mesh of a model.
 function objectForKey(key) {
   const m = /^node:([^#]+)#/.exec(key);
-  if (m) { const w = scanObjs[m[1]]; const part = w && partByKey(w, key); return part ? part.object : null; }
+  if (m) { const w = scanObjs[m[1]]; const part = w && partOfModel(w, key); return part ? part.object : null; }
   const k = /^(wall|room|ceiling|opening|fixture):(.+)$/.exec(key);
   if (!k || !modelGroup) return null;
   if (k[1] !== 'ceiling') return findGroupFor(k[1], k[2]);
   let found = null;
   modelGroup.traverse(o => { if (!found && o.userData && o.userData.kind === 'ceiling' && o.userData.id === k[2]) found = o; });
   return found;
+}
+// A loaded model's parts by tag key, listed once per model. partByKey lists every part of the
+// model again for each key it is asked for: with many parts selected, every hover did that
+// once per selected part.
+const partLookups = new WeakMap();   // model wrapper -> Map(key -> part)
+function partOfModel(wrapper, key) {
+  let byKey = partLookups.get(wrapper);
+  if (!byKey) {
+    byKey = new Map();
+    for (const part of modelParts(wrapper)) byKey.set(partKey(wrapper.userData.id, part), part);
+    partLookups.set(wrapper, byKey);
+  }
+  return byKey.get(key) || null;
 }
 function selectedObject() {
   if (!selection) return null;
@@ -3858,7 +3892,7 @@ function renderInspectorBody() {
       touch(); rebuildModel(); renderInspector();
     };
     let slidingOpening = false;
-    inspEl.querySelector('[data-t]').oninput = e => { if (!slidingOpening) { beginGeometryEdit(prop, 'move opening'); slidingOpening = true; } o.t = parseFloat(e.target.value); rebuildModel(); };
+    inspEl.querySelector('[data-t]').oninput = e => { if (!slidingOpening) { beginGeometryEdit(prop, 'move opening'); slidingOpening = true; } o.t = parseFloat(e.target.value); rebuildModelSoon(); };
     inspEl.querySelector('[data-t]').onchange = () => { slidingOpening = false; touch(); };
     inspEl.querySelector('[data-wall]').onclick = () => setSelection({ kind: 'wall', id: o.wallId });
     inspEl.querySelector('[data-del]').onclick = () => { beginGeometryEdit(prop, 'delete opening'); prop.openings = prop.openings.filter(x => x.id !== o.id); setSelection(null); touch(); rebuildModel(); };
