@@ -15,7 +15,7 @@ import threading
 import tempfile
 import time
 import zipfile
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from server.peers import trusted_peer
 from server.ranges import Part, byte_range
@@ -152,6 +152,8 @@ DAILY_DAYS = 90
 # A stored original nothing refers to is removed only after this long, so an upload whose save
 # has not arrived yet (a phone offline for a while) still finds it.
 BLOB_GRACE = 30 * 86400
+# Save ids the Mac remembers having committed (newest kept), with the revision each commit made.
+KEEP_SAVE_IDS = 2000
 # An original sent in pieces: each piece at most this big, and an upload left unfinished this long is dropped.
 MAX_PIECE = 64 * 1024 * 1024
 UPLOAD_KEEP = 7 * 86400
@@ -674,8 +676,25 @@ class WorkspaceService:
         return error
 
     def commit(self, request):
+        return self.commit_once(request)[0]
+
+    def committed(self, save_id):
+        """The revision the save with this id made, or None if the Mac never committed it."""
+        with self.lock: return (self.state.get('saves') or {}).get(save_id)
+
+    def commit_once(self, request):
+        """Commit a save; returns (revision, repeated). A save carrying an id the Mac has already
+        committed is not committed again: the answer is the revision that commit made."""
         if not isinstance(request, dict) or type(request.get('revision')) is not int:
             raise WorkspaceError('A base revision is required')
+        save_id = request.get('saveId')
+        if save_id is not None and (not isinstance(save_id, str) or not 0 < len(save_id) <= 200):
+            raise WorkspaceError('A save id is text of 1 to 200 characters')
+        with self.lock:
+            if save_id is not None and save_id in (self.state.get('saves') or {}): return self.state['saves'][save_id], True
+            return self.commit_new(request, save_id), False
+
+    def commit_new(self, request, save_id):
         data, assets = request.get('data'), request.get('assets')
         self.check_records(data)
         order = request.get('propertyOrder')
@@ -699,6 +718,13 @@ class WorkspaceService:
             if (pictures or self.has_pictures) and request.get('pictureFiles') is not True:
                 raise WorkspaceError('This Tiksi tab is out of date; reload it to keep saving', 426)
             value = {'revision': self.state['revision'] + 1, 'data': data, 'assets': assets}
+            # Which saves were committed is the Mac's own record, kept with its catalog and
+            # never in a project file; it is written in the same step as the save itself.
+            saves = dict(self.state.get('saves') or {})
+            if save_id is not None:
+                saves[save_id] = value['revision']
+                for old in list(saves)[:max(0, len(saves) - KEEP_SAVE_IDS)]: del saves[old]
+            value['saves'] = saves
             encoded = json.dumps(value, ensure_ascii=False).encode('utf-8')
             if len(encoded) > MAX_JSON: raise WorkspaceError('Workspace metadata exceeds 32 MB', 413)
             if self.path.exists():
@@ -928,16 +954,23 @@ class WorkspaceService:
                 with self.lock:
                     self.refresh()
                     revision = self.state['revision']
-                self.reply(h, 200, {'revision': revision})
+                asked = parse_qs(urlsplit(h.path).query).get('saveId', [None])[0]
+                self.reply(h, 200, {'revision': revision, **({'save': self.save_answer(asked)} if asked is not None else {})})
+            elif path == '/api/workspace/saves' and h.command == 'GET':
+                # Did the Mac commit the save with this id? ?id=<save id>
+                asked = parse_qs(urlsplit(h.path).query).get('id', [None])[0]
+                if not asked or len(asked) > 200: raise WorkspaceError('Ask with ?id=<save id>')
+                self.reply(h, 200, self.save_answer(asked))
             elif path == '/api/workspace' and h.command == 'GET':
                 self.reply(h, 200, self.snapshot())
             elif path == '/api/workspace' and h.command == 'PUT':
                 payload = self.read(h, MAX_WORKSPACE_REQUEST)
                 try: request = json.loads(payload)
                 except (ValueError, UnicodeDecodeError): raise WorkspaceError('Workspace must be JSON')
-                revision = self.commit(request)
+                revision, repeated = self.commit_once(request)
                 with self.lock: paths, unavailable = self.visible_paths(), self.unavailable_projects()
-                self.reply(h, 200, {'revision': revision, 'paths': paths, 'unavailable': unavailable})
+                saved = {'saveId': request['saveId'], 'repeated': repeated} if isinstance(request, dict) and request.get('saveId') is not None else {}
+                self.reply(h, 200, {'revision': revision, 'paths': paths, 'unavailable': unavailable, **saved})
             elif path == '/api/workspace/recovery' and h.command == 'POST':
                 payload = self.read(h, MAX_WORKSPACE_REQUEST)
                 try: record = json.loads(payload)
@@ -1083,6 +1116,10 @@ class WorkspaceService:
         finally:
             with self.lock: self.jobs -= 1
         return True
+
+    def save_answer(self, save_id):
+        revision = self.committed(save_id)
+        return {'saveId': save_id, 'committed': revision is not None, 'revision': revision}
 
     @staticmethod
     def length(h, limit):

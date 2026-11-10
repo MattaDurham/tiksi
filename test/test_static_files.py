@@ -14,6 +14,7 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
+import zipfile
 
 from server import peers
 from server.peers import Tailnet
@@ -174,6 +175,39 @@ class StaticFiles(unittest.TestCase):
         self.assertEqual(status, 422)
         self.assertFalse((self.server.workspace.root / 'blobs' / digest).exists())
         self.assertEqual(json.loads(self.call('/api/workspace/uploads/' + digest, headers=auth)[2])['received'], 0, 'it starts again from nothing')
+
+
+    def save(self, name, save_id=None, revision=None):
+        data = {'version': 2, 'settings': {}, 'properties': [{'id': 'prop-a', 'name': name, 'scans': [], 'photos': []}], 'projects': [], 'materials': [], 'products': []}
+        auth = {**WORKSPACE, 'X-Tiksi-Token': self.token}
+        if revision is None: revision = json.loads(self.call('/api/workspace/head', headers=auth)[2])['revision']
+        request = {'revision': revision, 'data': data, 'assets': {}, 'pictureFiles': True, 'projectData': {'prop-a': {**data}}, **({'saveId': save_id} if save_id else {})}
+        status, _, body = self.call('/api/workspace', 'PUT', {**auth, 'Content-Type': 'application/json'}, json.dumps(request).encode())
+        return status, json.loads(body)
+
+    def test_a_save_sent_twice_with_its_id_is_committed_once(self):
+        auth = {**WORKSPACE, 'X-Tiksi-Token': self.token}
+        ask = lambda save_id: json.loads(self.call('/api/workspace/saves?id=' + save_id, headers=auth)[2])
+        self.assertEqual(ask('phone-1:7'), {'saveId': 'phone-1:7', 'committed': False, 'revision': None})
+        start = json.loads(self.call('/api/workspace/head', headers=auth)[2])['revision']
+        status, first = self.save('Kitchen', 'phone-1:7', start)
+        self.assertEqual(status, 200); self.assertEqual((first['saveId'], first['repeated']), ('phone-1:7', False))
+        self.save('Kitchen, edited on the Mac')
+        path = Path(self.server.workspace.paths['prop-a']); before = path.read_bytes()
+        # The phone froze before it saw the answer and sends the same save again on its next open.
+        status, again = self.save('Kitchen', 'phone-1:7', start)
+        self.assertEqual(status, 200)
+        self.assertEqual((again['revision'], again['repeated']), (first['revision'], True), 'answered with the revision that commit made')
+        self.assertEqual(path.read_bytes(), before, 'the later edit on the Mac is not undone')
+        self.assertEqual(ask('phone-1:7'), {'saveId': 'phone-1:7', 'committed': True, 'revision': first['revision']})
+        head = json.loads(self.call('/api/workspace/head?saveId=phone-1%3A7', headers=auth)[2])
+        self.assertEqual(head['save'], {'saveId': 'phone-1:7', 'committed': True, 'revision': first['revision']})
+        self.assertGreater(head['revision'], first['revision'])
+        # The record survives a restart and is never written into a project file.
+        restarted = WorkspaceService(self.server.workspace.root, self.server.workspace.projects_dir)
+        self.assertEqual(restarted.committed('phone-1:7'), first['revision'])
+        with zipfile.ZipFile(path) as archive: self.assertNotIn(b'phone-1:7', archive.read('workspace.json'))
+        self.assertEqual(self.save('Kitchen', 'x' * 201)[0], 400)
 
 
 if __name__ == '__main__': unittest.main()
