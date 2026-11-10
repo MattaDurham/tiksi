@@ -1638,6 +1638,17 @@ function restoreHistory(direction) {
 }
 export function undo() { restoreHistory('undo'); }
 export function redo() { restoreHistory('redo'); }
+// Another device changed these fields of the open property (main.js sharedChange; the record
+// itself is the same object). The drawn building is rebuilt from them where that is all it
+// takes: the camera, the mode and the loaded scans stay. False when the page must be rebuilt.
+const REDRAWN_FIELDS = new Set(['walls', 'openings', 'rooms', 'fixtures', 'levels', 'activeLevelId']);
+const UNDRAWN_FIELDS = new Set(['name', 'address', 'notes', 'onePager', 'researchSession', 'documents', 'docSets']);
+export function sharedChange(keys) {
+  if (!scene || !prop || keys.some(key => !REDRAWN_FIELDS.has(key) && !UNDRAWN_FIELDS.has(key))) return false;
+  if (keys.some(key => REDRAWN_FIELDS.has(key))) { setSelection(null); rebuildModel(); }
+  renderInspector();
+  return true;
+}
 
 // ---------- measure ----------
 function addMeasurePoint(e) {
@@ -4450,9 +4461,13 @@ function openModel(root) {
   lastT = 0;
   renderer.setAnimationLoop(tick);
   requestRender(4);
+  // A rebuild that must not move the picture (keepViewOnNextMount): the camera last shown.
+  const kept = keepView && lastView && lastView.propId === prop.id ? lastView : null;
+  keepView = false;
+  if (kept && controls && controls.target) { camera.position.fromArray(kept.position); controls.target.fromArray(kept.target); camera.fov = kept.fov; camera.updateProjectionMatrix(); controls.update(); }
 
   const focus=pendingScanFocus || prop.modelSourceId,token=mountId,focusVersion=selectionVersion;pendingScanFocus=null;
-  loadShownScans().then(()=>{if(token===mountId && selectionVersion===focusVersion && !match && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
+  loadShownScans().then(()=>{if(token===mountId && selectionVersion===focusVersion && !match && !kept && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
   // Deep link from the PHOTOS view: #/model?pin=<photoId> enters PIN PHOTO for that photo.
   const m = /[?&]pin=([^&]+)/.exec(location.hash);
   if (m) {
@@ -4550,8 +4565,11 @@ export function partDrawn(key) {
 }
 
 // The camera the 3D view last showed, per property, so DOCUMENTS can place a 3D view from it.
-let lastView = null;
+let lastView = null, keepView = false;
 export function lastCameraView(propId) { return lastView && lastView.propId === propId ? lastView : null; }
+// The next open of MODEL starts from the camera it last showed, not from the overview: for a
+// rebuild after another device's change (main.js), which must not move what is on screen.
+export function keepViewOnNextMount() { keepView = true; }
 function rememberView() {
   if (!camera || !prop) return;
   const dir = camera.getWorldDirection(new THREE.Vector3());

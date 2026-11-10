@@ -10,6 +10,7 @@ import { normalizeTags } from './tags.js';
 import { normalizeSavedViews } from './saved-views.js';
 import { isPictureRef, inlineBundlePictures } from './picture-assets.js';
 import { normalizeOnePager, emptyOnePager } from './one-pager-record.js';
+import { sameJson } from './workspace-merge.js';
 
 const LS_KEY = 'tiksi.workspace.v1';   // storage slot, not the schema version (see migrate)
 const SCHEMA_VERSION = 2;
@@ -138,9 +139,17 @@ export function load() {
   return false;
 }
 
-export function replaceWorkspace(data, { source = 'import' } = {}) {
+// `source: 'shared'` is another device's change, or this device's own save merged with one.
+// The records it brings are put into the objects already here (see keepRecords), and what
+// changed is returned: { properties: Set of ids, keys: Map id -> changed fields (null when
+// more than its own fields changed), materials, other }. `prepare(next)` may adjust the
+// incoming data before it is compared and shown.
+export function replaceWorkspace(data, { source = 'import', prepare } = {}) {
   const before = ws.data;
-  ws.data = migrate(data);
+  const next = migrate(data);
+  if (prepare) prepare(next);
+  const change = source === 'shared' && before ? keepRecords(before, next) : null;
+  ws.data = next;
   for (const fn of replaceListeners) fn(before, ws.data, source);
   // Thumbnails arrive inline (JSON/bundle); hydrateThumbs() copies them into IndexedDB and
   // save() waits for it, so the first localStorage copy is already the slim one.
@@ -148,6 +157,44 @@ export function replaceWorkspace(data, { source = 'import' } = {}) {
   plansStored.clear();
   hydrateThumbs();
   touch();
+  return change;
+}
+
+// Put a record's new values into the object that already stands for it. An open page, a
+// dialog or a slow action that took the record before the change then still holds the live
+// one: what it writes next is saved, not lost in a copy nothing looks at any more.
+export function adoptRecord(held, fresh) {
+  if (held === fresh) return held;
+  for (const key of Object.keys(held)) if (!(key in fresh)) delete held[key];
+  return Object.assign(held, fresh);
+}
+// Shared data arrives as whole new records. Keep the objects of the records that are already
+// here (properties, projects, products, materials), and say what changed.
+function keepRecords(before, next) {
+  const change = { properties: new Set(), keys: new Map(), materials: false, other: false };
+  const note = (list, rec, old) => {
+    if (list === 'properties') {
+      change.properties.add(rec.id);
+      change.keys.set(rec.id, old && old !== rec ? [...new Set([...Object.keys(old), ...Object.keys(rec)])].filter(key => !sameJson(old[key], rec[key])) : null);
+    } else if (list === 'projects') { for (const r of [rec, old]) if (r) { change.properties.add(r.propertyId); change.keys.set(r.propertyId, null); } }
+    else if (list === 'materials') change.materials = true;
+    else change.other = true;
+  };
+  for (const list of ['properties', 'projects', 'products', 'materials']) {
+    const held = new Map((before[list] || []).map(rec => [rec && rec.id, rec]));
+    next[list] = (next[list] || []).map(rec => {
+      const old = rec && held.get(rec.id);
+      held.delete(rec && rec.id);
+      if (old && sameJson(old, rec)) return old;
+      note(list, rec, old);
+      return old ? adoptRecord(old, rec) : rec;
+    });
+    // What is here and no longer in the shared data was removed elsewhere.
+    for (const gone of held.values()) if (gone) note(list, gone, null);
+  }
+  const rest = d => { const o = { ...d }; for (const list of ['properties', 'projects', 'products', 'materials']) delete o[list]; return o; };
+  if (!sameJson(rest(before), rest(next))) change.other = true;
+  return change;
 }
 
 // Merge a project file (or any workspace-shaped JSON) into the current workspace: properties,

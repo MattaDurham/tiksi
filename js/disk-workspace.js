@@ -1,6 +1,6 @@
 // The Mac's project files are authoritative. Browser state is an in-memory working
 // copy; legacy browser stores are read once and removed only after a disk save.
-import { ws, emptyWorkspace, replaceWorkspace, onChange, touch, whenHydrated, projectSlice, listAllFileIds, storedFileIds, getCachedFile, cacheFile, setFileBackend, useDiskPersistence, finishBrowserMigration, setSaveStatus } from './store.js';
+import { ws, emptyWorkspace, replaceWorkspace, adoptRecord, onChange, touch, whenHydrated, projectSlice, listAllFileIds, storedFileIds, getCachedFile, cacheFile, setFileBackend, useDiskPersistence, finishBrowserMigration, setSaveStatus } from './store.js';
 import { mergeShared, sameJson } from './workspace-merge.js';
 import { syncMirror, mirrorCapabilities, mirrorSpec, specSignature, mirrorFileName } from './sketchup-mirror.js';
 import { pictureFiles, pictureRefs, mapStrings } from './picture-assets.js';
@@ -82,6 +82,59 @@ export function prepareDiskProjects(data) {
   });
   const prepared = { ...data, properties };
   return { data: prepared, projectData: Object.fromEntries(properties.map(p => [p.id, projectSlice(p.id, prepared)])) };
+}
+
+// What a device is looking at is its own: which property is open, which level of each
+// property, and which tags are switched on. These sit in the shared records (every page
+// reads them there), but they are not project content. A device keeps its own choices in
+// its browser, puts them back whenever shared data arrives, and saves the records with the
+// values the Mac already holds, so one device's view never moves another's and two devices
+// looking at different things is never a conflict.
+const VIEW_KEY = 'tiksi.device.view.v1';
+export function deviceView(storage = (() => { try { return globalThis.localStorage; } catch (error) { return null; } })()) {
+  let own = { property: null, levels: {}, tags: {} };
+  try { const kept = JSON.parse(storage.getItem(VIEW_KEY)); if (kept && typeof kept === 'object') own = { property: kept.property || null, levels: kept.levels || {}, tags: kept.tags || {} }; } catch (ignored) {}
+  let written = JSON.stringify(own);
+  return {
+    // Take this device's choices from the open records (after any edit).
+    note(data) {
+      own.property = data.settings.activePropertyId || own.property;
+      for (const p of data.properties) {
+        own.levels[p.id] = p.activeLevelId;
+        if ((p.tags || []).length) own.tags[p.id] = Object.fromEntries(p.tags.map(t => [t.id, t.visible !== false]));
+      }
+      const text = JSON.stringify(own);
+      if (text === written) return;
+      written = text;
+      try { storage.setItem(VIEW_KEY, text); } catch (ignored) { /* kept for as long as this page is open */ }
+    },
+    // Put this device's choices into records that arrived from the Mac. A property, level or
+    // tag this device has not seen yet starts as the Mac has it.
+    impose(data) {
+      if (own.property && data.properties.some(p => p.id === own.property)) data.settings.activePropertyId = own.property;
+      for (const p of data.properties) {
+        const level = own.levels[p.id], tags = own.tags[p.id];
+        if (level && (p.levels || []).some(l => l.id === level)) p.activeLevelId = level;
+        if (tags) for (const t of p.tags || []) if (t.id in tags) t.visible = tags[t.id];
+      }
+      return data;
+    },
+    // The same records as they are saved: with the Mac's view values, not this device's.
+    shared(data, agreed) {
+      if (!agreed) return data;
+      const held = new Map((agreed.properties || []).map(p => [p.id, p]));
+      const open = agreed.settings && agreed.settings.activePropertyId;
+      if (data.properties.some(p => p.id === open)) data.settings.activePropertyId = open;
+      for (const p of data.properties) {
+        const was = held.get(p.id);
+        if (!was) continue;
+        if ((p.levels || []).some(l => l.id === was.activeLevelId)) p.activeLevelId = was.activeLevelId;
+        const tags = new Map((was.tags || []).map(t => [t.id, t]));
+        for (const t of p.tags || []) { const w = tags.get(t.id); if (!w) continue; if ('visible' in w) t.visible = w.visible; else delete t.visible; }
+      }
+      return data;
+    },
+  };
 }
 
 export async function connectDiskWorkspace({ hadLocal, onRemote }) {
@@ -220,7 +273,8 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   }) : null;
   // The open workspace in its saved form, synchronously: known pictures as references,
   // new ones still inline (the next save stores them).
-  const savedFormNow = () => pictures ? pictures.slim(ws.data).data : copy(ws.data);
+  const view = deviceView();
+  const savedFormNow = () => view.shared(pictures ? pictures.slim(ws.data).data : copy(ws.data), base?.data);
   const pictureAssets = data => pictures ? pictures.assetsFor(pictureRefs(data).keys()) : {};
   // The status line also says which kind of state it shows, for the phone bar and for
   // styling: saved, sending, waiting (not saved yet, tried again by itself) or refused (not
@@ -262,6 +316,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   function changed() {
     edits++;
     if (applying) return;
+    view.note(ws.data);
     pending = true; failure = null; status(savingText(), true);
     clearTimeout(timer); timer = setTimeout(() => sync().catch(failed), 700);
     keepSoon();
@@ -356,7 +411,12 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   async function apply(saved) {
     const data = pictures ? pictures.inflate(saved) : copy(saved);
     applying = true;
-    try { replaceWorkspace(data, { source: 'shared' }); await whenHydrated(); onRemote?.(); }
+    try {
+      // This device's own view goes back in before the records are compared and shown.
+      const change = replaceWorkspace(data, { source: 'shared', prepare: next => view.impose(next) });
+      view.note(ws.data);
+      await whenHydrated(); onRemote?.(change);
+    }
     finally { applying = false; }
   }
   async function resolveMerge(ancestor, local, remote) {
@@ -418,7 +478,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     }
     const remoteRevision = remote ? remote.revision : revision;
     const saved = pictures ? await pictures.slimStored(() => ws.data) : { data: copy(ws.data) };
-    const sentData = saved.data;
+    const sentData = view.shared(saved.data, base?.data);
     const uploadedFiles = new Map();
     const sentAssets = { ...await fileManifest(sentData, assets, listAllFileIds(sentData), uploadedFiles), ...pictureAssets(sentData) };
     if (migration && !migrationPack) migrationPack = { data: legacyRecovery, assets: await fileManifest(legacyRecovery, {}, legacyIds) };
@@ -579,10 +639,12 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       const index = ws.data.properties.findIndex(p => p.id === prop.id);
       if (index >= 0) {
         const accepted = await resolveMerge(before, ws.data.properties[index], working);
-        ws.data.properties[index] = accepted; touch();
-        // An open page holds the record it was built with. Rebuild it on the merged one, as
-        // after another device's save, or its next edits change a record nothing saves.
-        onRemote?.();
+        // The merged values go into the record that is already there: an open page, a dialog
+        // or a slow action holding it keeps the live one. The open page is then redrawn.
+        const live = ws.data.properties[index];
+        const keys = [...new Set([...Object.keys(live), ...Object.keys(accepted)])].filter(key => !sameJson(live[key], accepted[key]));
+        adoptRecord(live, accepted); touch();
+        onRemote?.({ properties: new Set([prop.id]), keys: new Map([[prop.id, keys]]), materials: false, other: false });
         await sync();
       }
     }

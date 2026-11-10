@@ -67,7 +67,7 @@ let currentName = '';
 async function boot() {
   const had = load();
   await whenHydrated();
-  await connectDiskWorkspace({ hadLocal: had, onRemote: () => { if (currentView) { refreshTopbar(); afterWorkspaceReplaced(); } } });
+  await connectDiskWorkspace({ hadLocal: had, onRemote: sharedChange });
   if (!diskWorkspace && (!had || ws.data.properties.length === 0 && ws.data.projects.length === 0)) {
     replaceWorkspace(demoWorkspace());
   }
@@ -200,6 +200,57 @@ function afterWorkspaceReplaced() {
   ensureBuiltinMaterials();
   remountView();
 
+}
+
+// Another device saved, or a SketchUp save or this device's kept copy was merged in. The
+// records are already updated in place (store.js keepRecords); `change` says which. The open
+// page is touched only as far as the change reaches it:
+// - nothing it shows changed (another property, or only what the other device is looking
+//   at): it is left exactly as it is;
+// - a text field has the cursor, or a dialog is open: the redraw waits until that is over,
+//   so nothing being typed is lost;
+// - the page can redraw from the changed records (MODEL does, keeping camera, mode and
+//   loaded scans): it does that; any other page is rebuilt, MODEL with its camera kept.
+let heldChange = null, holdWatch = null;
+function sharedChange(change) {
+  ensureBuiltinMaterials();
+  if (!currentView) return;
+  change = change || { all: true, properties: new Set(), keys: new Map() };
+  if (heldChange) {
+    for (const id of change.properties) heldChange.properties.add(id);
+    for (const [id, keys] of change.keys) heldChange.keys.set(id, heldChange.keys.has(id) && heldChange.keys.get(id) && keys ? [...new Set([...heldChange.keys.get(id), ...keys])] : null);
+    for (const flag of ['all', 'materials', 'other']) heldChange[flag] = heldChange[flag] || change[flag];
+  } else heldChange = { all: !!change.all, materials: !!change.materials, other: !!change.other, properties: new Set(change.properties), keys: new Map(change.keys) };
+  showSharedChange();
+}
+function enteringText() {
+  const a = document.activeElement;
+  return !!a && (a.isContentEditable || a.matches('textarea, input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=button]):not([type=file]):not([type=color])'));
+}
+function showSharedChange() {
+  if (!heldChange) return;
+  refreshTopbar();
+  if (enteringText() || document.querySelector('dialog[open]')) {
+    // Leaving the field or closing the dialog shows it (`close` does not bubble: capture).
+    if (!holdWatch) {
+      holdWatch = () => setTimeout(showSharedChange, 0);
+      document.addEventListener('focusout', holdWatch); document.addEventListener('close', holdWatch, true);
+    }
+    return;
+  }
+  if (holdWatch) { document.removeEventListener('focusout', holdWatch); document.removeEventListener('close', holdWatch, true); holdWatch = null; }
+  const change = heldChange; heldChange = null;
+  const active = activeProperty();
+  const whole = change.all || change.other || change.materials;
+  // PROJECTS lists every property; the other pages show the open one.
+  const reaches = whole || (active && change.properties.has(active.id)) || (currentName === 'projects' && change.properties.size > 0);
+  if (!reaches) return;
+  if (change.all || change.materials) disposeMaterials();
+  const keys = active && change.keys.get(active.id);
+  if (!whole && keys && currentView.sharedChange && currentView.sharedChange(keys)) { refreshHistoryControls(); return; }
+  revokePhotoUrls();
+  if (currentName === 'model') viewer3d.keepViewOnNextMount();
+  remountView();
 }
 
 // IMPORT and DEMO leave the previous workspace's scans and photos in IndexedDB on purpose
