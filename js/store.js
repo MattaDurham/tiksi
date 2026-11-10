@@ -892,8 +892,8 @@ export function readLength(text) {
   const ft = m[1] ? amount(m[1]) : 0, inch = m[2] ? amount(m[2]) : 0;
   if (!Number.isFinite(ft) || !Number.isFinite(inch)) return cannot();
   // A number on its own (no mark at all): one rule everywhere.
-  if (!m[1] && !m[3]) return { value: sign * (units() === 'metric' ? inch : inch * M_PER_IN) };
-  return { value: sign * (ft * M_PER_FT + inch * M_PER_IN) };
+  if (!m[1] && !m[3]) return { value: sign * (units() === 'metric' ? inch : inch / 12 * M_PER_FT) };
+  return { value: sign * (ft + inch / 12) * M_PER_FT };
 }
 
 // The value of readLength, NaN when the entry cannot be read.

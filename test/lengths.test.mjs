@@ -90,6 +90,20 @@ test('a number on its own is inches in feet and inches and metres in metric, in 
   store.ws.data.settings.units = 'imperial';
 });
 
+test('typed lengths store exactly the metres the earlier reader stored', () => {
+  store.ws.data.settings.units = 'imperial';
+  // The earlier reader worked out (feet + inches / 12) * 0.3048. Saved walls, openings and
+  // undo steps are compared exactly, so the new reader must give the same number to the bit.
+  const FT = 0.3048;
+  assert.equal(store.parseLen('8"'), 8 / 12 * FT);
+  assert.equal(store.parseLen('8"'), 0.2032);
+  assert.equal(store.parseLen("12'-6\""), (12 + 6 / 12) * FT);
+  assert.equal(store.parseLen("2'-9 1/2\""), (2 + 9.5 / 12) * FT);
+  assert.equal(store.parseLen("-7'-7\""), -((7 + 7 / 12) * FT));
+  assert.equal(store.parseLen('33 1/2"'), 33.5 / 12 * FT);
+  assert.equal(store.parseLen('85 cm'), 0.85);
+});
+
 test('typed money: thousands, k and m are read, anything else is refused with a reason', () => {
   const val = t => store.readMoney(t).value;
   assert.equal(val('250k'), 250000);
