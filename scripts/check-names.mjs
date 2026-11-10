@@ -54,8 +54,10 @@ if (args.includes('--refresh')) {
 let babel;
 try { babel = requireHere('playwright/lib/transform/babelBundle'); }
 catch { try { babel = createRequire(import.meta.url)('playwright/lib/transform/babelBundle'); } catch (error) {
-  console.error('check-names: Playwright is not installed in this folder (npm ci), so names cannot be checked.');
-  console.error(String(error.message || error).split('\n')[0]);
+  console.error('check-names: this check reads JavaScript with the parser that ships inside Playwright, the pinned dev');
+  console.error('dependency (its published path playwright/lib/transform/babelBundle), and could not load it.');
+  console.error('Install it in this folder with npm ci. If Playwright was upgraded and no longer has that path,');
+  console.error('update scripts/check-names.mjs. ' + String(error.message || error).split('\n')[0]);
   process.exit(1);
 } }
 const { babelParse, traverse } = babel;

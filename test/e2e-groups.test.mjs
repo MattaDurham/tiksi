@@ -88,4 +88,11 @@ test('--webkit runs only the phone suites, on Safari\'s engine', () => {
   } finally { run.done(); }
   const bad = runner({}, '--webkit', 'extra');
   try { assert.notEqual(bad.code, 0); } finally { bad.done(); }
+  // A Safari-engine run whose listed suite is missing fails instead of passing with nothing run.
+  const none = runner({ 'e2e-other.mjs': mark('other') }, '--webkit');
+  try {
+    assert.equal(none.code, 1, none.out);
+    assert.match(none.out, /not in tools\/: e2e-field-view\.mjs/);
+    assert.doesNotMatch(none.out, /Browser suites passed/);
+  } finally { none.done(); }
 });

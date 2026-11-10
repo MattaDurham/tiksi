@@ -91,3 +91,29 @@ test('Python: a name nothing defines and a missing project import fail; clean co
   assert.equal(result.code, 1);
   assert.match(result.out, /imports json and never uses it/);
 });
+
+test('Python: a name only another function sets is not defined', () => {
+  const result = py({ 'scripts/tool.py': 'def setup():\n    shared = 1\n    return shared\n\ndef use():\n    return shared\n\nprint(setup(), use())\n' });
+  assert.equal(result.code, 1);
+  assert.match(result.out, /scripts\/tool\.py:6: shared is not defined anywhere/);
+  // A function that declares it global and sets it does define it for the module.
+  assert.equal(py({ 'scripts/tool.py': 'def setup():\n    global shared\n    shared = 1\n\ndef use():\n    return shared\n\nsetup(); print(use())\n' }).code, 0);
+});
+
+test('Python: a string holding an import\'s name is not a use, except in __all__', () => {
+  let result = py({ 'scripts/tool.py': "import json\nprint('json')\n" });
+  assert.equal(result.code, 1);
+  assert.match(result.out, /imports json and never uses it/);
+  assert.equal(py({ 'scripts/tool.py': "import json\n__all__ = ['json']\n" }).code, 0);
+});
+
+test('Python: import * from a project file brings its names; from a package it is noted', () => {
+  const server = { 'server/__init__.py': '', 'server/store.py': 'def load():\n    return 1\n' };
+  assert.equal(py({ ...server, 'scripts/tool.py': 'from server.store import *\nprint(load())\n' }).code, 0);
+  let result = py({ ...server, 'scripts/tool.py': 'from server.store import *\nprint(save())\n' });
+  assert.equal(result.code, 1);
+  assert.match(result.out, /save is not defined anywhere/);
+  result = py({ 'scripts/tool.py': 'from os.path import *\nprint(join("a", "b"))\n' });
+  assert.equal(result.code, 0, result.out);
+  assert.match(result.out, /note: scripts\/tool\.py imports \* from os\.path/);
+});

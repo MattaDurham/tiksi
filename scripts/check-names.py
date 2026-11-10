@@ -4,7 +4,11 @@
 Reports, for the Python files in scripts/, tools/, server/, test/ and tests/:
   - a name used that nothing defines (not the file, not Python's built-ins);
   - `from server.x import name` (or another project file) where that file has no such name;
-  - a top-level import that nothing in the file uses.
+  - a top-level import that nothing in the file uses (a string holding its name is not a use,
+    except in __all__).
+A file with `from x import *` gets its names from x when x is a project file; when x is a
+package, the names it brings cannot be known, so that file's names are not checked for being
+defined, and a note says so.
 Known cases not fixed yet are listed in scripts/check-names-allow.json, as for the
 JavaScript check. Only the standard library is used.
 """
@@ -31,28 +35,31 @@ def tables(table):
         yield from tables(child)
 
 
-def top_names(tree):
-    """Names a module defines at its top level, wherever in the file they are bound."""
-    names = set()
-    star = False
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.add(node.name)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            for alias in node.names:
-                if alias.name == '*': star = True
-                else: names.add((alias.asname or alias.name).split('.')[0])
-        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
-            names.add(node.id)
-        elif isinstance(node, ast.ExceptHandler) and node.name:
-            names.add(node.name)
-        elif isinstance(node, ast.Global):
-            names.update(node.names)
-        elif hasattr(ast, 'MatchAs') and isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
-            names.add(node.name)
-        elif hasattr(ast, 'MatchMapping') and isinstance(node, ast.MatchMapping) and node.rest:
-            names.add(node.rest)
-    return names, star
+def module_names(source, rel, seen=None):
+    """The names a module defines at module level: what its top level binds, plus what its
+    functions bind after `global name`. A local of one function is not among them.
+    Returns (names, unknown): unknown names the modules a `from x import *` reads that are not
+    project files, whose names cannot be known without running them."""
+    table = symtable.symtable(source, rel, 'exec')
+    names, unknown = set(), []
+    for symbol in table.get_symbols():
+        if symbol.is_assigned() or symbol.is_imported() or symbol.is_namespace():
+            names.add(symbol.get_name())
+    for scope in tables(table):
+        if scope is table: continue
+        for symbol in scope.get_symbols():
+            if symbol.is_declared_global() and symbol.is_assigned(): names.add(symbol.get_name())
+    seen = (seen or set()) | {rel}
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.ImportFrom) and any(a.name == '*' for a in node.names):
+            target = project_module(node.module) if node.module and not node.level else None
+            if target is None or target.relative_to(ROOT).as_posix() in seen:
+                unknown.append(node.module or '.')
+                continue
+            inner, more = module_names(target.read_text(encoding='utf-8'), target.relative_to(ROOT).as_posix(), seen)
+            names.update(n for n in inner if not n.startswith('_'))
+            unknown += more
+    return names, unknown
 
 
 def project_module(name):
@@ -61,6 +68,16 @@ def project_module(name):
     if path.with_suffix('.py').is_file(): return path.with_suffix('.py')
     if (path / '__init__.py').is_file(): return path / '__init__.py'
     return None
+
+
+def use_line(tree, scope, name):
+    """The first line where this scope reads the name."""
+    owner = tree
+    if scope.get_type() != 'module':
+        owner = next((n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda))
+                      and n.lineno == scope.get_lineno() and getattr(n, 'name', 'lambda') == scope.get_name()), tree)
+    found = [n.lineno for n in ast.walk(owner) if isinstance(n, ast.Name) and n.id == name and isinstance(n.ctx, ast.Load)]
+    return min(found) if found else None
 
 
 def check(path, report):
@@ -72,7 +89,9 @@ def check(path, report):
     except SyntaxError as exc:
         report(rel, exc.lineno or 0, 'syntax', '', f'does not parse: {exc.msg}')
         return
-    defined, star = top_names(tree)
+    defined, unknown = module_names(source, rel)
+    if unknown:
+        print(f'note: {rel} imports * from {", ".join(unknown)}, so names it uses are not checked for being defined')
     lines = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and node.id not in lines: lines[node.id] = node.lineno
@@ -82,16 +101,15 @@ def check(path, report):
             if not symbol.is_referenced(): continue
             name = symbol.get_name()
             referenced.add(name)
-            local = scope.get_type() != 'module' and (symbol.is_local() or symbol.is_free() or symbol.is_parameter())
-            if local and not symbol.is_global(): continue
-            if scope.get_type() == 'class' and symbol.is_assigned(): continue
-            if name in defined or name in BUILTINS or name in MODULE_NAMES or star: continue
-            report(rel, lines.get(name, 0), 'undefined', name, f'{name} is not defined anywhere')
-    # Names exported as strings, in __all__ or in attribute access through globals(), count as uses.
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name): referenced.add(node.value.id)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.isidentifier():
-            referenced.add(node.value)
+            # A name bound in this function, or in a function around it, is that function's.
+            if scope.get_type() != 'module' and not symbol.is_global(): continue
+            if name in defined or name in BUILTINS or name in MODULE_NAMES or unknown: continue
+            report(rel, use_line(tree, scope, name) or lines.get(name, 0), 'undefined', name, f'{name} is not defined anywhere')
+    # Only __all__ makes a name in a string a use: a string that happens to hold the name is not.
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == '__all__' for t in node.targets):
+            for item in ast.walk(node.value):
+                if isinstance(item, ast.Constant) and isinstance(item.value, str): referenced.add(item.value)
     if path.name != '__init__.py':
         for node in tree.body:
             if not isinstance(node, (ast.Import, ast.ImportFrom)): continue
@@ -105,7 +123,7 @@ def check(path, report):
         if not isinstance(node, ast.ImportFrom) or node.level or not node.module: continue
         target = project_module(node.module)
         if target is None: continue
-        names, open_ = top_names(ast.parse(target.read_text(encoding='utf-8')))
+        names, open_ = module_names(target.read_text(encoding='utf-8'), target.relative_to(ROOT).as_posix())
         for alias in node.names:
             if alias.name == '*' or open_: continue
             if alias.name in names or project_module(node.module + '.' + alias.name): continue

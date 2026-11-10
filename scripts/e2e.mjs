@@ -76,7 +76,15 @@ const webkit = flag === '--webkit';
 const { index, count } = flag && !webkit ? parseGroup(args[1]) : { index: 1, count: 1 };
 const suites = (await readdir('tools')).filter(name => /^e2e-.*\.mjs$/.test(name));
 const durations = JSON.parse(await readFile(new URL('./e2e-durations.json', import.meta.url), 'utf8'));
-const group = webkit ? { files: WEBKIT_SUITES.filter(f => suites.includes(f)), seconds: 0 } : groupSuites(suites, durations, count)[index - 1];
+if (webkit) {
+  const missing = WEBKIT_SUITES.filter(f => !suites.includes(f));
+  if (!WEBKIT_SUITES.length || missing.length) {
+    console.error(WEBKIT_SUITES.length ? `The Safari-engine run lists suites that are not in tools/: ${missing.join(', ')}` : 'The Safari-engine run lists no suites.');
+    process.exit(1);
+  }
+}
+const group = webkit ? { files: [...WEBKIT_SUITES], seconds: 0 } : groupSuites(suites, durations, count)[index - 1];
+if (!group.files.length) { console.error('This run holds no browser suites; nothing would be tested.'); process.exit(1); }
 if (flag === '--list') {
   console.log(`Group ${index} of ${count}, about ${Math.round(group.seconds / 60)} minutes:`);
   for (const file of group.files) console.log(`  ${file}`);

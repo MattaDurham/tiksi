@@ -6,11 +6,15 @@ checkout's private state folder, then in the main checkout's, which branch copie
 environment variable already set wins. Every skipped test is printed with its reason, and the
 run fails when more tests skip for a reason than scripts/unit-skips.json allows, or a test
 skips for a reason it does not list: a skip that grows hides a test that stopped running.
+The allowance is kept per system (Linux for the online checks, Darwin for this Mac), and the
+merge check reads it from the live checkout's copy of this file's folder, so a branch cannot
+raise its own allowance.
 """
 import argparse
 from collections import Counter
 import json
 import os
+import platform
 from pathlib import Path
 import subprocess
 import sys
@@ -54,7 +58,9 @@ def main():
             suite.addTests(unittest.TestLoader().discover(folder, pattern='test_*.py'))
     result = unittest.TextTestRunner(verbosity=1).run(suite)
     budget_file = args.skips
-    budget = json.loads(budget_file.read_text(encoding='utf-8')).get('reasons', {}) if budget_file.exists() else {}
+    data = json.loads(budget_file.read_text(encoding='utf-8')) if budget_file.exists() else {}
+    system = platform.system()
+    budget = data.get('systems', {}).get(system, {}) if 'systems' in data else data.get('reasons', {})
     reasons = Counter()
     for test, reason in result.skipped:
         print(f'skipped: {test.id()}: {reason}')
@@ -64,7 +70,7 @@ def main():
     over = [(r, n) for r, n in reasons.items() if n > budget.get(r, 0)]
     for reason, count in over:
         print(f'error: {count} test(s) skipped because "{reason}", more than the {budget.get(reason, 0)} '
-              f'scripts/unit-skips.json allows', file=sys.stderr)
+              f'{budget_file.name} allows on {system}', file=sys.stderr)
     if result.skipped: print(f'{len(result.skipped)} skipped: ' + '; '.join(f'{n} {r}' for r, n in reasons.items()))
     return 0 if result.wasSuccessful() and not over else 1
 

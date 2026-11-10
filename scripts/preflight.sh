@@ -2,7 +2,8 @@
 set -eu
 # The checks beside this file grade the tree in the current folder. The merge tool runs the
 # live checkout's copy of this file inside the branch copy, so a branch cannot weaken the
-# syntax, name and private-state checks that grade it; the unit tests are the branch's own.
+# syntax, name and private-state checks or the allowance of skipped tests that grade it; the
+# unit tests themselves are the branch's own.
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 if [ "${1:-}" = '--list' ]; then
   echo 'syntax: all application, tool, test and server source parses'
@@ -14,15 +15,16 @@ if [ "${1:-}" = '--list' ]; then
   exit 0
 fi
 if [ "${1:-}" = '--fast' ]; then
-  # The owner skipped the checks: keep only the seconds-long syntax, name and private-state pass.
-  python3 "$HERE/check.py"
+  # The owner skipped the checks: keep only the seconds-long syntax and private-state pass.
+  python3 "$HERE/check.py" --fast
   exit 0
 fi
 if [ "${1:-}" = '--merge' ]; then
   # The merge into main: syntax, names, private state, unit tests and one browser open of the
   # app. The full browser checks run in main's online checks after the push.
   python3 "$HERE/check.py"
-  npm test
+  node --test --test-concurrency=1 test/*.test.mjs
+  python3 "$HERE/unit.py"
   node "$HERE/smoke-open.mjs"
   exit 0
 fi
