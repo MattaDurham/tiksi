@@ -144,6 +144,38 @@ def file_state(path):
     return 'file' if stat.S_ISREG(info.st_mode) else 'missing'
 
 
+# How much of its own history the server keeps: every recent save, then one a day, then one a month.
+KEEP_SAVES = 50
+DAILY_DAYS = 90
+# A stored original nothing refers to is removed only after this long, so an upload whose save
+# has not arrived yet (a phone offline for a while) still finds it.
+BLOB_GRACE = 30 * 86400
+REVISION_COPY = re.compile(r'^(\d+)\.json$')
+
+
+def prune_history(folder, now=None):
+    """Thin the saved catalog copies (<revision>.json) in folder: keep the newest KEEP_SAVES, then
+    the newest of each day for DAILY_DAYS, then the newest of each month. Recovery copies and
+    set-aside notes are never touched. Returns the removed paths."""
+    now = time.time() if now is None else now
+    copies = []
+    for path in Path(folder).iterdir():
+        match = REVISION_COPY.match(path.name)
+        if match:
+            try: copies.append((int(match[1]), path.stat().st_mtime, path))
+            except OSError: continue
+    copies.sort(reverse=True)
+    kept, removed = set(), []
+    for index, (revision, mtime, path) in enumerate(copies):
+        day = time.strftime('%Y-%m-%d', time.localtime(mtime))
+        bucket = ('day', day) if now - mtime <= DAILY_DAYS * 86400 else ('month', day[:7])
+        if index < KEEP_SAVES or bucket not in kept:
+            kept.add(bucket)
+            continue
+        path.unlink(missing_ok=True); removed.append(path)
+    return removed
+
+
 def replace_in_place(records, belongs, replacement):
     """records with those that belong replaced by replacement, at the place of the first of them."""
     out, placed = [], False
@@ -435,6 +467,31 @@ class WorkspaceService:
             os.fsync(out.fileno())
         os.replace(temp, self.path)
 
+    def collect_blobs(self, now=None):
+        """Remove stored originals that nothing kept refers to: not the catalog, not a project file
+        as last read, not a kept catalog copy, and not uploaded in the last BLOB_GRACE. Every
+        project file holds its own originals, so this store is a cache of them. Returns the count."""
+        now = time.time() if now is None else now
+        wanted = set()
+        def take(assets):
+            for asset in (assets or {}).values():
+                if isinstance(asset, dict) and isinstance(asset.get('hash'), str): wanted.add(asset['hash'])
+        for path in (self.root / 'history').glob('*.json'):
+            try: take(json.loads(path.read_text(encoding='utf-8')).get('assets'))
+            except (OSError, ValueError, AttributeError): continue
+        removed = 0
+        with self.lock:
+            take(self.state.get('assets'))
+            for assets in self.part_assets.values(): take(assets)
+            for path in (self.root / 'blobs').iterdir():
+                if not HASH.fullmatch(path.name) or path.name in wanted: continue
+                try:
+                    if now - path.stat().st_mtime < BLOB_GRACE: continue
+                    path.unlink(); removed += 1
+                except OSError: continue
+        if removed: log.info('Removed %d stored original(s) that nothing refers to any more.', removed)
+        return removed
+
     def store_member(self, archive, member):
         """Fingerprint one original in a project file; copy it into the blob store only when the
         store does not hold it yet."""
@@ -567,6 +624,7 @@ class WorkspaceService:
                 # Keep every committed revision for recovery; assets are never garbage-collected here.
                 history = self.root / 'history' / (str(self.state['revision']) + '.json')
                 self.keep_history(history)
+                prune_history(self.root / 'history')
             slices = request.get('projectData')
             # A project file the client did not change since the revision it saved against
             # is named instead of sent; the server already holds exactly that file.

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 import zipfile
@@ -90,6 +91,54 @@ class WorkspaceTests(unittest.TestCase):
         restarted = WorkspaceService(self.root / 'runtime', self.root / 'projects')
         self.assertEqual(restarted.snapshot()['revision'], revision)
         self.assertEqual([u['id'] for u in restarted.snapshot()['unavailable']], ['prop-a'])
+
+    def test_saved_catalog_copies_are_thinned_to_recent_then_daily_then_monthly(self):
+        from server.workspace import prune_history, KEEP_SAVES
+        folder = self.root / 'history-test'; folder.mkdir()
+        now = 1_800_000_000.0; day = 86400
+        # Ten saves a day for 200 days, newest last; plus copies that are never removed.
+        revision = 0
+        for age in range(199, -1, -1):
+            for hour in range(10):
+                revision += 1
+                path = folder / (str(revision) + '.json'); path.write_text('{}')
+                os.utime(path, (now - age * day - (10 - hour) * 3600,) * 2)
+        keep = [folder / 'conflict-x.tiksi', folder / 'unreadable-save-note-1.json', folder / '12.unreadable-3.json']
+        for path in keep: path.write_text('{}')
+        removed = prune_history(folder, now)
+        left = sorted(int(p.stem) for p in folder.glob('*.json') if p.stem.isdigit())
+        self.assertEqual(left[-KEEP_SAVES:], list(range(revision - KEEP_SAVES + 1, revision + 1)), 'every recent save is kept')
+        older = left[:-KEEP_SAVES]
+        ages = [(now - (folder / (str(r) + '.json')).stat().st_mtime) / day for r in older]
+        recent_days = {int(a) for a in ages if a <= 90}
+        self.assertGreaterEqual(len(recent_days), 85, 'one a day for the last 90 days')
+        self.assertLessEqual(sum(a > 91 for a in ages), 5, 'then one a month')
+        self.assertLess(len(left), 160, 'bounded: far fewer than the 2000 saves')
+        self.assertTrue(all(p.exists() for p in keep), 'recovery copies and set-aside notes are never removed')
+        self.assertEqual(len(removed) + len(left), 2000)
+
+    def test_saving_keeps_a_bounded_number_of_catalog_copies(self):
+        for count in range(70): self.commit(workspace('A ' + str(count)))
+        copies = [p for p in (self.root / 'runtime' / 'history').glob('*.json') if p.stem.isdigit()]
+        self.assertEqual(len(copies), 50, 'seventy saves in one day keep the newest fifty copies')
+
+    def test_stored_originals_nothing_refers_to_are_removed_after_a_grace_period(self):
+        from server.workspace import BLOB_GRACE
+        data = self.two_with_originals()
+        kept = {a['hash'] for a in self.service.state['assets'].values()}
+        old_history = self.root / 'runtime' / 'history' / '1.json'
+        stray_old, _ = self.service.store_blob(io.BytesIO(b'replaced scan, long ago'))
+        in_history, _ = self.service.store_blob(io.BytesIO(b'scan an older kept save refers to'))
+        stray_new, _ = self.service.store_blob(io.BytesIO(b'uploaded, save not here yet'))
+        old_history.write_text(json.dumps({'revision': 1, 'assets': {'s': {'hash': in_history}}}))
+        now = time.time()
+        for digest in (stray_old, in_history, *kept):
+            os.utime(self.root / 'runtime' / 'blobs' / digest, (now - BLOB_GRACE - 10,) * 2)
+        self.assertEqual(self.service.collect_blobs(now), 1)
+        held = {p.name for p in (self.root / 'runtime' / 'blobs').iterdir()}
+        self.assertNotIn(stray_old, held)
+        self.assertTrue({in_history, stray_new, *kept} <= held)
+        self.commit(data, self.service.state['assets'])
 
     def test_videos_and_measurement_frames_travel_in_the_project_bundle(self):
         video, frame, stray = b'\x00\x00\x00\x18ftypmp42 synthetic video', b'\xff\xd8 synthetic frame', b'unreferenced'

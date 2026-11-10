@@ -147,7 +147,8 @@ class ServiceCallers(unittest.TestCase):
             def setup(self):
                 super().setup()
                 self.client_address = (test.caller, self.client_address[1])
-            def log_message(self, *args): pass
+            def log_message(self, format, *args): test.logged.append(format % args)
+        self.logged = []
         self.server = server = serve.AppServer(('127.0.0.1', 0), Handler)
         server.instance_file = None; server.allowed_hostname = '127.0.0.1'; server.allowed_hosts = []; server.remote_access = False
         server.workspace = WorkspaceService(state / 'workspace', state / 'projects')
@@ -215,6 +216,17 @@ class ServiceCallers(unittest.TestCase):
             self.caller = '127.0.0.1'
             self.assertEqual(self.call('/api/workspace/capabilities', headers=PAGE_HEADERS['workspace'])[0], 200, 'this Mac is still served')
         self.assertEqual(self.seen, ['workspace'])
+
+    def test_routine_successful_reads_are_not_logged_but_writes_and_failures_are(self):
+        token = json.loads(self.call('/api/workspace/capabilities', headers=PAGE_HEADERS['workspace'])[1])['token']
+        for _ in range(5):
+            self.assertEqual(self.call('/api/workspace/head', headers={**PAGE_HEADERS['workspace'], 'X-Tiksi-Token': token})[0], 200)
+        self.assertEqual(self.call('/index.html')[0], 200)
+        self.assertEqual(self.logged, [], 'every page polls every few seconds; those reads fill no log')
+        self.assertEqual(self.call('/js/not-there.js')[0], 404)
+        self.call('/api/workspace/recovery', 'POST', {**PAGE_HEADERS['workspace'], 'X-Tiksi-Token': token}, b'{}')
+        self.assertTrue(any('404' in line for line in self.logged), self.logged)
+        self.assertTrue(any('POST /api/workspace/recovery' in line for line in self.logged), self.logged)
 
     def test_a_stolen_token_is_still_refused_for_every_method(self):
         tokens = {service: json.loads(self.call('/api/' + service + '/capabilities', headers=PAGE_HEADERS.get(service))[1])['token'] for service in SERVICES}

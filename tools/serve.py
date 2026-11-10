@@ -45,6 +45,12 @@ class AppHandler(SimpleHTTPRequestHandler):
         self.response_status = code
         super().send_response(code, message)
 
+    def log_request(self, code='-', size='-'):
+        # Every open page asks for the revision every few seconds; a successful read is not news.
+        # Writes, refusals and failures are still logged.
+        if self.command in ('GET', 'HEAD') and isinstance(code, int) and code < 400: return
+        super().log_request(code, size)
+
     def log_error(self, format, *args):
         # An idle connection timing out is the normal end of a persistent connection, not an error.
         if format.startswith('Request timed out'): return
@@ -263,6 +269,13 @@ def main():
         sys.path.insert(0, str(ROOT))
         from server.workspace import WorkspaceService
         server.workspace = WorkspaceService(args.state_dir / 'workspace', args.projects_dir)
+        def tidy(every=86400):
+            # Stored originals nothing refers to any more are removed a minute after start, then daily.
+            while not stopping.wait(60 if every is None else every):
+                try: server.workspace.collect_blobs()
+                except Exception: log.exception('Could not tidy the stored originals')
+                every = 86400
+        threading.Thread(target=tidy, args=(None,), daemon=True).start()
         server.reconstruction = None
         server.material_research = None
         if (ROOT / 'server/reconstruction.py').exists():
