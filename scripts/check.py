@@ -24,6 +24,7 @@ for folder in ['scripts', 'tools', 'server', 'test', 'tests']:
             print(exc, file=sys.stderr); failed = True
 for command in (['node', str(HERE / 'check-names.mjs')],
                 [sys.executable, str(HERE / 'check-names.py')],
+                [sys.executable, str(HERE / 'check-vendor.py')],
                 [sys.executable, str(HERE / 'check-private.py'), '--tree']):
     result = subprocess.run(command, cwd=ROOT)
     failed = failed or bool(result.returncode)
