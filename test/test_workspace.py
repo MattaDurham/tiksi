@@ -199,6 +199,49 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(restored.snapshot()['data']['properties'][0]['name'], 'Recovered')
         self.assertFalse((self.service.root / 'pending.json').exists())
 
+    def test_a_half_written_save_note_found_at_start_is_set_aside_and_blocks_nothing(self):
+        self.commit(workspace('Saved'))
+        torn = b'{"state": {"revision": 2, "da'
+        (self.service.root / 'pending.json').write_bytes(torn)
+        with self.assertLogs('tiksi.workspace', 'WARNING'):
+            restarted = WorkspaceService(self.service.root, self.root / 'projects')
+        self.assertEqual(restarted.snapshot()['data']['properties'][0]['name'], 'Saved')
+        self.assertFalse((restarted.root / 'pending.json').exists())
+        aside = list((restarted.root / 'history').glob('unreadable-save-note-*.json'))
+        self.assertEqual([p.read_bytes() for p in aside], [torn], 'the note is kept, byte for byte')
+        self.service = restarted
+        self.commit(workspace('Saved again'))
+        self.assertEqual(WorkspaceService(restarted.root, self.root / 'projects').snapshot()['data']['properties'][0]['name'], 'Saved again')
+
+    def test_a_save_cut_off_while_writing_its_note_leaves_no_note_behind(self):
+        self.commit(workspace('Before'))
+        path = Path(self.service.paths['prop-a']); before = path.read_bytes()
+        real = json.dump
+        def torn(value, out, *args, **kwargs):
+            if isinstance(value, dict) and set(value) == {'state', 'files'}:
+                out.write('{"state": {"revi'); out.flush()
+                raise OSError('Synthetic full disk')
+            return real(value, out, *args, **kwargs)
+        with patch('server.workspace.json.dump', side_effect=torn):
+            with self.assertRaises(OSError): self.commit(workspace('Cut off'))
+        self.assertEqual(path.read_bytes(), before, 'no project file was replaced')
+        self.assertEqual(self.service.snapshot()['data']['properties'][0]['name'], 'Before', 'the next request works')
+        self.assertEqual(WorkspaceService(self.service.root, self.root / 'projects').snapshot()['data']['properties'][0]['name'], 'Before', 'and so does the next start')
+        self.commit(workspace('After'))
+        with zipfile.ZipFile(path) as archive: self.assertEqual(json.loads(archive.read('workspace.json'))['properties'][0]['name'], 'After')
+
+    def test_a_note_whose_project_file_has_since_gone_does_not_block_the_rest(self):
+        data = workspace(); data['properties'].append({'id': 'prop-b', 'name': 'B', 'scans': [], 'photos': []})
+        self.commit(data)
+        a = Path(self.service.paths['prop-a'])
+        state = json.loads((self.service.root / 'current.json').read_text())
+        (self.service.root / 'pending.json').write_text(json.dumps({'state': state, 'files': [[str(a) + '.gone.tmp', str(a)]]}))
+        a.unlink()
+        restarted = WorkspaceService(self.service.root, self.root / 'projects')
+        snapshot = restarted.snapshot()
+        self.assertEqual([p['name'] for p in snapshot['data']['properties']], ['B'])
+        self.assertEqual(snapshot['unavailable'][0]['id'], 'prop-a')
+
     def test_http_reads_require_trusted_peer_same_origin_and_custom_header(self):
         class Handler:
             path = '/api/workspace'; command = 'GET'; client_address = ('100.80.1.2', 1234)

@@ -1,6 +1,7 @@
 """Private, revisioned workspace and immutable assets shared by this Mac's clients."""
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -8,11 +9,13 @@ import secrets
 import subprocess
 import threading
 import tempfile
+import time
 import zipfile
 from urllib.parse import urlsplit
 
 from server.peers import trusted_peer
 
+log = logging.getLogger('tiksi.workspace')
 MAX_JSON = 32 * 1024 * 1024
 # A save envelope includes shared metadata, portable project slices and, during
 # migration, the recovery copy. Each can be valid while their sum exceeds one
@@ -132,10 +135,24 @@ class WorkspaceService:
     def recover(self):
         journal = self.root / 'pending.json'
         if not journal.exists(): return False
-        pending = json.loads(journal.read_text(encoding='utf-8'))
-        for source, destination in pending['files']:
+        try:
+            pending = json.loads(journal.read_text(encoding='utf-8'))
+            files = pending['files']
+            if not isinstance(pending['state'], dict) or not isinstance(files, list) or not all(
+                    isinstance(pair, list) and len(pair) == 2 and all(isinstance(item, str) for item in pair) for pair in files):
+                raise ValueError('unexpected save note')
+        except (ValueError, KeyError, TypeError, UnicodeDecodeError):
+            # The note is complete before any project file is replaced, so a note that cannot
+            # be read means that save never started: every project file is as it was. The
+            # note is kept for inspection, and so are the save's spare files.
+            aside = self.root / 'history' / ('unreadable-save-note-' + str(time.time_ns()) + '.json')
+            os.replace(journal, aside)
+            log.warning('An unreadable save note was set aside as %s; the project files were not changed by it.', aside)
+            return False
+        for source, destination in files:
+            # A spare file that is gone was already moved into place. If its destination is
+            # gone too, that project shows as unavailable rather than blocking the others.
             if Path(source).exists(): os.replace(source, destination)
-            elif not Path(destination).is_file(): raise WorkspaceError('An interrupted project save needs recovery', 409)
         temp = self.root / 'current.tmp'
         with temp.open('w', encoding='utf-8') as out:
             json.dump(pending['state'], out); out.flush(); os.fsync(out.fileno())
@@ -412,9 +429,16 @@ class WorkspaceService:
                 value['archived'] = {**self.state.get('archived', {}), **{i: name for i, name in self.paths.items() if i not in slices and i not in self.unavailable}}
                 for i in slices: value['archived'].pop(i, None)
                 journal = self.root / 'pending.json'
-                with journal.open('w', encoding='utf-8') as out:
-                    json.dump({'state': value, 'files': [[str(a), str(b)] for a, b, _ in staged]}, out)
-                    out.flush(); os.fsync(out.fileno())
+                # The note is written in full to a spare file and then renamed, so a crash or a
+                # full disk leaves either the whole note or none.
+                note = self.root / 'pending.tmp'
+                try:
+                    with note.open('w', encoding='utf-8') as out:
+                        json.dump({'state': value, 'files': [[str(a), str(b)] for a, b, _ in staged]}, out)
+                        out.flush(); os.fsync(out.fileno())
+                    os.replace(note, journal)
+                finally:
+                    if note.exists(): note.unlink()
                 for temp, dest, identifier in staged:
                     os.replace(temp, dest)
                     self.stamps[str(dest)] = (dest.stat().st_mtime_ns, dest.stat().st_size)
