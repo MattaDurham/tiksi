@@ -149,13 +149,15 @@ export function mirrorSpec(prop, materials) {
     const st = state.get(f.id);
     if (!st) continue;
     const { origin, angle, toLocal } = fixtureLocalFrame(f);
-    const r6 = v => Math.round(v * 1e6) / 1e6 || 0;
+    // Written unrounded, as walls are: the server measures the piece back from these points, and
+    // a point rounded here could read back a micrometre off and change its signature.
+    const plain = v => v || 0;   // -0 and a missing value as 0, nothing rounded
     const parts = fixtureParts(f).filter(q => q.pts.length >= 3 && q.y1 - q.y0 > 1e-4).map(q => ({
-      pts: q.pts.map(pt => toLocal(pt).map(r6)), z0: r6(q.y0), z1: r6(q.y1),
+      pts: q.pts.map(pt => toLocal(pt).map(plain)), z0: plain(q.y0), z1: plain(q.y1),
       material: finish(q.material, FALLBACK['fx-' + q.role] ? 'fx-' + q.role : 'fx-body', 'fixture ' + f.id),
     }));
     fixtures.push({ id: f.id, level: lvl.id, elevation: lvl.elevation, name: fixtureLabel(f), kind: f.kind, subtype: f.subtype || null, shape: fixtureShape(f),
-      origin: origin.map(r6), angle: r6(angle), parts, base: st.params, tag: tag('fixture:' + f.id), local: st.params.shape === 'run' ? { pts: f.pts.map(pt => toLocal(pt).map(r6)) } : null });
+      origin: origin.map(plain), angle: plain(angle), parts, base: st.params, tag: tag('fixture:' + f.id), local: st.params.shape === 'run' ? { pts: f.pts.map(pt => toLocal(pt).map(plain)) } : null });
   }
   const elements = {};
   for (const [id, st] of state) elements[id] = { kind: st.kind, sig: st.sig };
