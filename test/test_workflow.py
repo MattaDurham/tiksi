@@ -344,7 +344,7 @@ class SERVICE:
     def test_merge_refuses_when_github_main_has_commits_local_main_lacks(self):
         remote, target, info = self.merge_ready()
         other = Path(self.temp.name) / 'other'
-        self.git('clone', str(remote), str(other))
+        self.git('clone', '-b', 'main', str(remote), str(other))
         self.git('config', 'user.name', 'Synthetic Test', cwd=other)
         self.git('config', 'user.email', 'test@example.com', cwd=other)
         (other / 'README.md').write_text('pushed from elsewhere', encoding='utf-8')
@@ -393,7 +393,7 @@ class SERVICE:
 
     def use_real_checks(self):
         """Give the synthetic live checkout this repository's quick checks."""
-        for name in ['preflight.sh', 'check.py', 'check-private.py', 'check-names.py', 'check-names.mjs',
+        for name in ['preflight.sh', 'check.py', 'check-private.py', 'check-names.py', 'check-names.mjs', 'check-vendor.py',
                      'check-names-allow.json', 'browser-globals.json', 'smoke-open.mjs']:
             shutil.copy(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         (self.root / 'package.json').write_text(json.dumps({'type': 'module', 'scripts': {
@@ -405,6 +405,9 @@ class SERVICE:
     def test_the_live_checkout_checks_grade_a_branch_that_weakens_its_own(self):
         self.use_real_checks()
         remote, target, _ = self.merge_ready()
+        # Without the credential the same checks pass, so the refusal below is theirs.
+        clean = subprocess.run(['sh', str(self.root / 'scripts/preflight.sh'), '--fast'], cwd=target, capture_output=True, text=True)
+        self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
         (target / 'scripts/check-private.py').write_text('import sys\nsys.exit(0)\n', encoding='utf-8')
         (target / 'settings.js').write_text('export const token = "ghp_' + 'C' * 40 + '";\n', encoding='utf-8')
         self.git('add', '.', cwd=target); self.git('commit', '-qm', 'Weaken the guard', cwd=target)
