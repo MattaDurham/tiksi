@@ -100,6 +100,15 @@ def versioned_page(document):
         return found[1] + (versioned or './' + found[2]) + found[3]
     return re.sub(r'(<link rel="stylesheet" href=")\./((?:%s)/[^"?]+)(")' % '|'.join(VERSIONED), link, document)
 
+class NoBody:
+    """Where a HEAD answer's body goes: nowhere."""
+    def write(self, data): return len(data)
+    def flush(self): pass
+
+
+NO_BODY = NoBody()
+
+
 class AppHandler(SimpleHTTPRequestHandler):
     extensions_map = {**SimpleHTTPRequestHandler.extensions_map,
                       '.js': 'text/javascript', '.webmanifest': 'application/manifest+json'}
@@ -176,6 +185,15 @@ class AppHandler(SimpleHTTPRequestHandler):
         if not self.dispatch(): super().do_GET()
 
     def do_HEAD(self):
+        path = urlsplit(self.path).path
+        if (path == '/api' or path.startswith('/api/')) and path != '/api/instance':
+            # A service answers HEAD as it answers GET, and only its headers are sent: a page can
+            # ask whether the Mac holds a stored original without downloading it.
+            real, self.drop_body = self.wfile, True
+            try:
+                if not self.dispatch(): self.send_error(404)
+            finally: self.wfile, self.drop_body = real, False
+            return
         if not self.valid_host(): self.send_error(403, 'Host is not allowed')
         else: super().do_HEAD()
 
@@ -343,6 +361,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_header('Connection', 'close')
         self.body_framed = False
         super().end_headers()
+        if getattr(self, 'drop_body', False): self.wfile = NO_BODY
 
 class AppServer(ThreadingHTTPServer):
     daemon_threads = True

@@ -113,4 +113,26 @@ class StaticFiles(unittest.TestCase):
         self.assertEqual(self.call('/js/main.js')[1].get('cache-control'), 'no-cache')
 
 
+    def test_a_page_can_ask_whether_the_mac_holds_an_original_without_downloading_it(self):
+        payload = b'synthetic original ' * 1000
+        digest, _ = self.server.workspace.store_blob(io.BytesIO(payload))
+        auth = {**WORKSPACE, 'X-Tiksi-Token': self.token}
+        status, headers, body = self.call('/api/workspace/blobs/' + digest, 'HEAD', auth)
+        self.assertEqual((status, body), (200, b'')); self.assertEqual(int(headers['content-length']), len(payload))
+        self.assertEqual(self.call('/api/workspace/blobs/' + 'f' * 64, 'HEAD', auth)[0], 404)
+        self.assertEqual(self.call('/api/workspace/blobs/' + digest, 'HEAD', WORKSPACE)[0], 403, 'the token is still needed')
+        # The connection stays usable after a HEAD answer: the next answer is read whole.
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=10)
+        try:
+            for method in ('HEAD', 'GET', 'HEAD', 'GET'):
+                connection.request(method, '/api/workspace/blobs/' + digest, headers=auth)
+                response = connection.getresponse(); got = response.read()
+                self.assertEqual((response.status, got), (200, payload if method == 'GET' else b''), method)
+        finally: connection.close()
+        status, _, body = self.call('/api/workspace/blobs/held', 'POST', {**auth, 'Content-Type': 'application/json'},
+                                    json.dumps({'hashes': [digest, 'f' * 64, 'not a hash', digest]}).encode())
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {'held': [digest], 'sizes': {digest: len(payload)}})
+
+
 if __name__ == '__main__': unittest.main()

@@ -950,7 +950,14 @@ class WorkspaceService:
                 target, action = open_in_folder(self.project_folder(identifier), request.get('path', ''), self.run)
                 # action is 'opened', or 'shown' when the file is not a document and was only shown in Finder.
                 self.reply(h, 200, {'path': str(target.relative_to(self.project_folder(identifier).resolve())), 'folder': self.project_folder(identifier).name, 'action': action})
-            elif path.startswith('/api/workspace/blobs/') and h.command == 'GET':
+            elif path == '/api/workspace/blobs/held' and h.command == 'POST':
+                # Which of these stored originals the Mac already holds, in one question.
+                try: asked = json.loads(self.read(h, 2 * 1024 * 1024)).get('hashes')
+                except (ValueError, UnicodeDecodeError, AttributeError): raise WorkspaceError('Send {"hashes": [...]}')
+                if not isinstance(asked, list) or len(asked) > 10000 or not all(isinstance(d, str) for d in asked): raise WorkspaceError('Send at most 10000 hashes')
+                held = [d for d in dict.fromkeys(asked) if HASH.fullmatch(d) and (self.root / 'blobs' / d).is_file()]
+                self.reply(h, 200, {'held': held, 'sizes': {d: (self.root / 'blobs' / d).stat().st_size for d in held}})
+            elif path.startswith('/api/workspace/blobs/') and h.command in ('GET', 'HEAD'):
                 digest = path.removeprefix('/api/workspace/blobs/')
                 if not HASH.fullmatch(digest): raise WorkspaceError('Asset not found', 404)
                 dest = self.root / 'blobs' / digest
@@ -978,6 +985,7 @@ class WorkspaceService:
                 h.send_header('ETag', tag)
                 h.send_header('Cache-Control', 'private, max-age=31536000, immutable')
                 h.end_headers()
+                if h.command == 'HEAD': return True
                 with dest.open('rb') as source:
                     source.seek(start); part = Part(source, end - start + 1)
                     while chunk := part.read(1024 * 1024): h.wfile.write(chunk)
