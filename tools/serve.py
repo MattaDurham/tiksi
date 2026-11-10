@@ -15,7 +15,6 @@ import signal
 import socket
 import sys
 import threading
-import time
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
