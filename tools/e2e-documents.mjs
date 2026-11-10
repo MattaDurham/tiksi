@@ -145,7 +145,12 @@ try {
     window.__restorePut = () => { IDBObjectStore.prototype.put = put; };
     IDBObjectStore.prototype.put = function (...args) { if (this.name === 'files') throw new DOMException('Synthetic full disk', 'QuotaExceededError'); return put.apply(this, args); };
   });
-  await page.evaluate(async () => { window.__store = await import('/js/store.js'); });
+  await page.evaluate(async () => {
+    window.__store = await import('/js/store.js');
+    // Every change notice during the failed save, with the revisions the set held at the time.
+    window.__seen = [];
+    window.__offSeen = window.__store.onChange(() => window.__seen.push(window.__store.activeProperty().docSets[0].revisions.length));
+  });
   await page.locator('[data-save]').click();
   // Any change elsewhere redraws the sheet while the PDF renders, with the new revision on it.
   await page.evaluate(() => window.__store.touch());
@@ -154,10 +159,33 @@ try {
   const afterFail = await prop('return { revs: p.docSets[0].revisions.length, docs: p.photos.filter(x => x.kind === "document").length }');
   check(afterFail.revs === 0 && afterFail.docs === 0 && /Synthetic full disk/.test(await page.locator('[data-status]').textContent()), 'a PDF that cannot be stored leaves no revision without a file, and says why');
   check(/None saved yet/.test(await page.locator('.dc-paper svg').innerHTML()), 'the title block still lists no revision');
+  const seen = await page.evaluate(() => { window.__offSeen(); return window.__seen; });
+  check(seen.includes(1) && seen.at(-1) === 0, 'the failed save marks the project changed after dropping the revision, so a save made meanwhile is put right (' + seen.join(', ') + ')');
+
+  // A browser that cannot make an image that large hands back nothing: the save fails and says
+  // so, and leaves no revision, instead of storing blank pages.
+  await page.evaluate(() => {
+    const toBlob = HTMLCanvasElement.prototype.toBlob;
+    window.__restoreBlob = () => { HTMLCanvasElement.prototype.toBlob = toBlob; };
+    HTMLCanvasElement.prototype.toBlob = function (cb, ...rest) { if (this.width > 4000) return cb(null); return toBlob.call(this, cb, ...rest); };
+  });
+  await page.locator('[data-save]').click();
+  await page.waitForFunction(() => /could not draw sheet/.test(document.querySelector('[data-status]')?.textContent || ''), null, { timeout: 120000 });
+  await page.evaluate(() => window.__restoreBlob());
+  const afterBlank = await prop('return { revs: p.docSets[0].revisions.length, docs: p.photos.filter(x => x.kind === "document").length }');
+  check(afterBlank.revs === 0 && afterBlank.docs === 0, 'a sheet image the browser cannot make leaves no revision');
+  check(await page.locator('[data-status]').textContent() === 'The PDF could not be made: this browser could not draw sheet 1 as a 4964 x 3212 pixel image (292 dpi)', 'and says which sheet and size failed');
+
+  const sizes = await page.evaluate(async () => {
+    const { sheetDpi } = await import('/js/documentcenter.js'); const { PAPERS } = await import('/js/doc-sets.js');
+    return PAPERS.map(p => { const d = sheetDpi(p); return { id: p.id, dpi: d, px: Math.round(p.w * d) * Math.round(p.h * d) }; });
+  });
+  check(sizes.every(s => s.px <= 16e6) && sizes.find(s => s.id === 'tabloid').dpi === 292, 'every paper size stays under 16 million pixels, which iPhone and iPad Safari can draw (' + sizes.map(s => s.id + ' ' + s.dpi + ' dpi').join(', ') + ')');
 
   // Save a PDF of the set into the property as revision 1.
   await page.locator('[data-save]').click();
   await page.waitForFunction(() => /Saved/.test(document.querySelector('[data-status]')?.textContent || ''), null, { timeout: 120000 });
+  check(/\(sheets at 292 dpi\)\.$/.test(await page.locator('[data-status]').textContent()), 'the save says the resolution it used');
   const info = await page.evaluate(async () => {
     const s = await import('/js/store.js'); const { photoBytes } = await import('/js/photos-store.js');
     const p = s.activeProperty(); const r = p.docSets[0].revisions[0]; const d = p.photos.find(x => x.id === r.documentId);
@@ -166,7 +194,7 @@ try {
   });
   check(info.n === 1 && info.mime === 'application/pdf' && /rev 1/.test(info.name), 'SAVE PDF TO PROJECT stores revision 1 as a PDF document (' + info.name + ')');
   check(info.head === '%PDF-1.4' && info.count === 2 && info.pages === 2, 'the PDF has one page per sheet (' + info.count + ')');
-  check(info.widths.length === 2 && info.widths.every(w => w === 17 * 300), 'each tabloid sheet is drawn at 300 dpi, so small dimensions stay sharp (' + info.widths.join(', ') + ' px wide)');
+  check(info.widths.length === 2 && info.widths.every(w => w === 17 * 292), 'each tabloid sheet is drawn at 292 dpi, so small dimensions stay sharp (' + info.widths.join(', ') + ' px wide)');
   check(/>1 {3}\d{4}-\d{2}-\d{2} {3}Issued</.test(await page.locator('.dc-paper svg').innerHTML()), 'the title block lists revision 1');
   await page.locator('[data-doc]').first().click();
   await page.locator('.dc-viewer-page img').waitFor();

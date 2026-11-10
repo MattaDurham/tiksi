@@ -28,8 +28,9 @@ import { onePagerStatus, latestVersion } from './one-pager.js';
 const PT = 72;
 const EXPORT_DPI = 150;            // model renders and pictures inside views
 const SHEET_DPI = 300;             // the sheet itself: 6.5-point dimensions and schedules stay sharp
-const SHEET_MAX_PX = 40e6;         // a 36 x 24 in sheet would be 78 million pixels at 300 dpi
-// The sheet's resolution: 300 dpi, or less on the largest paper so the page fits in memory.
+const SHEET_MAX_PX = 16e6;         // iPhone and iPad Safari refuse a canvas over about 16.7 million pixels
+// The sheet's resolution: 300 dpi, or less on larger paper so the page stays under SHEET_MAX_PX
+// (letter 300 dpi, tabloid 292, ARCH C 192, ARCH D 136).
 export function sheetDpi(paper) { return Math.min(SHEET_DPI, Math.floor(Math.sqrt(SHEET_MAX_PX / (paper.w * paper.h)))); }
 
 let el = null, prop = null;
@@ -619,7 +620,7 @@ function bindVpInspector(host, v) {
   host.querySelectorAll('[data-len]').forEach(i => i.onchange = () => {
     const k = i.dataset.len;
     if (k === 'depth' && !i.value.trim()) { v.depth = 0; changed(true); return; }
-    const m = parseLen(i.value);
+    const m = parseLen(i.value, 'feet');
     if (Number.isFinite(m) && m > 0) { v[k] = m; changed(true); } else i.value = v[k] ? fmtLen(v[k]) : '';
   });
   host.querySelectorAll('[data-layer]').forEach(i => i.onchange = () => { v.layers[i.dataset.layer] = i.checked; changed(); });
@@ -749,7 +750,7 @@ async function exportPdf(saveToProject) {
   const bar = el.querySelector('[data-toolbar]');
   bar.querySelectorAll('button').forEach(b => b.disabled = true);
   try {
-    const date = isoToday();
+    const date = isoToday(), dpi = sheetDpi(paperOf(set));
     if (saveToProject) {
       const n = (set.revisions[set.revisions.length - 1]?.n || 0) + 1;
       const name = set.name + ' - rev ' + n + ' - ' + date + '.pdf';
@@ -759,24 +760,27 @@ async function exportPdf(saveToProject) {
       set.revisions.push(rev);
       let doc;
       try {
-        const file = new File([await setPdf(set, k => setStatus('Rendering sheet ' + k + ' of ' + set.sheets.length + ' for revision ' + n + '…'))], name, { type: 'application/pdf' });
+        const file = new File([await setPdf(set, k => setStatus('Rendering sheet ' + k + ' of ' + set.sheets.length + ' at ' + dpi + ' dpi for revision ' + n + '…'))], name, { type: 'application/pdf' });
         doc = await addDocumentFromFile(prop, file);
       } catch (e) {
         const i = set.revisions.indexOf(rev);
         if (i >= 0) set.revisions.splice(i, 1);
+        // Something else may have saved the project while the PDF rendered, with the revision
+        // in it: mark the project changed so the next save takes it off disk too.
+        touch();
         // A redraw during the save may have drawn the revision on the paper; take it off again.
         if (el) { renderLists(); renderInspector(); drawSheet(); }
         throw e;
       }
-      doc.notes = 'Drawing set "' + set.name + '", revision ' + n + ', saved ' + date + ' from DOCUMENTS (' + set.sheets.length + ' sheet' + (set.sheets.length === 1 ? '' : 's') + ').';
+      doc.notes = 'Drawing set "' + set.name + '", revision ' + n + ', saved ' + date + ' from DOCUMENTS (' + set.sheets.length + ' sheet' + (set.sheets.length === 1 ? '' : 's') + ' at ' + dpi + ' dpi).';
       rev.documentId = doc.id;
       touch();
-      setStatus('Saved ' + name + ' to this property\'s documents.');
+      setStatus('Saved ' + name + ' to this property\'s documents (sheets at ' + dpi + ' dpi).');
       renderLists(); renderInspector(); drawSheet();
     } else {
-      const bytes = await setPdf(set, n => setStatus('Rendering sheet ' + n + ' of ' + set.sheets.length + '…'));
+      const bytes = await setPdf(set, n => setStatus('Rendering sheet ' + n + ' of ' + set.sheets.length + ' at ' + dpi + ' dpi…'));
       download(new Blob([bytes], { type: 'application/pdf' }), set.name + ' - ' + date + '.pdf');
-      setStatus('PDF downloaded.');
+      setStatus('PDF downloaded (sheets at ' + dpi + ' dpi).');
     }
   } catch (e) {
     console.error(e);
@@ -812,9 +816,13 @@ export async function setPdf(set, progress) {
     const c = document.createElement('canvas');
     c.width = W; c.height = H;
     const ctx = c.getContext('2d');
+    const refused = () => new Error('this browser could not draw sheet ' + (i + 1) + ' as a ' + W + ' x ' + H + ' pixel image (' + dpi + ' dpi)');
+    if (!ctx) throw refused();
     ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
     ctx.drawImage(img, 0, 0, W, H);
     const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
+    // A browser that cannot make an image this size hands back nothing: fail, never a blank page.
+    if (!blob || !blob.size) throw refused();
     pages.push({ jpeg: new Uint8Array(await blob.arrayBuffer()), px: [W, H], inches: [paper.w, paper.h] });
   }
   return pdfFromJpegs(pages, { title: prop.name + ' - ' + set.name, date: new Date().toISOString() });
