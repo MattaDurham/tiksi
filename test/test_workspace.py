@@ -181,6 +181,36 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(status, 422); self.assertIn('Mac running Tiksi', reply['error'])
         self.service.run.assert_not_called()
 
+    def test_open_on_this_mac_opens_documents_and_only_shows_anything_else_in_finder(self):
+        self.commit(workspace())
+        folder = Path(self.service.paths['prop-a']).parent
+        files = {'Product documents/spec sheet.PDF': 'opened', 'Photos/kitchen.heic': 'opened', 'Drawings/plan.dwg': 'opened',
+                 'Downloads/installer.command': 'shown', 'Downloads/run.sh': 'shown', 'Downloads/page.html': 'shown',
+                 'Downloads/link.webloc': 'shown', 'Downloads/no extension': 'shown', 'Downloads/Tool.app': 'shown',
+                 'Product documents': 'opened', 'Version 1.2': 'opened'}
+        folders = {'Downloads/Tool.app', 'Product documents', 'Version 1.2'}
+        for relative in files:
+            target = folder / relative
+            if relative in folders: target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(b'synthetic')
+        self.service.run = Mock(return_value=Mock(returncode=0, stderr=''))
+        for relative, expected in files.items():
+            data = json.dumps({'path': relative}).encode()
+            class Handler:
+                path = '/api/workspace/open/prop-a'; command = 'POST'; client_address = ('127.0.0.1', 1234); connection = Mock()
+                headers = {'Host': 'localhost:8888', 'Content-Length': str(len(data)), 'X-Tiksi-Workspace': '1', 'X-Tiksi-Token': self.service.token}
+                rfile = io.BytesIO(data); wfile = io.BytesIO()
+                def send_response(self, status): self.status = status
+                def send_header(self, *args): pass
+                def end_headers(self): pass
+            handler = Handler(); self.service.dispatch(handler)
+            reply = json.loads(handler.wfile.getvalue())
+            self.assertEqual((handler.status, reply['action']), (200, expected), relative)
+            command = self.service.run.call_args[0][0]
+            target = str((folder / relative).resolve())
+            self.assertEqual(command, ['open', target] if expected == 'opened' else ['open', '-R', target], relative)
+
     def test_missing_assets_fail_without_overwrite(self):
         self.commit(workspace())
         with self.assertRaises(WorkspaceError): self.commit(workspace('Bad'), {'missing': {'hash': 'f' * 64, 'size': 4}})

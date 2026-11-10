@@ -51,8 +51,31 @@ class WorkspaceError(ValueError):
         self.status = status
 
 
+# Kinds of file "Open on this Mac" hands to the Mac's default app: documents, pictures,
+# videos and drawings or models. Anything else (an app, a script, a shortcut, a web page) is
+# shown in Finder instead, so a click never launches a program that ended up in the folder.
+DOCUMENT_TYPES = frozenset((
+    '.pdf', '.txt', '.md', '.rtf', '.rtfd', '.csv', '.tsv', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.pages', '.numbers', '.key', '.odt', '.ods', '.odp',
+    '.jpg', '.jpeg', '.png', '.gif', '.heic', '.heif', '.tif', '.tiff', '.webp', '.bmp', '.dng',
+    '.mov', '.mp4', '.m4v',
+    '.skp', '.dwg', '.dxf', '.ifc', '.usdz', '.glb', '.gltf', '.obj', '.stl', '.ply', '.3dm', '.e57', '.las', '.laz'))
+
+
+def opens_directly(target):
+    """True for a document, or a plain folder (opened in Finder); False for anything to show in Finder only."""
+    suffix = target.suffix.lower()
+    if suffix in DOCUMENT_TYPES: return True
+    if target.is_dir():
+        # A folder named like a bundle (Example.app, Tool.workflow) is a program to the Mac.
+        return not (suffix[1:].isalpha() if suffix else False)
+    return False
+
+
 def open_in_folder(folder, relative, run=subprocess.run):
-    """Open a file or folder inside a project folder with the Mac's default app (Finder for folders)."""
+    """Open a document or folder inside a project folder with the Mac's default app (Finder for
+    folders). Any other kind of file is shown in Finder, selected, and not opened.
+    Returns the target and 'opened' or 'shown'."""
     if not isinstance(relative, str) or len(relative) > 1024 or '\0' in relative or relative.startswith(('/', '\\')):
         raise WorkspaceError('Invalid project file path')
     parts = Path(relative).parts
@@ -61,10 +84,12 @@ def open_in_folder(folder, relative, run=subprocess.run):
     target = (root / relative).resolve()
     if not target.is_relative_to(root): raise WorkspaceError('Invalid project file path')
     if not target.exists(): raise WorkspaceError((relative or 'The project folder') + ' is not in the project folder on this Mac', 404)
-    try: result = run(['open', str(target)], capture_output=True, text=True, timeout=30)
+    action = 'opened' if target == root or opens_directly(target) else 'shown'
+    command = ['open', str(target)] if action == 'opened' else ['open', '-R', str(target)]
+    try: result = run(command, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as error: raise WorkspaceError('Could not open ' + target.name + ': ' + str(error), 422)
     if result.returncode: raise WorkspaceError('Could not open ' + target.name + ': ' + (result.stderr or '').strip()[:300], 422)
-    return target
+    return target, action
 
 
 def project_file_base(name):
@@ -612,8 +637,9 @@ class WorkspaceService:
                 try: request = json.loads(self.read(h, 64 * 1024))
                 except (ValueError, UnicodeDecodeError): raise WorkspaceError('Open request must be JSON')
                 if not isinstance(request, dict): raise WorkspaceError('Open request must be an object')
-                target = open_in_folder(self.project_folder(identifier), request.get('path', ''), self.run)
-                self.reply(h, 200, {'path': str(target.relative_to(self.project_folder(identifier).resolve())), 'folder': self.project_folder(identifier).name})
+                target, action = open_in_folder(self.project_folder(identifier), request.get('path', ''), self.run)
+                # action is 'opened', or 'shown' when the file is not a document and was only shown in Finder.
+                self.reply(h, 200, {'path': str(target.relative_to(self.project_folder(identifier).resolve())), 'folder': self.project_folder(identifier).name, 'action': action})
             elif path.startswith('/api/workspace/blobs/') and h.command == 'GET':
                 digest = path.removeprefix('/api/workspace/blobs/')
                 if not HASH.fullmatch(digest): raise WorkspaceError('Asset not found', 404)
