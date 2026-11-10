@@ -38,6 +38,8 @@ class WorkflowTests(unittest.TestCase):
         (self.root / '.gitignore').write_text('.worktrees/\nAGENTS.local.md\n.tiksi-*\n', encoding='utf-8')
         self.git('add', '.')
         self.git('commit', '-m', 'Synthetic root')
+        # The private-data check needs a word list on this Mac; this one is synthetic.
+        (self.root / '.git' / 'tiksi-private-patterns').write_text('Synthetic Owner Word\n', encoding='utf-8')
         self.workflow = branch.Workflow(self.root)
         self.children = []
         # Concurrent suites have distinct disposable Git repositories and locks.
@@ -334,6 +336,40 @@ class SERVICE:
         os.utime(lock, (old, old))
         with self.workflow.lock(): pass
 
+    def test_discard_keeps_a_pushed_branch_that_is_not_in_main(self):
+        remote = self.add_origin()
+        target = self.start()
+        self.commit_feature(target)
+        head = self.git('rev-parse', 'HEAD', cwd=target)
+        self.git('push', '-u', 'origin', 'codex/feature', cwd=target)
+        with patch.object(self.workflow, 'gh'), patch.object(self.workflow, 'pr_info', return_value=None):
+            self.workflow.discard('feature', owner_approved=True)
+        self.assertNotIn('codex/feature', self.git('branch', '-a'))
+        self.assertEqual(self.git('ls-remote', '--heads', str(remote), 'codex/feature'), '')
+        refs = self.git('for-each-ref', '--format=%(objectname)', 'refs/tiksi-discarded/').splitlines()
+        self.assertEqual(refs, [head])
+
+    def test_two_commands_clearing_one_stale_lock_never_remove_each_others_lock(self):
+        lock = self.workflow.records / 'lock'
+        self.workflow.records.mkdir(exist_ok=True)
+        lock.mkdir()
+        gone = subprocess.Popen(['true']); gone.wait()
+        (lock / 'owner.json').write_text(json.dumps({'pid': gone.pid, 'created': 0}), encoding='utf-8')
+        other = branch.Workflow(self.root)
+        real = branch.Workflow.stale_lock
+        def slow_check(lock_path):
+            # This command decides the lock is stale; before it acts, the other command clears it
+            # and takes a fresh lock of its own.
+            verdict = real(self.workflow, lock_path)
+            other.claim_stale(lock_path)
+            (lock_path / 'owner.json').write_text(json.dumps({'pid': os.getpid(), 'created': 1}), encoding='utf-8')
+            return verdict
+        with patch.object(self.workflow, 'stale_lock', side_effect=slow_check):
+            with self.assertRaisesRegex(branch.WorkflowError, 'took the lock just now'):
+                self.workflow.claim_stale(lock)
+        self.assertEqual(json.loads((lock / 'owner.json').read_text(encoding='utf-8'))['created'], 1)
+        self.assertEqual([p.name for p in self.workflow.records.glob('lock*')], ['lock'])
+
     def merge_ready(self):
         remote = self.add_origin()
         target = self.start()
@@ -391,16 +427,24 @@ class SERVICE:
         self.workflow.discard('second', owner_approved=True)
         self.assertEqual(len(self.git('for-each-ref', 'refs/tiksi-discarded/').splitlines()), 1)
 
-    def use_real_checks(self):
+    def use_real_checks(self, packages=True):
         """Give the synthetic live checkout this repository's quick checks."""
         for name in ['preflight.sh', 'check.py', 'check-private.py', 'check-names.py', 'check-names.mjs', 'check-vendor.py',
-                     'check-names-allow.json', 'browser-globals.json', 'smoke-open.mjs']:
+                     'check-names-allow.json', 'browser-globals.json', 'smoke-open.mjs', 'unit.py', 'unit-skips.json']:
             shutil.copy(ROOT / 'scripts' / name, self.root / 'scripts' / name)
         (self.root / 'package.json').write_text(json.dumps({'type': 'module', 'scripts': {
             'check': 'python3 scripts/check.py', 'test': 'true'}}), encoding='utf-8')
-        (self.root / 'node_modules').symlink_to(ROOT / 'node_modules', target_is_directory=True)
+        if packages: (self.root / 'node_modules').symlink_to(ROOT / 'node_modules', target_is_directory=True)
         with (self.root / '.gitignore').open('a', encoding='utf-8') as ignore: ignore.write('node_modules\n')
         self.git('add', '.'); self.git('commit', '-qm', 'Real checks')
+
+    def test_the_fast_path_needs_no_packages_and_the_full_check_says_what_to_install(self):
+        self.use_real_checks(packages=False)
+        fast = subprocess.run(['sh', 'scripts/preflight.sh', '--fast'], cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(fast.returncode, 0, fast.stdout + fast.stderr)
+        full = subprocess.run(['python3', 'scripts/check.py'], cwd=self.root, capture_output=True, text=True)
+        self.assertNotEqual(full.returncode, 0)
+        self.assertIn('npm ci', full.stderr)
 
     def test_the_live_checkout_checks_grade_a_branch_that_weakens_its_own(self):
         self.use_real_checks()

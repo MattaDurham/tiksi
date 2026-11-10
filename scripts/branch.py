@@ -82,6 +82,31 @@ class Workflow:
         except PermissionError: return False
         return False
 
+    def claim_stale(self, lock):
+        """Take over a lock whose owner is gone. The stale lock is first renamed aside, which only
+        one command can do; a command that finds it renamed a different (live) lock puts it
+        back and stops. Then the new lock is made."""
+        try: seen = lock.stat().st_ino
+        except FileNotFoundError: seen = None
+        if seen is not None and not self.stale_lock(lock):
+            raise WorkflowError('Another workflow command owns the lock. Inspect it; never clear a live lock.')
+        if seen is not None:
+            owner = read_json(lock / 'owner.json') or {}
+            aside = lock.with_name(f'lock.stale-{os.getpid()}-{uuid.uuid4().hex}')
+            try: os.rename(lock, aside)
+            except FileNotFoundError:
+                raise WorkflowError('Another workflow command is clearing the same stale lock. Retry.')
+            if aside.stat().st_ino != seen:
+                # The lock was cleared and retaken between the check and the rename: it is live.
+                try: os.rename(aside, lock)
+                except OSError: pass
+                raise WorkflowError('Another workflow command took the lock just now. Retry.')
+            shutil.rmtree(aside, ignore_errors=True)
+            print(f'Cleared a lock left by a command that is no longer running (process {owner.get("pid", "unknown")}).')
+        try: lock.mkdir()
+        except FileExistsError:
+            raise WorkflowError('Another workflow command took the lock just now. Retry.')
+
     @contextmanager
     def lock(self):
         self.records.mkdir(exist_ok=True)
@@ -89,14 +114,7 @@ class Workflow:
         try:
             lock.mkdir()
         except FileExistsError:
-            if not self.stale_lock(lock):
-                raise WorkflowError('Another workflow command owns the lock. Inspect it; never clear a live lock.')
-            owner = read_json(lock / 'owner.json') or {}
-            shutil.rmtree(lock, ignore_errors=True)
-            print(f'Cleared a lock left by a command that is no longer running (process {owner.get("pid", "unknown")}).')
-            try: lock.mkdir()
-            except FileExistsError:
-                raise WorkflowError('Another workflow command took the lock just now. Retry.')
+            self.claim_stale(lock)
         try:
             (lock / 'owner.json').write_text(json.dumps({'pid': os.getpid(), 'created': time.time()}), encoding='utf-8')
             yield
@@ -473,7 +491,7 @@ class Workflow:
             self.record(slug).unlink(missing_ok=True)
         if kept:
             ref, count = kept
-            print(f'{branch} had {count} commit(s) that are in neither main nor GitHub. They are kept, not deleted: '
+            print(f'{branch} had {count} commit(s) that are not in main. They are kept, not deleted: '
                   f'{ref} (restore with: git branch {branch} {ref}).')
         print(f'Discarded {branch}; private runtime, if present, preserved in {archive}')
 
@@ -489,8 +507,9 @@ class Workflow:
                 and not any(n == skip or n.startswith(skip + '/') for skip in self.NOT_ARCHIVED)]
 
     def keep_unshared(self, branch, slug, stamp):
-        """Keep commits that only this branch holds reachable under refs/tiksi-discarded/."""
-        count = int(self.git('rev-list', '--count', branch, '--not', 'main', '--remotes', cwd=self.live) or 0)
+        """Keep a branch whose head is not in main reachable under refs/tiksi-discarded/: discard
+        also deletes the branch's own GitHub copy, so that copy does not count as kept."""
+        count = int(self.git('rev-list', '--count', branch, '--not', 'main', cwd=self.live) or 0)
         if not count: return None
         ref = f'refs/tiksi-discarded/{slug}-{stamp}'
         self.git('update-ref', ref, branch, cwd=self.live)
