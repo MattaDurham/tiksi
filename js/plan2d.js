@@ -14,12 +14,14 @@ import {
 import { openingSchedule, connectsLabel, resizeOpening, MIN_SIZE } from './opening-schedule.js';
 import { doorSwings } from './wall-solids.js';
 import { materialSelectHtml } from './materials.js';
+import { safeUrl } from './material-identity.js';
+import { printSheet } from './print-sheet.js';
 import { icon } from './icons.js';
-import { beginGeometryEdit, cancelGeometryEdit, restoreGeometryEdit } from './edit-history.js';
+import { beginGeometryEdit, cancelGeometryEdit, restoreGeometryEdit, revertGeometryEdit, endGeometryHold } from './edit-history.js';
 import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import {
   planWallMove, applyWallMove, normalOffset, planCornerMove, applyCornerMove,
-  floorCornerAttached, floorCornersOf, snapFloorToWalls,
+  floorCornerAttached, floorCornersOf, snapFloorToWalls, movedWallLengths, moveLeavesShortWall,
 } from './wallmove.js';
 import { wallFaces, roomFromWalls, sameFloor } from './roomfill.js';
 import { fixturesOn, fixtureOutline } from './fixtures.js';
@@ -36,10 +38,12 @@ const WINDOW_DEFAULT = { width: 0.914, height: 1.219, sill: 0.762 }; // 36 x 48,
 
 const RULER = 22;                 // px; rulers sit along the top and left canvas edges
 const DRAG_START = 4;             // px the pointer travels before a press becomes a drag
+const CALIB_MIN_PX = 20;          // px: the shortest on-screen span CALIBRATE accepts
+const MIN_WALL = 0.05;            // m: a corner move never leaves a wall shorter than this
 const FONT = 'ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
 // Palette for the drawing surface (kept in sync with css/console.css tokens by hand:
-// canvas cannot read CSS variables cheaply every frame).
-const C = {
+// canvas cannot read CSS variables cheaply every frame). PAPER swaps it for printing.
+const SCREEN = {
   bg: '#0a0e12',
   gridMinor: 'rgba(255,255,255,0.032)',
   gridMajor: 'rgba(255,255,255,0.075)',
@@ -56,7 +60,39 @@ const C = {
   rulerBg: 'rgba(12,17,22,0.96)',
   rulerLine: 'rgba(255,255,255,0.12)',
   rulerText: '#7c8995',
+  grid: true,
+  pillBg: 'rgba(10,14,18,0.92)',
+  tagBg: 'rgba(10,14,18,0.94)',
+  tagSelBg: 'rgba(40,26,10,0.95)',
+  textShadow: 'rgba(0,0,0,0.55)',
+  underlayFill: 'rgba(255,255,255,0.03)',
+  underlayEdge: 'rgba(255,255,255,0.12)',
+  hudLine: 'rgba(233,238,243,0.9)',
 };
+// Dark ink on white for a printed sheet: no grid, and the light-on-dark colours darkened
+// so doors, windows and labels read on paper.
+const PAPER = Object.assign({}, SCREEN, {
+  bg: '#ffffff',
+  axis: 'rgba(0,0,0,0)',
+  wallLine: 'rgba(20,24,28,0.9)',
+  ink: '#16191c',
+  dim: '#4b545c',
+  faint: '#8a939b',
+  accent: '#b8650f',
+  cyan: '#1d6f86',
+  door: '#8a5a17',
+  dimLine: 'rgba(40,48,56,0.85)',
+  hover: 'rgba(0,0,0,0.6)',
+  grid: false,
+  pillBg: 'rgba(255,255,255,0.94)',
+  tagBg: 'rgba(255,255,255,0.96)',
+  tagSelBg: 'rgba(255,240,220,0.96)',
+  textShadow: 'rgba(0,0,0,0)',
+  underlayFill: 'rgba(0,0,0,0)',
+  underlayEdge: 'rgba(0,0,0,0.18)',
+  hudLine: 'rgba(20,24,28,0.9)',
+});
+let C = SCREEN;
 
 // Module-persistent editor state (survives view switches). Views are kept per property AND
 // per level (key prop.id + ':' + level.id): each storey remembers its own zoom and pan.
@@ -86,6 +122,29 @@ let calib = null;            // {a:[x,y], b:[x,y]|null}
 let hoverPt = null;          // last cursor world pos
 let drag = null;             // active drag descriptor
 let spaceDown = false;
+// Fingers on the canvas (pointerType 'touch'): pointerId -> [sx, sy]. A finger never drags
+// geometry; one finger pans, two pinch to zoom, and a tap acts like a mouse click.
+const fingers = new Map();
+let gesture = null;          // {kind: 'tap'|'pan'|'pinch', ...}
+let lastTap = null;          // {t, sx, sy}: the previous tap, for a double-tap
+let touchInput = false;      // the last press on the canvas was a finger (hints say tap)
+let inputSeen = false;       // a press on the canvas has happened since the page loaded
+function phoneScreen() {
+  return document.documentElement.classList.contains('phone') ||
+    (typeof matchMedia === 'function' && matchMedia('(hover: none) and (pointer: coarse)').matches);
+}
+// A file saved while a zero-length calibration was possible can carry a scale that is not a
+// positive number, which breaks every view of the underlay and every later calibration. Such
+// a scale goes back to the upload default (18 m across the image), marked not calibrated.
+function repairUnderlayScales(p) {
+  for (const l of p.levels || []) {
+    const pl = l.plan;
+    if (!pl || !pl.img) continue;
+    if (!(Number.isFinite(pl.mPerPx) && pl.mPerPx > 0)) { pl.mPerPx = 18 / (pl.imgW || 1000); pl.calibrated = false; }
+    if (!Number.isFinite(pl.offsetX)) pl.offsetX = 0;
+    if (!Number.isFinite(pl.offsetY)) pl.offsetY = 0;
+  }
+}
 let altDown = false;         // Alt/Option: the ROOM tool outlines instead of filling
 let facesCache = null;       // {key, faces}: the areas the current level's walls enclose
 const hatchCache = new Map(); // material colour -> CanvasPattern (per device pixel ratio)
@@ -393,8 +452,10 @@ function deleteSelection() {
     pushUndo();
     prop.rooms = prop.rooms.filter(r => r.id !== selection.id);
   } else if (selection.kind === 'underlay') {
-    // The underlay is not part of the undo snapshot, so no history entry for it. The
-    // calibration form cannot outlive its image: drop it and fall back to the select tool.
+    // The underlay is not part of the undo snapshot (no image copies in history), so removing
+    // it is final: ask first. The calibration form cannot outlive its image: drop it and fall
+    // back to the select tool.
+    if (!confirm(`Remove the plan underlay from ${lvl().name || 'this level'}? Its image, scale and alignment are removed with it, and UNDO cannot bring them back.`)) return;
     lvl().plan = null;
     vs.planSrc = planKey(prop);
     calib = null;
@@ -529,7 +590,7 @@ function pill(text, x, y, color, opts) {
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const w = textWidth(text) + 14, h = size + 9;
   roundRect(x - w / 2, y - h / 2, w, h, h / 2);
-  ctx.fillStyle = opts.bg || 'rgba(10,14,18,0.92)';
+  ctx.fillStyle = opts.bg || C.pillBg;
   ctx.fill();
   ctx.lineWidth = 1;
   ctx.strokeStyle = opts.stroke || hexA(color, 0.55);
@@ -548,13 +609,34 @@ function tracePoly(pts) {
 
 // At an L-corner two centreline rectangles leave a notch on the outside; extending each wall
 // by the neighbour's half thickness at a shared endpoint fills it (drawing only, no data change).
-function endExtension(wl, px, py) {
-  let ext = 0;
-  for (const o of curWalls()) {
-    if (o === wl) continue;
-    if ((Math.abs(o.ax - px) < 0.003 && Math.abs(o.ay - py) < 0.003) ||
-        (Math.abs(o.bx - px) < 0.003 && Math.abs(o.by - py) < 0.003)) ext = Math.max(ext, o.thickness / 2);
+// The joints are found once per frame through a grid of wall ends, not by searching every
+// wall again for each wall end.
+const JOIN = 0.003, JOIN_CELL = 0.01;
+let joints = null;   // {frame, walls, ext: Map(wall -> [at a, at b])}
+function wallEndExtensions() {
+  const walls = curWalls();
+  if (joints && joints.frame === frameNo && joints.walls === walls.length) return joints.ext;
+  const grid = new Map(), ext = new Map();
+  const cellKey = (x, y) => Math.floor(x / JOIN_CELL) + ',' + Math.floor(y / JOIN_CELL);
+  for (const w of walls) for (const [x, y] of [[w.ax, w.ay], [w.bx, w.by]]) {
+    const k = cellKey(x, y);
+    let list = grid.get(k);
+    if (!list) grid.set(k, list = []);
+    list.push([w, x, y]);
   }
+  for (const w of walls) {
+    const out = [0, 0];
+    [[w.ax, w.ay], [w.bx, w.by]].forEach(([px, py], end) => {
+      const ci = Math.floor(px / JOIN_CELL), cj = Math.floor(py / JOIN_CELL);
+      for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+        for (const [o, x, y] of grid.get((ci + di) + ',' + (cj + dj)) || []) {
+          if (o !== w && Math.abs(x - px) < JOIN && Math.abs(y - py) < JOIN) out[end] = Math.max(out[end], o.thickness / 2);
+        }
+      }
+    });
+    ext.set(w, out);
+  }
+  joints = { frame: frameNo, walls: walls.length, ext };
   return ext;
 }
 
@@ -563,7 +645,7 @@ function wallPoly(wl) {
   if (L < 0.001) return null;
   const ux = (wl.bx - wl.ax) / L, uy = (wl.by - wl.ay) / L;
   const nx = -uy * wl.thickness / 2, ny = ux * wl.thickness / 2;
-  const ea = endExtension(wl, wl.ax, wl.ay), eb = endExtension(wl, wl.bx, wl.by);
+  const [ea, eb] = wallEndExtensions().get(wl) || [0, 0];
   const ax = wl.ax - ux * ea, ay = wl.ay - uy * ea, bx = wl.bx + ux * eb, by = wl.by + uy * eb;
   return {
     L, ux, uy, nx, ny,
@@ -619,6 +701,7 @@ function paint(w, h, exporting) {
 }
 
 function drawGrid(w, h) {
+  if (!C.grid) return;
   const { major, minor } = gridSteps();
   const minorPx = minor * vs.zoom;
   const fade = Math.max(0, Math.min(1, (minorPx - 5) / 22));
@@ -697,14 +780,14 @@ function drawUnderlay() {
   const hov = hover && hover.kind === 'underlay';
   ctx.save();
   if (sel || hov) { ctx.shadowColor = sel ? 'rgba(232,151,58,0.45)' : 'rgba(255,255,255,0.25)'; ctx.shadowBlur = 22; }
-  ctx.fillStyle = 'rgba(255,255,255,0.03)';
+  ctx.fillStyle = C.underlayFill;
   ctx.fillRect(sx, sy, sw, sh);
   ctx.restore();
   ctx.globalAlpha = pl.opacity;
   ctx.drawImage(underlayImg, sx, sy, sw, sh);
   ctx.globalAlpha = 1;
   ctx.lineWidth = sel ? 1.5 : 1;
-  ctx.strokeStyle = sel ? C.accent : (hov ? C.hover : 'rgba(255,255,255,0.12)');
+  ctx.strokeStyle = sel ? C.accent : (hov ? C.hover : C.underlayEdge);
   ctx.setLineDash(sel ? [6, 4] : []);
   ctx.strokeRect(crisp(sx), crisp(sy), sw, sh);
   ctx.setLineDash([]);
@@ -846,9 +929,9 @@ function drawRoomLabels() {
     const x0 = s[0] - (tw + 12) / 2;
     ctx.beginPath(); ctx.arc(x0 + 3.5, s[1] - 4, 3.5, 0, Math.PI * 2);
     ctx.fillStyle = col; ctx.fill();
-    ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(0,0,0,0.55)'; ctx.stroke();
+    ctx.lineWidth = 1; ctx.strokeStyle = C.textShadow; ctx.stroke();
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillStyle = C.textShadow;
     ctx.fillText(name, x0 + 12 + 0.5, s[1] - 4 + 1);
     ctx.fillStyle = sel ? C.accent : C.ink;
     ctx.fillText(name, x0 + 12, s[1] - 4);
@@ -988,21 +1071,30 @@ function drawOpening(o) {
 // Numbers come from opening-schedule.js and run over the whole property, so a tag reads the
 // same on screen, in the schedule panel and on the printed sheet.
 function schedule() {
+  // While a drag moves geometry the numbering stays as it was when the drag began (tags follow
+  // their openings live in drawOpeningTags); it is worked out again once, after the drag.
+  if (scheduleCache && drag && drag.moved && scheduleCache.level === lvl().id) return scheduleCache.rows;
   const key = lvl().id + '|' + JSON.stringify([prop.walls, prop.openings, prop.rooms, prop.levels.map(l => [l.id, l.elevation, l.name])]);
-  if (!scheduleCache || scheduleCache.key !== key) scheduleCache = { key, rows: openingSchedule(prop, lvl().id) };
+  if (!scheduleCache || scheduleCache.key !== key) scheduleCache = { key, level: lvl().id, rows: openingSchedule(prop, lvl().id) };
   return scheduleCache.rows;
 }
 function scheduleRow(id) { return numbersOn ? schedule().find(r => r.id === id) || null : null; }
 // A tag on the side of the wall away from the door swing, so it never sits on the leaf.
 function drawOpeningTags() {
+  const live = drag && drag.moved;
+  const openings = live ? new Map(curOpenings().map(o => [o.id, o])) : null;
   for (const row of schedule()) {
-    const w = prop.walls.find(w => w.id === row.wallId);
+    // During a drag the tag sits where its opening is now, not where the schedule last saw it.
+    const p = live ? (openings.get(row.id) && openingPos(openings.get(row.id))) : null;
+    if (live && !p) continue;
+    const w = live ? p.w : prop.walls.find(w => w.id === row.wallId);
     if (!w) continue;
     const off = w.thickness / 2 + 13 / vs.zoom;
-    const s = w2s([row.cx + row.uy * off, row.cy - row.ux * off]);
+    const [cx, cy, ux, uy] = live ? [p.cx, p.cy, p.ux, p.uy] : [row.cx, row.cy, row.ux, row.uy];
+    const s = w2s([cx + uy * off, cy - ux * off]);
     const sel = selection && selection.kind === 'opening' && selection.id === row.id;
     const col = sel ? C.accent : row.type === 'door' ? C.door : C.cyan;
-    pill(row.number, s[0], s[1], col, { weight: 700, size: 10.5, bg: sel ? 'rgba(40,26,10,0.95)' : 'rgba(10,14,18,0.94)', stroke: hexA(col, 0.9) });
+    pill(row.number, s[0], s[1], col, { weight: 700, size: 10.5, bg: sel ? C.tagSelBg : C.tagBg, stroke: hexA(col, 0.9) });
   }
 }
 function scheduleCounts(rows) {
@@ -1096,18 +1188,20 @@ function editScheduleSize(id, key, inp) {
 }
 
 // The active level drawn at its fitted view into a fresh canvas: what PRINT and SAVE PNG send.
-function planImage(W, H, scale) {
+// `paper` draws it dark on white, for printing.
+function planImage(W, H, scale, paper = false) {
   const saved = { canvas, ctx, vs, selection, hover, hoverPt, drawing, roomDraft, calib };
   const c = document.createElement('canvas');
   c.width = Math.round(W * scale); c.height = Math.round(H * scale);
   try {
     canvas = c; ctx = c.getContext('2d'); exportScale = scale; hatchCache.clear();
+    if (paper) C = PAPER;
     vs = Object.assign({}, vs, fitFor(W, H, 0));
     selection = hover = hoverPt = drawing = roomDraft = calib = null;
     paint(W, H, true);
   } finally {
     ({ canvas, ctx, vs, selection, hover, hoverPt, drawing, roomDraft, calib } = saved);
-    exportScale = 0; hatchCache.clear(); invalidate();
+    C = SCREEN; exportScale = 0; hatchCache.clear(); textWidthCache.clear(); invalidate();
   }
   return c;
 }
@@ -1115,10 +1209,14 @@ function scheduleTitle() { return (prop.name || 'Property') + ' - ' + (lvl().nam
 function scheduleFileName(ext) {
   return ('opening schedule ' + scheduleTitle()).replace(/[^\w\- ]+/g, ' ').trim().replace(/\s+/g, '-').toLowerCase() + '.' + ext;
 }
-function printSchedule() {
-  const rows = schedule(), img = planImage(1500, 1000, 2).toDataURL('image/png');
+// The sheet prints once its plan image is decoded (print-sheet.js keeps it out of any later
+// Cmd+P).
+let printing = false;
+async function printSchedule() {
+  if (printing) return;
+  const rows = schedule(), img = planImage(1500, 1000, 2, true).toDataURL('image/png');
   const cell = v => `<td class="num">${v == null ? '' : escapeHtml(fmtLen(v))}</td>`;
-  document.getElementById('print-root').innerHTML = `<div class="sheet sheet-page opening-sheet">
+  const html = `<div class="sheet sheet-page opening-sheet">
     <div class="s-head"><span class="s-brand">TIKSI</span><span class="s-doc">Opening schedule</span></div>
     <h1>${escapeHtml(scheduleTitle())}</h1>
     <div class="s-sub">${scheduleCounts(rows)} - ${escapeHtml(fmtDate(isoToday()))} - please correct any size by its number</div>
@@ -1128,7 +1226,9 @@ function printSchedule() {
       <tbody>${rows.map(r => `<tr><td><b>${r.number}</b></td><td>${r.type === 'door' ? 'Door' : 'Window'}</td><td>${escapeHtml(connectsLabel(r))}</td>${cell(r.width)}${cell(r.height)}${cell(r.sill)}</tr>`).join('')}</tbody></table>
     <div class="s-foot"><span>tiksi design console</span><span>${escapeHtml(fmtDate(isoToday()))}</span></div>
   </div>`;
-  window.print();
+  printing = true;
+  try { await printSheet(html, el => el.querySelector('.s-plan').decode()); }
+  finally { printing = false; }
 }
 // One image holding the numbered plan with the table under it, for a text or an email.
 function saveSchedulePng() {
@@ -1200,9 +1300,8 @@ function dimString(a, b, color, opts) {
   pill(text, (D1[0] + D2[0]) / 2, (D1[1] + D2[1]) / 2, color, { size: opts.size || 10 });
 }
 
-function dimSideFor(wl) {
+function dimSideFor(wl, b = bounds()) {
   // Put the string on the side of the wall facing away from the plan's centre.
-  const b = bounds();
   const cx = (b.minX + b.maxX) / 2, cy = (b.minY + b.maxY) / 2;
   const mx = (wl.ax + wl.bx) / 2, my = (wl.ay + wl.by) / 2;
   const L = Math.hypot(wl.bx - wl.ax, wl.by - wl.ay) || 1;
@@ -1211,6 +1310,7 @@ function dimSideFor(wl) {
 }
 
 function drawDims() {
+  let b = null;   // the plan's bounds, worked out once per frame for every string
   for (const wl of curWalls()) {
     const sel = selection && selection.kind === 'wall' && selection.id === wl.id;
     if (!sel && !dimsOn) continue;
@@ -1218,7 +1318,7 @@ function drawDims() {
     if (L < 0.01) continue;
     const gapPx = wl.thickness / 2 * vs.zoom + 5;
     dimString([wl.ax, wl.ay], [wl.bx, wl.by], sel ? C.accent : C.dimLine, {
-      side: dimSideFor(wl), gap: gapPx, offset: gapPx + 18, size: sel ? 10.5 : 9.5,
+      side: dimSideFor(wl, b || (b = bounds())), gap: gapPx, offset: gapPx + 18, size: sel ? 10.5 : 9.5,
     });
   }
 }
@@ -1556,7 +1656,7 @@ function drawHud(w, h) {
     ctx.fillRect(x0 + i * segW, y - 3, segW, 6);
   }
   ctx.restore();
-  ctx.strokeStyle = 'rgba(233,238,243,0.9)'; ctx.lineWidth = 1;
+  ctx.strokeStyle = C.hudLine; ctx.lineWidth = 1;
   ctx.strokeRect(crisp(x0), crisp(y - 3), px, 6);
   ctx.fillStyle = C.dim;
   ctx.font = `9px ${FONT}`;
@@ -1622,10 +1722,19 @@ function updateBadge(wx, wy) {
 }
 
 function onPointerDown(e) {
+  if (e.pointerType === 'touch') { onFingerDown(e); return; }
   if (e.button === 2) return;
   invalidate();
+  inputSeen = true;
+  if (touchInput) { touchInput = false; updateHint(); }
   canvas.setPointerCapture(e.pointerId);
   const [sx, sy] = canvasPos(e);
+  press(sx, sy, e);
+}
+
+// What a mouse press (or a finger's tap) does at canvas position (sx, sy). `e` carries the
+// button and the Alt key.
+function press(sx, sy, e) {
   const [wx, wy] = s2w(sx, sy);
 
   if (e.button === 1 || spaceDown) {
@@ -1680,7 +1789,16 @@ function onPointerDown(e) {
     const pl = curPlan();
     if (!pl || !pl.img) { setHint('Upload a plan image first, then calibrate.'); return; }
     if (!calib || calib.b) calib = { a: [wx, wy], b: null };
-    else { calib.b = [wx, wy]; renderInspector(); }
+    else {
+      // Two clicks on (nearly) the same spot measure nothing: a zero length would make the
+      // scale infinite. Keep the first point and ask for a second one further away.
+      const a = w2s(calib.a);
+      if (Math.hypot(a[0] - sx, a[1] - sy) < CALIB_MIN_PX) {
+        setHint(`The two points are too close together to set a scale. Click a second point at least ${CALIB_MIN_PX} px from the first, a known distance away.`);
+        return;
+      }
+      calib.b = [wx, wy]; renderInspector();
+    }
     updateHint();
     return;
   }
@@ -1705,7 +1823,8 @@ function onPointerDown(e) {
   if (hit.kind === 'handle') {
     const w = prop.walls.find(w => w.id === hit.id);
     const joint = w && !e.altKey ? planCornerMove(w, hit.end, curWalls(), curRooms(), curOpenings()) : null;
-    drag = { kind: 'handle', id: hit.id, end: hit.end, joint, sx, sy, moved: false };
+    drag = { kind: 'handle', id: hit.id, end: hit.end, joint, sx, sy, moved: false,
+      lengths: joint ? movedWallLengths(joint) : null, last: joint ? [joint.x0, joint.y0] : null };
     return;
   }
   if (hit.kind === 'floorCorner') {
@@ -1717,7 +1836,9 @@ function onPointerDown(e) {
   if (hit.kind === 'wall') {
     const w = prop.walls.find(w => w.id === hit.id);
     const mv = e.altKey ? null : planWallMove(w, curWalls(), curRooms(), curOpenings());
-    drag = { kind: 'wall', id: hit.id, sx, sy, wx, wy, orig: { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by }, mv: mv && mv.connected ? mv : null, moved: false };
+    const slide = mv && mv.connected ? mv : null;
+    drag = { kind: 'wall', id: hit.id, sx, sy, wx, wy, orig: { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by }, mv: slide, moved: false,
+      lengths: slide ? movedWallLengths(slide) : null, last: 0 };
   } else if (hit.kind === 'opening') {
     drag = { kind: 'opening', id: hit.id, sx, sy, moved: false };
   } else if (hit.kind === 'underlay') {
@@ -1727,6 +1848,7 @@ function onPointerDown(e) {
 }
 
 function onPointerMove(e) {
+  if (e.pointerType === 'touch') { onFingerMove(e); return; }
   invalidate();
   const [sx, sy] = canvasPos(e);
   const [wx, wy] = s2w(sx, sy);
@@ -1750,15 +1872,29 @@ function onPointerMove(e) {
   if (!drag.moved) {
     if (!travelled) return;
     // First real movement: snapshot the pre-drag state (the underlay is not in the snapshot).
-    if (drag.kind !== 'underlay') pushUndo();
+    // The edit stays open (held) until the drag ends: another change arriving meanwhile, such
+    // as a save from another device, must not close it half way, or a cancel could not put
+    // the geometry back and undo would hold only part of the drag.
+    if (drag.kind !== 'underlay') beginGeometryEdit(prop, 'plan edit', { hold: true });
     drag.moved = true;
   }
   if (drag.kind === 'handle') {
     const w = prop.walls.find(w => w.id === drag.id);
     if (!w) return;
     const pt = snapPoint(wx, wy, { excludeWall: drag.joint ? new Set(drag.joint.wallIds) : w.id, from: drag.end === 'a' ? [w.bx, w.by] : [w.ax, w.ay], walls: true });
-    if (drag.joint) applyCornerMove(drag.joint, pt[0], pt[1]);
-    else if (drag.end === 'a') { w.ax = pt[0]; w.ay = pt[1]; } else { w.bx = pt[0]; w.by = pt[1]; }
+    // A move never leaves a wall it reshapes shorter than MIN_WALL: that wall would vanish
+    // from the drawing and the schedule yet stay in the data. The corner waits where it last
+    // was until the pointer leaves that zone.
+    if (drag.joint) {
+      applyCornerMove(drag.joint, pt[0], pt[1]);
+      if (moveLeavesShortWall(drag.lengths, MIN_WALL)) { applyCornerMove(drag.joint, ...drag.last); refuseShortWall(); return; }
+      drag.last = pt;
+    } else {
+      const far = drag.end === 'a' ? 'b' : 'a';
+      if (Math.hypot(pt[0] - w[far + 'x'], pt[1] - w[far + 'y']) < MIN_WALL) { refuseShortWall(); return; }
+      if (drag.end === 'a') { w.ax = pt[0]; w.ay = pt[1]; } else { w.bx = pt[0]; w.by = pt[1]; }
+    }
+    shortWallAllowed();
   } else if (drag.kind === 'floorCorner') {
     const r = drag.r, n = r && r.pts.length;
     if (!n || drag.i >= n) return;
@@ -1767,7 +1903,15 @@ function onPointerMove(e) {
   } else if (drag.kind === 'wall') {
     const w = prop.walls.find(w => w.id === drag.id);
     if (!w) return;
-    if (drag.mv) { applyWallMove(drag.mv, rnd(normalOffset(drag.mv, wx - drag.wx, wy - drag.wy))); return; }
+    if (drag.mv) {
+      // A slide that would squeeze a joined wall to (almost) nothing stops where it last was.
+      const off = rnd(normalOffset(drag.mv, wx - drag.wx, wy - drag.wy));
+      applyWallMove(drag.mv, off);
+      if (moveLeavesShortWall(drag.lengths, MIN_WALL)) { applyWallMove(drag.mv, drag.last); refuseShortWall(); return; }
+      drag.last = off;
+      shortWallAllowed();
+      return;
+    }
     const dx = rnd(wx - drag.wx), dy = rnd(wy - drag.wy);
     w.ax = drag.orig.ax + dx; w.ay = drag.orig.ay + dy;
     w.bx = drag.orig.bx + dx; w.by = drag.orig.by + dy;
@@ -1784,7 +1928,17 @@ function onPointerMove(e) {
   }
 }
 
-function onPointerUp() {
+function refuseShortWall() {
+  setHint(`A wall cannot be shorter than ${fmtLen(MIN_WALL)}. Delete the wall instead (Backspace).`);
+  drag.refused = true;
+}
+function shortWallAllowed() { if (drag.refused) { drag.refused = false; updateHint(); } }
+
+function onPointerUp(e) {
+  if (e && e.pointerType === 'touch') { onFingerUp(e); return; }
+  release();
+}
+function release() {
   invalidate();
   if (drag && drag.kind === 'pan' && drag.click && !drag.panned) {
     // A click on a floor, the underlay or empty canvas selects it (or clears the selection).
@@ -1792,13 +1946,119 @@ function onPointerUp() {
     selection = c.kind === 'none' ? null : c.kind === 'underlay' ? { kind: 'underlay' } : { kind: c.kind, id: c.id };
     renderInspector();
   }
-  if (drag && drag.moved) { touch(); renderInspector(); }
+  // The drag ends before the store hears of it, so the schedule panel and inspector that the
+  // change rebuilds number the openings as they are now, not as they were when it began.
+  const moved = !!(drag && drag.moved);
   drag = null;
+  if (moved) { endGeometryHold(prop); touch(); renderInspector(); }
   if (hoverPt && tool === 'select') hover = hitTest(hoverPt[0], hoverPt[1]);
   updateCursor();
 }
 
-function onPointerLeave() {
+// The browser took the pointer away mid-gesture (a system gesture, a lost capture). A drag
+// that was moving geometry is put back as it was, with no undo entry; the view keeps its pan.
+function onPointerCancel(e) {
+  if (e && e.pointerType === 'touch') { onFingerUp(e, true); return; }
+  invalidate();
+  const d = drag;
+  drag = null;
+  if (d && d.moved) {
+    // The store hears of the put-back geometry too, so an autosave that ran during the drag
+    // is overwritten with what the screen shows.
+    if (d.kind === 'underlay') { d.pl.offsetX = d.ox; d.pl.offsetY = d.oy; touch(); }
+    else if (revertGeometryEdit(prop)) touch();
+    renderInspector();
+  }
+  updateCursor(); updateHint();
+}
+
+// ---------- fingers ----------
+const TAP_SLOP = 10;          // px a finger may wander and still tap
+const DOUBLE_TAP_MS = 350, DOUBLE_TAP_PX = 30;
+function onFingerDown(e) {
+  e.preventDefault();
+  // A finger resting on the screen while a mouse or a pen drags (a tablet with a pen, a
+  // touchscreen laptop) is ignored: it must not select, place or pan under that drag.
+  if (drag) return;
+  invalidate();
+  inputSeen = true;
+  if (!touchInput) { touchInput = true; updateHint(); }
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* already released */ }
+  const pos = canvasPos(e);
+  fingers.set(e.pointerId, pos);
+  hover = null; hoverPt = null;
+  if (fingers.size === 1) {
+    gesture = { kind: 'tap', id: e.pointerId, sx: pos[0], sy: pos[1], panX: vs.panX, panY: vs.panY };
+  } else if (fingers.size === 2) {
+    startPinch();
+  }
+  // A third finger is ignored until the others lift.
+}
+function pinchPair() {
+  const [a, b] = [...fingers.values()];
+  return { mid: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], dist: Math.max(1, Math.hypot(a[0] - b[0], a[1] - b[1])) };
+}
+function startPinch() {
+  const { mid, dist } = pinchPair();
+  gesture = { kind: 'pinch', ids: [...fingers.keys()].slice(0, 2), zoom: vs.zoom, dist, world: s2w(mid[0], mid[1]) };
+}
+function onFingerMove(e) {
+  if (!fingers.has(e.pointerId)) return;
+  e.preventDefault();
+  const pos = canvasPos(e);
+  fingers.set(e.pointerId, pos);
+  if (!gesture) return;
+  invalidate();
+  if (gesture.kind === 'tap') {
+    if (Math.hypot(pos[0] - gesture.sx, pos[1] - gesture.sy) < TAP_SLOP) return;
+    gesture.kind = 'pan';
+  }
+  if (gesture.kind === 'pan' && e.pointerId === gesture.id) {
+    vs.panX = gesture.panX - (pos[0] - gesture.sx) / vs.zoom;
+    vs.panY = gesture.panY - (pos[1] - gesture.sy) / vs.zoom;
+  } else if (gesture.kind === 'pinch' && gesture.ids.includes(e.pointerId) && fingers.size >= 2) {
+    // The plan point that was under the middle of the two fingers stays under it.
+    const { mid, dist } = pinchPair();
+    vs.zoom = Math.max(4, Math.min(400, gesture.zoom * dist / gesture.dist));
+    vs.panX = gesture.world[0] - mid[0] / vs.zoom;
+    vs.panY = gesture.world[1] - mid[1] / vs.zoom;
+  }
+}
+function onFingerUp(e, cancelled = false) {
+  if (!fingers.has(e.pointerId)) return;
+  invalidate();
+  const pos = fingers.get(e.pointerId);
+  fingers.delete(e.pointerId);
+  const g = gesture;
+  if (!g) return;
+  if (g.kind === 'tap' && g.id === e.pointerId) {
+    gesture = null;
+    if (!cancelled && !drag) tap(pos[0], pos[1], e.timeStamp);   // not under a mouse or pen drag
+    return;
+  }
+  if (g.kind === 'pinch') {
+    // One finger left after a pinch carries on panning from where it is; no tap.
+    const [id, rest] = [...fingers.entries()][0] || [];
+    gesture = rest ? { kind: 'pan', id, sx: rest[0], sy: rest[1], panX: vs.panX, panY: vs.panY } : null;
+    return;
+  }
+  if (!fingers.size) gesture = null;
+}
+// A finger's tap is a click: it selects, places a wall corner, a door, a window or a floor
+// corner, or calibrates, exactly as the mouse would. A double tap ends a wall chain or closes
+// a floor outline, as a double-click does.
+function tap(sx, sy, t) {
+  const double = lastTap && t - lastTap.t < DOUBLE_TAP_MS && Math.hypot(sx - lastTap.sx, sy - lastTap.sy) < DOUBLE_TAP_PX;
+  lastTap = double ? null : { t, sx, sy };
+  if (double && (tool === 'wall' || tool === 'room')) { onDblClick(); return; }
+  press(sx, sy, { button: 0, altKey: false });
+  release();
+  hover = null;
+  updateCursor();
+}
+
+function onPointerLeave(e) {
+  if (e && e.pointerType === 'touch') return;
   invalidate();
   hoverPt = null; hover = null;
   if (!drag) updateCursor();
@@ -1853,7 +2113,9 @@ function onWheel(e) {
 }
 
 function onKeyDown(e) {
-  if (e.target.matches('input, textarea, select')) return;
+  if (e.target.matches('input, textarea, select') || e.target.isContentEditable) return;
+  // A dialog open over PLAN owns the keyboard, as in MEASURE.
+  if (document.querySelector('dialog[open]')) return;
   invalidate();
   if (e.key === ' ') { spaceDown = true; e.preventDefault(); updateCursor(); return; }
   if (e.key === 'Alt') { altDown = true; return; }
@@ -1908,7 +2170,16 @@ function updateHint() {
     room: roomDraft ? 'Click corners; click the first point or double-click to close the room.' : 'Click inside a room the walls close to floor it. To outline a floor corner by corner, start on a wall or in an open area, or Alt-click; corners snap to walls, so the floor follows them.',
     calibrate: (!prop || !curPlan()) ? 'Upload a plan image first (UNDERLAY, left panel).' : 'Click two points a known distance apart on the plan image, then enter the real distance.',
   };
-  setHint(hints[tool] || '');
+  // With a finger: no drags of geometry, and taps in place of clicks.
+  const fingerHints = {
+    select: 'Tap a wall, door, window or floor to select it and type its sizes below. One finger pans, two fingers pinch to zoom. Walls are dragged with a mouse.',
+    wall: drawing ? 'Tap to place the next corner. Double-tap to end the chain.' : 'Tap to start a wall chain. One finger pans, two fingers pinch to zoom.',
+    door: 'Tap on a wall to place a door.',
+    window: 'Tap on a wall to place a window.',
+    room: roomDraft ? 'Tap corners; tap the first point or double-tap to close the floor.' : 'Tap inside a room the walls close to floor it, or tap on a wall to start an outline.',
+    calibrate: (!prop || !curPlan()) ? hints.calibrate : 'Tap two points a known distance apart on the plan image, then enter the real distance.',
+  };
+  setHint((touchInput ? fingerHints[tool] : hints[tool]) || '');
 }
 
 // ---------- levels ----------
@@ -2052,9 +2323,13 @@ function sourceCardHtml() {
   const src = prop.source;
   const scan = meshScan();
   const label = src && src.kind === 'polycam' ? 'FROM POLYCAM' : 'SCAN';
+  // Only a web address becomes a link: a javascript: or data: one from an imported file
+  // shows as plain text and can never run.
+  const href = src && safeUrl(src.url);
+  const srcText = src && src.url ? escapeHtml(src.title || String(src.url).replace(/^https?:\/\//, '')) : '';
   return `<div class="src-card">
     <span class="np-kicker">${label}</span>
-    ${src && src.url ? `<a href="${escapeHtml(src.url)}" target="_blank" rel="noopener" title="${escapeHtml(src.url)}">${escapeHtml(src.title || src.url.replace(/^https?:\/\//, ''))}</a>` : ''}
+    ${href ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener" title="${escapeHtml(href)}">${srcText}</a>` : srcText ? `<span class="src-link-text">${srcText}</span>` : ''}
     ${scan ? `<button class="btn" data-src-plan title="Square the scan up and propose walls, rooms, doors, windows and the underlay again">${icon('scan')}PROPOSE PLAN FROM SCAN</button>
     <button class="btn" data-src-fixtures title="Read counter runs, wall cabinets, tall appliances and furniture from the scan, for review">${icon('scan')}PROPOSE FIXTURES FROM SCAN</button>` : ''}
     <div class="empty">Add captures in FILE → Import.</div>
@@ -2146,6 +2421,7 @@ function renderInspector() {
       const real = parseLen(input.value);
       if (isNaN(real) || real <= 0) { alert('Could not parse that distance. Try 12\'6", 150", or 3.8m.'); return; }
       const ratio = real / measured;
+      if (!(measured > 0) || !Number.isFinite(ratio) || !(Number.isFinite(pl.mPerPx * ratio) && pl.mPerPx * ratio > 0)) { calib = null; renderInspector(); setHint('Those two points are too close together to set a scale. Click two points further apart.'); return; }
       // Rescale the underlay mapping about its own origin so image geometry matches reality.
       pl.mPerPx = pl.mPerPx * ratio;
       pl.calibrated = true;
@@ -2242,13 +2518,18 @@ function renderInspector() {
       <button class="btn danger" data-del>${icon('trash')}DELETE WALL</button>`;
     insp.querySelector('[data-len=len]').onchange = e => {
       const v = parseLen(e.target.value);
+      // A wall with no length has no direction to grow along (left over from older files).
+      if (!(L >= 0.001)) { setHint('This wall has no length, so it has no direction to grow along. Delete it and draw it again.'); renderInspector(); return; }
       if (!isNaN(v) && v > 0.05) {
         pushUndo();
         // The b end moves along the wall like a corner drag: walls joined there and the floor
         // corners on it come along.
         const ux = (w.bx - w.ax) / L, uy = (w.by - w.ay) / L;
-        applyCornerMove(planCornerMove(w, 'b', curWalls(), curRooms(), curOpenings()), rnd(w.ax + ux * v), rnd(w.ay + uy * v));
-        touch();
+        const cm = planCornerMove(w, 'b', curWalls(), curRooms(), curOpenings()), lengths = movedWallLengths(cm);
+        applyCornerMove(cm, rnd(w.ax + ux * v), rnd(w.ay + uy * v));
+        // A wall joined at that end must not be squeezed to nothing either.
+        if (moveLeavesShortWall(lengths, MIN_WALL)) { applyCornerMove(cm, cm.x0, cm.y0); cancelGeometryEdit(prop); setHint(`That length would leave a joined wall shorter than ${fmtLen(MIN_WALL)}.`); }
+        else touch();
       }
       renderInspector();
     };
@@ -2297,18 +2578,25 @@ function renderInspector() {
       if (o.type === 'window' && o.sill == null) o.sill = WINDOW_DEFAULT.sill;
       touch(); renderInspector();
     };
-    const num = (key, fn) => {
+    // Widths and heights must be real sizes; a sill may sit at the floor (0).
+    const num = (key, fn, min = 0.05) => {
       const elx = insp.querySelector(`[data-len=${key}]`);
       if (elx) elx.onchange = e => {
         const v = parseLen(e.target.value);
-        if (!isNaN(v) && v > 0.05) { pushUndo(); fn(v); touch(); }
+        if (!isNaN(v) && (min === 0 ? v >= 0 : v > min)) { pushUndo(); fn(v); touch(); }
         renderInspector();
       };
     };
     // Through the schedule's rule, so a typed width or height still fits the wall.
     num('w', v => resizeOpening(prop, o, { width: v }, wallHeightOf(prop, ow)));
     num('h', v => resizeOpening(prop, o, { height: v }, wallHeightOf(prop, ow)));
-    num('s', v => o.sill = v);
+    // The sill keeps the window inside its wall: it stops MIN_SIZE below the top, and the
+    // height then shrinks to fit under the wall top, by the same rule a typed height follows.
+    num('s', v => {
+      const wallH = wallHeightOf(prop, ow);
+      o.sill = Math.max(0, Math.min(v, wallH - MIN_SIZE));
+      resizeOpening(prop, o, { height: o.height }, wallH);
+    }, 0);
     const leavesSel = insp.querySelector('[data-leaves]');
     if (leavesSel) leavesSel.onchange = e => { pushUndo('change door leaves'); o.leaves = Number(e.target.value); touch(); renderInspector(); };
     let slidingOpening = false;
@@ -2378,6 +2666,10 @@ export function mount(root) {
     return;
   }
   ensureLevels(prop);
+  repairUnderlayScales(prop);
+  // On a phone (or any screen whose only pointer is a finger) the hints say tap from the start;
+  // a mouse press switches them back.
+  if (!inputSeen) touchInput = phoneScreen();
   root.innerHTML = `
     <div class="editor-layout">
       <div class="tool-col"></div>
@@ -2412,6 +2704,8 @@ export function mount(root) {
   canvas.addEventListener('pointermove', onPointerMove);
   canvas.addEventListener('pointerup', onPointerUp);
   canvas.addEventListener('pointerleave', onPointerLeave);
+  canvas.addEventListener('pointercancel', onPointerCancel);
+  canvas.addEventListener('lostpointercapture', e => { if (e.pointerType === 'touch' && fingers.has(e.pointerId)) onFingerUp(e, true); });
   canvas.addEventListener('dblclick', onDblClick);
   canvas.addEventListener('wheel', onWheel, { passive: false });
   canvas.addEventListener('contextmenu', e => e.preventDefault());
@@ -2440,9 +2734,13 @@ export function mount(root) {
   updateHint();
   updateCursor();
 
+  // A frame that throws is reported and skipped; the loop always schedules the next one, so
+  // one bad value never leaves the canvas dead until the page is left.
   const loop = () => {
-    if (dirty && draw()) dirty = false;
     raf = requestAnimationFrame(loop);
+    if (!dirty) return;
+    try { if (draw()) dirty = false; }
+    catch (e) { dirty = false; console.error('PLAN could not draw this frame:', e); }
   };
   raf = requestAnimationFrame(loop);
 }
@@ -2480,6 +2778,8 @@ export function unmount() {
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
   if (offChange) { offChange(); offChange = null; }
   drawing = null; roomDraft = null; drag = null; hover = null; hoverPt = null; facesCache = null;
+  fingers.clear(); gesture = null; lastTap = null; joints = null;
+  if (prop) endGeometryHold(prop);   // a drag cut short by a remount: the next change closes its edit
   el = null; canvas = null; ctx = null; wrapEl = null; inspEl = null; hintEl = null; badgeEl = null; levelEl = null; scheduleEl = null;
   scheduleCache = null;
 }

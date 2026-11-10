@@ -6,6 +6,7 @@ import {
   fmtDate, isoToday, projectLabel, propertyProjects,
 } from './store.js';
 import { icon } from './icons.js';
+import { printSheet } from './print-sheet.js';
 
 let el = null;
 export function mount(root) { el = root; render(); }
@@ -180,6 +181,5 @@ export function budgetReportHtml() {
 }
 
 function printReport() {
-  document.getElementById('print-root').innerHTML = budgetReportHtml();
-  window.print();
+  printSheet(budgetReportHtml());
 }
