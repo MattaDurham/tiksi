@@ -1,10 +1,12 @@
 """The real server answering for the page's own files and stored originals: ranges, reuse, size."""
+import gzip
 import http.client
 import importlib.util
 import io
 import ipaddress
 import json
 from pathlib import Path
+import re
 import tempfile
 import threading
 import unittest
@@ -72,6 +74,43 @@ class StaticFiles(unittest.TestCase):
         self.assertEqual(headers['content-range'], 'bytes 1000-1999/%d' % len(payload))
         self.assertEqual(self.call('/api/workspace/blobs/' + digest, headers={**auth, 'Range': 'bytes=999999-'})[0], 416)
         self.assertEqual(self.call('/api/workspace/blobs/' + digest, headers=auth)[2], payload)
+
+
+    def test_text_is_sent_compressed_to_a_browser_that_accepts_it(self):
+        whole = (ROOT / 'js/main.js').read_bytes()
+        status, headers, body = self.call('/js/main.js', headers={'Accept-Encoding': 'gzip, deflate, br'})
+        self.assertEqual((status, headers.get('content-encoding')), (200, 'gzip'))
+        self.assertEqual(gzip.decompress(body), whole)
+        self.assertLess(len(body), len(whole) / 2)
+        self.assertIn('Accept-Encoding', headers.get('vary', ''))
+        tag = headers['etag']
+        self.assertEqual(self.call('/js/main.js', headers={'Accept-Encoding': 'gzip', 'If-None-Match': tag})[0], 304)
+        status, headers, body = self.call('/js/main.js')
+        self.assertEqual((status, body, headers.get('content-encoding')), (200, whole, None), 'no gzip asked for: none sent')
+        self.assertNotEqual(headers['etag'], tag, 'each encoding has its own validator')
+        status, headers, body = self.call('/', headers={'Accept-Encoding': 'gzip'})
+        self.assertEqual(headers.get('content-encoding'), 'gzip'); self.assertIn(b'tiksi-storage', gzip.decompress(body))
+        # Video and pictures are not compressed again.
+        self.assertIsNone(self.call(CLIP, headers={'Accept-Encoding': 'gzip'})[1].get('content-encoding'))
+
+    def test_libraries_and_style_sheets_are_addressed_by_fingerprint_and_kept_without_asking(self):
+        page = self.call('/')[2].decode()
+        imports = json.loads(re.search(r'<script type="importmap">(.*?)</script>', page, re.S)[1])['imports']
+        three = imports['three']
+        self.assertRegex(three, r'^\./vendor/three\.module\.min\.js\?v=[0-9a-f]{16}$')
+        self.assertEqual(imports['./vendor/three.module.min.js'], three, 'a bare and a relative import of one library reach one address')
+        loader = imports['three/addons/loaders/GLTFLoader.js']
+        self.assertEqual(imports['./vendor/addons/loaders/GLTFLoader.js'], loader)
+        self.assertNotIn('./js/main.js', imports, "the page's own scripts keep their addresses")
+        sheet = re.search(r'<link rel="stylesheet" href="(\./css/console\.css\?v=[0-9a-f]{16})"', page)[1]
+        for address in (three, loader, sheet):
+            status, headers, _ = self.call(address.lstrip('.'))
+            self.assertEqual(status, 200, address)
+            self.assertEqual(headers.get('cache-control'), 'public, max-age=31536000, immutable', address)
+        # An old fingerprint, or none, is asked about each time.
+        self.assertEqual(self.call('/vendor/three.module.min.js?v=0000000000000000')[1].get('cache-control'), 'no-cache')
+        self.assertEqual(self.call('/vendor/three.module.min.js')[1].get('cache-control'), 'no-cache')
+        self.assertEqual(self.call('/js/main.js')[1].get('cache-control'), 'no-cache')
 
 
 if __name__ == '__main__': unittest.main()

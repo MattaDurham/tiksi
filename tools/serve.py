@@ -3,12 +3,15 @@
 import argparse
 import email.utils
 import errno
+import gzip
+import hashlib
 import html
 import io
 import ipaddress
 import json
 import logging
 import os
+import re
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import faulthandler
@@ -16,7 +19,7 @@ import signal
 import socket
 import sys
 import threading
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 # The service packages live at the repository root, whatever folder this file is started from.
@@ -25,6 +28,77 @@ from server.peers import refusal, this_mac_tailscale_address, trusted_peer
 from server.ranges import Part, byte_range
 PUBLIC_FILES = {'index.html', 'manifest.webmanifest', 'app-icon.svg'}
 PUBLIC_DIRS = {'css', 'js', 'vendor'}
+# Text the browser accepts compressed; pictures, video and models are compressed already.
+COMPRESSIBLE = {'text/javascript', 'text/css', 'text/html', 'text/plain', 'application/json', 'application/manifest+json', 'image/svg+xml'}
+# Files the page addresses with ?v=<content fingerprint> (see versioned_page): the libraries in
+# vendor/ and the style sheets. A browser keeps those for a year without asking again, since a
+# changed file gets a new address. The page's own scripts in js/ are asked about each time.
+VERSIONED = ('vendor', 'css')
+IMMUTABLE = 'public, max-age=31536000, immutable'
+
+
+class Fingerprints:
+    """Content fingerprints and compressed copies of public files, kept while a file's time and
+    size stay the same."""
+    def __init__(self, limit=64 * 1024 * 1024):
+        self.lock = threading.Lock(); self.hashes = {}; self.packed = {}; self.limit = limit; self.held = 0
+
+    def version(self, path):
+        info = path.stat(); key = (info.st_mtime_ns, info.st_size)
+        with self.lock:
+            found = self.hashes.get(path)
+            if found and found[0] == key: return found[1]
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+        with self.lock: self.hashes[path] = (key, digest)
+        return digest
+
+    def gzip(self, path, info):
+        key = (info.st_mtime_ns, info.st_size)
+        with self.lock:
+            found = self.packed.get(path)
+            if found and found[0] == key: return found[1]
+        packed = gzip.compress(path.read_bytes(), 6, mtime=0)
+        with self.lock:
+            old = self.packed.pop(path, None)
+            if old: self.held -= len(old[1])
+            while self.packed and self.held + len(packed) > self.limit:
+                self.held -= len(self.packed.pop(next(iter(self.packed)))[1])
+            self.packed[path] = (key, packed); self.held += len(packed)
+        return packed
+
+
+FINGERPRINTS = Fingerprints()
+
+
+def versioned_page(document):
+    """index.html with every library and style sheet addressed by its content fingerprint: the
+    import map's entries (and an exact entry for each library module, so relative imports
+    between them resolve to the same address) and the style sheet links."""
+    def address(relative):
+        target = ROOT / relative
+        return './' + relative + '?v=' + FINGERPRINTS.version(target) if target.is_file() else None
+    match = re.search(r'(<script type="importmap">)(.*?)(</script>)', document, re.S)
+    if match:
+        try: given = json.loads(match[2]).get('imports', {})
+        except (ValueError, AttributeError): given = None
+        if isinstance(given, dict):
+            imports = {}
+            for key, value in given.items():
+                relative = str(value).removeprefix('./')
+                if key.endswith('/') and relative.startswith(VERSIONED):
+                    imports[key] = value
+                    for module in sorted((ROOT / relative).rglob('*.js')):
+                        imports[key + module.relative_to(ROOT / relative).as_posix()] = address(module.relative_to(ROOT).as_posix())
+                else: imports[key] = (address(relative) if relative.startswith(VERSIONED) else None) or value
+            for folder in VERSIONED:
+                for module in sorted((ROOT / folder).rglob('*.js')):
+                    relative = module.relative_to(ROOT).as_posix()
+                    if not any(part.startswith('.') for part in module.relative_to(ROOT).parts): imports['./' + relative] = address(relative)
+            document = document[:match.start(2)] + '\n' + json.dumps({'imports': imports}, indent=1) + '\n' + document[match.end(2):]
+    def link(found):
+        versioned = address(found[2])
+        return found[1] + (versioned or './' + found[2]) + found[3]
+    return re.sub(r'(<link rel="stylesheet" href=")\./((?:%s)/[^"?]+)(")' % '|'.join(VERSIONED), link, document)
 
 class AppHandler(SimpleHTTPRequestHandler):
     extensions_map = {**SimpleHTTPRequestHandler.extensions_map,
@@ -152,6 +226,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         if target == ROOT: target = ROOT / 'index.html'
         if target == ROOT / 'index.html':
             document = target.read_text(encoding='utf-8').replace('name="tiksi-storage" content="portable"', 'name="tiksi-storage" content="project-files"')
+            document = versioned_page(document)
             if not getattr(self.server, 'instance_file', None):
                 return self.bytes_response(document.encode('utf-8'), 'text/html; charset=utf-8')
             metadata = self.instance()
@@ -171,14 +246,31 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_error(404); return None
         tag = '"%x-%x"' % (info.st_mtime_ns, info.st_size)
         modified = email.utils.formatdate(info.st_mtime, usegmt=True)
-        if self.not_modified(tag, info.st_mtime):
-            source.close()
-            self.send_response(304); self.send_header('ETag', tag); self.end_headers()
-            return None
         kind = self.guess_type(str(target))
         # A range is honoured unless If-Range names another version of the file.
         asked = self.headers.get('Range') if self.headers.get('If-Range', tag) in (tag, modified) else None
         wanted = byte_range(asked, info.st_size)
+        packed = not wanted and self.compressible(kind)
+        if packed: tag = tag[:-1] + '-gz"'
+        # Addressed by its current fingerprint: the browser keeps it without asking again.
+        version = parse_qs(urlsplit(self.path).query).get('v', [''])[0]
+        immutable = bool(version) and target.relative_to(ROOT).parts[0] in VERSIONED and version == FINGERPRINTS.version(target)
+        if self.not_modified(tag, info.st_mtime):
+            source.close()
+            self.send_response(304); self.send_header('ETag', tag)
+            if immutable: self.send_header('Cache-Control', IMMUTABLE)
+            if self.compressible(kind, accepted=False): self.send_header('Vary', 'Accept-Encoding')
+            self.end_headers()
+            return None
+        if packed:
+            source.close()
+            payload = FINGERPRINTS.gzip(target, info)
+            self.send_response(200)
+            self.send_header('Content-Type', kind); self.send_header('Content-Encoding', 'gzip'); self.send_header('Vary', 'Accept-Encoding')
+            self.send_header('Content-Length', str(len(payload))); self.send_header('Last-Modified', modified); self.send_header('ETag', tag)
+            if immutable: self.send_header('Cache-Control', IMMUTABLE)
+            self.end_headers()
+            return io.BytesIO(payload)
         if wanted == 'unsatisfiable':
             source.close()
             self.send_response(416); self.send_header('Content-Range', 'bytes */%d' % info.st_size)
@@ -198,8 +290,17 @@ class AppHandler(SimpleHTTPRequestHandler):
         self.send_header('Last-Modified', modified)
         self.send_header('ETag', tag)
         self.send_header('Accept-Ranges', 'bytes')
+        if immutable: self.send_header('Cache-Control', IMMUTABLE)
+        if self.compressible(kind, accepted=False): self.send_header('Vary', 'Accept-Encoding')
         self.end_headers()
         return body
+
+    def compressible(self, kind, accepted=True):
+        """True for text worth compressing; with accepted, only when this browser takes gzip."""
+        if kind.split(';')[0].strip() not in COMPRESSIBLE: return False
+        if not accepted: return True
+        offered = [part.split(';')[0].strip().lower() for part in self.headers.get('Accept-Encoding', '').split(',')]
+        return 'gzip' in offered and not any(part.replace(' ', '') == 'gzip;q=0' for part in self.headers.get('Accept-Encoding', '').split(','))
 
     def not_modified(self, tag, mtime):
         match = self.headers.get('If-None-Match')
@@ -210,8 +311,12 @@ class AppHandler(SimpleHTTPRequestHandler):
         except (TypeError, ValueError, IndexError, OverflowError): return False
 
     def bytes_response(self, payload, content_type):
+        packed = len(payload) > 1024 and self.compressible(content_type)
+        if packed: payload = gzip.compress(payload, 6, mtime=0)
         self.send_response(200)
         self.send_header('Content-Type', content_type)
+        if self.compressible(content_type, accepted=False): self.send_header('Vary', 'Accept-Encoding')
+        if packed: self.send_header('Content-Encoding', 'gzip')
         self.send_header('Content-Length', str(len(payload)))
         self.end_headers()
         return io.BytesIO(payload)
