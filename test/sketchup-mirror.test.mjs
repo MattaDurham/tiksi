@@ -5,7 +5,7 @@ import { test } from 'node:test';
 
 globalThis.indexedDB = { open() { throw new Error('no IndexedDB under Node'); } };
 const store = await import('../js/store.js');
-const { mirrorSpec, mergeMirror, syncedState, specSignature, mirrorFileName, sketchupImageBytes } = await import('../js/sketchup-mirror.js');
+const { mirrorSpec, mergeMirror, syncedState, specSignature, mirrorFileName, sketchupImageBytes, wallSig } = await import('../js/sketchup-mirror.js');
 
 function room() {
   const p = store.propertyTemplate('Synthetic room');
@@ -65,6 +65,50 @@ test('an unedited .skp changes nothing', () => {
   const r = mergeMirror(p, readOf(mirrorSpec(p)), syncedState(p));
   assert.deepEqual([r.applied, r.added, r.deleted, r.conflicts], [[], [], [], []]);
   assert.equal(JSON.stringify(p), before);
+});
+
+// Typed lengths are stored exactly, so the mirror tells apart changes far under a millimetre.
+const INCH = 0.0254;
+test('a typed change under a millimetre counts as a change on both sides', () => {
+  const p = room(), w = p.walls.find(x => x.id === 'w-e');   // 100 mm thick
+  const synced = syncedState(p), read = readOf(mirrorSpec(p));
+  w.thickness = 0.1 + INCH / 64;   // typed 1/64" (0.4 mm) thicker
+  assert.notEqual(syncedState(p)['w-e'], synced['w-e'], 'the typed change is a change');
+  // SketchUp moved the same wall meanwhile: both changed, so Tiksi keeps its typed value.
+  read.walls.find(x => x.id === 'w-e').now.ax = 4.5;
+  const r = mergeMirror(p, read, synced);
+  assert.deepEqual(r.conflicts.map(c => c.id), ['w-e']);
+  assert.equal(w.thickness, 0.1 + INCH / 64);
+});
+
+test('a wall moved half a millimetre in SketchUp moves in Tiksi', () => {
+  const p = room(), synced = syncedState(p), read = readOf(mirrorSpec(p));
+  Object.assign(read.walls.find(x => x.id === 'w-e').now, { ax: 4.0005, bx: 4.0005 });
+  const r = mergeMirror(p, read, synced);
+  assert.deepEqual(r.applied, ['w-e']);
+  assert.deepEqual([p.walls.find(x => x.id === 'w-e').ax, p.walls.find(x => x.id === 'w-e').bx], [4.0005, 4.0005]);
+});
+
+test('a length signs alike as Tiksi holds it and as the server reads it back to the micrometre', () => {
+  // The server reports each value rounded to six decimals of a metre (r6), from its exact value.
+  const readBack = v => Number(v.toFixed(6));
+  const differ = [];
+  for (let n = -16 * 400; n <= 16 * 400; n++) for (const v of [n * INCH / 16, n * INCH / 32, n / 1e4, n / 1e5]) {
+    const params = { ax: v, ay: 0, bx: 1, by: 0, thickness: 0.1, height: 2.4 };
+    if (wallSig(params) !== wallSig({ ...params, ax: readBack(v) })) differ.push(v);
+  }
+  assert.deepEqual(differ.slice(0, 5), [], differ.length + ' lengths sign differently once read back');
+});
+
+test('signatures kept from the millimetre mirror are set aside, and a SketchUp edit still comes through', () => {
+  const p = room(), read = readOf(mirrorSpec(p));
+  // The millimetre-era record of the last agreed state: same elements, signatures without the tail.
+  const old = Object.fromEntries(Object.entries(syncedState(p)).map(([id, sig]) => [id, sig.replace(/\|0\.1mm$/, '')]));
+  for (const e of Object.values(read.model.elements)) e.sig = e.sig.replace(/\|0\.1mm$/, '');
+  Object.assign(read.walls.find(x => x.id === 'w-e').now, { ax: 4.5, bx: 4.5 });
+  const r = mergeMirror(p, read, old, old);
+  assert.deepEqual([r.applied, r.conflicts, r.deleted], [['w-e'], [], []]);
+  assert.equal(p.walls.find(x => x.id === 'w-e').ax, 4.5);
 });
 
 test('a wall moved and raised in SketchUp updates Tiksi; its height stops following the level', () => {

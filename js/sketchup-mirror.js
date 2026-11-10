@@ -22,8 +22,17 @@ import { tagIdOf, tagById } from './tags.js';
 import { fixtureShape, fixtureMirrorParams, fixtureLocalFrame, fixtureParts, fixtureLabel, fixturesOn, normaliseFixture, FIXTURE_FALLBACK } from './fixtures.js';
 
 export const MIRROR_FORMAT = 'tiksi-sketchup-mirror';
-const mm = v => Math.round(Number(v || 0) * 1000);           // signatures compare to the millimetre
-const permille = v => Math.round(Number(v || 0) * 2000);     // opening position, to 1/2000 of the wall
+// Signatures compare lengths to 0.1 mm, finer than any typed change, and the opening position
+// to 1/100,000 of the wall. Each value is first rounded to the micrometre, as the server reports
+// what it reads from the .skp (r6 in server/sketchup_mirror.py), so a value Tiksi wrote and the
+// same value read back always sign alike. SIG_TAIL marks signatures of this precision: ones kept
+// from the earlier millimetre signatures carry none and are set aside (mergeMirror).
+const micro = v => Number((Number(v) || 0).toFixed(6));
+const tenth = v => Math.round(micro(v) * 1e4);
+const along = v => Math.round(micro(v) * 1e5);
+const SIG_TAIL = '|0.1mm';
+const current = s => typeof s === 'string' && s.endsWith(SIG_TAIL);
+const currentOnly = m => Object.fromEntries(Object.entries(m || {}).filter(([, s]) => current(s)));
 
 // ---------- spec: what the .skp should contain ----------
 
@@ -65,15 +74,15 @@ export function elementState(prop) {
   return out;
 }
 
-export function wallSig(p) { return ['wall', mm(p.ax), mm(p.ay), mm(p.bx), mm(p.by), mm(p.thickness), mm(p.height)].join(','); }
-export function openingSig(p) { return ['opening', p.wallId, permille(p.t), mm(p.width), mm(p.height), mm(p.sill)].join(','); }
-export function roomSig(p) { return ['room', p.name || '', ...(p.pts || []).map(q => mm(q[0]) + ':' + mm(q[1]))].join(','); }
-// Rotation to a tenth of a degree, the rest to the millimetre.
+export function wallSig(p) { return ['wall', tenth(p.ax), tenth(p.ay), tenth(p.bx), tenth(p.by), tenth(p.thickness), tenth(p.height)].join(',') + SIG_TAIL; }
+export function openingSig(p) { return ['opening', p.wallId, along(p.t), tenth(p.width), tenth(p.height), tenth(p.sill)].join(',') + SIG_TAIL; }
+export function roomSig(p) { return ['room', p.name || '', ...(p.pts || []).map(q => tenth(q[0]) + ':' + tenth(q[1]))].join(',') + SIG_TAIL; }
+// Rotation to a tenth of a degree, the rest to 0.1 mm.
 const decideg = v => ((Math.round(Number(v || 0) * 10) % 3600) + 3600) % 3600;
 export function fixtureSig(p) {
   const head = ['fixture', p.kind || '', p.subtype || '', p.shape || ''];
-  if (p.shape === 'box') return head.concat([mm(p.x), mm(p.y), decideg(p.rot), mm(p.w), mm(p.d), mm(p.y0), mm(p.h)]).join(',');
-  return head.concat((p.pts || []).map(q => mm(q[0]) + ':' + mm(q[1])), [mm(p.depth), mm(p.y0), mm(p.h)]).join(',');
+  if (p.shape === 'box') return head.concat([tenth(p.x), tenth(p.y), decideg(p.rot), tenth(p.w), tenth(p.d), tenth(p.y0), tenth(p.h)]).join(',') + SIG_TAIL;
+  return head.concat((p.pts || []).map(q => tenth(q[0]) + ':' + tenth(q[1])), [tenth(p.depth), tenth(p.y0), tenth(p.h)]).join(',') + SIG_TAIL;
 }
 
 // Finishes as SketchUp should paint them: { id, name, color } from the workspace materials,
@@ -201,16 +210,20 @@ const readSig = {
 // file reported before. Tiksi changed it when it differs from the last agreed state.
 // Mutates `prop`; the returned report's `seen` is the next `seenBefore`.
 export function mergeMirror(prop, read, synced, seenBefore) {
-  synced = synced || {};
-  seenBefore = seenBefore || {};
+  // Signatures kept from before the 0.1 mm ones cannot be compared: go by the file's own values,
+  // as for a mirror written on another machine. (Which elements the file was written with still
+  // counts; an element deleted in SketchUp across the change is kept and reported, not deleted.)
+  synced = currentOnly(synced);
+  seenBefore = currentOnly(seenBefore);
   const written = (read.model && read.model.elements && typeof read.model.elements === 'object') ? read.model.elements : {};
+  const writtenSig = id => written[id] && current(written[id].sig) ? written[id].sig : '';
   const report = { applied: [], added: [], deleted: [], conflicts: [], warnings: (read.warnings || []).slice(), untagged: read.untagged || null, seen: {} };
   const before = elementState(prop);
   const seen = new Set();
   const decide = (id, kind, now, base) => {
     const nowSig = readSig[kind](now), fileBase = readSig[kind](base || {}), cur = before.get(id);
     report.seen[id] = nowSig;
-    const agreed = synced[id] || (written[id] && written[id].sig) || fileBase;
+    const agreed = synced[id] || writtenSig(id) || fileBase;
     const skpChanged = nowSig !== fileBase && nowSig !== synced[id] && nowSig !== seenBefore[id];
     if (!cur) {
       if (synced[id] || written[id]) {   // Tiksi deleted it after the last sync
@@ -293,7 +306,7 @@ export function mergeMirror(prop, read, synced, seenBefore) {
   // element Tiksi added after the file was opened in SketchUp is not in its record.)
   for (const [id, cur] of before) {
     if (seen.has(id) || !written[id]) continue;
-    const agreed = synced[id] || written[id].sig;
+    const agreed = synced[id] || writtenSig(id);
     if (cur.sig !== agreed) { report.conflicts.push({ id, kind: cur.kind, reason: 'deleted in SketchUp, changed in Tiksi; kept' }); continue; }
     if (cur.kind === 'wall') {
       prop.walls = prop.walls.filter(w => w.id !== id);
