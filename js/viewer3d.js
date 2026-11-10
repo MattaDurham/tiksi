@@ -558,16 +558,46 @@ function rebuildNightLights() {
   discGeo.rotateX(Math.PI / 2);
   const discMat = new THREE.MeshStandardMaterial({ color: 0xfff1dc, emissive: new THREE.Color(0xffd9a8), emissiveIntensity: 5, roughness: 0.6 });
   discMat.userData.disposable = true;
-  for (const r of roomCentres(prop)) {
-    if (hidden.has(r.level)) continue;
+  // Every room keeps its glowing fixture. How many of them also cast light is a device limit
+  // (render-quality.js deviceLimits): every light is worked out for every pixel of every lit
+  // surface. A computer lights every room, as it always has. A touch device lights a few: the
+  // room the camera is in and the ones nearest it, moved as the camera moves (placeRoomLights).
+  // Their number does not change while the camera moves, so no shader is rebuilt for it.
+  lampRooms = roomCentres(prop).filter(r => !hidden.has(r.level));
+  lampLights = [];
+  const limit = memoryLimits().roomLights;
+  const count = limit ? Math.min(lampRooms.length, limit) : lampRooms.length;
+  for (let i = 0; i < count; i++) {
     const light = new THREE.PointLight(0xffc48a, 14, 0, 2);
-    light.position.set(r.x, r.top - 0.12, r.z);
+    lampLights.push(light);
     lightRoot.add(light);
+  }
+  for (const r of lampRooms) {
     const disc = new THREE.Mesh(discGeo, discMat);
     disc.position.set(r.x, r.top - 0.035, r.z);
     disc.userData = { kind: 'ceiling', id: r.id };
     lightRoot.add(disc);
   }
+  lampKey = null;
+  placeRoomLights();
+}
+// Put the lights over the rooms that get one: all of them where there is a light per room, else
+// the room the camera stands in first, then the nearest. Called before every drawn frame; it
+// does nothing unless the rooms chosen have changed.
+let lampRooms = [], lampLights = [], lampKey = null;
+function placeRoomLights() {
+  let chosen = lampRooms;
+  if (lampLights.length < lampRooms.length) {
+    const c = camera.position;
+    const inside = r => { const room = (prop.rooms || []).find(x => x.id === r.id); return !!room && c.y >= r.y - 0.05 && c.y < r.top - 0.05 && pointInPolygon(c.x, c.z, room.pts); };
+    const far = r => (inside(r) ? 0 : 1e6) + (r.x - c.x) ** 2 + (r.top - c.y) ** 2 + (r.z - c.z) ** 2;
+    chosen = lampRooms.map(r => [far(r), r]).sort((a, b) => a[0] - b[0]).slice(0, lampLights.length).map(x => x[1]);
+    chosen.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);   // a steady order: a room keeps its light
+  }
+  const key = chosen.map(r => r.id).join('|');
+  if (key === lampKey) return;
+  lampKey = key;
+  chosen.forEach((r, i) => lampLights[i].position.set(r.x, r.top - 0.12, r.z));
 }
 
 function fitShadow() {
@@ -1243,6 +1273,7 @@ function renderFrame(still = false) {
     const shown = prop.env.showCeilings !== false && (mode === 'walk' || camera.position.y < l.top - 0.05);
     if (l.ceilings.visible !== shown) { l.ceilings.visible = shown; invalidateShadows(); }
   }
+  if (lampLights.length < lampRooms.length) placeRoomLights();
   updatePins();
   updateNotes();
   updateMatchMarkers();
@@ -4541,6 +4572,7 @@ export function qualityState() {
   return {
     quality: quality(), touch: ownQuality(), phoneLayout: fieldLayout(), shared: prop.env.quality, shadowMap: sun.shadow.mapSize.x, smoothingSamples: composer.renderTarget1.samples,
     shading: aoWanted, glow: passes.bloom.enabled, pixelRatio: renderer.getPixelRatio(), limits: memoryLimits(),
+    roomLights: lampLights.length, litRooms: lampKey ? lampKey.split('|').filter(Boolean) : [],
   };
 }
 export function scanStates() {
