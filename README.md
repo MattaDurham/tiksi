@@ -194,10 +194,20 @@ the server uses its private state directory's `workspace/projects` folder.
 The first connection migrates legacy browser projects and originals to disk.
 Differing edits require a choice; unrelated records combine. A recovery bundle
 retains the old browser data, including unreferenced original files, before the
-browser store is removed. Subsequent working copies stay in memory. Changes
-appear on other clients within a few seconds; edits to the same field require
-review. Keep the Mac reachable until `SAVED TO DISK` appears. Offline edits are
-unsaved working changes, and closing the page warns before losing them.
+browser store is removed. After that a page holds a working copy in memory.
+Changes appear on other clients within a few seconds, in place: a page is
+redrawn only as far as the change reaches it, and not while a text field or a
+dialog is in use. Edits to the same value require review; the question names
+the values that differ. Which property, level and tags are showing is each
+device's own choice, kept in its browser and never saved to the Mac.
+
+In the Mac's own desktop browser, wait for `SAVED TO DISK`: edits not saved yet
+exist only in the page, and closing it warns first. A phone or another computer
+also keeps what it has not sent yet (records and new originals up to 100 MB
+each) in its own browser storage until the Mac confirms it, and sends it the
+next time Tiksi is opened there; if the Mac has moved on, the two are merged
+and reviewed like any other edit. While an original that could not be kept is
+unsent, the phone bar reads Keep open.
 Conflict review saves both reviewed variants as complete `.tiksi` recovery bundles
 in `<state-dir>/workspace/history/`, including a draft declined in favor of the Mac.
 Pictures (photo and video thumbnails, plan underlays, uploaded product images)

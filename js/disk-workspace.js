@@ -1,10 +1,11 @@
 // The Mac's project files are authoritative. Browser state is an in-memory working
 // copy; legacy browser stores are read once and removed only after a disk save.
-import { ws, emptyWorkspace, replaceWorkspace, adoptRecord, onChange, touch, whenHydrated, projectSlice, listAllFileIds, storedFileIds, getCachedFile, cacheFile, setFileBackend, useDiskPersistence, finishBrowserMigration, setSaveStatus } from './store.js';
+import { ws, emptyWorkspace, replaceWorkspace, adoptRecord, onChange, touch, whenHydrated, projectSlice, listAllFileIds, storedFileIds, getCachedFile, cacheFile, deleteFiles, setFileBackend, useDiskPersistence, finishBrowserMigration, setSaveStatus } from './store.js';
 import { mergeShared, sameJson } from './workspace-merge.js';
 import { syncMirror, mirrorCapabilities, mirrorSpec, specSignature, mirrorFileName } from './sketchup-mirror.js';
 import { pictureFiles, pictureRefs, mapStrings } from './picture-assets.js';
 import { unsentStore } from './unsent.js';
+import { touchDevice } from './render-quality.js';
 
 export let diskWorkspace = null;
 // A JSON-shaped copy whose objects are all new; strings are immutable and shared.
@@ -15,6 +16,14 @@ const copy = value => mapStrings(value, s => s);
 // direction, for `stallMs`; `answerMs` is the wait for the Mac's answer once everything was
 // sent (it may be writing a large project file).
 export const transferLimits = { stallMs: 45000, answerMs: 120000 };
+// Originals read from the Mac are kept in page memory only up to these sizes: one file up to
+// `fileBytes`, and `totalBytes` of them together (the ones read longest ago go first). The
+// Mac marks a stored original as never changing, so the browser's own cache answers the next
+// read; anything larger is handed to whoever asked and not held here at all. A phone gets a
+// smaller share: a page that fills its memory is dropped by the phone.
+export const originalLimits = touchDevice()
+  ? { fileBytes: 16 * 1024 * 1024, totalBytes: 64 * 1024 * 1024 }
+  : { fileBytes: 48 * 1024 * 1024, totalBytes: 256 * 1024 * 1024 };
 // The largest original the Mac stores (MAX_BLOB in server/workspace.py).
 const MAX_FILE_BYTES = 600 * 1024 * 1024;
 // True on every device but the Mac's own desktop browser: another machine on the network,
@@ -410,16 +419,37 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     if (!failure) return;
     failure = null; status(settledText(), pending || cleanupNotice);
   }
+  // Originals read from the Mac and held in page memory, oldest read first: id -> bytes.
+  const heldOriginals = new Map();
+  function holdOriginal(id, bytes) {
+    heldOriginals.delete(id); heldOriginals.set(id, bytes);
+    let total = 0; for (const size of heldOriginals.values()) total += size;
+    for (const [old, size] of heldOriginals) {
+      if (total <= originalLimits.totalBytes) break;
+      if (old === id) continue;
+      heldOriginals.delete(old); total -= size;
+      // Only what the Mac holds unchanged is let go; it is read again when next wanted.
+      if (!changedFiles.has(old)) deleteFiles([old]);
+    }
+  }
+  async function download(remote) {
+    // The Mac marks an original as never changing: the browser may answer from its own cache.
+    const buffer = await (await request('/blobs/' + remote.hash, { cache: 'default' })).arrayBuffer();
+    if (buffer.byteLength !== remote.size) throw new Error('Project asset download was truncated');
+    return buffer;
+  }
   async function read(id, local) {
     const remote = assets[id];
-    if (!remote || changedFiles.has(id) || local?.sharedHash === remote.hash) return local;
+    if (!remote || changedFiles.has(id)) return local;
+    if (local?.sharedHash === remote.hash) { if (heldOriginals.has(id)) holdOriginal(id, heldOriginals.get(id)); return local; }
+    const meta = { id, name: remote.name, format: remote.format, kind: remote.kind, mime: remote.mime, sharedHash: remote.hash };
+    // Too large to hold: the bytes go straight to whoever asked, uncopied, and are not kept.
+    if (remote.size > originalLimits.fileBytes) return { ...meta, buffer: await download(remote), owned: true };
     const key = id + ':' + remote.hash;
     if (!inFlightFiles.has(key)) inFlightFiles.set(key, (async () => {
-      const r = await request('/blobs/' + remote.hash);
-      const buffer = await r.arrayBuffer();
-      if (buffer.byteLength !== remote.size) throw new Error('Project asset download was truncated');
-      const value = { id, buffer, name: remote.name, format: remote.format, kind: remote.kind, mime: remote.mime, sharedHash: remote.hash };
-      if (assets[id]?.hash === remote.hash && !changedFiles.has(id)) await cacheFile(id, buffer, value);
+      const buffer = await download(remote);
+      const value = { ...meta, buffer };
+      if (assets[id]?.hash === remote.hash && !changedFiles.has(id)) { await cacheFile(id, buffer, value); holdOriginal(id, buffer.byteLength); }
       return value;
     })().finally(() => inFlightFiles.delete(key)));
     return inFlightFiles.get(key);
@@ -637,7 +667,11 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       paths = reply.paths || (await (await request()).json()).paths || {};
       // Blob upload alone is not a save acknowledgment. Keep replacements dirty
       // across revision retries, while preserving any still-newer in-flight edit.
-      for (const [id, buffer] of uploadedFiles) if ((await getCachedFile(id))?.buffer === buffer) { changedFiles.delete(id); heldByMac.delete(id); }
+      for (const [id, buffer] of uploadedFiles) if ((await getCachedFile(id))?.buffer === buffer) {
+        changedFiles.delete(id); heldByMac.delete(id);
+        // The Mac has it now: it counts toward what page memory holds, or is let go when too large.
+        if (buffer.byteLength > originalLimits.fileBytes) deleteFiles([id]); else holdOriginal(id, buffer.byteLength);
+      }
       await fetchPictures(accepted.data, accepted.assets);
       current = savedFormNow();
       const after = mergeShared(sentData, current, accepted.data);
@@ -778,7 +812,11 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   // before showing anything (nothing can be unsaved yet).
   if (initial.data && Number(initial.data.version) > ownVersion && reloadOnceFor(initial.data.version)) await new Promise(() => {});
   revision = initial.revision; paths = initial.paths || {}; assets = initial.assets || {};
-  if (initial.data) await fetchPictures(initial.data, assets);
+  // The first screen needs the pictures of the property it opens on, not of every property:
+  // those are fetched first, the rest once the app is open (laterPictures below).
+  const opensOn = initial.data && view.impose({ settings: { ...initial.data.settings }, properties: initial.data.properties.map(p => ({ id: p.id })) }).settings.activePropertyId;
+  const firstShown = initial.data && initial.data.properties.some(p => p.id === opensOn) ? { ...initial.data, properties: initial.data.properties.filter(p => p.id === opensOn) } : initial.data;
+  if (initial.data) await fetchPictures(firstShown, assets);
   if (needsMigration) {
     // Stage a legacy migration as a merge; never seed an empty phone over the Mac.
     if (!hadLocal && initial.data) await apply(initial.data);
@@ -932,6 +970,16 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     dialog.querySelector('[data-ok]').onclick = () => { dialog.close(); dialog.remove(); };
   }
   try { await sendKept(); } catch (error) { console.warn('unsent changes:', error); }
+  // The other properties' pictures, behind the open app. They go into the open records in
+  // place; a page that shows any of them is told, as for a change from another device.
+  async function laterPictures() {
+    if (!pictures || !initial.data || firstShown === initial.data) return;
+    await pictures.fetchMissing(ws.data, assets);
+    const filled = new Set();
+    for (const p of ws.data.properties) if (pictures.fill(p)) filled.add(p.id);
+    if (pictures.fill(ws.data) || filled.size) onRemote?.({ properties: filled, keys: new Map([...filled].map(id => [id, null])), materials: false, other: false });
+  }
+  laterPictures().catch(error => console.warn('pictures of the other properties:', error));
   onChange(changed);
   setInterval(() => {
     // Another part of the app may have written its own message over this module's state

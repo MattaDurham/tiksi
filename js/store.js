@@ -1146,6 +1146,9 @@ export async function getFile(id) {
   const file = await fileBackend.read(id, local);
   // IndexedDB used to return an owned copy. Preserve that contract: renderers
   // may mutate bytes or transfer them to a worker, detaching the supplied buffer.
+  // A file the backend did not keep (`owned`: too large to hold in page memory) is the
+  // caller's already: it is handed over as it is, not copied a second time.
+  if (file?.owned) { const { owned, ...mine } = file; return mine; }
   return file?.buffer ? { ...file, buffer: file.buffer.slice(0) } : file;
 }
 

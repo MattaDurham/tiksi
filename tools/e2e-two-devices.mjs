@@ -9,6 +9,9 @@ import { spawn, execFileSync } from 'node:child_process';
 import { mkdtemp, rm, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import net from 'node:net';
+import http from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { resolve, extname, sep } from 'node:path';
 import { chromium } from 'playwright';
 
 const state = await mkdtemp(tmpdir() + '/tiksi-two-devices-');
@@ -16,7 +19,12 @@ const socket = net.createServer(); await new Promise(r => socket.listen(0, '127.
 const port = socket.address().port; await new Promise(r => socket.close(r));
 const child = spawn('python3', ['tools/serve.py', '--port', String(port), '--state-dir', state, '--projects-dir', state + '/projects'], { stdio: ['ignore', 'pipe', 'pipe'] });
 // Read the server's output: an unread pipe fills and then every server thread stops at its next log line.
-let serverLog = ''; child.stdout.resume(); child.stderr.on('data', d => { serverLog = (serverLog + d).slice(-8000); });
+// How many times the Mac was asked for each stored original, counted from its request log.
+const asked = new Map();
+let serverLog = ''; child.stdout.resume(); child.stderr.on('data', d => {
+  serverLog = (serverLog + d).slice(-8000);
+  for (const m of String(d).matchAll(/"GET \/api\/workspace\/blobs\/([0-9a-f]{64})/g)) asked.set(m[1], (asked.get(m[1]) || 0) + 1);
+});
 const url = 'http://127.0.0.1:' + port;
 const SAVED = () => document.querySelector('#save-status').textContent === 'SAVED TO DISK';
 const errors = [];
@@ -471,8 +479,140 @@ async function aKeptCopyTheMacAlreadyHasIsNotSentAgain() {
   await context.close(); await desk.context().close();
 }
 
+// A stored original never changes on the Mac, so the browser may keep it: opening the page
+// again does not download it again. Page memory holds originals only up to a limit; a larger
+// one is handed over and not kept, and the ones read longest ago make room.
+async function originalsAreNotDownloadedAndHeldForEver() {
+  step('originals');
+  const [first] = await makeProperties('originals');
+  const maker = await device({ hash: '' });
+  const sizes = { 'original-a': 60000, 'original-b': 40000, 'original-c': 30000 };
+  await maker.evaluate(async ([id, sizes]) => {
+    const store = await import('/js/store.js'), p = store.ws.data.properties.find(p => p.id === id);
+    for (const [name, size] of Object.entries(sizes)) {
+      const bytes = new Uint8Array(size); for (let i = 0; i < size; i++) bytes[i] = (i * 31 + size) & 255;
+      await store.putFile(name, bytes.buffer, { kind: 'photo', mime: 'image/jpeg', name: name + '.jpg' });
+      p.photos.push({ id: name, name, thumb: '', notes: '', kind: 'photo' });
+    }
+    store.touch();
+    await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
+  }, [first, sizes]);
+  await maker.context().close();
+  const hash = (await mac()).assets['original-a'].hash;
+  const page = await device();
+  const readOriginal = name => page.evaluate(async name => { const f = await (await import('/js/store.js')).getFile(name); const b = new Uint8Array(f.buffer); return [b.length, b[1], b[b.length - 1]]; }, name);
+  const expected = name => [sizes[name], (31 + sizes[name]) & 255, ((sizes[name] - 1) * 31 + sizes[name]) & 255];
+  const held = name => page.evaluate(async name => !!(await (await import('/js/store.js')).getCachedFile(name))?.buffer, name);
+  assert.deepEqual(await readOriginal('original-a'), expected('original-a'));
+  assert.equal(asked.get(hash), 1);
+  await page.reload(); await page.waitForFunction(SAVED);
+  assert.deepEqual(await readOriginal('original-a'), expected('original-a'), 'the original reads the same after the page is opened again');
+  await new Promise(r => setTimeout(r, 300));
+  assert.equal(asked.get(hash), 1, 'and the Mac was not asked for it a second time: the browser kept it');
+  // Page memory: an original over the per-file limit is handed over, not held.
+  await page.evaluate(async () => { Object.assign((await import('/js/disk-workspace.js')).originalLimits, { fileBytes: 50000, totalBytes: 60000 }); });
+  await page.reload(); await page.waitForFunction(SAVED);
+  await page.evaluate(async () => { Object.assign((await import('/js/disk-workspace.js')).originalLimits, { fileBytes: 50000, totalBytes: 60000 }); });
+  assert.deepEqual(await readOriginal('original-a'), expected('original-a'));
+  assert.equal(await held('original-a'), false, 'an original larger than the limit is not kept in page memory');
+  const twice = await page.evaluate(async () => {
+    const s = await import('/js/store.js'), one = await s.getFile('original-a');
+    new Uint8Array(one.buffer)[1] = 0; structuredClone(one.buffer, { transfer: [one.buffer] });
+    const two = await s.getFile('original-a');
+    return [one.buffer.byteLength, new Uint8Array(two.buffer)[1], two.buffer.byteLength];
+  });
+  assert.deepEqual(twice, [0, expected('original-a')[1], 60000], 'whoever reads it next still gets every byte, whatever the first reader did with its copy');
+  // Two that fit one at a time: reading the second lets go of the first.
+  assert.deepEqual(await readOriginal('original-b'), expected('original-b'));
+  assert.equal(await held('original-b'), true);
+  assert.deepEqual(await readOriginal('original-c'), expected('original-c'));
+  assert.equal(await held('original-c'), true);
+  assert.equal(await held('original-b'), false, 'the original read longest ago makes room');
+  assert.deepEqual(await readOriginal('original-b'), expected('original-b'), 'and is read again when wanted');
+  await page.context().close();
+}
+
+// The first screen waits for the pictures of the property it opens on, not for every
+// property's. The others arrive behind the open app and go into the records in place.
+async function theFirstScreenDoesNotWaitForEveryPicture() {
+  step('pictures');
+  const [first, second] = await makeProperties('pictures');
+  const maker = await device({ hash: '' });
+  await maker.evaluate(async ids => {
+    const store = await import('/js/store.js');
+    ids.forEach((id, n) => {
+      // A picture large enough to be stored as a file of its own, different for each property.
+      const canvas = document.createElement('canvas'); canvas.width = 64; canvas.height = 64;
+      const g = canvas.getContext('2d'); for (let i = 0; i < 400; i++) { g.fillStyle = 'hsl(' + ((i * 37 + n * 120) % 360) + ' 70% 50%)'; g.fillRect((i * 13) % 64, (i * 29 + n * 7) % 64, 5, 5); }
+      store.ws.data.properties.find(p => p.id === id).photos.push({ id: 'photo-' + n, name: 'Picture ' + n, thumb: canvas.toDataURL('image/png'), notes: '', kind: 'photo' });
+    });
+    store.touch();
+    await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
+  }, [first, second]);
+  await maker.context().close();
+  const reference = prop(await mac(), second).photos.find(p => p.id === 'photo-1').thumb;
+  assert.match(reference, /^tiksi-picture:image\/png:pic-[0-9a-f]{64}$/, 'the picture is a file on the Mac');
+  const otherHash = reference.slice(-64);
+  // This device last had the first property open. The other property's picture is held back.
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  await context.addInitScript(id => { try { if (!localStorage.getItem('tiksi.device.view.v1')) localStorage.setItem('tiksi.device.view.v1', JSON.stringify({ property: id, levels: {}, tags: {} })); } catch {} }, first);
+  let release, wanted = false; const go = new Promise(r => { release = r; });
+  await context.route('**/api/workspace/blobs/' + otherHash, async route => { wanted = true; await go; return route.continue(); });
+  const page = await device({ context, hash: '#/photos', ready: null });
+  await page.getByRole('button', { name: /Picture 0/ }).waitFor({ timeout: 30000 });
+  const thumbs = () => page.evaluate(async ids => { const s = await import('/js/store.js'); return ids.map(id => s.ws.data.properties.find(p => p.id === id).photos.find(ph => /^photo-/.test(ph.id)).thumb.slice(0, 14)); }, [first, second]);
+  assert.deepEqual(await thumbs(), ['data:image/png', 'tiksi-picture:'], 'the app is open with the open property\'s picture, while the other property\'s is still on its way');
+  for (const end = Date.now() + 15000; !wanted && Date.now() < end;) await new Promise(r => setTimeout(r, 100));
+  assert.equal(wanted, true, 'the other picture was asked for behind the open app');
+  release();
+  await until(page, async id => (await import('/js/store.js')).ws.data.properties.find(p => p.id === id).photos.find(ph => ph.id === 'photo-1').thumb.startsWith('data:image/png'), second, 'the other property\'s picture arriving');
+  // Arriving pictures are not an edit: nothing is saved because of them.
+  await page.waitForFunction(SAVED);
+  assert.equal(await page.evaluate(async () => (await import('/js/disk-workspace.js')).diskWorkspace.pending), false);
+  assert.equal(prop(await mac(), second).photos.find(p => p.id === 'photo-1').thumb, reference);
+  await context.close();
+}
+
+// The copy that keeps everything in the browser (the hosted one, or the app opened without
+// the Mac's server): a stored workspace that cannot be read is left exactly as it is.
+async function anUnreadableStoredWorkspaceIsLeftAsItIs() {
+  step('stored');
+  const root = resolve('.');
+  const plain = http.createServer(async (req, res) => {
+    const path = resolve(root, '.' + decodeURIComponent(new URL(req.url, 'http://localhost').pathname));
+    if (path !== root && !path.startsWith(root + sep)) { res.writeHead(404).end(); return; }
+    try {
+      const bytes = await readFile(path === root ? resolve(root, 'index.html') : path);
+      res.setHeader('Content-Type', ({ '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.svg': 'image/svg+xml', '.json': 'application/json', '.wasm': 'application/wasm' })[extname(path)] || (path === root ? 'text/html' : 'application/octet-stream'));
+      res.end(bytes);
+    } catch { res.writeHead(404).end(); }
+  });
+  await new Promise(r => plain.listen(0, '127.0.0.1', r));
+  const site = 'http://127.0.0.1:' + plain.address().port;
+  try {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    page.on('pageerror', e => errors.push(e.message));
+    await page.goto(site + '/app-icon.svg');
+    await page.evaluate(() => localStorage.setItem('tiksi.workspace.v1', '{"properties": [ this is not a workspace any more'));
+    await page.goto(site + '/');
+    const notice = page.locator('#view .page-open-failed');
+    await notice.waitFor({ timeout: 60000 });
+    assert.match(await notice.textContent(), /stored in this browser could not be read[\s\S]*Nothing has been changed or saved over it/);
+    await page.waitForTimeout(2500);   // well past the moment the older code saved the demo over it
+    assert.equal(await page.evaluate(() => localStorage.getItem('tiksi.workspace.v1')), '{"properties": [ this is not a workspace any more', 'the stored text is exactly as it was found');
+    await notice.getByRole('button', { name: 'START WITH AN EMPTY WORKSPACE' }).click();
+    await page.locator('#property-select option').first().waitFor({ state: 'attached', timeout: 60000 });
+    const kept = await page.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith('tiksi.workspace.v1.unreadable.')).map(k => localStorage.getItem(k)));
+    assert.deepEqual(kept, ['{"properties": [ this is not a workspace any more'], 'starting again keeps the unreadable text in the browser under another name');
+    assert.equal(await page.locator('#view .page-open-failed').count(), 0);
+    await context.close();
+  } finally { await new Promise(r => plain.close(r)); plain.closeAllConnections?.(); }
+}
+
 const parts = { view: eachDeviceKeepsItsOwnView, typing: aSaveElsewhereLeavesThePageAlone, slow: aSlowActionWritesIntoTheLiveRecord, conflict: theCopiesDifferQuestionSaysWhatDiffers, older: anOlderTabDoesNotSaveOverANewerCopy,
-  drafts: twoDraftsAreNotAConflict, unavailable: aProjectWithAMissingFileIsShown, import: aProjectFileAsksBeforeItReplaces, error: aPageThatFailsToOpenSaysSo, saveid: aKeptCopyTheMacAlreadyHasIsNotSentAgain, model: modelKeepsItsCamera };
+  drafts: twoDraftsAreNotAConflict, unavailable: aProjectWithAMissingFileIsShown, import: aProjectFileAsksBeforeItReplaces, error: aPageThatFailsToOpenSaysSo, saveid: aKeptCopyTheMacAlreadyHasIsNotSentAgain,
+  originals: originalsAreNotDownloadedAndHeldForEver, pictures: theFirstScreenDoesNotWaitForEveryPicture, stored: anUnreadableStoredWorkspaceIsLeftAsItIs, model: modelKeepsItsCamera };
 
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(url)).ok) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
@@ -482,7 +622,7 @@ try {
   await Promise.race([(async () => { for (const [key, part] of Object.entries(parts)) if (!process.env.E2E_STEP || process.env.E2E_STEP.split(',').includes(key)) await part(); })(),
     new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('The run did not finish; it was in part ' + lastStep)), 600000); })]).finally(() => clearTimeout(timer));
   assert.deepEqual(errors, []);
-  console.log('ok   two devices: own view each; a save elsewhere updates in place; the copies-differ question names what differs; an older tab cannot save over a newer copy; drafts do not conflict; a missing project file is shown; a project file asks before replacing; a failed page says so; a kept copy the Mac has is not sent again; MODEL keeps its camera');
+  console.log('ok   two devices: own view each; a save elsewhere updates in place; the copies-differ question names what differs; an older tab cannot save over a newer copy; drafts do not conflict; a missing project file is shown; a project file asks before replacing; a failed page says so; a kept copy the Mac has is not sent again; originals are cached and not held for ever; the first screen does not wait for every picture; an unreadable stored workspace is left as it is; MODEL keeps its camera');
 } catch (error) {
   // The failure first: a browser that will not close must not hide it.
   console.error(error);
