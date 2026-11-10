@@ -211,7 +211,7 @@ export function applyProposal(prop, scan, result, underlays) {
     const ids = {};
     for (const w of L.walls) {
       const id = uid('w'); ids[w.id] = id;
-      walls.push({ id, level: lvl.id, ax: w.ax, ay: w.ay, bx: w.bx, by: w.by, thickness: w.thickness, height: null, material: w.exterior ? 'mat-fiber' : 'mat-drywall' });
+      walls.push({ id, level: lvl.id, ax: w.ax, ay: w.ay, bx: w.bx, by: w.by, thickness: w.thickness, height: null, material: w.exterior ? 'mat-exterior-unknown' : 'mat-drywall' });
     }
     for (const o of L.openings) {
       if (!ids[o.wallId]) continue;
