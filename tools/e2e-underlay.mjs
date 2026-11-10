@@ -116,6 +116,34 @@ try {
   assert.ok(mixed.unchanged && mixed.sourceUnchanged, 'Proposal/rendering changed the source');
   assert.deepEqual(mixed.roundtrip, mixed.report, 'Review evidence survives a project bundle');
   assert.match(mixed.summary, /Review floor datums/);
+  // A helper that dies is reported, not rerun in the page (where a very large scan would
+  // freeze it). The stand-in helper fails at once; the page must not run the job itself.
+  const died = await page.evaluate(async () => {
+    const THREE = await import('three');
+    const { mixedScan } = await import('/test/fixtures/mixed-scan.mjs');
+    const { analyseMesh } = await import('/js/scan2plan.js');
+    const { proposeFixtures } = await import('/js/fixtures-ui.js');
+    const { pos, idx } = mixedScan();
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geometry.setIndex(new THREE.BufferAttribute(idx, 1));
+    const root = new THREE.Group(); root.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial()));
+    const RealWorker = window.Worker;
+    let progress = 0;
+    window.Worker = class { constructor() { setTimeout(() => this.onerror && this.onerror(new ErrorEvent('error', { message: 'out of memory' })), 0); }
+      postMessage() {} terminate() {} };
+    const outcome = async run => { try { await run(); return 'resolved'; } catch (e) { return String(e && e.message); } };
+    try {
+      const scan = await outcome(() => analyseMesh(root, { progress: (m, f) => { if (f > 0.1) progress++; } }));
+      const prop = { levels: [{ id: 'L1', name: 'Main', elevation: 0 }], walls: [] };
+      const fixtures = await outcome(() => proposeFixtures(prop, { id: 's', name: 'synthetic.obj', kind: 'mesh' }, null, root));
+      return { scan, fixtures, progress };
+    } finally { window.Worker = RealWorker; geometry.dispose(); }
+  });
+  assert.match(died.scan, /Scan analysis stopped \(out of memory\)/, 'A dead helper is reported: ' + died.scan);
+  assert.equal(died.progress, 0, 'The page did not run the scan analysis itself');
+  assert.match(died.fixtures, /Fixture detection stopped \(out of memory\)/, 'A dead fixture helper is reported: ' + died.fixtures);
+  console.log('Dead helper passed: scan analysis and fixture detection report the failure.');
   await page.goto(`http://localhost:${server.address().port}/#/model`);
   await page.locator('canvas.v-canvas').waitFor();
   await page.locator('#rail a[data-view=plan]').click({ noWaitAfter: true });

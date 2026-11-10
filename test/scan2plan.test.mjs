@@ -6,7 +6,7 @@
 // the whole thing rotated 7 degrees, plus a slab of furniture against a wall.
 // Asserts levels, wall count, rooms, the door and the window.
 
-import { scanToPlan } from '../js/scan2plan-core.js';
+import { scanToPlan, rasterCell, DEFAULTS } from '../js/scan2plan-core.js';
 
 const tris = [];
 function quad(a, b, c, d) { tris.push([a, b, c], [a, c, d]); }
@@ -80,6 +80,16 @@ for (const L of res.levels) {
 const win = res.levels[0].openings.filter(o => o.type === 'window');
 check(win.length === 1 && Math.abs(win[0].width - 1.2) < 0.3 && Math.abs((win[0].sill || 0) - 0.9) < 0.2, 'window on level 1 ~1.2 m wide, sill ~0.9 m');
 check(res.levels[1].openings.filter(o => o.type === 'window').length === 0, 'no window on level 2');
+
+// A site too large for fine cells is rasterized with coarser ones, so working memory stays
+// bounded; the plan is still read. (At 2 cm this house needs about 450,000 level cells.)
+check(res.grid.cell === 0.02, 'an ordinary house keeps 2 cm cells (' + res.grid.cell + ')');
+const coarse = scanToPlan(pos, idx, { maxCells: 2e5 });
+check(coarse.grid.cell > 0.02 && coarse.grid.W * coarse.grid.H * coarse.levels.length <= 2e5,
+  'over the cell limit the cells grow (' + coarse.grid.cell.toFixed(4) + ' m, ' + coarse.grid.W * coarse.grid.H * coarse.levels.length + ' level cells)');
+check(coarse.levels.length === 2 && coarse.levels.every(L => L.rooms.length === 2), 'coarse cells still find both levels and their rooms');
+check(rasterCell(60.8, 60.8, 1, DEFAULTS) > 0.02 && Math.ceil(60.8 / rasterCell(60.8, 60.8, 1, DEFAULTS)) ** 2 <= DEFAULTS.maxCells,
+  'a 60 by 60 m site stays within the default cell limit (' + rasterCell(60.8, 60.8, 1, DEFAULTS).toFixed(4) + ' m cells)');
 
 console.log(failed ? failed + ' check(s) failed' : 'all checks passed');
 process.exit(failed ? 1 : 0);

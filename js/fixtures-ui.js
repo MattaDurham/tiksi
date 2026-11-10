@@ -22,7 +22,8 @@ function runWorker(pos, idx, options, say) {
       if (m.type === 'progress') say && say(m.stage, m.frac);
       else { settled = true; worker.terminate(); if (m.type === 'done') resolve(m.result); else reject(new Error(m.message)); }
     };
-    worker.onerror = () => { if (settled) return; settled = true; worker.terminate(); inline(); };
+    // A helper that dies is reported, not rerun here, where the same job would freeze the page.
+    worker.onerror = e => { if (e && e.preventDefault) e.preventDefault(); if (settled) return; settled = true; worker.terminate(); reject(new Error('Fixture detection stopped' + (e && e.message ? ' (' + e.message + ')' : '') + '. The scan may be too large for this browser.')); };
     const p = new Float32Array(pos), i = new Uint32Array(idx);
     worker.postMessage({ pos: p, idx: i, options }, [p.buffer, i.buffer]);
   });

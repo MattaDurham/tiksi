@@ -31,6 +31,7 @@ const DEG = Math.PI / 180;
 
 export const DEFAULTS = {
   cell: 0.02,             // raster cell, meters
+  maxCells: 8e6,          // raster cells over all levels (about 17 bytes each); a larger site uses coarser cells
   slice: 0.1,             // coverage slice height
   sliceFrom: 0.25,        // first slice starts this far above the floor
   sliceBelowCeil: 0.15,   // last slice ends this far below the ceiling
@@ -212,14 +213,25 @@ export function findLevels(pos, idx, tri, o) {
 
 // ---------- 4: rasterize ----------
 
+// The raster cell for a site of spanX by spanZ metres with `nLevels` levels: the requested
+// cell, grown by a quarter at a time until every level's raster together stays within
+// o.maxCells, so working memory is bounded on a very large scan (as fixture detection does).
+export function rasterCell(spanX, spanZ, nLevels, o) {
+  let cell = o.cell;
+  const limit = o.maxCells || DEFAULTS.maxCells, n = Math.max(1, nLevels);
+  while (Math.ceil(spanX / cell) * Math.ceil(spanZ / cell) * n > limit) cell *= 1.25;
+  return cell;
+}
+
 function rasterize(pos, idx, tri, levels, o) {
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
   for (let i = 0; i < pos.length; i += 3) {
     if (pos[i] < minX) minX = pos[i]; if (pos[i] > maxX) maxX = pos[i];
     if (pos[i + 2] < minZ) minZ = pos[i + 2]; if (pos[i + 2] > maxZ) maxZ = pos[i + 2];
   }
-  const cell = o.cell, pad = 0.4;
+  const pad = 0.4;
   const ox = minX - pad, oz = minZ - pad;
+  const cell = rasterCell(maxX - minX + 2 * pad, maxZ - minZ + 2 * pad, levels.length, o);
   const W = Math.ceil((maxX - minX + 2 * pad) / cell), H = Math.ceil((maxZ - minZ + 2 * pad) / cell);
   const grid = { W, H, ox, oz, cell };
   for (const L of levels) {
