@@ -15,6 +15,7 @@ import { openingSchedule, connectsLabel, resizeOpening, MIN_SIZE } from './openi
 import { doorSwings } from './wall-solids.js';
 import { materialSelectHtml } from './materials.js';
 import { safeUrl } from './material-identity.js';
+import { printSheet } from './print-sheet.js';
 import { icon } from './icons.js';
 import { beginGeometryEdit, cancelGeometryEdit, restoreGeometryEdit, revertGeometryEdit, endGeometryHold } from './edit-history.js';
 import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
@@ -1191,15 +1192,14 @@ function scheduleTitle() { return (prop.name || 'Property') + ' - ' + (lvl().nam
 function scheduleFileName(ext) {
   return ('opening schedule ' + scheduleTitle()).replace(/[^\w\- ]+/g, ' ').trim().replace(/\s+/g, '-').toLowerCase() + '.' + ext;
 }
-// The sheet goes into #print-root, the browser prints once its plan image is decoded, and the
-// sheet is cleared after printing, so a later Cmd+P never prints this sheet again.
+// The sheet prints once its plan image is decoded (print-sheet.js keeps it out of any later
+// Cmd+P).
 let printing = false;
 async function printSchedule() {
   if (printing) return;
   const rows = schedule(), img = planImage(1500, 1000, 2, true).toDataURL('image/png');
-  const root = document.getElementById('print-root');
   const cell = v => `<td class="num">${v == null ? '' : escapeHtml(fmtLen(v))}</td>`;
-  root.innerHTML = `<div class="sheet sheet-page opening-sheet">
+  const html = `<div class="sheet sheet-page opening-sheet">
     <div class="s-head"><span class="s-brand">TIKSI</span><span class="s-doc">Opening schedule</span></div>
     <h1>${escapeHtml(scheduleTitle())}</h1>
     <div class="s-sub">${scheduleCounts(rows)} - ${escapeHtml(fmtDate(isoToday()))} - please correct any size by its number</div>
@@ -1209,14 +1209,9 @@ async function printSchedule() {
       <tbody>${rows.map(r => `<tr><td><b>${r.number}</b></td><td>${r.type === 'door' ? 'Door' : 'Window'}</td><td>${escapeHtml(connectsLabel(r))}</td>${cell(r.width)}${cell(r.height)}${cell(r.sill)}</tr>`).join('')}</tbody></table>
     <div class="s-foot"><span>tiksi design console</span><span>${escapeHtml(fmtDate(isoToday()))}</span></div>
   </div>`;
-  const sheet = root.firstElementChild, plan = sheet.querySelector('.s-plan');
   printing = true;
-  try { await plan.decode(); } catch (e) { /* print the table even if the image failed */ }
+  try { await printSheet(html, el => el.querySelector('.s-plan').decode()); }
   finally { printing = false; }
-  if (root.firstElementChild !== sheet) return;   // another print replaced it meanwhile
-  const clear = () => { if (root.firstElementChild === sheet) root.innerHTML = ''; };
-  window.addEventListener('afterprint', clear, { once: true });
-  window.print();
 }
 // One image holding the numbered plan with the table under it, for a text or an email.
 function saveSchedulePng() {

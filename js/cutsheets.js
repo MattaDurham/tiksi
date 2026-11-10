@@ -5,6 +5,7 @@ import {
   ws, escapeHtml, fmtMoney, fmtLen, fmtArea, fmtDate, isoToday,
   allScopeItems, elementInfo, materialById, itemTotals,
 } from './store.js';
+import { printSheet } from './print-sheet.js';
 
 let el = null;
 let current = null; // {kind:'item'|'product', id}
@@ -57,8 +58,7 @@ function render() {
   el.querySelector('#print-sheet').onclick = () => {
     const html = currentSheetHtml();
     if (!html) return;
-    document.getElementById('print-root').innerHTML = html;
-    window.print();
+    printSheet(html);
   };
 
   const view = el.querySelector('#sheet-view');
