@@ -128,6 +128,18 @@ const fingers = new Map();
 let gesture = null;          // {kind: 'tap'|'pan'|'pinch', ...}
 let lastTap = null;          // {t, sx, sy}: the previous tap, for a double-tap
 let touchInput = false;      // the last press on the canvas was a finger (hints say tap)
+// A file saved while a zero-length calibration was possible can carry a scale that is not a
+// positive number, which breaks every view of the underlay and every later calibration. Such
+// a scale goes back to the upload default (18 m across the image), marked not calibrated.
+function repairUnderlayScales(p) {
+  for (const l of p.levels || []) {
+    const pl = l.plan;
+    if (!pl || !pl.img) continue;
+    if (!(Number.isFinite(pl.mPerPx) && pl.mPerPx > 0)) { pl.mPerPx = 18 / (pl.imgW || 1000); pl.calibrated = false; }
+    if (!Number.isFinite(pl.offsetX)) pl.offsetX = 0;
+    if (!Number.isFinite(pl.offsetY)) pl.offsetY = 0;
+  }
+}
 let altDown = false;         // Alt/Option: the ROOM tool outlines instead of filling
 let facesCache = null;       // {key, faces}: the areas the current level's walls enclose
 const hatchCache = new Map(); // material colour -> CanvasPattern (per device pixel ratio)
@@ -2402,7 +2414,7 @@ function renderInspector() {
       const real = parseLen(input.value);
       if (isNaN(real) || real <= 0) { alert('Could not parse that distance. Try 12\'6", 150", or 3.8m.'); return; }
       const ratio = real / measured;
-      if (!(measured > 0) || !Number.isFinite(ratio) || !(pl.mPerPx * ratio > 0)) { calib = null; renderInspector(); setHint('Those two points are too close together to set a scale. Click two points further apart.'); return; }
+      if (!(measured > 0) || !Number.isFinite(ratio) || !(Number.isFinite(pl.mPerPx * ratio) && pl.mPerPx * ratio > 0)) { calib = null; renderInspector(); setHint('Those two points are too close together to set a scale. Click two points further apart.'); return; }
       // Rescale the underlay mapping about its own origin so image geometry matches reality.
       pl.mPerPx = pl.mPerPx * ratio;
       pl.calibrated = true;
@@ -2647,6 +2659,7 @@ export function mount(root) {
     return;
   }
   ensureLevels(prop);
+  repairUnderlayScales(prop);
   root.innerHTML = `
     <div class="editor-layout">
       <div class="tool-col"></div>
