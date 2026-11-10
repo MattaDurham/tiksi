@@ -218,16 +218,20 @@ function ensureRenderer() {
 // A panel over the canvas for the moments there is no picture to trust: the graphics context
 // is gone, or a frame would not draw. Styled inline: it must show whatever else failed.
 const NOTICE_STYLE = 'position:absolute;inset:0;z-index:7;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;background:rgba(9,12,15,0.92);color:var(--ink,#e9eef3);font:14px/1.45 var(--sans,sans-serif);';
+// A failed frame is cleared by the next good one, and a good one comes from moving the view: so
+// that message is a strip along the bottom which lets every touch and click through to the
+// view, except on its own button.
+const BANNER_STYLE = 'position:absolute;left:0;right:0;bottom:0;z-index:7;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px 14px;padding:12px 16px calc(12px + env(safe-area-inset-bottom, 0px));text-align:center;pointer-events:none;background:rgba(9,12,15,0.92);border-top:1px solid var(--red,#e05252);color:var(--ink,#e9eef3);font:13px/1.4 var(--sans,sans-serif);';
 const notices = {};   // kind -> element
 function noticeHtml(message, reload) {
-  return `<p style="margin:0;max-width:34em">${escapeHtml(message)}</p>${reload ? '<button type="button" class="btn" data-reload style="width:auto;padding:10px 18px">RELOAD</button>' : ''}`;
+  return `<p style="margin:0;max-width:34em">${escapeHtml(message)}</p>${reload ? '<button type="button" class="btn" data-reload style="width:auto;padding:10px 18px;pointer-events:auto">RELOAD</button>' : ''}`;
 }
-function showNotice(kind, message, reload = false) {
+function showNotice(kind, message, reload = false, banner = false) {
   if (!wrapEl) return;
   let box = notices[kind];
   if (!box || box.parentElement !== wrapEl) {
     box = document.createElement('div');
-    box.className = 'v-notice'; box.dataset.notice = kind; box.setAttribute('role', 'alert'); box.style.cssText = NOTICE_STYLE;
+    box.className = 'v-notice'; box.dataset.notice = kind; box.setAttribute('role', 'alert'); box.style.cssText = banner ? BANNER_STYLE : NOTICE_STYLE;
     wrapEl.appendChild(box);
     notices[kind] = box;
   }
@@ -1177,7 +1181,7 @@ function tick(time) {
       if (!renderFailed) {
         renderFailed = true;
         console.error('render failed', e);
-        showNotice('draw', 'MODEL could not draw this view (' + errMsg(e) + '). Reload to try again.', true);
+        showNotice('draw', 'MODEL could not draw this view (' + errMsg(e) + '). Move the view to try again, or reload.', true, true);
       }
     }
   }
