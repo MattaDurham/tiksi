@@ -13,7 +13,7 @@
 import { ws, touch, activeProperty, projectSlice, onWorkspaceReplace, escapeHtml as esc, fmtDate, isoToday } from './store.js';
 import { icon } from './icons.js';
 import { normalizeOnePager, draftOnePager, latestVersion, onePagerStatus, shouldAskOnClose, projectSignature, DEFAULT_PROMPT, SHOW_KEYS, MAX_HIGHLIGHTS } from './one-pager.js';
-import { PAGE_CSS, PAGE_W, PAGE_H } from './one-pager-page.js';
+import { PAGE_CSS, PAGE_W, PAGE_H, pageCuts } from './one-pager-page.js';
 import { pageAssets, pageMarkup, onePagerPdf, saveOnePagerVersion, versionInProgress, heroCandidates, latestVersionBytes } from './one-pager-render.js';
 
 let app = { refresh() {}, remount() {}, toast() {} };
@@ -126,7 +126,7 @@ export function openOnePagerEditor(prop = activeProperty(), opts = {}) {
         </div>
         <div data-op-versions>${versionsHtml(prop)}</div>
       </form>
-      <div class="op-preview-wrap"><div class="op-preview" data-op-preview><style>${PAGE_CSS}</style><div class="op-preview-page" data-op-page></div></div></div>
+      <div class="op-preview-wrap"><p class="np-status fail" data-op-cuts role="alert" hidden></p><div class="op-preview" data-op-preview><style>${PAGE_CSS}</style><div class="op-preview-page" data-op-page></div></div></div>
     </div>
     <footer class="op-dlg-foot">
       <span class="np-status" data-op-note role="status"></span>
@@ -172,6 +172,7 @@ export function openOnePagerEditor(prop = activeProperty(), opts = {}) {
       if (!editor) return;
       page.innerHTML = pageMarkup(prop, a, { version: 'Version ' + ((latestVersion(prop)?.n || 0) + 1) + ' (draft)', date: isoToday() });
       fitPreview();
+      showCuts();
     } catch (e) { console.error(e); say('The page could not be drawn: ' + (e.message || e), 'fail'); }
   };
   const fitPreview = () => {
@@ -179,6 +180,12 @@ export function openOnePagerEditor(prop = activeProperty(), opts = {}) {
     const k = Math.min(1, (wrap.clientWidth - 2) / PAGE_W);
     page.style.transform = 'scale(' + k + ')';
     wrap.style.height = Math.round(PAGE_H * k) + 'px';
+  };
+  // Text the page has no room for is clipped on the PDF too: say so before it is saved.
+  const showCuts = () => {
+    const cuts = pageCuts(page.querySelector('.op-page')), box = dlg.querySelector('[data-op-cuts]');
+    box.hidden = !cuts.length;
+    box.textContent = cuts.length ? 'Cut off on the page: ' + cuts.join('; ') + '. Shorten the text or turn parts off before you save.' : '';
   };
   const schedulePreview = () => { clearTimeout(previewTimer); previewTimer = setTimeout(drawPreview, 250); };
   const readField = (el) => {

@@ -68,6 +68,22 @@ try {
     s.touch();
   });
 
+  // ---- BUDGET and SCHEDULE show the figures the one-pager prints ----
+  await page.goto(url + '/#/budget');
+  await page.locator('#cap-input').waitFor();
+  check(/\$32,000/.test(await page.locator('.kpi.accent .k-value').textContent()), 'BUDGET totals the selected program at $32,000 likely');
+  await page.fill('#cap-input', '250k'); await page.press('#cap-input', 'Tab');
+  await page.waitForFunction(() => document.querySelector('#cap-input')?.value === '$250,000');
+  check(await prop('return s.ws.data.settings.budgetCap === 250000'), 'a cap typed as 250k is $250,000');
+  await page.fill('#cap-input', '10x12'); await page.press('#cap-input', 'Tab');
+  await page.waitForFunction(() => /is not an amount/.test(document.querySelector('#cap-note')?.textContent || ''));
+  check(await prop('return s.ws.data.settings.budgetCap === 250000') && /The cap is still \$250,000/.test(await page.locator('#cap-note').textContent()), 'an amount BUDGET cannot read is refused with a reason and the cap stays');
+  await page.goto(url + '/#/schedule');
+  await page.locator('#prog-start').waitFor();
+  check(/Nov 23, 2026/.test(await page.locator('.kpi.accent .k-value').textContent()) && /13 calendar days/.test(await page.locator('.kpi.accent .k-sub').textContent()), 'SCHEDULE finishes the program on Nov 23, 2026, 13 calendar days');
+  await page.goto(url + '/#/plan');
+  await page.waitForSelector('#btn-file');
+
   // ---- the editor ----
   await page.click('#btn-file');
   check(/No one-pager saved yet/.test(await page.locator('[data-op-file-status]').textContent()), 'FILE > Project says there is no one-pager yet');
@@ -82,6 +98,22 @@ try {
   check(/Test House/.test(pageText) && /\$32,000/.test(pageText) && /\$25,000 to \$41,000/.test(pageText) && /13 calendar days/.test(pageText) && /2 rooms/.test(pageText) && /Shaker cabinets/.test(pageText), 'the page shows the headline, budget range, schedule, rooms and products');
   check((await page.locator('.op-preview-page .op-plan svg polygon').count()) >= 2 && /LIVING ROOM/.test(await page.locator('.op-preview-page .op-plan').innerHTML()), 'the floor plan is drawn beside the text with its rooms named');
   check(/front\.jpg/.test(await page.locator('[data-op-hero] option').first().textContent()), 'the automatic picture is the site photo');
+
+  // Text the page has no room for is named above the preview before anything is saved.
+  check(await page.locator('[data-op-cuts]').isHidden(), 'a page that fits says nothing is cut off');
+  const longSummary = Array.from({ length: 30 }, (_, i) => 'Sentence ' + (i + 1) + ' of a summary that keeps going about the work.').join(' ').slice(0, 1100);
+  const longHighlights = Array.from({ length: 6 }, (_, i) => 'Highlight ' + (i + 1) + ': a description of the work that keeps going well past the width of a single line here').join('\n');
+  await page.fill('[data-f="summary"]', longSummary);
+  await page.fill('[data-f="highlights"]', longHighlights);
+  await page.waitForFunction(() => /highlight/.test(document.querySelector('[data-op-cuts]').textContent));
+  const cutText = await page.locator('[data-op-cuts]').textContent();
+  check(/summary is longer than its space/.test(cutText) && /6 highlights are longer than one line/.test(cutText) && /before you save/.test(cutText), 'a long summary and long highlights are named as cut off (' + cutText + ')');
+  await page.fill('[data-f="summary"]', summary);
+  await page.dispatchEvent('[data-f="summary"]', 'change');
+  await page.fill('[data-f="highlights"]', '');
+  await page.dispatchEvent('[data-f="highlights"]', 'change');
+  await page.waitForFunction(() => document.querySelector('[data-op-cuts]').hidden);
+  check(true, 'shortening the text clears the warning');
 
   // A hand edit sticks, and the page follows it.
   await page.fill('[data-f="headline"]', 'A brighter kitchen');

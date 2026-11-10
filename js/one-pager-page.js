@@ -68,7 +68,7 @@ export function onePagerHtml(prop, data, assets = {}, opts = {}) {
   if (show.budget && f.budget.priced) stats.push(stat('Likely cost', fmtMoney(f.budget.likely), f.budget.low !== f.budget.high ? fmtMoney(f.budget.low) + ' to ' + fmtMoney(f.budget.high) : plural(f.program.length, 'project') + ' priced'));
   else if (show.budget && f.program.length) stats.push(stat('Scope', plural(f.program.length, 'project'), f.scopeItems ? plural(f.scopeItems, 'scope item') + ', not priced yet' : 'not priced yet'));
   if (show.schedule && f.days > 0) stats.push(stat('Schedule', 'About ' + plural(f.days, 'calendar day'), f.start ? fmtDate(f.start) + ' to ' + fmtDate(f.finish) : ''));
-  if (show.rooms && f.rooms.length) stats.push(stat('Rooms', plural(f.rooms.length, 'room') + (f.floorArea > 0 ? ' · ' + fmtArea(f.floorArea) : ''), f.rooms.slice(0, MAX_ROOMS).map(r => r.name || 'Room').join(', ') + (f.rooms.length > MAX_ROOMS ? ', …' : '')));
+  if (show.rooms && f.rooms.length) stats.push(stat('Rooms', plural(f.rooms.length, 'room') + (f.floorArea > 0 ? ' · ' + fmtArea(f.floorArea) : ''), f.rooms.slice(0, MAX_ROOMS).map(r => r.name || 'Room').join(', ') + (f.rooms.length > MAX_ROOMS ? ', …' : '') + (f.floorArea > 0 ? '. Area to wall centre lines' : '')));
   if (!stats.length) stats.push(stat('Status', 'In design', 'Scope and budget to follow'));
   const planInSide = show.plan && planSvg && !(hero && hero.plan);
   const highlights = (o.highlights || []).filter(Boolean);
@@ -107,6 +107,45 @@ function stat(label, value, sub) {
 }
 const plural = (n, one) => n + ' ' + one + (n === 1 ? '' : 's');
 function today() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+
+// What the laid-out page cuts off, in words, from the page as the browser drew it (`el` is the
+// .op-page element). The page has fixed room: a long headline, summary, highlight or product
+// list is clipped, so the editor shows this list before anything is saved. Browser only.
+export function pageCuts(el) {
+  if (!el) return [];
+  // One-line text ends in an ellipsis, which scrollWidth does not report: measure a copy of
+  // the text at its natural width beside it instead.
+  const wider = n => {
+    const c = n.cloneNode(true);
+    c.style.cssText = 'position:absolute;visibility:hidden;left:0;top:0;width:auto;max-width:none;overflow:visible;white-space:nowrap;padding:0';
+    n.parentNode.appendChild(c);
+    const natural = c.getBoundingClientRect().width;
+    c.remove();
+    const box = n.getBoundingClientRect(), cs = getComputedStyle(n);
+    const k = n.offsetWidth ? box.width / n.offsetWidth : 1;   // the preview is scaled down
+    return natural > box.width - (parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)) * k + 1;
+  };
+  const over = (n, axis) => !!n && (axis === 'x' ? wider(n) : n.scrollHeight > n.clientHeight + 1);
+  const cuts = [];
+  if (over(el.querySelector('.op-head h1'), 'y')) cuts.push('the headline is longer than two lines');
+  if (over(el.querySelector('.op-tagline'), 'x')) cuts.push('the tagline is longer than one line');
+  if (over(el.querySelector('.op-summary'), 'y')) cuts.push('the summary is longer than its space');
+  const lists = [...el.querySelectorAll('.op-list')];
+  for (const ul of lists) {
+    const long = [...ul.querySelectorAll('li')].filter(li => over(li, 'x')).length;
+    const what = ul.classList.contains('op-products') ? 'product' : 'highlight';
+    if (long) cuts.push(long + ' ' + what + (long === 1 ? ' is' : 's are') + ' longer than one line');
+  }
+  const main = el.querySelector('.op-main');
+  if (main) {
+    const bottom = main.getBoundingClientRect().bottom + 1;
+    const below = [...main.querySelectorAll('li')].filter(li => li.getBoundingClientRect().bottom > bottom).length;
+    if (below || over(main, 'y')) cuts.push((below ? below + ' list line' + (below === 1 ? '' : 's') : 'the text') + ' ran off the bottom of the page');
+  }
+  const side = el.querySelector('.op-side');
+  if (over(side, 'y') || [...el.querySelectorAll('.op-stat b')].some(b => over(b, 'x'))) cuts.push('a figure beside the text is cut');
+  return cuts;
+}
 
 // The label printed in the page's corner for the version being made, or for the preview.
 export function versionLabel(prop, next = false) {
