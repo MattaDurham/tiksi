@@ -329,7 +329,11 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       const index = ws.data.properties.findIndex(p => p.id === prop.id);
       if (index >= 0) {
         const accepted = await resolveMerge(before, ws.data.properties[index], working);
-        ws.data.properties[index] = accepted; touch(); await sync();
+        ws.data.properties[index] = accepted; touch();
+        // An open page holds the record it was built with. Rebuild it on the merged one, as
+        // after another device's save, or its next edits change a record nothing saves.
+        onRemote?.();
+        await sync();
       }
     }
   }
