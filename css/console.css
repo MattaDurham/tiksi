@@ -346,6 +346,9 @@ h3.kicker { font-weight: 700; }
 .canvas-badge b { color: var(--ink); font-weight: 600; }
 .canvas-badge .ac { color: var(--accent); }
 /* the plan editor draws rulers along the top and left edges; move the overlays clear of them */
+/* PLAN handles its own touches: one finger pans the plan, two pinch it, a tap selects. The
+   page must not scroll, zoom or show a callout under a finger on the plan. */
+.plan-canvas canvas { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .plan-canvas .canvas-badge { top: 30px; }
 .plan-canvas .canvas-hint { left: 30px; }
 /* which storey the plan canvas is showing: same glass pill as the badge, top left */

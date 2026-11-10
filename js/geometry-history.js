@@ -49,6 +49,18 @@ export class GeometryHistory {
     const current = this.undo.length || this.redo.length ? geometrySnapshot(prop).data : null;
     return { undo: this.state(prop, 'undo', current), redo: this.state(prop, 'redo', current) };
   }
+  // Put the geometry back as it was when the pending edit began and drop the edit: a drag the
+  // browser cancelled leaves nothing behind. Underlays stay as they are now (no image copies).
+  revert(prop) {
+    const pending = this.pending;
+    this.pending = null;
+    if (!pending || pending.before.data.id !== prop.id) return false;
+    const data = clone(pending.before.data);
+    const plans = Object.fromEntries(prop.levels.map(level => [level.id, level.plan || null]));
+    for (const level of data.levels) level.plan = (level.id in plans ? plans[level.id] : pending.before.plans[level.id]) || null;
+    for (const key of ['walls', 'openings', 'rooms', 'fixtures', 'levels', 'activeLevelId']) prop[key] = key === 'fixtures' ? data.fixtures || [] : data[key];
+    return true;
+  }
   restore(prop, direction) {
     this.commit(prop);
     const result = this.candidate(prop, direction);

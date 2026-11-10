@@ -18,6 +18,8 @@ function history(prop, create = false) {
 }
 export function beginGeometryEdit(prop, label) { revision++; history(prop, true)?.begin(prop, label); }
 export function cancelGeometryEdit(prop) { const h = history(prop); if (h) h.pending = null; }
+// Undo an edit that was begun but never finished (a cancelled drag), leaving no history entry.
+export function revertGeometryEdit(prop) { revision++; return !!history(prop)?.revert(prop); }
 export function onEditHistoryChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 export function editHistoryState(prop) {
   const h = history(prop);

@@ -69,3 +69,16 @@ test('both buttons from one copy give the same answers as asking each direction'
   p.walls[1].ax = 9;   // a newer edit to the same wall blocks redo
   assert.equal(h.states(p).redo.blocked, true);
 });
+test('reverting a cancelled drag puts every moved piece back and leaves no undo entry', () => {
+  const p = house(), h = new GeometryHistory(), before = geometrySnapshot(p).data, plan = p.levels[0].plan;
+  h.begin(p, 'move wall');
+  const mv = planWallMove(p.walls[1], p.walls, p.rooms, p.openings);
+  applyWallMove(mv, normalOffset(mv, 1.5, 0));
+  assert.equal(p.walls[1].ax, 7.5);
+  assert.equal(h.revert(p), true);
+  assert.deepEqual(geometrySnapshot(p).data, before);
+  assert.equal(p.levels[0].plan, plan, 'the underlay object is kept, not copied');
+  h.commit(p);
+  assert.equal(h.states(p).undo.available, false, 'nothing to undo after a reverted drag');
+  assert.equal(h.revert(p), false, 'a second revert has nothing to put back');
+});

@@ -16,7 +16,7 @@ import { doorSwings } from './wall-solids.js';
 import { materialSelectHtml } from './materials.js';
 import { safeUrl } from './material-identity.js';
 import { icon } from './icons.js';
-import { beginGeometryEdit, cancelGeometryEdit, restoreGeometryEdit } from './edit-history.js';
+import { beginGeometryEdit, cancelGeometryEdit, restoreGeometryEdit, revertGeometryEdit } from './edit-history.js';
 import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import {
   planWallMove, applyWallMove, normalOffset, planCornerMove, applyCornerMove,
@@ -121,6 +121,12 @@ let calib = null;            // {a:[x,y], b:[x,y]|null}
 let hoverPt = null;          // last cursor world pos
 let drag = null;             // active drag descriptor
 let spaceDown = false;
+// Fingers on the canvas (pointerType 'touch'): pointerId -> [sx, sy]. A finger never drags
+// geometry; one finger pans, two pinch to zoom, and a tap acts like a mouse click.
+const fingers = new Map();
+let gesture = null;          // {kind: 'tap'|'pan'|'pinch', ...}
+let lastTap = null;          // {t, sx, sy}: the previous tap, for a double-tap
+let touchInput = false;      // the last press on the canvas was a finger (hints say tap)
 let altDown = false;         // Alt/Option: the ROOM tool outlines instead of filling
 let facesCache = null;       // {key, faces}: the areas the current level's walls enclose
 const hatchCache = new Map(); // material colour -> CanvasPattern (per device pixel ratio)
@@ -1704,10 +1710,18 @@ function updateBadge(wx, wy) {
 }
 
 function onPointerDown(e) {
+  if (e.pointerType === 'touch') { onFingerDown(e); return; }
   if (e.button === 2) return;
   invalidate();
+  if (touchInput) { touchInput = false; updateHint(); }
   canvas.setPointerCapture(e.pointerId);
   const [sx, sy] = canvasPos(e);
+  press(sx, sy, e);
+}
+
+// What a mouse press (or a finger's tap) does at canvas position (sx, sy). `e` carries the
+// button and the Alt key.
+function press(sx, sy, e) {
   const [wx, wy] = s2w(sx, sy);
 
   if (e.button === 1 || spaceDown) {
@@ -1818,6 +1832,7 @@ function onPointerDown(e) {
 }
 
 function onPointerMove(e) {
+  if (e.pointerType === 'touch') { onFingerMove(e); return; }
   invalidate();
   const [sx, sy] = canvasPos(e);
   const [wx, wy] = s2w(sx, sy);
@@ -1882,7 +1897,11 @@ function onPointerMove(e) {
   }
 }
 
-function onPointerUp() {
+function onPointerUp(e) {
+  if (e && e.pointerType === 'touch') { onFingerUp(e); return; }
+  release();
+}
+function release() {
   invalidate();
   if (drag && drag.kind === 'pan' && drag.click && !drag.panned) {
     // A click on a floor, the underlay or empty canvas selects it (or clears the selection).
@@ -1896,7 +1915,103 @@ function onPointerUp() {
   updateCursor();
 }
 
-function onPointerLeave() {
+// The browser took the pointer away mid-gesture (a system gesture, a lost capture). A drag
+// that was moving geometry is put back as it was, with no undo entry; the view keeps its pan.
+function onPointerCancel(e) {
+  if (e && e.pointerType === 'touch') { onFingerUp(e, true); return; }
+  invalidate();
+  if (drag && drag.moved) {
+    if (drag.kind === 'underlay') { drag.pl.offsetX = drag.ox; drag.pl.offsetY = drag.oy; }
+    else revertGeometryEdit(prop);
+    renderInspector();
+  }
+  drag = null;
+  updateCursor(); updateHint();
+}
+
+// ---------- fingers ----------
+const TAP_SLOP = 10;          // px a finger may wander and still tap
+const DOUBLE_TAP_MS = 350, DOUBLE_TAP_PX = 30;
+function onFingerDown(e) {
+  e.preventDefault();
+  invalidate();
+  if (!touchInput) { touchInput = true; updateHint(); }
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* already released */ }
+  const pos = canvasPos(e);
+  fingers.set(e.pointerId, pos);
+  hover = null; hoverPt = null;
+  if (fingers.size === 1) {
+    gesture = { kind: 'tap', id: e.pointerId, sx: pos[0], sy: pos[1], panX: vs.panX, panY: vs.panY };
+  } else if (fingers.size === 2) {
+    startPinch();
+  }
+  // A third finger is ignored until the others lift.
+}
+function pinchPair() {
+  const [a, b] = [...fingers.values()];
+  return { mid: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], dist: Math.max(1, Math.hypot(a[0] - b[0], a[1] - b[1])) };
+}
+function startPinch() {
+  const { mid, dist } = pinchPair();
+  gesture = { kind: 'pinch', ids: [...fingers.keys()].slice(0, 2), zoom: vs.zoom, dist, world: s2w(mid[0], mid[1]) };
+}
+function onFingerMove(e) {
+  if (!fingers.has(e.pointerId)) return;
+  e.preventDefault();
+  const pos = canvasPos(e);
+  fingers.set(e.pointerId, pos);
+  if (!gesture) return;
+  invalidate();
+  if (gesture.kind === 'tap') {
+    if (Math.hypot(pos[0] - gesture.sx, pos[1] - gesture.sy) < TAP_SLOP) return;
+    gesture.kind = 'pan';
+  }
+  if (gesture.kind === 'pan' && e.pointerId === gesture.id) {
+    vs.panX = gesture.panX - (pos[0] - gesture.sx) / vs.zoom;
+    vs.panY = gesture.panY - (pos[1] - gesture.sy) / vs.zoom;
+  } else if (gesture.kind === 'pinch' && gesture.ids.includes(e.pointerId) && fingers.size >= 2) {
+    // The plan point that was under the middle of the two fingers stays under it.
+    const { mid, dist } = pinchPair();
+    vs.zoom = Math.max(4, Math.min(400, gesture.zoom * dist / gesture.dist));
+    vs.panX = gesture.world[0] - mid[0] / vs.zoom;
+    vs.panY = gesture.world[1] - mid[1] / vs.zoom;
+  }
+}
+function onFingerUp(e, cancelled = false) {
+  if (!fingers.has(e.pointerId)) return;
+  invalidate();
+  const pos = fingers.get(e.pointerId);
+  fingers.delete(e.pointerId);
+  const g = gesture;
+  if (!g) return;
+  if (g.kind === 'tap' && g.id === e.pointerId) {
+    gesture = null;
+    if (!cancelled) tap(pos[0], pos[1], e.timeStamp);
+    return;
+  }
+  if (g.kind === 'pinch') {
+    // One finger left after a pinch carries on panning from where it is; no tap.
+    const [id, rest] = [...fingers.entries()][0] || [];
+    gesture = rest ? { kind: 'pan', id, sx: rest[0], sy: rest[1], panX: vs.panX, panY: vs.panY } : null;
+    return;
+  }
+  if (!fingers.size) gesture = null;
+}
+// A finger's tap is a click: it selects, places a wall corner, a door, a window or a floor
+// corner, or calibrates, exactly as the mouse would. A double tap ends a wall chain or closes
+// a floor outline, as a double-click does.
+function tap(sx, sy, t) {
+  const double = lastTap && t - lastTap.t < DOUBLE_TAP_MS && Math.hypot(sx - lastTap.sx, sy - lastTap.sy) < DOUBLE_TAP_PX;
+  lastTap = double ? null : { t, sx, sy };
+  if (double && (tool === 'wall' || tool === 'room')) { onDblClick(); return; }
+  press(sx, sy, { button: 0, altKey: false });
+  release();
+  hover = null;
+  updateCursor();
+}
+
+function onPointerLeave(e) {
+  if (e && e.pointerType === 'touch') return;
   invalidate();
   hoverPt = null; hover = null;
   if (!drag) updateCursor();
@@ -2008,7 +2123,16 @@ function updateHint() {
     room: roomDraft ? 'Click corners; click the first point or double-click to close the room.' : 'Click inside a room the walls close to floor it. To outline a floor corner by corner, start on a wall or in an open area, or Alt-click; corners snap to walls, so the floor follows them.',
     calibrate: (!prop || !curPlan()) ? 'Upload a plan image first (UNDERLAY, left panel).' : 'Click two points a known distance apart on the plan image, then enter the real distance.',
   };
-  setHint(hints[tool] || '');
+  // With a finger: no drags of geometry, and taps in place of clicks.
+  const fingerHints = {
+    select: 'Tap a wall, door, window or floor to select it and type its sizes below. One finger pans, two fingers pinch to zoom. Walls are dragged with a mouse.',
+    wall: drawing ? 'Tap to place the next corner. Double-tap to end the chain.' : 'Tap to start a wall chain. One finger pans, two fingers pinch to zoom.',
+    door: 'Tap on a wall to place a door.',
+    window: 'Tap on a wall to place a window.',
+    room: roomDraft ? 'Tap corners; tap the first point or double-tap to close the floor.' : 'Tap inside a room the walls close to floor it, or tap on a wall to start an outline.',
+    calibrate: (!prop || !curPlan()) ? hints.calibrate : 'Tap two points a known distance apart on the plan image, then enter the real distance.',
+  };
+  setHint((touchInput ? fingerHints[tool] : hints[tool]) || '');
 }
 
 // ---------- levels ----------
@@ -2526,6 +2650,8 @@ export function mount(root) {
   canvas.addEventListener('pointermove', onPointerMove);
   canvas.addEventListener('pointerup', onPointerUp);
   canvas.addEventListener('pointerleave', onPointerLeave);
+  canvas.addEventListener('pointercancel', onPointerCancel);
+  canvas.addEventListener('lostpointercapture', e => { if (e.pointerType === 'touch' && fingers.has(e.pointerId)) onFingerUp(e, true); });
   canvas.addEventListener('dblclick', onDblClick);
   canvas.addEventListener('wheel', onWheel, { passive: false });
   canvas.addEventListener('contextmenu', e => e.preventDefault());
@@ -2598,6 +2724,7 @@ export function unmount() {
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
   if (offChange) { offChange(); offChange = null; }
   drawing = null; roomDraft = null; drag = null; hover = null; hoverPt = null; facesCache = null;
+  fingers.clear(); gesture = null; lastTap = null; joints = null;
   el = null; canvas = null; ctx = null; wrapEl = null; inspEl = null; hintEl = null; badgeEl = null; levelEl = null; scheduleEl = null;
   scheduleCache = null;
 }
