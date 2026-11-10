@@ -9,9 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import socket
-import struct
 import subprocess
 import tempfile
 import threading
@@ -19,7 +17,6 @@ import time
 import unittest
 from unittest.mock import patch
 import zipfile
-import zlib
 
 from server import peers
 from server.peers import Tailnet
@@ -219,26 +216,29 @@ class StaticFiles(unittest.TestCase):
         self.assertEqual(path.read_bytes(), before, 'nothing of it was written')
 
 
-    @unittest.skipUnless(shutil.which('sips'), "needs the Mac's image tool")
     def test_a_phone_gets_a_smaller_copy_of_a_large_picture_made_on_the_mac(self):
-        folder = Path(self.temp.name) / 'picture'; folder.mkdir()
-        png = folder / 'site.png'
-        png.write_bytes(synthetic_png(1800, 1200))
-        jpeg = folder / 'site.jpg'
-        subprocess.run(['sips', '-s', 'format', 'jpeg', str(png), '--out', str(jpeg)], check=True, capture_output=True)
-        digest, size = self.server.workspace.store_blob(io.BytesIO(jpeg.read_bytes()))
+        # The Mac's image tool (sips) is stood in for, so this runs on any computer: it reports a
+        # picture's size and writes a smaller copy, as sips does.
+        calls = []
+        def image_tool(command, **kwargs):
+            calls.append(command[1])
+            if command[1] == '-g': return subprocess.CompletedProcess(command, 0, '  pixelWidth: 1800\n  pixelHeight: 1200\n', '')
+            Path(command[-1]).write_bytes(b'\xff\xd8 smaller copy, longest side ' + command[2].encode())
+            return subprocess.CompletedProcess(command, 0, '', '')
+        self.server.workspace.run = image_tool
+        photo = b'\xff\xd8 a large synthetic photo ' * 2000
+        digest, size = self.server.workspace.store_blob(io.BytesIO(photo))
         auth = {**WORKSPACE, 'X-Tiksi-Token': self.token}
-        status, headers, body = self.call('/api/workspace/blobs/' + digest + '?size=512', headers=auth)
-        self.assertEqual((status, headers['content-type'], headers['x-tiksi-preview']), (200, 'image/jpeg', 'smaller'))
-        self.assertLess(len(body), size / 2)
-        (folder / 'small.jpg').write_bytes(body)
-        found = subprocess.run(['sips', '-g', 'pixelWidth', '-g', 'pixelHeight', str(folder / 'small.jpg')], capture_output=True, text=True).stdout
-        self.assertEqual([int(v) for v in re.findall(r'pixel(?:Width|Height): (\d+)', found)], [512, 341])
-        self.assertEqual(self.call('/api/workspace/blobs/' + digest + '?size=512', headers={**auth, 'If-None-Match': headers['etag']})[0], 304)
-        # A picture already that small comes back as it is; an odd size is refused.
-        status, headers, body = self.call('/api/workspace/blobs/' + digest + '?size=2048', headers=auth)
-        self.assertEqual((status, headers['x-tiksi-preview'], body), (200, 'original', jpeg.read_bytes()))
-        self.assertEqual(self.call('/api/workspace/blobs/' + digest + '?size=777', headers=auth)[0], 400)
+        with patch('server.workspace.shutil.which', return_value='/usr/bin/sips'):
+            status, headers, body = self.call('/api/workspace/blobs/' + digest + '?size=512', headers=auth)
+            self.assertEqual((status, headers['content-type'], headers['x-tiksi-preview'], body), (200, 'image/jpeg', 'smaller', b'\xff\xd8 smaller copy, longest side 512'))
+            self.assertEqual(self.call('/api/workspace/blobs/' + digest + '?size=512', headers={**auth, 'If-None-Match': headers['etag']})[0], 304)
+            self.assertEqual(self.call('/api/workspace/blobs/' + digest + '?size=512', headers=auth)[2], body)
+            self.assertEqual(calls, ['-g', '-Z'], 'the copy is made once and kept')
+            # A picture already that small comes back as it is; an odd size is refused.
+            status, headers, body = self.call('/api/workspace/blobs/' + digest + '?size=2048', headers=auth)
+            self.assertEqual((status, headers['x-tiksi-preview'], body), (200, 'original', photo))
+            self.assertEqual(self.call('/api/workspace/blobs/' + digest + '?size=777', headers=auth)[0], 400)
 
     def test_a_file_that_is_not_a_picture_gets_no_smaller_copy_and_the_page_is_told(self):
         digest, _ = self.server.workspace.store_blob(io.BytesIO(b'a scan, not a picture'))
@@ -248,12 +248,6 @@ class StaticFiles(unittest.TestCase):
         with patch('server.workspace.shutil.which', return_value=None), patch('server.workspace.Path.is_file', autospec=True, side_effect=lambda p: 'sips' not in str(p) and os.path.isfile(p)):
             status, _, body = self.call('/api/workspace/blobs/' + digest + '?size=256', headers=auth)
         self.assertEqual((status, json.loads(body).get('code')), (415, 'no-preview'), 'a Mac without the image tool says so')
-
-
-def synthetic_png(width, height):
-    rows = b''.join(b'\x00' + bytes(v for x in range(width) for v in (x * 255 // width, y * 255 // height, (x ^ y) & 255)) for y in range(height))
-    chunk = lambda kind, data: struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data) & 0xffffffff)
-    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(rows, 6)) + chunk(b'IEND', b'')
 
 
 if __name__ == '__main__': unittest.main()
