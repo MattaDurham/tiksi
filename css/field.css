@@ -33,6 +33,46 @@ html.phone.fd-model .fd-bar { background: transparent; border: 0; pointer-events
 html.phone.fd-model .fd-title { display: none; }
 html.phone .fd-bar .fd-menu { pointer-events: auto; }
 html.phone .fd-bar .history-actions { margin-left: auto; }
+
+/* Save state. The status line is in the topbar, which is not on a phone, so the bar repeats
+   it at its right end: a dot and one or two words. A tap opens the full wording under the bar. */
+html.phone .fd-save {
+  display: inline-flex; align-items: center; gap: 7px; flex: 0 1 auto; min-width: 0; margin-left: auto;
+  height: 44px; padding: 0 2px 0 8px; background: none; border: 0; color: var(--dim); pointer-events: auto;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+  touch-action: manipulation; user-select: none; -webkit-user-select: none;
+}
+html.phone .fd-save[hidden] { display: none; }
+/* The page name keeps its room; the save state gives way first, down to its dot. */
+html.phone .fd-title { flex: 0 0 auto; max-width: 46%; }
+html.phone .fd-save span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.phone .fd-save i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 6px rgba(87, 185, 129, 0.6); }
+html.phone .fd-save[data-state=sending], html.phone .fd-save[data-state=waiting] { color: var(--accent); }
+html.phone .fd-save[data-state=sending] i, html.phone .fd-save[data-state=waiting] i { background: var(--accent); box-shadow: 0 0 8px rgba(232, 151, 58, 0.7); animation: pulse 900ms ease-in-out infinite; }
+html.phone .fd-save[data-state=refused] { color: var(--red); }
+html.phone .fd-save[data-state=refused] i { background: var(--red); box-shadow: 0 0 6px rgba(224, 82, 82, 0.6); }
+html.phone .fd-bar .fd-save ~ .history-actions { margin-left: 0; }
+/* In the bar UNDO and REDO are their arrows alone (the words stay for screen readers), so the
+   page name and the save state both fit an iPhone's width in full. */
+html.phone .fd-bar .history-actions .tb-btn span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+html.phone .fd-bar .history-actions .tb-btn { position: relative; min-width: 44px; justify-content: center; }
+/* Over the model the bar is see-through: the state sits on a dark chip, and shrinks to its
+   dot while everything is saved. */
+html.phone.fd-model .fd-save {
+  height: 32px; padding: 0 12px; border-radius: 16px; color: var(--ink);
+  background: rgba(12, 16, 19, 0.62); border: 1px solid rgba(139, 154, 167, 0.24);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2); backdrop-filter: blur(12px) saturate(1.2);
+}
+html.phone.fd-model .fd-save[data-state=saved] span { display: none; }
+html.phone.fd-model .fd-save[data-state=sending], html.phone.fd-model .fd-save[data-state=waiting] { color: var(--accent); }
+html.phone.fd-model .fd-save[data-state=refused] { color: var(--red); }
+.fd-save-note { display: none; }
+html.phone .fd-save-note:not([hidden]) {
+  display: block; position: fixed; z-index: 45; top: calc(var(--fd-bar-h) + var(--fd-top) + 6px);
+  right: calc(10px + var(--fd-right)); left: calc(10px + var(--fd-left)); max-width: 420px; margin-left: auto;
+  padding: 12px 14px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line-2); color: var(--ink);
+  font-size: 13.5px; line-height: 1.45; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+}
 html.phone .fd-bar .history-actions .tb-btn { min-height: 44px; padding: 8px 10px; }
 html.phone.fd-model .fd-bar .history-actions { display: none; }
 
@@ -140,7 +180,14 @@ html.phone.fd-open .fd-panel { transform: none; visibility: visible; transition:
 
 @media (prefers-reduced-motion: reduce) {
   html.phone .fd-panel, html.phone .fd-scrim { transition: none; }
+  html.phone .fd-save i { animation: none; }
 }
 @media print {
-  .fd-bar, .fd-frame, .fd-walk, .fd-scrim, .fd-panel { display: none !important; }
+  .fd-bar, .fd-frame, .fd-walk, .fd-scrim, .fd-panel, .fd-save-note { display: none !important; }
 }
+
+/* ---------- save state, both layouts ----------
+   js/disk-workspace.js marks the status line with what it shows. A save the Mac refused is
+   red and still; one being retried keeps the amber pulse of a save in progress. */
+.save-status[data-save-state="refused"] { color: var(--red); }
+.save-status.busy[data-save-state="refused"]::before { background: var(--red); box-shadow: 0 0 6px rgba(224, 82, 82, 0.6); animation: none; }
