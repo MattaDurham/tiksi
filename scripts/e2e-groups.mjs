@@ -7,6 +7,9 @@
 // FIRST_GROUP_EXTRA seconds of work already on it.
 
 export const DEFAULT_SECONDS = 60;
+// The suites whose phone checks also run on Safari's engine (node scripts/e2e.mjs --webkit);
+// each reads E2E_BROWSER=webkit.
+export const WEBKIT_SUITES = ['e2e-field-view.mjs'];
 export const FIRST_GROUP_EXTRA = 150;
 
 export function parseGroup(text) {
