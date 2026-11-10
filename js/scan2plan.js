@@ -66,18 +66,26 @@ function runCore(pos, idx, options, say) {
     try { worker = new Worker(new URL('./scan2plan.worker.js', import.meta.url), { type: 'module' }); }
     catch (e) { worker = null; }
     if (!worker) return inline();   // file://, CSP: run here instead
-    let settled = false;
+    let settled = false, started = false;
     worker.onmessage = e => {
       const m = e.data;
-      if (m.type === 'progress') say && say(m.stage, m.frac);
+      if (m.type === 'started') started = true;
+      else if (m.type === 'progress') say && say(m.stage, m.frac);
       else if (m.type === 'done') { settled = true; clearTimeout(timer); worker.terminate(); resolve(m.result); }
       else if (m.type === 'error') { settled = true; clearTimeout(timer); worker.terminate(); reject(new Error(m.message)); }
     };
-    // A helper that dies (most likely out of memory on a very large scan) is reported, not
-    // rerun here, where the same job would freeze the page; so is one that runs too long.
+    // A helper that could not load (it never took the job) leaves the job to run here, as when
+    // no helper can be made. One that dies mid-analysis (most likely out of memory on a very
+    // large scan) is reported, not rerun here, where the same job would freeze the page; so is
+    // one that runs too long.
     const fail = msg => { if (settled) return; settled = true; clearTimeout(timer); worker.terminate(); reject(new Error(msg)); };
     const timer = setTimeout(() => fail('Scan analysis took longer than ' + Math.round(CORE_TIME_LIMIT / 60000) + ' minutes and was stopped. Try a smaller part of the scan.'), CORE_TIME_LIMIT);
-    worker.onerror = e => { if (e && e.preventDefault) e.preventDefault(); fail('Scan analysis stopped' + (e && e.message ? ' (' + e.message + ')' : '') + '. The scan may be too large for this browser; try a smaller part of it.'); };
+    worker.onerror = e => {
+      if (e && e.preventDefault) e.preventDefault();
+      if (settled) return;
+      if (!started) { settled = true; clearTimeout(timer); worker.terminate(); return inline(); }
+      fail('Scan analysis stopped' + (e && e.message ? ' (' + e.message + ')' : '') + '. The scan may be too large for this browser; try a smaller part of it.');
+    };
     // The worker takes ownership of copies; the caller keeps its arrays.
     const p = new Float32Array(pos), i = new Uint32Array(idx);
     worker.postMessage({ pos: p, idx: i, options: options || {} }, [p.buffer, i.buffer]);
