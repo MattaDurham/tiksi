@@ -4645,6 +4645,8 @@ export function fieldState() {
   const counts = tagCounts(prop);
   return {
     mode,
+    // The tool a tap on the model uses: 'pin' (place a photo) and 'note' get a banner on a phone.
+    tool,
     cameras: [{ id: 'frame', label: 'Overview' }, { id: 'front', label: 'Front' }, { id: 'iso', label: 'Corner' }],
     views: (prop.savedViews || []).map(v => ({ id: v.id, label: v.name, on: v.id === activeViewId })),
     positions: (prop.photoPositions || []).map(p => ({ id: p.id, label: positionLabel(p) })),
@@ -4680,6 +4682,7 @@ export function fieldAction(kind, id, value) {
   }
   else if (kind === 'view') goToView(id);
   else if (kind === 'save-view') addView();
+  else if (kind === 'tool') { if (id === 'note' || id === 'select') setTool(id); }
   else if (kind === 'tag') toggleTag(id || UNTAGGED);
   else if (kind === 'level') toggleLevel(id);
   else if (kind === 'quality') {
