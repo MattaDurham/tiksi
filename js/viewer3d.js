@@ -36,7 +36,7 @@ import { proposeFixtures, openFixtureReview, fixtureInspectorHtml, bindFixtureIn
 import { openNewPropertyDialog } from './newproperty.js';
 import { materialSelectHtml } from './materials.js';
 import { pendingTextureJobs, setTextureQuality, setTextureLimits } from './textures.js';
-import { qualityProfile, stillDimensions, effectiveQuality, phoneQualityChoice, choosePhoneQuality, deviceLimits, QUALITY_NAMES } from './render-quality.js';
+import { qualityProfile, stillDimensions, effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, touchDevice, QUALITY_NAMES } from './render-quality.js';
 import { icon } from './icons.js';
 import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
 import { SECTION_KINDS, SECTION_LABELS, MAX_SECTIONS, TURN_SNAP_DEG, moveSnapStep, snapTo, quatRotate, planeNormal, planeOf, flipped, rangeAlong, movedTo, makeSection, normalizeSections, levelHeightOf } from './section-planes.js';
@@ -139,23 +139,25 @@ const walkEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 // The phone layout fills the screen; 1.5x stays sharp at arm's length and keeps orbiting smooth
 // and the battery cooler than a phone's native 3x.
 const PHONE_MAX_DPR = 1.5;
-// The quality this device draws at (render-quality.js). The desktop uses the setting saved with
-// the property, as it always has. The phone layout keeps its own choice in this browser's
-// storage (Medium until it makes one): it is never saved with the property, so the Mac's
-// setting and the phone's stay apart.
+// The quality this device draws at (render-quality.js). A computer with a mouse or trackpad uses
+// the setting saved with the property, as it always has, whatever its window width or layout. A
+// touch device (phone or tablet) keeps its own choice in this browser's storage (Medium until it
+// makes one), in either layout: it is never saved with the property, so the Mac's setting and
+// the phone's stay apart.
 function browserStorage() { try { return window.localStorage; } catch (e) { return null; } }
-let unsavedPhoneQuality = null;   // the choice for this visit when the browser refuses storage
+const ownQuality = () => touchDevice(window);
+let unsavedDeviceQuality = null;   // the choice for this visit when the browser refuses storage
 function quality() {
-  return effectiveQuality({ phone: fieldLayout(), shared: prop && prop.env && prop.env.quality, choice: phoneQualityChoice(browserStorage()) || unsavedPhoneQuality });
+  return effectiveQuality({ touch: ownQuality(), shared: prop && prop.env && prop.env.quality, choice: deviceQualityChoice(browserStorage()) || unsavedDeviceQuality });
 }
-function memoryLimits() { return deviceLimits({ phone: fieldLayout(), quality: quality() }); }
+function memoryLimits() { return deviceLimits({ touch: ownQuality(), quality: quality() }); }
 // Texture sizes and how many generated textures are kept follow the device too.
 function applyTextureLimits() {
   const l = memoryLimits();
   setTextureQuality(l.textureQuality);
   setTextureLimits({ bytes: l.textureBytes, sets: l.textureSets });
 }
-let appliedQuality = null, appliedPhone = null;   // what the drawing settings were last set from
+let appliedQuality = null;   // what the drawing settings were last set from
 function dpr() { const q = qualityProfile(quality()); return Math.min((window.devicePixelRatio || 1) * q.scale, fieldLayout() ? Math.min(q.maxDpr, PHONE_MAX_DPR) : q.maxDpr); }
 // World Y of the highest ceiling: the height the whole model spans (framing, shadows, the section range).
 function modelTop() { return topOfLevels(prop); }
@@ -475,7 +477,7 @@ function passClipMaterials() {
 
 function applyQuality() {
   const q = quality();
-  appliedQuality = q; appliedPhone = fieldLayout();
+  appliedQuality = q;
   configureRenderQuality(q);
   resize();
 }
@@ -1241,9 +1243,6 @@ function resize() {
   if (!wrapEl || !renderer || !composer || exportingStill) return;
   const w = wrapEl.clientWidth, h = wrapEl.clientHeight;
   if (!w || !h) return;
-  // Switching between the phone and desktop layouts resizes the view and changes whose quality
-  // applies: set textures, shadows and effects from the new one (applyQuality comes back here).
-  if (appliedQuality !== null && (quality() !== appliedQuality || fieldLayout() !== appliedPhone)) { applyTextureLimits(); rebuildModel(); applyQuality(); return; }
   const pr = dpr();
   renderer.setPixelRatio(pr);
   renderer.setSize(w, h);
@@ -3284,10 +3283,10 @@ function renderEnvPanel(p = hud.env) {
         <select data-env="sky"><option value="dynamic" ${env.sky === 'dynamic' ? 'selected' : ''}>Dynamic sun</option><option value="studio" ${env.sky === 'studio' ? 'selected' : ''}>Studio</option><option value="pano" ${env.sky === 'pano' ? 'selected' : ''}>Panorama</option></select>
         ${env.sky === 'pano' ? `<select data-env="panoPhotoId"><option value="">(choose pano)</option>${panos.map(ph => `<option value="${escapeHtml(ph.id)}" ${ph.id === env.panoPhotoId ? 'selected' : ''}>${escapeHtml(ph.name)}</option>`).join('')}</select>` : ''}
       </div>
-      <div class="v-row v-row-sel"><span>${fieldLayout() ? 'QUALITY ON THIS PHONE' : 'QUALITY'}</span>
+      <div class="v-row v-row-sel"><span>${ownQuality() ? 'QUALITY ON THIS DEVICE' : 'QUALITY'}</span>
         <select data-env="quality"><option value="ultra" ${quality() === 'ultra' ? 'selected' : ''}>Ultra (detail + 32-sample AO)</option><option value="high" ${quality() === 'high' ? 'selected' : ''}>High (AO + bloom)</option><option value="medium" ${quality() === 'medium' ? 'selected' : ''}>Medium</option><option value="low" ${quality() === 'low' ? 'selected' : ''}>Low</option></select>
       </div>
-      ${fieldLayout() ? '<p class="v-env-help">Kept on this phone only. The desktop keeps its own quality.</p>' : ''}
+      ${ownQuality() ? '<p class="v-env-help">Kept on this device only. Computers keep the quality saved with the property.</p>' : ''}
       <div class="v-checks">
         <label><input type="checkbox" data-env="showCeilings" ${env.showCeilings !== false ? 'checked' : ''}> CEILINGS</label>
         <label><input type="checkbox" data-env="showGround" ${env.showGround !== false ? 'checked' : ''}> GROUND</label>
@@ -3333,9 +3332,9 @@ function renderEnvPanel(p = hud.env) {
   });
   p.querySelectorAll('select').forEach(s => {
     s.onchange = () => {
-      // The phone's quality is its own: kept in this browser, never saved with the property.
-      const onPhone = s.dataset.env === 'quality' && fieldLayout();
-      if (onPhone) setPhoneQuality(s.value);
+      // A touch device's quality is its own: kept in this browser, never saved with the property.
+      const onPhone = s.dataset.env === 'quality' && ownQuality();
+      if (onPhone) setDeviceQuality(s.value);
       else env[s.dataset.env] = s.value || null;
       if (s.dataset.env === 'quality') { applyTextureLimits(); rebuildModel(); applyQuality(); }
       if (s.dataset.env === 'sky') rebuildGround();
@@ -3356,9 +3355,9 @@ function renderEnvPanel(p = hud.env) {
   });
 }
 
-function setPhoneQuality(name) {
+function setDeviceQuality(name) {
   if (!QUALITY_NAMES.includes(name)) return;
-  unsavedPhoneQuality = choosePhoneQuality(browserStorage(), name) ? null : name;
+  unsavedDeviceQuality = chooseDeviceQuality(browserStorage(), name) ? null : name;
 }
 
 export function mountEnvironmentSettings(host) {
@@ -4468,7 +4467,7 @@ export function viewerIdleState() {
 export function qualityState() {
   if (!scene || !composer || !sun || !prop) return null;
   return {
-    quality: quality(), phone: fieldLayout(), shared: prop.env.quality, shadowMap: sun.shadow.mapSize.x, smoothingSamples: composer.renderTarget1.samples,
+    quality: quality(), touch: ownQuality(), phoneLayout: fieldLayout(), shared: prop.env.quality, shadowMap: sun.shadow.mapSize.x, smoothingSamples: composer.renderTarget1.samples,
     shading: aoWanted, glow: passes.bloom.enabled, pixelRatio: renderer.getPixelRatio(), limits: memoryLimits(),
   };
 }
@@ -4597,7 +4596,7 @@ export function fieldState() {
       return { min: sp.min, max: sp.max, step: sp.step, value: r.d, label: r.label, kinds: SECTION_KINDS.map(k => ({ id: k, label: SECTION_LABELS[k][0] + SECTION_LABELS[k].slice(1).toLowerCase(), on: s.kind === k })) };
     })(),
     levels: prop.levels.map(l => ({ id: l.id, label: l.name, on: !hidden.has(l.id) })),
-    // This device's drawing quality (the phone's own choice in the phone layout).
+    // The quality this device draws at (a touch device's own choice; otherwise the property's).
     quality: QUALITY_NAMES.map(id => ({ id, label: id[0].toUpperCase() + id.slice(1), on: quality() === id })),
     // One switch per tag that holds something; Untagged only when objects sit on no tag.
     tags: [...prop.tags.map(t => ({ id: t.id, label: t.name, color: t.color, on: t.visible !== false })),
@@ -4620,7 +4619,7 @@ export function fieldAction(kind, id, value) {
   else if (kind === 'level') toggleLevel(id);
   else if (kind === 'quality') {
     if (!QUALITY_NAMES.includes(id) || id === quality()) return;
-    if (fieldLayout()) setPhoneQuality(id); else { prop.env.quality = id; touch(); }
+    if (ownQuality()) setDeviceQuality(id); else { prop.env.quality = id; touch(); }
     applyTextureLimits(); rebuildModel(); applyQuality(); applyEnvironment();
   }
   else if (kind === 'section-height') { slideSection(Number(value)); updateSectionReadout(); }

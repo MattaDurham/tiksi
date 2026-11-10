@@ -24,42 +24,53 @@ export function stillDimensions(viewWidth, viewHeight, longEdge, maxTextureSize 
 }
 
 // ---------- this device's own quality ----------
-// The quality saved with a property is shared by every device that opens it and stays the
-// desktop's setting. A phone keeps its own choice in its own browser storage, so a Mac set to
-// Ultra never makes the phone draw Ultra, and the phone's choice never changes the Mac.
+// The quality saved with a property is shared by every device that opens it, and stays the
+// setting of every computer with a mouse or trackpad. A touch device (a phone or a tablet) keeps
+// its own choice in its own browser storage, so a Mac set to Ultra never makes the phone draw
+// Ultra, and the phone's choice never changes the Mac.
+//
+// The device decides, never the layout or the window: a narrow Mac window or the Mac in the
+// phone layout is still the Mac, and a phone switched to the desktop layout is still a phone.
 export const QUALITY_NAMES = Object.freeze(['low', 'medium', 'high', 'ultra']);
-export const PHONE_DEFAULT_QUALITY = 'medium';
-export const PHONE_QUALITY_KEY = 'tiksi.phone.quality';
+export const TOUCH_DEFAULT_QUALITY = 'medium';
+export const DEVICE_QUALITY_KEY = 'tiksi.device.quality';
 const known = name => QUALITY_NAMES.includes(name);
+
+// A touch device: its main pointer is a finger and it cannot hover. The one test every file
+// uses; `win` is the browser window (or anything with its matchMedia).
+export const TOUCH_DEVICE_QUERY = '(hover: none) and (pointer: coarse)';
+export function touchDevice(win = globalThis) {
+  try { return !!(win && typeof win.matchMedia === 'function' && win.matchMedia(TOUCH_DEVICE_QUERY).matches); } catch (e) { return false; }
+}
 
 // `storage` is the browser's localStorage (or anything shaped like it). A browser that refuses
 // storage (private mode) simply has no saved choice.
-export function phoneQualityChoice(storage) {
-  try { const v = storage && storage.getItem(PHONE_QUALITY_KEY); return known(v) ? v : null; } catch (e) { return null; }
+export function deviceQualityChoice(storage) {
+  try { const v = storage && storage.getItem(DEVICE_QUALITY_KEY); return known(v) ? v : null; } catch (e) { return null; }
 }
-export function choosePhoneQuality(storage, name) {
+export function chooseDeviceQuality(storage, name) {
   if (!known(name)) throw new Error('Unknown quality ' + name);
-  try { storage.setItem(PHONE_QUALITY_KEY, name); return true; } catch (e) { return false; }
+  try { storage.setItem(DEVICE_QUALITY_KEY, name); return true; } catch (e) { return false; }
 }
-// The quality this device draws at: on a phone its own choice (Medium until it makes one), on
-// the desktop the property's shared setting, exactly as before.
-export function effectiveQuality({ phone, shared, choice } = {}) {
-  if (phone) return known(choice) ? choice : PHONE_DEFAULT_QUALITY;
+// The quality this device draws at: on a touch device its own choice (Medium until it makes
+// one), on any other the property's shared setting, exactly as before.
+export function effectiveQuality({ touch, shared, choice } = {}) {
+  if (touch) return known(choice) ? choice : TOUCH_DEFAULT_QUALITY;
   return known(shared) ? shared : 'high';
 }
 
 // ---------- memory limits by device ----------
-// A phone browser page has a fraction of a desktop's memory and loses its graphics context when
-// it runs short. The desktop row is what every device used before: 16384 pixels is the most a
-// graphics card takes, so on the desktop no model texture is shrunk here and three does what it
-// always did.
+// A phone or tablet browser page has a fraction of a desktop's memory and loses its graphics
+// context when it runs short. The other row is what every device had before these limits.
 //   textureBytes / textureSets   the generated material textures kept at once (textures.js)
 //   textureQuality               which size row those textures are made at (textures.js resFor)
-//   importedTextureSize          longest side, in pixels, of a texture inside an imported model
+//   importedTextureSize          longest side, in pixels, of a texture inside an imported model.
+//                                16384 is the most a graphics card takes, so off a touch device
+//                                nothing is shrunk here and three does what it always did.
 const MB = 1024 * 1024;
-export function deviceLimits({ phone, quality } = {}) {
+export function deviceLimits({ touch, quality } = {}) {
   const q = known(quality) ? quality : 'high';
-  if (!phone) return { textureBytes: 256 * MB, textureSets: 56, textureQuality: q, importedTextureSize: 16384 };
+  if (!touch) return { textureBytes: 256 * MB, textureSets: 56, textureQuality: q, importedTextureSize: 16384 };
   const light = q === 'low' || q === 'medium';
   return { textureBytes: 96 * MB, textureSets: 24, textureQuality: light ? 'low' : q, importedTextureSize: q === 'low' ? 1024 : 2048 };
 }
