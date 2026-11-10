@@ -21,9 +21,12 @@ const FALLBACK = { id: '', name: 'Fallback', color: '#d8d4cc', pattern: 'flat', 
 const SWATCH_RES = 256;          // texture resolution behind a swatch; the chip is tiny
 const HI_RES = new Set(['wood', 'stone', 'marble']);
 const SLICE_MS = 12;             // per-tick CPU budget of the synthesis scheduler
-const MAX_TEX_BYTES = 256 * 1024 * 1024; // GPU mip chains + retained albedo; higher resolution sets need a byte cap.
+// GPU mip chains + retained albedo; higher resolution sets need a byte cap. These are the desktop
+// limits; a phone is given lower ones through setTextureLimits (render-quality.js deviceLimits).
+const DESKTOP_TEX_BYTES = 256 * 1024 * 1024, DESKTOP_TEX_ENTRIES = 56;
+let MAX_TEX_BYTES = DESKTOP_TEX_BYTES;
 let textureQuality = 'high';
-const MAX_TEX_ENTRIES = 56;      // LRU cap on full texture sets (a 1024 set is ~16 MB of maps)
+let MAX_TEX_ENTRIES = DESKTOP_TEX_ENTRIES;      // LRU cap on full texture sets (a 1024 set is ~16 MB of maps)
 const MAX_TRANSIENT_ENTRIES = 8; // of which editor-preview variants: the current one and a few recent
 const MAX_SWATCHES = 200;        // cached swatch PNGs (~50 KB each); a long editing session mints many
 
@@ -912,6 +915,15 @@ function tick(deadline) {
 export function pendingTextureJobs() { return [...texCache.values()].filter(e => !e.cancelled && e.status !== 'ready').length; }
 
 export function setTextureQuality(quality) { textureQuality = quality; }
+
+// How much generated texture this device keeps at once: `bytes` of maps and `sets` of them.
+// Lowering a limit frees the least recently shown sets straight away.
+export function setTextureLimits({ bytes, sets } = {}) {
+  MAX_TEX_BYTES = Number.isFinite(bytes) && bytes > 0 ? bytes : DESKTOP_TEX_BYTES;
+  MAX_TEX_ENTRIES = Number.isFinite(sets) && sets > 0 ? Math.floor(sets) : DESKTOP_TEX_ENTRIES;
+  evictTextures();
+}
+export function textureLimits() { return { bytes: MAX_TEX_BYTES, sets: MAX_TEX_ENTRIES }; }
 
 // Debug aid: synthesis cost per cached texture set.
 export function textureStats() {
