@@ -82,7 +82,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
             return True
-        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement'):
+        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement', 'folder_intake'):
             service = getattr(self.server, name, None)
             if service and service.dispatch(self): return True
         return False
@@ -112,7 +112,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         result = {key: metadata[key] for key in ('slug', 'branch', 'port', 'instanceId', 'head', 'live') if key in metadata}
         result.update({'pid': os.getpid(), 'port': self.server.server_port,
                        'live': metadata.get('live', self.server.server_port == 8642), 'activeJobs': 0})
-        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement'):
+        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement', 'folder_intake'):
             service = getattr(self.server, name, None)
             if service:
                 active = getattr(service, 'active_jobs', None)
@@ -229,6 +229,11 @@ def main():
             from server.photo_placement import PhotoPlacementService
             folders = lambda: [Path(p).parent for p in list(getattr(server.workspace, 'paths', {}).values())] + [server.workspace.projects_dir]
             server.photo_placement = PhotoPlacementService(args.state_dir / 'photo-placement', projects_dir=args.projects_dir, project_folders=folders)
+        server.folder_intake = None
+        if (ROOT / 'server/folder_intake.py').exists():
+            # A property from a folder the owner picks on this Mac; files are read there, never changed.
+            from server.folder_intake import FolderIntakeService
+            server.folder_intake = FolderIntakeService(server.workspace)
         def shutdown(signum, frame):
             threading.Thread(target=server.shutdown, daemon=True).start()
         # A hung test asks for every thread's stack with SIGUSR1 (written to stderr).
@@ -238,7 +243,7 @@ def main():
         print(f'Tiksi listening on {args.host}:{server.server_port}', flush=True)
         try: server.serve_forever()
         finally:
-            for name in ('reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement'):
+            for name in ('reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement', 'folder_intake'):
                 service = getattr(server, name, None)
                 if service: service.close()
 

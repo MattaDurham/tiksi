@@ -64,6 +64,11 @@ def open_in_folder(folder, relative, run=subprocess.run):
     return target
 
 
+def project_file_base(name):
+    """A property's name as a file name: no path or reserved characters, at most 80 long."""
+    return re.sub(r'[\\/:*?"<>|\x00-\x1f]', ' ', str(name)).strip(' .')[:80] or 'Project'
+
+
 class WorkspaceService:
     run = staticmethod(subprocess.run)
 
@@ -89,10 +94,30 @@ class WorkspaceService:
         self.stamps = {}
         self.parts = {}
         self.part_assets = {}
+        # Where a property made from a picked folder will be kept, until its first save writes it.
+        self.planned = {}
         self.refresh()
 
     def active_jobs(self):
         return self.jobs
+
+    def plan_destination(self, identifier, folder, name):
+        """Name the file a property not saved yet will be written to on its first save:
+        <folder>/<name>.tiksi. Nothing is written here. A property that already has a file keeps it."""
+        if not isinstance(identifier, str) or not 0 < len(identifier) <= 160: raise WorkspaceError('Invalid property')
+        with self.lock:
+            if identifier in self.paths or identifier in self.state.get('archived', {}): raise WorkspaceError('This property already has a project file', 409)
+            base = project_file_base(name)
+            taken = {str(Path(p)) for p in list(self.paths.values()) + list(self.state.get('archived', {}).values()) + [v for k, v in self.planned.items() if k != identifier]}
+            dest = Path(folder) / (base + '.tiksi')
+            count = 1
+            # An earlier project file in the same folder is never overwritten.
+            while dest.exists() or str(dest) in taken:
+                count += 1
+                dest = Path(folder) / (base + ' ' + str(count) + '.tiksi')
+            self.planned[identifier] = str(dest)
+            while len(self.planned) > 64: self.planned.pop(next(iter(self.planned)))
+            return str(dest)
 
     def project_folder(self, identifier):
         # A project file sits in its folder, or in that folder's Tiksi/ subfolder (see refresh).
@@ -309,9 +334,9 @@ class WorkspaceService:
                     identifier = prop['id']
                     part = slices[identifier]
                     if not isinstance(part, dict) or part.get('properties') != [prop]: raise WorkspaceError('Project file does not match workspace')
-                    base = re.sub(r'[\\/:*?"<>|\x00-\x1f]', ' ', str(prop.get('name', 'Project'))).strip(' .')[:80] or 'Project'
+                    base = project_file_base(prop.get('name', 'Project'))
                     folder = self.projects_dir / (base + '-' + hashlib.sha256(identifier.encode()).hexdigest()[:8])
-                    dest = Path(self.paths.get(identifier) or self.state.get('archived', {}).get(identifier) or str(folder / (base + '.tiksi')))
+                    dest = Path(self.paths.get(identifier) or self.state.get('archived', {}).get(identifier) or self.planned.get(identifier) or str(folder / (base + '.tiksi')))
                     destinations[identifier] = str(dest)
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     files = self.referenced(part)
@@ -338,6 +363,7 @@ class WorkspaceService:
                     os.replace(temp, dest)
                     self.stamps[str(dest)] = (dest.stat().st_mtime_ns, dest.stat().st_size)
                 self.state, self.paths = value, value['paths']
+                for i in destinations: self.planned.pop(i, None)
                 self.has_pictures = bool(pictures)
                 self.parts = slices
                 self.part_assets = {i: {k: assets[k] for k in self.referenced(part) if k in assets} for i, part in slices.items()}

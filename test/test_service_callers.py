@@ -7,6 +7,7 @@ import tempfile
 import threading
 import unittest
 
+from server.folder_intake import FolderIntakeService
 from server.model_conversion import ModelConversionService
 from server.material_research import MaterialResearchService
 from server.peers import trusted_peer
@@ -19,9 +20,9 @@ ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location('tiksi_serve_callers', ROOT / 'tools/serve.py')
 serve = importlib.util.module_from_spec(spec); spec.loader.exec_module(serve)
 
-SERVICES = ('workspace', 'reconstruction', 'material-research', 'model-conversion', 'video', 'photo-placement')
+SERVICES = ('workspace', 'reconstruction', 'material-research', 'model-conversion', 'video', 'photo-placement', 'folder-intake')
 # What each service's own page sends when it asks for capabilities.
-PAGE_HEADERS = {'workspace': {'X-Tiksi-Workspace': '1'}, 'video': {'X-Tiksi-Video': '1'}}
+PAGE_HEADERS = {'workspace': {'X-Tiksi-Workspace': '1'}, 'video': {'X-Tiksi-Video': '1'}, 'folder-intake': {'X-Tiksi-Folder': '1'}}
 
 
 class PeerRule(unittest.TestCase):
@@ -36,7 +37,7 @@ class PeerRule(unittest.TestCase):
 
 
 class ServiceCallers(unittest.TestCase):
-    """The real server with all six real services; only the caller's address is set by the test."""
+    """The real server with all seven real services; only the caller's address is set by the test."""
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); state = Path(self.temp.name)
@@ -55,9 +56,10 @@ class ServiceCallers(unittest.TestCase):
         server.model_conversion = ModelConversionService(state / 'converters')
         server.video_frames = VideoFrameService(state / 'video-frames')
         server.photo_placement = PhotoPlacementService(state / 'photo-placement', projects_dir=state / 'projects', project_folders=lambda: [])
+        server.folder_intake = FolderIntakeService(server.workspace, chooser=lambda: None)
         # seen: a service was offered the request. answered: it took the request as its own.
         self.seen = []; self.answered = []
-        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement'):
+        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement', 'folder_intake'):
             service = getattr(server, name); inner = service.dispatch
             def dispatch(handler, name=name, inner=inner):
                 self.seen.append(name)

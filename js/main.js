@@ -303,7 +303,7 @@ function openFileMenu(initialTab = 'project', selected) {
     <nav class="file-tabs" aria-label="File actions">${[['project','Project'],['capture','Import'],['exchange','3D exchange'],['settings','Settings']].map(([id,label])=>`<button class="btn" data-file-tab="${id}">${label}</button>`).join('')}</nav>
     <section data-file-panel="project"><h3>Save your project</h3><p>A .tiksi file keeps your plan, models, original captures, pinned photos, materials and project work together.</p>
       <div class="file-actions"><button class="btn primary" data-project-save>SAVE PROJECT</button><button class="btn" data-project-as>SAVE AS…</button><button class="btn" data-project-open>OPEN / IMPORT…</button></div><p data-file-target></p>
-      <button class="btn" data-new-property>NEW PROPERTY</button>
+      <div class="file-actions"><button class="btn" data-new-property>NEW PROPERTY</button><button class="btn" data-new-folder>NEW PROPERTY FROM A FOLDER…</button></div>
       <h3>One-pager</h3><p>A one-page teaser of this property for its client: the picture, the pitch, the scope, the budget and the schedule. Every saved version is a PDF among the property's documents; the newest is the one to send.</p>
       <p class="op-file-status" data-op-file-status></p><div class="file-actions"><button class="btn primary" data-one-pager>OPEN ONE-PAGER</button></div></section>
     <section data-file-panel="capture" hidden><h3>Bring your room into Tiksi</h3><p>Choose photos, a walk-through video, a scan, a 3D model or a saved project. Imported projects add or update properties here.</p><button class="btn primary" data-capture-open>CHOOSE FILES…</button><button class="btn" data-polycam>POLYCAM LINK</button><button class="btn" data-photo3d>PHOTOS → 3D</button></section>
@@ -358,6 +358,8 @@ function openFileMenu(initialTab = 'project', selected) {
       type=await importAnyFile(new File([zipSync(entries)],models[0].name+'.zip'));
     } else for(const file of files)type=await importAnyFile(file);ensureBuiltinMaterials();refreshTopbar();if(type==='model'&&currentName!=='model')location.hash='#/model';else if(type==='photo'&&currentName!=='photos')location.hash='#/photos';else if(type==='measure'&&currentName!=='measure')location.hash='#/measure';else remountView();dialog.close();});
   on('[data-new-property]',()=>{dialog.close();openNewPropertyDialog();});
+  // The folder of a site visit: its scans, photos, videos and PDFs become a property in one go.
+  on('[data-new-folder]',()=>{dialog.close();openNewPropertyDialog({folder:true});});
   on('[data-one-pager]',()=>{dialog.close();openOnePagerEditor(prop);});
   dialog.querySelector('[data-op-prompt]').value=promptMode();
   dialog.querySelector('[data-op-prompt]').onchange=e=>{ws.data.settings.onePagerPrompt=e.target.value;touch();};
