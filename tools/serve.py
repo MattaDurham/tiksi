@@ -15,6 +15,9 @@ import threading
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
+# The service packages live at the repository root, whatever folder this file is started from.
+if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
+from server.peers import trusted_peer
 PUBLIC_FILES = {'index.html', 'manifest.webmanifest', 'app-icon.svg'}
 PUBLIC_DIRS = {'css', 'js', 'vendor'}
 
@@ -54,9 +57,30 @@ class AppHandler(SimpleHTTPRequestHandler):
             return address.is_loopback or self.server.remote_access
         except ValueError: return False
 
+    def service_caller_refused(self):
+        # Every address under /api/ is a service on this Mac: project files, photo to 3D, model
+        # conversion, material research, video frames, photo placement. Each hands its access
+        # token to whoever asks its capabilities address, so who may ask is decided here, once,
+        # before any service sees the request. A service added later is covered without a check
+        # of its own. The page itself (index.html, css, js, vendor) holds no project data.
+        # The path is read the way every service reads it, so nothing a service would answer
+        # can pass by under a different spelling.
+        path = urlsplit(self.path).path
+        if path != '/api' and not path.startswith('/api/'): return False
+        return not trusted_peer(self.client_address[0])
+
     def dispatch(self):
         if not self.valid_host():
             self.send_error(403, 'Host is not allowed')
+            return True
+        if self.service_caller_refused():
+            payload = (json.dumps({'error': 'Tiksi services answer only this Mac or a device on its Tailscale network'}) + '\n').encode('utf-8')
+            self.send_response(403)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Content-Length', str(len(payload)))
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            self.wfile.write(payload)
             return True
         for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement'):
             service = getattr(self.server, name, None)
@@ -99,6 +123,9 @@ class AppHandler(SimpleHTTPRequestHandler):
     def send_head(self):
         if not self.valid_host():
             self.send_error(403, 'Host is not allowed'); return None
+        # HEAD reaches here without passing dispatch().
+        if self.service_caller_refused():
+            self.send_error(403, 'Tiksi services answer only this Mac or Tailscale'); return None
         path = unquote(urlsplit(self.path).path)
         if path == '/api/instance':
             payload = (json.dumps(self.instance()) + '\n').encode('utf-8')
