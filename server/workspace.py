@@ -1,6 +1,5 @@
 """Private, revisioned workspace and immutable assets shared by this Mac's clients."""
 import hashlib
-import ipaddress
 import json
 import os
 from pathlib import Path
@@ -11,6 +10,8 @@ import threading
 import tempfile
 import zipfile
 from urllib.parse import urlsplit
+
+from server.peers import trusted_peer
 
 MAX_JSON = 32 * 1024 * 1024
 # A save envelope includes shared metadata, portable project slices and, during
@@ -391,13 +392,8 @@ class WorkspaceService:
         ids.update(picture_refs(data))
         return ids
 
-    @staticmethod
-    def trusted_peer(address):
-        try:
-            ip = ipaddress.ip_address(address)
-            if getattr(ip, 'ipv4_mapped', None): ip = ip.ipv4_mapped
-            return ip.is_loopback or ip in ipaddress.ip_network('100.64.0.0/10') or ip in ipaddress.ip_network('fd7a:115c:a1e0::/48')
-        except ValueError: return False
+    # One definition of a trusted caller, shared with the server's own check (tools/serve.py).
+    trusted_peer = staticmethod(trusted_peer)
 
     def dispatch(self, h):
         path = urlsplit(h.path).path

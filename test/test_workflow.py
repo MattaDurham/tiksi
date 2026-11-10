@@ -29,6 +29,7 @@ class WorkflowTests(unittest.TestCase):
             (self.root / name).mkdir()
         shutil.copy(ROOT / 'tools/serve.py', self.root / 'tools/serve.py')
         shutil.copy(ROOT / 'server/workspace.py', self.root / 'server/workspace.py')
+        shutil.copy(ROOT / 'server/peers.py', self.root / 'server/peers.py')
         (self.root / 'server/__init__.py').write_text('', encoding='utf-8')
         (self.root / 'scripts/preflight.sh').write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
         (self.root / 'index.html').write_text('<html><body>fixture</body></html>', encoding='utf-8')

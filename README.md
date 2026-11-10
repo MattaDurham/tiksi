@@ -133,8 +133,8 @@ For the local app, run `python3 tools/serve.py --host 0.0.0.0 --port 8642 --proj
 open `http://localhost:8642/` in Chrome. Install Tiksi using the install button
 in the address bar to give it its own app window and Dock launcher. This server
 serves app assets and a private project-file API; repository files and directory listings
-are excluded. The project API accepts this Mac and Tailscale peers, requires same-origin requests, and does not enable CORS. Binding to `0.0.0.0` makes the app reachable on the local network
-and through the Mac's Tailscale address.
+are excluded. Every service address under `/api/` (project files, photo to 3D, model conversion, material research, video frames, photo placement) answers only this Mac and Tailscale peers; the server checks the caller once, before any service sees the request. The project API also requires same-origin requests and does not enable CORS. Binding to `0.0.0.0` makes the page reachable on the local network
+and through the Mac's Tailscale address; a device on the local network that is not on Tailscale gets the page but no service.
 
 For automatic startup, use your operating system's service manager. Keep the
 installation's paths, service label and restart instructions in the private
