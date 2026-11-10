@@ -764,6 +764,8 @@ async function exportPdf(saveToProject) {
       } catch (e) {
         const i = set.revisions.indexOf(rev);
         if (i >= 0) set.revisions.splice(i, 1);
+        // A redraw during the save may have drawn the revision on the paper; take it off again.
+        if (el) { renderLists(); renderInspector(); drawSheet(); }
         throw e;
       }
       doc.notes = 'Drawing set "' + set.name + '", revision ' + n + ', saved ' + date + ' from DOCUMENTS (' + set.sheets.length + ' sheet' + (set.sheets.length === 1 ? '' : 's') + ').';

@@ -145,7 +145,10 @@ try {
     window.__restorePut = () => { IDBObjectStore.prototype.put = put; };
     IDBObjectStore.prototype.put = function (...args) { if (this.name === 'files') throw new DOMException('Synthetic full disk', 'QuotaExceededError'); return put.apply(this, args); };
   });
+  await page.evaluate(async () => { window.__store = await import('/js/store.js'); });
   await page.locator('[data-save]').click();
+  // Any change elsewhere redraws the sheet while the PDF renders, with the new revision on it.
+  await page.evaluate(() => window.__store.touch());
   await page.waitForFunction(() => /could not be made/.test(document.querySelector('[data-status]')?.textContent || ''), null, { timeout: 120000 });
   await page.evaluate(() => window.__restorePut());
   const afterFail = await prop('return { revs: p.docSets[0].revisions.length, docs: p.photos.filter(x => x.kind === "document").length }');
