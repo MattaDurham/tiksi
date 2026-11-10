@@ -35,8 +35,8 @@ import { chooseScanPlacement } from './scanplace.js';
 import { proposeFixtures, openFixtureReview, fixtureInspectorHtml, bindFixtureInspector, addFixtureHtml, addFixture } from './fixtures-ui.js';
 import { openNewPropertyDialog } from './newproperty.js';
 import { materialSelectHtml } from './materials.js';
-import { pendingTextureJobs, setTextureQuality } from './textures.js';
-import { qualityProfile, stillDimensions } from './render-quality.js';
+import { pendingTextureJobs, setTextureQuality, setTextureLimits, beginTextureBuild, setTextureUse } from './textures.js';
+import { qualityProfile, stillDimensions, effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, touchDevice, QUALITY_NAMES } from './render-quality.js';
 import { icon } from './icons.js';
 import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
 import { SECTION_KINDS, SECTION_LABELS, MAX_SECTIONS, TURN_SNAP_DEG, moveSnapStep, snapTo, quatRotate, planeNormal, planeOf, flipped, rangeAlong, movedTo, makeSection, normalizeSections, levelHeightOf } from './section-planes.js';
@@ -50,7 +50,7 @@ import { takenAtMs } from './photo-exif.js';
 import { KF, keyframeRow, keyframeModelPose, keyframeLens, nearestKeyframe, sharpKeyframes, segmentsOf, decodePng16, depthPoints, alignSession } from './polycam-cameras.js';
 import { addPosition, removePosition, picturesOf, positionLabel, renderingName, renderSize, ROLE_LABELS } from './positions.js';
 import {
-  loadScanObject, applyScanTransform, disposeScanObject,
+  loadScanObject, applyScanTransform, disposeScanObject, redoSplatAfterContextLoss,
   scanStats, dropScanToFloor, centerScanOnModel, releaseSplatRenderer, splatDrawables, splatBusy,
 } from './scans.js';
 import { attachSketchupNavigation } from './sketchup-nav.js';
@@ -106,7 +106,7 @@ const ORBIT_POLAR = Math.PI * 0.495, MATCH_POLAR = Math.PI - 0.01, BASE_FOV = 50
 let measureDraft = null;       // first measure point
 const measures = [];           // {a, b, line, label}
 const scanObjs = {};           // scanId -> Object3D
-const scanState = {};          // scanId -> 'loading' | 'ready' | 'missing' | 'failed'
+const scanState = {};          // scanId -> 'loading' | 'ready' | 'missing' | 'failed' | 'hidden' (not loaded: it has not been shown yet)
 const pinObjs = {};            // photoId -> {group, sprite, line, dot, aspect}
 const noteObjs = {};           // noteId -> {group, sprite, aspect, place}
 const cameraObjs = {};         // photoId -> camera pyramid group
@@ -139,7 +139,26 @@ const walkEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 // The phone layout fills the screen; 1.5x stays sharp at arm's length and keeps orbiting smooth
 // and the battery cooler than a phone's native 3x.
 const PHONE_MAX_DPR = 1.5;
-function dpr() { const q = qualityProfile(prop.env.quality); return Math.min((window.devicePixelRatio || 1) * q.scale, fieldLayout() ? Math.min(q.maxDpr, PHONE_MAX_DPR) : q.maxDpr); }
+// The quality this device draws at (render-quality.js). A computer with a mouse or trackpad uses
+// the setting saved with the property, as it always has, whatever its window width or layout. A
+// touch device (phone or tablet) keeps its own choice in this browser's storage (Medium until it
+// makes one), in either layout: it is never saved with the property, so the Mac's setting and
+// the phone's stay apart.
+function browserStorage() { try { return window.localStorage; } catch (e) { return null; } }
+const ownQuality = () => touchDevice(window);
+let unsavedDeviceQuality = null;   // the choice for this visit when the browser refuses storage
+function quality() {
+  return effectiveQuality({ touch: ownQuality(), shared: prop && prop.env && prop.env.quality, choice: deviceQualityChoice(browserStorage()) || unsavedDeviceQuality });
+}
+function memoryLimits() { return deviceLimits({ touch: ownQuality(), quality: quality() }); }
+// Texture sizes and how many generated textures are kept follow the device too.
+function applyTextureLimits() {
+  const l = memoryLimits();
+  setTextureQuality(l.textureQuality);
+  setTextureLimits({ bytes: l.textureBytes, sets: l.textureSets });
+}
+let appliedQuality = null;   // what the drawing settings were last set from
+function dpr() { const q = qualityProfile(quality()); return Math.min((window.devicePixelRatio || 1) * q.scale, fieldLayout() ? Math.min(q.maxDpr, PHONE_MAX_DPR) : q.maxDpr); }
 // World Y of the highest ceiling: the height the whole model spans (framing, shadows, the section range).
 function modelTop() { return topOfLevels(prop); }
 function lowestElevation() { return prop.levels.reduce((m, l) => Math.min(m, l.elevation), Infinity); }
@@ -175,7 +194,8 @@ function ensureDefaults(p) {
 // ---------- renderer ----------
 function ensureRenderer() {
   if (renderer) return renderer;
-  renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', stencil: false });
+  try { renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', stencil: false }); }
+  catch (e) { renderer = null; throw Object.assign(new Error('This browser could not start 3D graphics.'), { cause: e, graphics: true }); }
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.AgXToneMapping || THREE.ACESFilmicToneMapping;
   renderer.shadowMap.enabled = true;
@@ -187,7 +207,93 @@ function ensureRenderer() {
   renderer.domElement.className = 'v-canvas';
   pmrem = new THREE.PMREMGenerator(renderer);
   pmrem.compileEquirectangularShader();
+  // three's own listeners (added by the constructor, so they run first) keep the context
+  // restorable and start a fresh GL state; these do what three cannot (see graphicsRestored).
+  renderer.domElement.addEventListener('webglcontextlost', graphicsLost);
+  renderer.domElement.addEventListener('webglcontextrestored', graphicsRestored);
   return renderer;
+}
+
+// ---------- messages over the view ----------
+// A panel over the canvas for the moments there is no picture to trust: the graphics context
+// is gone, or a frame would not draw. Styled inline: it must show whatever else failed.
+const NOTICE_STYLE = 'position:absolute;inset:0;z-index:7;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;background:rgba(9,12,15,0.92);color:var(--ink,#e9eef3);font:14px/1.45 var(--sans,sans-serif);';
+// A failed frame is cleared by the next good one, and a good one comes from moving the view: so
+// that message is a strip along the bottom which lets every touch and click through to the
+// view, except on its own button.
+const BANNER_STYLE = 'position:absolute;left:0;right:0;bottom:0;z-index:7;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:10px 14px;padding:12px 16px calc(12px + env(safe-area-inset-bottom, 0px));text-align:center;pointer-events:none;background:rgba(9,12,15,0.92);border-top:1px solid var(--red,#e05252);color:var(--ink,#e9eef3);font:13px/1.4 var(--sans,sans-serif);';
+const notices = {};   // kind -> element
+function noticeHtml(message, reload) {
+  return `<p style="margin:0;max-width:34em">${escapeHtml(message)}</p>${reload ? '<button type="button" class="btn" data-reload style="width:auto;padding:10px 18px;pointer-events:auto">RELOAD</button>' : ''}`;
+}
+function showNotice(kind, message, reload = false, banner = false) {
+  if (!wrapEl) return;
+  let box = notices[kind];
+  if (!box || box.parentElement !== wrapEl) {
+    box = document.createElement('div');
+    box.className = 'v-notice'; box.dataset.notice = kind; box.setAttribute('role', 'alert'); box.style.cssText = banner ? BANNER_STYLE : NOTICE_STYLE;
+    wrapEl.appendChild(box);
+    notices[kind] = box;
+  }
+  box.innerHTML = noticeHtml(message, reload);
+  const button = box.querySelector('[data-reload]');
+  if (button) button.onclick = () => location.reload();
+}
+function hideNotice(kind) { const box = notices[kind]; if (box) { box.remove(); delete notices[kind]; } }
+
+// ---------- losing the graphics context ----------
+// A phone takes graphics memory back from a page that is in the background or when memory is
+// short; a desktop can do the same after a very large still. three re-uploads geometry and
+// ordinary textures from their source data once the context returns, and makes every render
+// target again, empty. So what was drawn into a target is gone until it is drawn again: the
+// sun's shadow map and the sky lighting. Nothing would ask for a frame either, so the view
+// stayed blank until a touch. While the context is away the view says so; a reload is offered
+// if it has not come back after CONTEXT_WAIT_MS on screen.
+const CONTEXT_WAIT_MS = 4000;
+let contextLost = false, contextTimer = 0;
+function contextNotice(waited) {
+  showNotice('graphics', waited
+    ? 'The 3D view lost its graphics memory and has not got it back. Reload to open the model again.'
+    : 'The 3D view lost its graphics memory. Waiting for it to come back…', waited);
+}
+// The wait only counts while the page is on screen: a phone gives the context back when the
+// page returns to the front, and that must not be met by a reload prompt.
+function armContextTimer() {
+  clearTimeout(contextTimer);
+  if (!contextLost || document.visibilityState === 'hidden') return;
+  contextTimer = setTimeout(() => { if (contextLost) contextNotice(true); }, CONTEXT_WAIT_MS);
+}
+document.addEventListener('visibilitychange', armContextTimer);
+function graphicsLost() {
+  contextLost = true;
+  clearTimeout(pmremTimer);
+  contextNotice(false);
+  armContextTimer();
+}
+function graphicsRestored() {
+  contextLost = false;
+  clearTimeout(contextTimer);
+  hideNotice('graphics');
+  // The generator's own buffers and shader belonged to the old context.
+  if (pmrem) pmrem.dispose();
+  pmrem = new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+  if (!scene || !composer) return;   // MODEL is not open: the next mount builds everything
+  renderFailed = false;
+  hideNotice('draw');
+  if (envRT) { envRT.dispose(); envRT = null; }
+  scene.environment = null;
+  if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
+  // Buffers for smoothing, shading, outlines and glow at this device's quality and size.
+  applyQuality();
+  // Sky lighting first, then the shader warm-up it triggers, then the shadows and a frame.
+  programsWarm = false;
+  regenEnvMap();
+  invalidateShadows();
+  // Splats keep their unpacked data on the graphics card: have it made again (scans.js).
+  let splats = false;
+  for (const obj of Object.values(scanObjs)) splats = redoSplatAfterContextLoss(obj) || splats;
+  requestRender(splats ? 8 : 4);
 }
 
 // ---------- scene ----------
@@ -377,7 +483,8 @@ function passClipMaterials() {
 }
 
 function applyQuality() {
-  const q = prop.env.quality || 'high';
+  const q = quality();
+  appliedQuality = q;
   configureRenderQuality(q);
   resize();
 }
@@ -405,7 +512,20 @@ function configureRenderQuality(name, forExport = false) {
 }
 
 // ---------- model ----------
+// The colour maps on the surfaces in the scene now (walls and floors, the ground, imported
+// models): the texture store never frees a set that is on one of them (textures.js).
+function texturesOnScreen() {
+  const out = new Set();
+  const visit = o => {
+    if (!o.isMesh || !o.material) return;
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m && m.map) out.add(m.map.source);
+  };
+  for (const root of [modelGroup, groundGroup, scanRoot]) if (root) root.traverse(visit);
+  return out;
+}
+
 function rebuildModel() {
+  beginTextureBuild();   // the sets asked for from here on are this model's
   if (modelGroup) { scene.remove(modelGroup); disposeBuilt(modelGroup); }
   modelGroup = buildPropertyGroup(prop, { xray, xrayOpacity: prop.env.xrayOpacity, hiddenLevels: hiddenLevels() });
   modelGroup.visible = !prop.modelSourceId;
@@ -590,7 +710,7 @@ function scheduleEnvMap(delay) {
   pmremTimer = setTimeout(regenEnvMap, delay);
 }
 function regenEnvMap() {
-  if (!scene) return;
+  if (!scene || contextLost) return;   // a restored context bakes it again (graphicsRestored)
   const env = prop.env;
   let rt = null;
   if (env.sky === 'studio') {
@@ -1064,11 +1184,22 @@ function tick(time) {
     invalidateShadows();
     requestRender(3);
   }
+  // Nothing can be drawn into a lost context; what is waiting is drawn when it returns.
+  if (contextLost) return;
   if (framesLeft > 0) {
     framesLeft--;
-    // One bad frame must not kill the animation loop for the rest of the session.
-    try { renderFrame(); }
-    catch (e) { if (!renderFailed) { renderFailed = true; console.error('render failed', e); } }
+    // One bad frame must not kill the animation loop for the rest of the session. It must not
+    // leave a stale picture looking current either: say so until a frame draws again.
+    try {
+      renderFrame();
+      if (renderFailed) { renderFailed = false; hideNotice('draw'); }
+    } catch (e) {
+      if (!renderFailed) {
+        renderFailed = true;
+        console.error('render failed', e);
+        showNotice('draw', 'MODEL could not draw this view (' + errMsg(e) + '). Move the view to try again, or reload.', true, true);
+      }
+    }
   }
 }
 let renderFailed = false;
@@ -1207,9 +1338,14 @@ async function renderStillPrepared(options) {
 
 // A PNG of the model at width x height: the current view, or `view` (a stored camera with its
 // lens and roll, for numbered photo positions). `live()` says whether to carry on.
+// Nothing can be drawn into a lost graphics context, and what a snapshot of it holds is blank:
+// stop with a plain reason so no empty picture is saved or downloaded.
+function graphicsGone() { return contextLost || !renderer || renderer.getContext().isContextLost(); }
+const GRAPHICS_GONE = 'The 3D view has lost its graphics memory, so no image was made. Wait for the view to come back, then render again.';
 async function renderStillBlob(options) {
   const token = mountId;
   const live = options.live || (() => token === mountId);
+  if (graphicsGone()) throw new Error(GRAPHICS_GONE);
   const deadline = performance.now() + 60000;
   // Do not save a transient flat-tinted first frame. Photo decoding is counted too.
   while (pendingTextureJobs() || Object.values(scanState).some(s => s === 'loading') || splatBusy()) {
@@ -1232,6 +1368,7 @@ async function renderStillBlob(options) {
   await new Promise(resolve => requestAnimationFrame(resolve));
   try {
     if (!live()) throw new Error('Export cancelled.');
+    if (graphicsGone()) throw new Error(GRAPHICS_GONE);
     // High-resolution stills use SMAA at output size; avoid multiplying their HDR memory by MSAA.
     configureRenderQuality(options.quality, true);
     for (const [p] of savedPasses) p.enabled = false;
@@ -1254,6 +1391,8 @@ async function renderStillBlob(options) {
     for (const m of measures) m.line.material.resolution.set(width, height);
     invalidateShadows();
     renderFrame(true);
+    // A large still is itself a way to lose the context: what was just drawn is then gone.
+    if (graphicsGone()) throw new Error(GRAPHICS_GONE);
     // Snapshot synchronously before WebGL's non-preserved default framebuffer is cleared.
     const snapshot = document.createElement('canvas');
     snapshot.width = width; snapshot.height = height;
@@ -1271,7 +1410,7 @@ async function renderStillBlob(options) {
       camera.position.copy(oldPos); camera.quaternion.copy(oldQuat);
       camera.aspect = oldAspect; camera.fov = oldFov; camera.updateProjectionMatrix();
       if (controls) controls.update();
-      configureRenderQuality(prop.env.quality);
+      configureRenderQuality(quality());
       resize();
       requestRender(2);
     }
@@ -2169,7 +2308,7 @@ async function renderPositions(ids) {
       if (token !== mountId) return;
       setHint('Rendering position ' + pos.number + ' (' + (i + 1) + ' of ' + list.length + ')…');
       const { width, height } = renderSize(prop, pos, 2400);
-      const blob = await renderStillBlob({ width, height, quality: prop.env.quality || 'high', annotations: false, view: pos.view });
+      const blob = await renderStillBlob({ width, height, quality: quality(), annotations: false, view: pos.view });
       if (token !== mountId) return;
       const now = new Date();
       const file = new File([blob], renderingName(pos, now) + '.png', { type: 'image/png' });
@@ -2180,7 +2319,10 @@ async function renderPositions(ids) {
     touch();
     toast('Rendered ' + made.length + ' position' + (made.length === 1 ? '' : 's') + '. The renderings are in PHOTOS and on each position.', 'ok');
   } catch (e) {
-    toast('Rendering stopped: ' + e.message, 'error');
+    // What was rendered before the stop is kept; say which positions still have no rendering.
+    if (made.length) touch();
+    const left = list.slice(made.length).map(p => p.number);
+    toast('Rendering stopped: ' + e.message + (made.length ? ' Rendered: ' + made.length + '.' : '') + ' Not rendered: position' + (left.length === 1 ? ' ' : 's ') + left.join(', ') + '.', 'error', 12000);
   } finally {
     renderingPositions = false;
     if (token === mountId) { setHint(''); renderInspector(); }
@@ -2323,15 +2465,37 @@ function scanPlacementMatrix() {
   }
   return null;
 }
+// What the scan sessions are lined up against, and the first guess at their placement. The
+// result is saved and places the photo cameras, so it is computed from every scan of the
+// property, hidden ones too, exactly as when opening MODEL loaded them all: the scans that are
+// not loaded yet are loaded first (and stay hidden).
+async function lineUpModel() {
+  const token = mountId;
+  if (prop.scans.some(s => !scanObjs[s.id] && (!scanState[s.id] || scanState[s.id] === 'hidden' || scanState[s.id] === 'loading'))) {
+    setHint('Loading the scans to line up against…');
+    await loadScans(true);
+    if (token !== mountId) return null;
+    setHint('');
+  }
+  return { ...sampleModelPoints(), init: scanPlacementMatrix() };
+}
+// For the browser checks: what a line-up would be computed against right now.
+export async function lineUpSource() {
+  if (!scene || !prop) return null;
+  const model = await lineUpModel();
+  return model && { from: model.from, points: model.points.length, placed: !!model.init };
+}
 async function lineUpSessions(setId) {
   const set = (prop.cameraSets || []).find(s => s.id === setId);
   if (!set) return;
   const folder = await ensureFolderFor(set);
   if (!folder) return;
-  const model = sampleModelPoints();
+  const token = mountId;
+  const model = await lineUpModel();
+  if (token !== mountId || !model) return;
   if (model.points.length < 500) { toast('The model has too little surface to line the scan up against. Load the scan or draw the plan first.', 'warn'); return; }
-  const report = [], token = mountId;
-  const inits = [scanPlacementMatrix()].filter(Boolean);
+  const report = [];
+  const inits = [model.init].filter(Boolean);
   // Larger sessions first: once one is lined up, its placement is a starting guess for the rest.
   const segs = segmentsOf(set).sort((a, b) => set.keyframes.filter(r => r[KF.seg] === b).length - set.keyframes.filter(r => r[KF.seg] === a).length);
   for (const seg of segs) {
@@ -2822,6 +2986,8 @@ const hooks = {
   toast(msg, kind) { toast(msg, kind); },
   get renderer() { return renderer; },
   get scene() { return scene; },
+  // The longest side a texture inside an imported model may have on this device.
+  get textureLimit() { return memoryLimits().importedTextureSize; },
   requestRender() { requestRender(3); },
 };
 const errMsg = e => String(e && e.message || e);
@@ -2837,7 +3003,9 @@ async function addScanToScene(scan) {
   const token = mountId;
   setScanState(scan.id, 'loading');
   let obj = null;
-  try { obj = await loadScanObject(scan, hooks); }
+  // Still wanted? Asked once the bytes are here, before the costly parse: a visit that has ended
+  // (another property, a remount after a save) stops there.
+  try { obj = await loadScanObject(scan, hooks, () => token === mountId && !!scene); }
   catch (e) { if (token === mountId) setScanState(scan.id, 'failed'); throw e; }
   if (token !== mountId || !scene) { disposeScanObject(obj); return null; }
   if (!prop.scans.some(s => s.id === scan.id)) { disposeScanObject(obj); delete scanState[scan.id]; return null; }
@@ -2860,14 +3028,37 @@ async function addScanToScene(scan) {
   requestRender(scan.kind === 'splat' ? 8 : 3);
   return obj;
 }
-async function loadAllScans() {
+// A scan is loaded the first time it is shown, never just because the page opened: a hidden
+// scan (the other side of a before/after pair, say) costs no download, parse or memory until
+// someone switches it on. One at a time, in list order. Call this after anything that can show
+// a scan; scans already loaded, loading, missing or failed are left alone.
+//
+// `every` loads hidden scans too (they stay hidden): for work whose saved result is computed
+// from every scan of the property, so that hiding one cannot change the answer.
+//
+// The queue belongs to one visit (mount resets it): a load left behind by the visit before, a
+// download or parse that may never finish, must not hold up this one.
+let scanQueue = Promise.resolve();
+function loadShownScans() { return loadScans(false); }
+function loadScans(every) {
   const token = mountId;
-  for (const scan of prop.scans.slice()) {
-    try { await addScanToScene(scan); }
-    catch (e) { console.error(e); if (token === mountId) toast('Could not load scan ' + scan.name + ': ' + errMsg(e), 'error'); }
-    if (token !== mountId || !scene) return;
-  }
-  renderToolCol();
+  for (const scan of prop.scans) if (scan.visible === false && !scanObjs[scan.id] && !scanState[scan.id]) scanState[scan.id] = 'hidden';
+  const wanted = prop.scans.filter(scan => (every || scan.visible !== false) && !scanObjs[scan.id] && (!scanState[scan.id] || scanState[scan.id] === 'hidden'));
+  // Marked now, so a second call before the queue reaches them does not queue them twice.
+  for (const scan of wanted) setScanState(scan.id, 'loading');
+  if (wanted.length) renderToolCol();
+  scanQueue = scanQueue.then(async () => {
+    for (const scan of wanted) {
+      if (token !== mountId || !scene) return;
+      // Deleted, or hidden again, while it waited its turn.
+      if (!prop.scans.some(s => s.id === scan.id)) { delete scanState[scan.id]; continue; }
+      if (!every && scan.visible === false) { setScanState(scan.id, 'hidden'); continue; }
+      try { await addScanToScene(scan); }
+      catch (e) { console.error(e); if (token === mountId) toast('Could not load scan ' + scan.name + ': ' + errMsg(e), 'error'); }
+    }
+    if (token === mountId && scene && wanted.length) renderToolCol();
+  }).catch(e => console.error(e));
+  return scanQueue;
 }
 // Scan to plan on a mesh scan that is already here. Without a plan the proposal becomes the
 // plan. A scan the plan already came from is proposed again over the floor it matches (after
@@ -3158,9 +3349,10 @@ function renderEnvPanel(p = hud.env) {
         <select data-env="sky"><option value="dynamic" ${env.sky === 'dynamic' ? 'selected' : ''}>Dynamic sun</option><option value="studio" ${env.sky === 'studio' ? 'selected' : ''}>Studio</option><option value="pano" ${env.sky === 'pano' ? 'selected' : ''}>Panorama</option></select>
         ${env.sky === 'pano' ? `<select data-env="panoPhotoId"><option value="">(choose pano)</option>${panos.map(ph => `<option value="${escapeHtml(ph.id)}" ${ph.id === env.panoPhotoId ? 'selected' : ''}>${escapeHtml(ph.name)}</option>`).join('')}</select>` : ''}
       </div>
-      <div class="v-row v-row-sel"><span>QUALITY</span>
-        <select data-env="quality"><option value="ultra" ${env.quality === 'ultra' ? 'selected' : ''}>Ultra (detail + 32-sample AO)</option><option value="high" ${env.quality === 'high' ? 'selected' : ''}>High (AO + bloom)</option><option value="medium" ${env.quality === 'medium' ? 'selected' : ''}>Medium</option><option value="low" ${env.quality === 'low' ? 'selected' : ''}>Low</option></select>
+      <div class="v-row v-row-sel"><span>${ownQuality() ? 'QUALITY ON THIS DEVICE' : 'QUALITY'}</span>
+        <select data-env="quality"><option value="ultra" ${quality() === 'ultra' ? 'selected' : ''}>Ultra (detail + 32-sample AO)</option><option value="high" ${quality() === 'high' ? 'selected' : ''}>High (AO + bloom)</option><option value="medium" ${quality() === 'medium' ? 'selected' : ''}>Medium</option><option value="low" ${quality() === 'low' ? 'selected' : ''}>Low</option></select>
       </div>
+      ${ownQuality() ? '<p class="v-env-help">Kept on this device only. Computers keep the quality saved with the property.</p>' : ''}
       <div class="v-checks">
         <label><input type="checkbox" data-env="showCeilings" ${env.showCeilings !== false ? 'checked' : ''}> CEILINGS</label>
         <label><input type="checkbox" data-env="showGround" ${env.showGround !== false ? 'checked' : ''}> GROUND</label>
@@ -3206,12 +3398,15 @@ function renderEnvPanel(p = hud.env) {
   });
   p.querySelectorAll('select').forEach(s => {
     s.onchange = () => {
-      env[s.dataset.env] = s.value || null;
-      if (s.dataset.env === 'quality') { setTextureQuality(env.quality); rebuildModel(); applyQuality(); }
+      // A touch device's quality is its own: kept in this browser, never saved with the property.
+      const onPhone = s.dataset.env === 'quality' && ownQuality();
+      if (onPhone) setDeviceQuality(s.value);
+      else env[s.dataset.env] = s.value || null;
+      if (s.dataset.env === 'quality') { applyTextureLimits(); rebuildModel(); applyQuality(); }
       if (s.dataset.env === 'sky') rebuildGround();
       if (s.dataset.env === 'panoPhotoId') panoMissing = null;   // a fresh choice gets a fresh try
       applyEnvironment();
-      touch();
+      if (!onPhone) touch();
       renderEnvPanel(p);
     };
   });
@@ -3224,6 +3419,11 @@ function renderEnvPanel(p = hud.env) {
       touch();
     };
   });
+}
+
+function setDeviceQuality(name) {
+  if (!QUALITY_NAMES.includes(name)) return;
+  unsavedDeviceQuality = chooseDeviceQuality(browserStorage(), name) ? null : name;
 }
 
 export function mountEnvironmentSettings(host) {
@@ -3770,7 +3970,7 @@ function renderInspectorBody() {
     if (!s) { selection = null; tagPicks = []; return renderInspectorBody(); }
     const obj = scanObjs[s.id] || null;
     const state = obj ? 'ready' : (scanState[s.id] || 'loading');
-    const st = obj ? scanStats(obj) : { label: { missing: 'missing from storage - re-import it', failed: 'could not be loaded', loading: 'loading' }[state] || 'loading' };
+    const st = obj ? scanStats(obj) : { label: { missing: 'missing from storage - re-import it', failed: 'could not be loaded', loading: 'loading', hidden: 'not loaded while hidden' }[state] || 'loading' };
     const rot = s.rot || [0, s.rotY || 0, 0];
     const isPts = s.kind === 'points', isSplat = s.kind === 'splat';
     // Nothing to frame, drop or centre until the object exists; deleting mid-parse would race the loader.
@@ -3826,7 +4026,7 @@ function renderInspectorBody() {
     if (pc) pc.onchange = e => { s.pointColor = e.target.value; upd(); };
     const flip = inspEl.querySelector('[data-flip]');
     if (flip) flip.onclick = () => { s.flip = !s.flip; upd(); };
-    inspEl.querySelector('[data-vis]').onchange = e => { s.visible = e.target.checked; upd(); renderToolCol(); };
+    inspEl.querySelector('[data-vis]').onchange = e => { s.visible = e.target.checked; upd(); loadShownScans(); renderToolCol(); };
     inspEl.querySelector('[data-frame]').onclick = () => { if (obj) frameObject(obj); };
     inspEl.querySelector('[data-floor]').onclick = () => { if (obj) { dropScanToFloor(s, obj); upd(); renderInspector(); } };
     inspEl.querySelector('[data-center]').onclick = () => { if (obj) { centerScanOnModel(s, obj, modelBounds(prop)); upd(); renderInspector(); } };
@@ -4012,7 +4212,7 @@ function renderToolCol() {
   const tb = (act, ic, label, key, active) =>
     `<button class="tool-btn ${active ? 'active' : ''}" data-act="${act}" title="${label}${key ? ' (' + key + ')' : ''}">` +
     `${icon(ic)}<span class="tb-text">${label}</span>${key ? `<kbd class="key">${key}</kbd>` : ''}</button>`;
-  const scanBadge = s => scanObjs[s.id] ? (s.kind || '').toUpperCase().slice(0, 5) : ({ missing: 'GONE', failed: 'ERR' }[scanState[s.id]] || '...');
+  const scanBadge = s => scanObjs[s.id] ? (s.kind || '').toUpperCase().slice(0, 5) : ({ missing: 'GONE', failed: 'ERR', hidden: 'OFF' }[scanState[s.id]] || '...');
   const scanRows = prop.scans.map(s => `<button class="tool-btn v-scan-row ${scanSelected(s.id) ? 'active' : ''}" data-scan="${escapeHtml(s.id)}" title="${escapeHtml(s.name)}${scanObjs[s.id] ? '' : ' (' + escapeHtml(scanState[s.id] || 'loading') + ')'}">${icon(s.kind === 'splat' ? 'splat' : s.kind === 'mesh' ? 'model' : 'scan')}<span class="tb-text">${escapeHtml(s.name.length > 14 ? s.name.slice(0, 12) + '..' : s.name)}</span><kbd class="key">${escapeHtml(scanBadge(s))}</kbd></button>`).join('');
   // One toggle per storey, lit while the level is shown; the key badge is its floor elevation.
   const hidden = hiddenLevels();
@@ -4078,6 +4278,7 @@ function renderToolCol() {
     for(const id of [c.beforeId,c.afterId]) {
       const scan=prop.scans.find(s=>s.id===id);if(scan){scan.visible=id===chosen;applyScanTransform(scan,scanObjs[id]);}
     }
+    loadShownScans();   // the side now shown, if this is the first time
     if(chosen==='design')delete prop.modelSourceId;else prop.modelSourceId=chosen;
     // Select the record immediately, including while its scene object is loading.
     // setScanState refreshes this inspector when the chosen object is ready.
@@ -4148,7 +4349,25 @@ function onPointerLeave() { if (hoverTarget) { hoverTarget = null; updateOutline
 function onContextMenu(e) { e.preventDefault(); }
 
 // ---------- mount / unmount ----------
+// A MODEL page that cannot open says so in its own place, with a way to try again, instead of
+// leaving the layout empty. The other pages keep working.
 export function mount(root) {
+  try { openModel(root); }
+  catch (e) {
+    console.error('MODEL could not open', e);
+    try { unmount(); } catch (err) { console.error(err); }
+    // Whatever the failed open left half-built must not be torn down twice or drawn.
+    if (renderer) { renderer.setAnimationLoop(null); renderer.domElement.remove(); }
+    scene = null; camera = null; composer = null; passes = {}; controls = null; modelGroup = null; groundGroup = null; batches = null;
+    el = null; wrapEl = null; inspEl = null; hud = {};
+    const why = e && e.graphics
+      ? 'This browser could not start 3D graphics, so MODEL cannot be shown. Close other tabs or apps that use 3D, then reload. The other pages still work.'
+      : 'MODEL could not open (' + errMsg(e) + '). Reload to try again. The other pages still work.';
+    root.innerHTML = `<div class="view-scroll v-open-failed" role="alert"><div class="kicker">MODEL</div>${noticeHtml(why, true).replace('<p style="margin:0;', '<p class="muted" style="margin:0 0 14px;')}</div>`;
+    root.querySelector('[data-reload]').onclick = () => location.reload();
+  }
+}
+function openModel(root) {
   const resumed = matchResume && performance.now() - matchResume.at < 1500 ? matchResume : null;
   matchResume = null;
   prop = activeProperty();
@@ -4160,7 +4379,8 @@ export function mount(root) {
   }
   ensureDefaults(prop);
   section = sectionsByProp[prop.id] || (sectionsByProp[prop.id] = { on: false, planes: [], active: null });
-  setTextureQuality(prop.env.quality);
+  applyTextureLimits();
+  setTextureUse(texturesOnScreen);
   root.innerHTML = `
     <div class="editor-layout v-layout">
       <div class="tool-col"></div>
@@ -4188,6 +4408,9 @@ export function mount(root) {
   movingNoteId = null; rightPress = null; ctxMenu = null; noteEditor = null;
   panoNagged = false; panoPending = null; panoMissing = null;
   for (const k of Object.keys(scanState)) delete scanState[k];
+  for (const k of Object.keys(notices)) delete notices[k];
+  appliedQuality = null; renderFailed = false;
+  scanQueue = Promise.resolve();   // this visit's own queue (see loadScans)
   mountId++;
 
   ensureRenderer();
@@ -4225,13 +4448,15 @@ export function mount(root) {
   resizeObs = new ResizeObserver(resize);
   resizeObs.observe(wrapEl);
   resize();
+  // The context went while MODEL was closed and is not back yet.
+  if (contextLost) { contextNotice(false); armContextTimer(); }
   programsWarm = false;
   lastT = 0;
   renderer.setAnimationLoop(tick);
   requestRender(4);
 
   const focus=pendingScanFocus || prop.modelSourceId,token=mountId,focusVersion=selectionVersion;pendingScanFocus=null;
-  loadAllScans().then(()=>{if(token===mountId && selectionVersion===focusVersion && !match && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
+  loadShownScans().then(()=>{if(token===mountId && selectionVersion===focusVersion && !match && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
   // Deep link from the PHOTOS view: #/model?pin=<photoId> enters PIN PHOTO for that photo.
   const m = /[?&]pin=([^&]+)/.exec(location.hash);
   if (m) {
@@ -4302,7 +4527,21 @@ export function viewerIdleState() {
     mounted: !!(scene && renderer), programsWarm, texturesIn: !texturesPending && !(scene && pendingTextureJobs() > 0),
     modelsLoaded: !Object.values(scanState).some(s => s === 'loading') && !(scene && splatBusy()),
     firstFrame: frameCounts.fullFrames > 0, nothingToDraw: framesLeft <= 0, shadowsFresh: !(renderer && renderer.shadowMap.needsUpdate),
+    graphics: !contextLost,
   };
+}
+// For the browser checks: the quality this device draws at and what was set from it, and where
+// each scan record stands ('hidden' is a scan that has not been loaded because it is not shown).
+export function qualityState() {
+  if (!scene || !composer || !sun || !prop) return null;
+  return {
+    quality: quality(), touch: ownQuality(), phoneLayout: fieldLayout(), shared: prop.env.quality, shadowMap: sun.shadow.mapSize.x, smoothingSamples: composer.renderTarget1.samples,
+    shading: aoWanted, glow: passes.bloom.enabled, pixelRatio: renderer.getPixelRatio(), limits: memoryLimits(),
+  };
+}
+export function scanStates() {
+  if (!scene || !prop) return null;
+  return Object.fromEntries(prop.scans.map(s => [s.id, { state: scanObjs[s.id] ? 'ready' : (scanState[s.id] || 'loading'), label: scanObjs[s.id] ? scanStats(scanObjs[s.id]).label : '' }]));
 }
 // Whether MODEL currently draws this part of a loaded model (tag key from tags.js); null when the
 // key names no loaded part. Grouped parts answer for their proxy, others for their own mesh.
@@ -4334,6 +4573,9 @@ export function unmount() {
   mountId++;
   revokePhotoUrls();   // object URLs handed to the lightbox, pin picker and pano loader
   // mount() bails out before building anything when there is no property; there is nothing to tear down.
+  for (const k of Object.keys(notices)) hideNotice(k);
+  appliedQuality = null;
+  setTextureUse(null);
   if (!scene) { el = wrapEl = inspEl = null; hud = {}; return; }
   window.removeEventListener('keydown', onKeyDown);
   window.removeEventListener('keyup', onKeyUp);
@@ -4423,6 +4665,8 @@ export function fieldState() {
       return { min: sp.min, max: sp.max, step: sp.step, value: r.d, label: r.label, kinds: SECTION_KINDS.map(k => ({ id: k, label: SECTION_LABELS[k][0] + SECTION_LABELS[k].slice(1).toLowerCase(), on: s.kind === k })) };
     })(),
     levels: prop.levels.map(l => ({ id: l.id, label: l.name, on: !hidden.has(l.id) })),
+    // The quality this device draws at (a touch device's own choice; otherwise the property's).
+    quality: QUALITY_NAMES.map(id => ({ id, label: id[0].toUpperCase() + id.slice(1), on: quality() === id })),
     // One switch per tag that holds something; Untagged only when objects sit on no tag.
     tags: [...prop.tags.map(t => ({ id: t.id, label: t.name, color: t.color, on: t.visible !== false })),
       { id: UNTAGGED, label: UNTAGGED_LABEL, on: tagShown(prop, UNTAGGED) }].filter(t => (counts.get(t.id) || 0) > 0),
@@ -4442,6 +4686,11 @@ export function fieldAction(kind, id, value) {
   else if (kind === 'save-view') addView();
   else if (kind === 'tag') toggleTag(id || UNTAGGED);
   else if (kind === 'level') toggleLevel(id);
+  else if (kind === 'quality') {
+    if (!QUALITY_NAMES.includes(id) || id === quality()) return;
+    if (ownQuality()) setDeviceQuality(id); else { prop.env.quality = id; touch(); }
+    applyTextureLimits(); rebuildModel(); applyQuality(); applyEnvironment();
+  }
   else if (kind === 'section-height') { slideSection(Number(value)); updateSectionReadout(); }
   else if (kind === 'section-kind') setSectionKind(id);
   else if (kind === 'show') {
