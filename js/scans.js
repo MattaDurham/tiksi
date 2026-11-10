@@ -215,7 +215,12 @@ function parseInWorker(format, buffer, name, onProgress) {
   });
 }
 
-async function parsePoints(buffer, e, name, hooks) {
+// `handOver`: the caller is finished with `buffer` (a loaded scan's bytes, read for this parse
+// only), so the worker is given the bytes themselves and the page keeps no copy of the original
+// while the cloud is built. Without it (an import, which stores the same bytes afterwards) the
+// worker gets a copy. `again` re-reads the bytes for the rare case the worker turns out to be
+// unusable after it has already taken them.
+async function parsePoints(buffer, e, name, hooks, handOver = false, again = null) {
   const prog = f => hooks && hooks.progress && hooks.progress('Parsing ' + name, 0.3 + f * 0.6);
   if (e === 'pcd') {
     const header = new TextDecoder().decode(buffer.slice(0, Math.min(buffer.byteLength, 65536)));
@@ -228,12 +233,14 @@ async function parsePoints(buffer, e, name, hooks) {
   }
   const format = e === 'las' ? 'las' : (e === 'ply' ? 'ply' : 'xyz');
   try {
-    const copy = buffer.slice(0);   // the worker takes ownership of its copy
-    const r = await parseInWorker(format, copy, name, prog);
+    const forWorker = handOver ? buffer : buffer.slice(0);   // the worker takes ownership of what it is sent
+    const r = await parseInWorker(format, forWorker, name, prog);
     return { positions: r.positions, colors: r.colors, count: r.count, hasColor: r.hasColor };
   } catch (err) {
     if (!err.workerUnavailable) throw err;
     // No worker (file://, CSP): parse here instead; the console freezes for large files.
+    // Bytes already handed to a worker that then failed to start are read again.
+    if (!buffer.byteLength && again) buffer = await again();
     return parseAndRecentre(format, buffer, prog);
   }
 }
@@ -325,7 +332,9 @@ async function validateScan(buffer, format, kind, name, hooks) {
 // Each builder fills `inner` and returns the stats the inspector shows.
 async function buildPoints(buffer, e, scan, inner, wrapper, hooks) {
   hooks && hooks.progress && hooks.progress('Parsing ' + scan.name, 0.3);
-  let data = await parsePoints(buffer, e, scan.name, hooks);
+  // The last use of these bytes: hand them to the parser, keep nothing.
+  const again = async () => { const rec = await getFile(scan.id); if (!rec || !rec.buffer) throw new Error('The scan bytes are no longer in storage'); return rec.buffer; };
+  let data = await parsePoints(buffer, e, scan.name, hooks, true, again);
   // An empty cloud would import "successfully" and sit invisibly in the list forever.
   if (!data.count) throw new Error('No points found in ' + scan.name);
   const total = data.count;
