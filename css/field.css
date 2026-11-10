@@ -69,7 +69,7 @@ html.phone.fd-model .fd-walk:not([hidden]) {
 html.phone .v-layout { display: block; height: 100%; overflow: hidden; }
 html.phone .v-layout > .tool-col, html.phone .v-layout > .inspector, html.phone .v-layout > .side-handle { display: none; }
 html.phone .v-layout .v-wrap { height: 100%; }
-html.phone .v-modes, html.phone .v-compass, html.phone .v-env, html.phone .v-hint, html.phone .v-views { display: none !important; }
+html.phone .v-modes, html.phone .v-sections, html.phone .v-compass, html.phone .v-env, html.phone .v-hint, html.phone .v-views { display: none !important; }
 html.phone .v-toast { top: calc(14px + var(--fd-top)); max-width: calc(100% - 132px); text-align: center; }
 html.phone .v-progress { top: calc(66px + var(--fd-top)); width: min(280px, calc(100% - 32px)); }
 html.phone .v-progress.show ~ .v-toast { top: calc(118px + var(--fd-top)); }

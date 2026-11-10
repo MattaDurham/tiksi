@@ -201,8 +201,10 @@ function render() {
     const saved = st.views.map(v => `<button type="button" class="fd-chip ${v.on ? 'on' : ''}" data-act="view" data-id="${escapeHtml(v.id)}">${escapeHtml(v.label)}</button>`).join('')
       + '<button type="button" class="fd-chip fd-add" data-act="save-view">+ Save this view</button>';
     const spots = st.positions.map(p => `<button type="button" class="fd-chip" data-act="position" data-id="${escapeHtml(p.id)}">${escapeHtml(p.label)}</button>`).join('');
-    const range = st.section ? `<label class="fd-range"><span>Cut height</span><output>${escapeHtml(st.section.label)}</output>
-        <input type="range" data-section-height min="${st.section.min.toFixed(2)}" max="${st.section.max.toFixed(2)}" step="0.05" value="${st.section.value}" aria-label="Section cut height"></label>` : '';
+    // The cut slides up and down, side to side or front to back, or stands facing you (custom).
+    const range = st.section ? `<div class="fd-chips fd-cut-kinds" role="group" aria-label="Which way the cut slides">${st.section.kinds.map(k => `<button type="button" class="fd-chip ${k.on ? 'on' : ''}" aria-pressed="${k.on}" data-act="section-kind" data-id="${k.id}">${escapeHtml(k.label)}</button>`).join('')}</div>
+      <label class="fd-range"><span>Cut position</span><output>${escapeHtml(st.section.label)}</output>
+        <input type="range" data-section-height min="${st.section.min}" max="${st.section.max}" step="${st.section.step}" value="${st.section.value}" aria-label="Section cut position"></label>` : '';
     // Only switches that do something here: no scan, no furniture, no photos pinned, no notes.
     const show = st.show.filter(s => !s.disabled && s.count !== 0);
     model = section('View', `<div class="fd-segs" role="group" aria-label="How to move">${modes}</div><div class="fd-chips">${cams}</div>`)

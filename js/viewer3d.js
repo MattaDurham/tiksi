@@ -26,7 +26,7 @@ import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 import {
-  ws, activeProperty, defaultEnv, uid, touch, fmtLen, parseLen, fmtArea, polyArea, countsAsFloor,
+  ws, activeProperty, defaultEnv, uid, touch, units, fmtLen, parseLen, fmtArea, polyArea, countsAsFloor,
   escapeHtml, deleteFile, getFile, itemById, materialById, isoToday, projectLabel, propertyProjects,
   ensureLevels, wallsOn, roomsOn, wallHeightOf, levelOfWall, levelOfRoom, levelHeight, topOfLevels,
 } from './store.js';
@@ -38,7 +38,8 @@ import { materialSelectHtml } from './materials.js';
 import { pendingTextureJobs, setTextureQuality } from './textures.js';
 import { qualityProfile, stillDimensions } from './render-quality.js';
 import { icon } from './icons.js';
-import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapRects, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
+import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
+import { SECTION_KINDS, SECTION_LABELS, MAX_SECTIONS, TURN_SNAP_DEG, moveSnapStep, snapTo, quatRotate, planeNormal, planeOf, flipped, rangeAlong, movedTo, makeSection, normalizeSections, levelHeightOf } from './section-planes.js';
 import { planWallMove, applyWallMove, normalOffset } from './wallmove.js';
 import { addPhotoFromFile, photoUrl, photoById, revokePhotoUrls, photoBytes, ensureCameraFacts } from './photos-store.js';
 import { normalizeView, defaultHfov, hfovOf, viewFrame, viewForPin, FOV_MIN, FOV_MAX, FOUND_SOURCES } from './photo-match.js';
@@ -76,8 +77,13 @@ let hoverTarget = null;
 let mode = 'orbit';            // orbit | walk | top
 let tool = 'select';           // select | move | measure | pin | note
 let xray = false;
-let section = { on: false, height: 1.2 };
-const clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 1.2);
+// Section cuts (section-planes.js), per property and kept across remounts:
+// { on, planes: [{ id, kind, q, pos }], active: id of the plane whose handles show }.
+const sectionsByProp = {};
+let section = { on: false, planes: [], active: null };
+let sectionSnap = true, sectionSheets = true;   // snapping, and the floating sheets with their handles
+let clipPlanes = [];           // THREE.Plane per cut, in step with section.planes while the cut is on
+let sheetRoot = null, secMove = null, secTurn = null, secDragAt = -Infinity;
 let framesLeft = 0, lastT = 0, tween = null, resizeObs = null;
 // Imported models drawn grouped by look (model-batch.js); built lazily as models arrive.
 let batches = null;
@@ -219,6 +225,7 @@ function setupScene() {
   cameraRoot = new THREE.Group(); cameraRoot.name = 'photo cameras'; scene.add(cameraRoot);
   positionRoot = new THREE.Group(); positionRoot.name = 'photo positions'; scene.add(positionRoot);
   measureRoot = new THREE.Group(); measureRoot.name = 'measures'; scene.add(measureRoot);
+  sheetRoot = new THREE.Group(); sheetRoot.name = 'section planes'; scene.add(sheetRoot);
   batches = new ModelBatches();
   scene.add(batches.root);
   invalidateShadows();
@@ -251,6 +258,25 @@ function setupScene() {
   });
   gizmo.addEventListener('change', () => { if (gizmo.dragging) invalidateShadows(); requestRender(2); });
   scene.add(gizmo.getHelper());
+
+  // A section plane has two sets of handles at once: an arrow that slides it along its own
+  // normal, reaching out past two rings that turn it. While one drags, the other is switched
+  // off, so a press where the arrow crosses a ring slides the plane and does not turn it too.
+  secMove = new TransformControls(camera, renderer.domElement);
+  secMove.setMode('translate'); secMove.setSpace('local'); secMove.showX = false; secMove.showY = false; secMove.setSize(1.5);
+  secTurn = new TransformControls(camera, renderer.domElement);
+  secTurn.setMode('rotate'); secTurn.setSpace('local'); secTurn.showZ = false; secTurn.setSize(0.8);
+  for (const [g, other] of [[secMove, secTurn], [secTurn, secMove]]) {
+    g.addEventListener('dragging-changed', e => {
+      secDragAt = performance.now();
+      other.enabled = !e.value;
+      controls.enabled = !e.value && mode !== 'walk';
+      if (!e.value) renderSectionBar();
+    });
+    g.addEventListener('objectChange', sectionDragged);
+    g.addEventListener('change', () => requestRender(2));
+    scene.add(g.getHelper());
+  }
 }
 
 const SKY_SCALE = 0.3, ENV_SKY_SCALE = 0.35;
@@ -287,7 +313,7 @@ function setupComposer() {
   const gtaoRender = passes.gtao.render.bind(passes.gtao);
   passes.gtao.render = (...args) => {
     const hidden = hideSplats();
-    for (const o of [pinRoot, noteRoot]) if (o && o.visible) { o.visible = false; hidden.push(o); }
+    for (const o of [pinRoot, noteRoot, ...sectionOverlays()]) if (o && o.visible) { o.visible = false; hidden.push(o); }
     gtaoRender(...args);
     hidden.forEach(o => { o.visible = true; });
   };
@@ -305,6 +331,8 @@ function setupComposer() {
     const orig = p.render.bind(p);
     p.render = (...args) => {
       const hidden = hideSplats();
+      // The floating section sheets are not surfaces: they must not hide an outline behind them.
+      for (const o of sectionOverlays()) if (o && o.visible) { o.visible = false; hidden.push(o); }
       const restore = batches ? batches.beginOutline(p) : () => {};
       try { orig(...args); } finally { restore(); hidden.forEach(o => { o.visible = true; }); }
     };
@@ -338,6 +366,8 @@ function enableMaskClipping(m) {
   m.userData.clipReady = true;
   m.needsUpdate = true;
 }
+// The sheets and handles of the section planes: drawn over the model, never part of it.
+function sectionOverlays() { return [sheetRoot, secMove && secMove.getHelper(), secTurn && secTurn.getHelper()]; }
 // Every pass material that re-renders scene geometry and must respect the section cut.
 function passClipMaterials() {
   const list = [];
@@ -618,36 +648,170 @@ function updateSun() {
   sun.shadow.camera.updateProjectionMatrix();
 }
 
-// ---------- section cut ----------
-let capMesh = null;
-function rebuildCaps() {
-  if (capMesh) { scene.remove(capMesh); capMesh.geometry.dispose(); capMesh = null; }
+// ---------- section cuts ----------
+// Each cut is a plane (section-planes.js) that clips the model, fills the walls it passes
+// through, and floats in the view as a transparent sheet with handles to move and turn it.
+const activeSection = () => section.planes.find(s => s.id === section.active) || null;
+const turnSnap = () => TURN_SNAP_DEG * Math.PI / 180;
+// The box the cuts range over: the traced model and every imported model that is showing.
+let sectionBoxCache = null;
+function sectionBox() {
+  if (sectionBoxCache) return sectionBoxCache;
+  const b = modelBounds(prop);
+  const box = new THREE.Box3(new THREE.Vector3(b.minX, lowestElevation(), b.minY), new THREE.Vector3(b.maxX, modelTop(), b.maxY));
+  for (const scan of prop.scans) {
+    if (scan.visible === false || !scanObjs[scan.id]) continue;
+    const sb = new THREE.Box3().setFromObject(scanObjs[scan.id]);
+    if (Number.isFinite(sb.min.x) && Number.isFinite(sb.max.x)) box.union(sb);
+  }
+  return (sectionBoxCache = box);
+}
+// How far a plane can slide: from just outside one face of the model to just outside the other.
+function sectionRange(s) {
+  const box = sectionBox();
+  const [lo, hi] = rangeAlong(planeNormal(s.q), { min: box.min.toArray(), max: box.max.toArray() });
+  return { lo, hi, min: lo - 0.3, max: hi + 0.3 };
+}
+// What the bar shows for a plane: a flat cut reads as its elevation, any other as its distance
+// in from the face of the model it starts at; plus the way it faces and how far it leans.
+function sectionReadout(s) {
+  const { n, d } = planeOf(s);
+  const flat = Math.abs(n[1]) > 0.9999;
+  const deg = v => { const r = Math.round(v * 10) / 10; return (Object.is(r, -0) ? 0 : r) + '°'; };
+  return {
+    d, flat,
+    label: fmtLen(flat ? s.pos[1] : d - sectionRange(s).lo),
+    angle: flat ? (n[1] > 0 ? 'FLAT' : 'FLAT, FROM BELOW') : 'TURN ' + deg((Math.atan2(n[0], n[2]) * 180 / Math.PI + 360) % 360) + ' · TILT ' + deg(Math.asin(Math.max(-1, Math.min(1, n[1]))) * 180 / Math.PI),
+  };
+}
+
+let capMeshes = [];            // the dark fill of each cut, in step with section.planes
+function disposeCap(i) {
+  const m = capMeshes[i];
+  if (!m) return;
+  scene.remove(m); m.geometry.dispose(); m.material.dispose();
+  capMeshes[i] = null;
+}
+function rebuildCap(i) {
+  disposeCap(i);
   if (!section.on || !modelGroup || !modelGroup.visible) return;
-  const rects = wallCapRects(prop, section.height, { hiddenLevels: hiddenLevels() });
-  if (!rects.length) return;
+  const { n, d } = planeOf(section.planes[i]);
+  const polys = wallCapPolygons(prop, n, d, { hiddenLevels: hiddenLevels() });
+  if (!polys.length) return;
   const P = [], I = [];
-  rects.forEach((r, i) => {
-    for (const [x, z] of r) P.push(x, section.height - 0.0008, z);
-    I.push(i * 4, i * 4 + 2, i * 4 + 1, i * 4, i * 4 + 3, i * 4 + 2);
-  });
+  for (const poly of polys) {
+    const base = P.length / 3;
+    // A hair inside the part that is kept, so the fill never fights the cut edge for depth.
+    for (const p of poly) P.push(p[0] - n[0] * 0.0008, p[1] - n[1] * 0.0008, p[2] - n[2] * 0.0008);
+    for (let k = 1; k + 1 < poly.length; k++) I.push(base, base + k, base + k + 1);
+  }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
   geo.setIndex(I);
   geo.computeVertexNormals();
-  capMesh = new THREE.Mesh(geo, capMaterial());
-  capMesh.renderOrder = 2;
-  scene.add(capMesh);
+  // Architectural section fill: dark, matte, lit from either side. Its own plane never clips
+  // it, but every other cut does, so two cuts that cross leave no fill hanging in the gap.
+  const mat = new THREE.MeshStandardMaterial({ color: 0x262c33, roughness: 0.95, side: THREE.DoubleSide });
+  mat.userData.noClip = true;
+  mat.clippingPlanes = clipPlanes.filter((_, j) => j !== i);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.renderOrder = 2;
+  scene.add(mesh);
+  capMeshes[i] = mesh;
 }
-let capMat = null;
-function capMaterial() {
-  // Architectural section fill: dark, matte, never clipped, faces up whichever way the quad winds.
-  if (!capMat) { capMat = new THREE.MeshStandardMaterial({ color: 0x262c33, roughness: 0.95, side: THREE.DoubleSide }); capMat.userData.noClip = true; }
-  return capMat;
+
+// The floating sheet of each plane: a tinted rectangle with a border, sized to the model as
+// the plane sees it. The group sits at the plane's own point and turns with it, so the
+// handles attach to the group; the rectangle inside is shifted to cover the model.
+const SHEET_COLOR = 0xe8973a;
+let sheetGeo = null, sheetEdgeGeo = null;
+function sheetGeometries() {
+  if (!sheetGeo) {
+    sheetGeo = new THREE.PlaneGeometry(1, 1);
+    sheetEdgeGeo = new THREE.BufferGeometry().setFromPoints([[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]].map(([x, y]) => new THREE.Vector3(x, y, 0)));
+  }
+}
+function rebuildSheets() {
+  for (const g of [secMove, secTurn]) if (g) g.detach();
+  if (!sheetRoot) return;
+  for (const g of [...sheetRoot.children]) {
+    sheetRoot.remove(g);
+    g.traverse(o => { if (o.material) o.material.dispose(); });
+  }
+  if (!section.on) return;
+  sheetGeometries();
+  section.planes.forEach((s, i) => {
+    const g = new THREE.Group();
+    g.userData.sectionId = s.id;
+    const fill = new THREE.Mesh(sheetGeo, new THREE.MeshBasicMaterial({ color: SHEET_COLOR, transparent: true, opacity: 0.1, side: THREE.DoubleSide, depthWrite: false, fog: false }));
+    const edge = new THREE.LineLoop(sheetEdgeGeo, new THREE.LineBasicMaterial({ color: SHEET_COLOR, transparent: true, opacity: 0.9, fog: false }));
+    for (const o of [fill, edge]) { o.material.userData.noClip = true; o.renderOrder = 6; g.add(o); }
+    sheetRoot.add(g);
+    placeCutSheet(i);
+  });
+  syncSectionHandles();
+}
+function placeCutSheet(i) {
+  const s = section.planes[i], g = sheetRoot && sheetRoot.children[i];
+  if (!s || !g) return;
+  g.position.fromArray(s.pos); g.quaternion.fromArray(s.q);
+  const box = sectionBox(), ux = quatRotate(s.q, [1, 0, 0]), uy = quatRotate(s.q, [0, 1, 0]);
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (let k = 0; k < 8; k++) {
+    const c = [(k & 1 ? box.max.x : box.min.x) - s.pos[0], (k & 2 ? box.max.y : box.min.y) - s.pos[1], (k & 4 ? box.max.z : box.min.z) - s.pos[2]];
+    const x = c[0] * ux[0] + c[1] * ux[1] + c[2] * ux[2], y = c[0] * uy[0] + c[1] * uy[1] + c[2] * uy[2];
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+  }
+  const M = 0.4, on = s.id === section.active;
+  for (const o of g.children) {
+    o.position.set((x0 + x1) / 2, (y0 + y1) / 2, 0);
+    o.scale.set(x1 - x0 + 2 * M, y1 - y0 + 2 * M, 1);
+    o.material.opacity = o.isMesh ? (on ? 0.14 : 0.06) : (on ? 0.95 : 0.4);
+  }
+}
+// The handles sit on the active plane; none in a walk, on the phone layout, or with the sheets hidden.
+function syncSectionHandles() {
+  if (!secMove || !sheetRoot) return;
+  const i = section.on ? section.planes.findIndex(s => s.id === section.active) : -1;
+  const g = i >= 0 ? sheetRoot.children[i] : null;
+  const show = !!g && sectionSheets && mode !== 'walk' && !fieldLayout();
+  sheetRoot.visible = sectionSheets;
+  for (const h of [secMove, secTurn]) {
+    if (!show) h.detach();
+    else if (h.object !== g) h.attach(g);
+  }
+  secMove.setTranslationSnap(sectionSnap ? moveSnapStep(units()) : null);
+  secTurn.setRotationSnap(sectionSnap ? turnSnap() : null);
+  requestRender(2);
+}
+// A handle moved the active plane's sheet: the plane follows it.
+function sectionDragged() {
+  const s = activeSection(), g = secMove && (secMove.object || secTurn.object);
+  if (!s || !g) return;
+  s.pos = g.position.toArray(); s.q = g.quaternion.toArray();
+  sectionMoved(section.planes.indexOf(s));
+  updateSectionReadout();
+}
+// One plane moved or turned: the same planes keep clipping, only their numbers change.
+function sectionMoved(i) {
+  const s = section.planes[i], p = clipPlanes[i];
+  if (!s || !p) return applySection();
+  const { n, d } = planeOf(s);
+  p.normal.set(-n[0], -n[1], -n[2]); p.constant = d;
+  rebuildCap(i);
+  placeCutSheet(i);
+  invalidateShadows();
+  requestRender(2);
 }
 function applySection() {
-  clipPlane.constant = section.height;
-  const planes = section.on ? [clipPlane] : null;
-  rebuildCaps();
+  sectionBoxCache = null;
+  // three keeps the side where normal . p + constant >= 0: the opposite of the cut-away side.
+  clipPlanes = section.on ? section.planes.map(s => { const { n, d } = planeOf(s); return new THREE.Plane(new THREE.Vector3(-n[0], -n[1], -n[2]), d); }) : [];
+  const planes = clipPlanes.length ? clipPlanes : null;
+  for (let i = Math.max(capMeshes.length, section.planes.length) - 1; i >= 0; i--) disposeCap(i);
+  capMeshes = [];
+  if (planes) section.planes.forEach((_, i) => rebuildCap(i));
+  rebuildSheets();
   const visit = o => {
     const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
     for (const m of mats) {
@@ -659,18 +823,78 @@ function applySection() {
   if (lightRoot) lightRoot.traverse(visit);
   if (scanRoot) scanRoot.traverse(o => { if (!(o.userData && o.userData.splatDraw)) visit(o); });
   // GTAO's normal/depth prepass and the outline masks re-render the geometry with their own
-  // materials; without the plane they would shade and outline the part that was cut away.
+  // materials; without the planes they would shade and outline the part that was cut away.
   for (const m of passClipMaterials()) { m.clippingPlanes = planes; m.needsUpdate = true; }
   invalidateShadows();
   requestRender(2);
 }
-// Anything above the cut is not on screen and must not be picked, unless its material is
-// exempt from clipping (section caps, pin cards).
+// Anything on the cut-away side of a plane is not on screen and must not be picked, unless
+// its material is exempt from clipping (section caps, pin cards).
 function clippedAway(h) {
-  if (!section.on || h.point.y <= section.height + 1e-4) return false;
+  if (!clipPlanes.some(p => p.distanceToPoint(h.point) < -1e-4)) return false;
   const m = h.object.material;
   return !(m && m.userData && m.userData.noClip);
 }
+
+// Waist height on the lowest level: where a new flat cut starts.
+function defaultCutHeight() {
+  const lo = lowestElevation();
+  const H0 = levelHeight(prop, prop.levels.find(l => l.elevation === lo).id);
+  return lo + Math.min(1.2, H0 * 0.5);
+}
+function newSection(kind) {
+  const c = sectionBox().getCenter(new THREE.Vector3());
+  const s = makeSection(kind, c.toArray(), camera.getWorldDirection(_v).toArray(), sectionSnap);
+  if (kind === 'level') s.pos[1] = defaultCutHeight();
+  if (sectionSnap) s.pos = movedTo(s, snapTo(planeOf(s).d, moveSnapStep(units())));
+  return s;
+}
+function addSection(kind) {
+  if (!SECTION_KINDS.includes(kind)) return;
+  if (section.planes.length >= MAX_SECTIONS) { toast('A view holds up to ' + MAX_SECTIONS + ' section cuts. Remove one first.', 'warn'); return; }
+  const s = newSection(kind);
+  section.planes.push(s); section.active = s.id; section.on = true;
+  applySection(); renderHud();
+}
+function removeSection(id) {
+  const i = section.planes.findIndex(s => s.id === id);
+  if (i < 0) return;
+  section.planes.splice(i, 1);
+  if (section.active === id) section.active = section.planes.length ? section.planes[Math.min(i, section.planes.length - 1)].id : null;
+  if (!section.planes.length) section.on = false;
+  applySection(); renderHud();
+}
+function selectSection(id) {
+  if (!section.planes.some(s => s.id === id)) return;
+  section.active = id;
+  section.planes.forEach((_, i) => placeCutSheet(i));
+  syncSectionHandles(); renderSectionBar();
+}
+function flipSection() {
+  const s = activeSection();
+  if (!s) return;
+  s.q = flipped(s.q);
+  sectionMoved(section.planes.indexOf(s));
+  renderSectionBar();
+}
+// Slide the active plane to distance `d` along its own normal (a flat cut: to that elevation).
+function slideSection(d) {
+  const s = activeSection();
+  if (!s || !Number.isFinite(d)) return;
+  s.pos = movedTo(s, d);
+  sectionMoved(section.planes.indexOf(s));
+}
+// The phone layout keeps one plane: choosing a direction swaps the active plane for a fresh one.
+function setSectionKind(kind) {
+  if (!SECTION_KINDS.includes(kind)) return;
+  const i = section.planes.findIndex(s => s.id === section.active);
+  const s = newSection(kind);
+  if (i >= 0) section.planes[i] = s; else section.planes.push(s);
+  section.active = s.id; section.on = true;
+  applySection(); renderHud();
+}
+function setSectionSnap(on) { sectionSnap = !!on; syncSectionHandles(); renderSectionBar(); }
+function setSectionSheets(on) { sectionSheets = !!on; syncSectionHandles(); renderSectionBar(); }
 
 // ---------- camera framing ----------
 function boundsInfo() {
@@ -753,6 +977,7 @@ function setMode(next) {
   else if (next === 'top') presetView('top');
   else if (next === 'orbit' && camera.position.y < 0.3) camera.position.y = 0.3;
   if (next !== 'walk') { controls.target.y = Math.max(controls.target.y, 0); controls.update(); }
+  syncSectionHandles();
   renderHud();
   requestRender(3);
 }
@@ -996,7 +1221,8 @@ async function renderStillBlob(options) {
   const { width, height } = options;
   const c = composer, r = renderer;
   const savedPasses = [passes.outline, passes.hover].map(p => [p, p.enabled]);
-  const roots = [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, gizmo.getHelper()].map(o => [o, o && o.visible]);
+  const handles = new Set([gizmo.getHelper(), ...sectionOverlays()]);   // never in the image
+  const roots = [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, ...handles].map(o => [o, o && o.visible]);
   const oldAspect = camera.aspect, oldFov = camera.fov;
   const oldPos = camera.position.clone(), oldQuat = camera.quaternion.clone();
   const matchEl = match && match.el;
@@ -1010,7 +1236,7 @@ async function renderStillBlob(options) {
     configureRenderQuality(options.quality, true);
     for (const [p] of savedPasses) p.enabled = false;
     // Photo pins and notes hidden with their toggles stay out of the image too.
-    for (const [o, visible] of roots) if (o) o.visible = options.annotations && visible && o !== gizmo.getHelper();
+    for (const [o, visible] of roots) if (o) o.visible = options.annotations && visible && !handles.has(o);
     if (matchEl) matchEl.style.visibility = 'hidden';
     r.setPixelRatio(1); c.setPixelRatio(1);
     r.setSize(width, height, false); c.setSize(width, height);
@@ -1108,7 +1334,8 @@ function onPointerUp(e) {
   const rp = rightPress; rightPress = null;
   if (rp) { if (Math.hypot(e.clientX - rp.x, e.clientY - rp.y) <= 5) openContextMenu(e); return; }
   const p = pressed; pressed = null; dragLook = null;
-  if (!p || e.button !== 0 || gizmo.dragging) return;
+  // A press on a section handle moved or turned a plane; it is not a click on the model.
+  if (!p || e.button !== 0 || gizmo.dragging || secMove.dragging || secTurn.dragging || performance.now() - secDragAt < 80) return;
   if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > 5) return;      // it was a drag, not a click
   if (mode === 'walk') {
     // A plain click in walk mode captures the mouse for free-look (a user gesture is required).
@@ -2729,7 +2956,7 @@ function defaultHint() {
   if (tool === 'pin') return 'PIN: choose a photo or document, then click the surface to hang it on.';
   if (tool === 'note') return noteHint();
   if (tool === 'move') return 'MOVE WALLS: select a wall, drag the gizmo arrow to slide it; connected walls follow on release.';
-  if (section.on) return 'SECTION: slide the cut height in the mode bar to look inside.';
+  if (section.on) return fieldLayout() || !sectionSheets ? 'SECTION: slide the cut to look inside.' : 'SECTION: drag the arrow to slide the cut, a ring to turn it. SNAP holds it to ' + TURN_SNAP_DEG + '° turns and ' + (units() === 'metric' ? '5 cm' : '1"') + ' steps.';
   return 'Drag or middle-drag to orbit, hold Shift to pan, scroll or pinch to zoom. Click elements to inspect; right-click to pin a note.';
 }
 function showProgress(label, frac) {
@@ -2750,15 +2977,12 @@ function updateCompass() {
 function renderHud() {
   const bar = hud.modes;
   if (!bar) return;
-  const H = modelTop(), lo = Math.min(0.3, lowestElevation() + 0.3);
   bar.innerHTML = `
     <button class="v-pill ${mode === 'orbit' ? 'active' : ''}" data-mode="orbit" title="Orbit (O)">ORBIT</button>
     <button class="v-pill ${mode === 'walk' ? 'active' : ''}" data-mode="walk" title="Walk through (W)">WALK</button>
     <button class="v-pill ${mode === 'top' ? 'active' : ''}" data-mode="top" title="Top, north up (T)">TOP</button>
     <span class="v-pill-sep"></span>
-    <button class="v-pill ${section.on ? 'active' : ''}" data-section title="Section cut (C)">SECTION</button>
-    ${section.on ? `<input type="range" class="v-section-range" min="${lo.toFixed(2)}" max="${(H + 0.3).toFixed(2)}" step="0.05" value="${section.height}" title="Cut height (world elevation)">
-      <span class="v-section-val">${escapeHtml(fmtLen(section.height))}</span>` : ''}
+    <button class="v-pill ${section.on ? 'active' : ''}" data-section title="Section cuts (C)">SECTION</button>
     <span class="v-pill-sep"></span>
     <button class="v-pill ${xray ? 'active' : ''}" data-xray aria-pressed="${xray}" title="X-ray (X)">X-RAY</button>
     ${xray ? `<label class="v-xray-control">TRANSPARENCY<input type="range" class="v-xray-range" min="0" max="100" step="1" value="${Math.round((1 - prop.env.xrayOpacity) * 100)}" aria-label="X-ray transparency"><output>${Math.round((1 - prop.env.xrayOpacity) * 100)}%</output></label>` : ''}
@@ -2780,22 +3004,72 @@ function renderHud() {
     };
     xr.onchange = () => touch();
   }
-  const range = bar.querySelector('.v-section-range');
-  if (range) range.oninput = () => {
-    section.height = parseFloat(range.value);
-    bar.querySelector('.v-section-val').textContent = fmtLen(section.height);
-    applySection();
-  };
+  renderSectionBar();
   setHint('');
+}
+// The strip of section controls, over the bottom of the view whenever the cut is on (the mode
+// bar may be off the screen): the planes, the four ways to add one, and the active plane's
+// position, direction, snapping and removal.
+function sliderSpan(s) {
+  const r = sectionRange(s), step = sectionSnap ? moveSnapStep(units()) : 0.01;
+  // A range input steps from its minimum: start on a whole step so snapped stops are whole too.
+  return { min: Math.floor(r.min / step) * step, max: Math.ceil(r.max / step) * step, step };
+}
+function renderSectionBar() {
+  const bar = hud.sections;
+  if (!bar) return;
+  bar.hidden = !section.on;
+  if (!section.on) { bar.innerHTML = ''; return; }
+  const short = { level: 'UP/DOWN', side: 'SIDE', front: 'FRONT', custom: 'CUSTOM' };
+  const s = activeSection();
+  const chips = section.planes.map((x, i) => `<button class="v-pill ${x.id === section.active ? 'active' : ''}" data-cut="${escapeHtml(x.id)}" aria-pressed="${x.id === section.active}" title="Section cut ${i + 1}: show its handles">${i + 1} ${short[x.kind]}</button>`).join('');
+  const adds = SECTION_KINDS.map(k => `<button class="v-pill" data-cut-add="${k}" title="${escapeHtml({ level: 'Add a flat cut that slides up and down', side: 'Add an upright cut that slides side to side', front: 'Add an upright cut that slides front to back', custom: 'Add an upright cut facing you; turn it to any angle with the rings' }[k])}">+ ${SECTION_LABELS[k]}</button>`).join('');
+  let row = '';
+  if (s) {
+    const sp = sliderSpan(s), r = sectionReadout(s);
+    row = `<div class="v-sec-row">
+      <input type="range" class="v-section-range" min="${sp.min}" max="${sp.max}" step="${sp.step}" value="${r.d}" aria-label="Position of the cut" title="${r.flat ? 'Cut height (world elevation)' : 'Position of the cut, measured in from the face of the model'}">
+      <span class="v-section-val">${escapeHtml(r.label)}</span>
+      <span class="v-section-ang">${escapeHtml(r.angle)}</span>
+      <span class="v-pill-sep"></span>
+      <button class="v-pill" data-cut-flip title="Cut away the other side">FLIP</button>
+      <button class="v-pill ${sectionSnap ? 'active' : ''}" data-cut-snap aria-pressed="${sectionSnap}" title="Snap: turns in ${TURN_SNAP_DEG}° steps, slides in ${units() === 'metric' ? '5 cm' : '1 inch'} steps">SNAP</button>
+      <button class="v-pill ${sectionSheets ? 'active' : ''}" data-cut-sheets aria-pressed="${sectionSheets}" title="Show the floating planes and their handles">PLANES</button>
+      <button class="v-pill" data-cut-remove title="Remove this cut">REMOVE</button>
+    </div>`;
+  }
+  bar.innerHTML = `<div class="v-sec-row">${chips}<span class="v-pill-sep"></span>${adds}</div>${row}`;
+  bar.querySelectorAll('[data-cut]').forEach(b => b.onclick = () => selectSection(b.dataset.cut));
+  bar.querySelectorAll('[data-cut-add]').forEach(b => b.onclick = () => addSection(b.dataset.cutAdd));
+  const on = (sel, fn) => { const b = bar.querySelector(sel); if (b) b.onclick = fn; };
+  on('[data-cut-flip]', flipSection);
+  on('[data-cut-snap]', () => setSectionSnap(!sectionSnap));
+  on('[data-cut-sheets]', () => setSectionSheets(!sectionSheets));
+  on('[data-cut-remove]', () => removeSection(section.active));
+  const range = bar.querySelector('.v-section-range');
+  if (range) range.oninput = () => { slideSection(parseFloat(range.value)); updateSectionReadout(true); };
+}
+// While a plane is dragged or slid only its numbers change; the bar is not rebuilt under the pointer.
+function updateSectionReadout(fromSlider) {
+  const bar = hud.sections, s = activeSection();
+  if (!bar || !s) return;
+  const r = sectionReadout(s);
+  const val = bar.querySelector('.v-section-val'), ang = bar.querySelector('.v-section-ang'), range = bar.querySelector('.v-section-range');
+  if (val) val.textContent = r.label;
+  if (ang) ang.textContent = r.angle;
+  if (range && !fromSlider) {
+    const sp = sliderSpan(s);
+    range.min = sp.min; range.max = sp.max; range.value = r.d;
+  }
 }
 function toggleSection() {
   section.on = !section.on;
-  if (section.on && (section.height > modelTop() || section.height < lowestElevation())) {
-    // Default cut: waist height on the lowest level.
-    const lo = lowestElevation();
-    const H0 = levelHeight(prop, prop.levels.find(l => l.elevation === lo).id);
-    section.height = lo + Math.min(1.2, H0 * 0.5);
+  if (section.on && !section.planes.length) {
+    // The first cut: flat, at waist height on the lowest level.
+    const s = newSection('level');
+    section.planes.push(s); section.active = s.id;
   }
+  if (section.on && !activeSection()) section.active = section.planes[0].id;
   applySection();
   renderHud();
 }
@@ -3581,7 +3855,9 @@ let offScreen = null, offMenu = null;
 function viewState() {
   return {
     camera: { position: camera.position.toArray(), target: controls.target.toArray(), fov: camera.fov },
-    mode: mode === 'top' ? 'top' : 'orbit', section: { on: section.on, height: section.height }, xray,
+    mode: mode === 'top' ? 'top' : 'orbit', xray,
+    // `height` is the first flat cut, for a version of the app that knows only one cut height.
+    section: { on: section.on, height: levelHeightOf(section.planes) ?? 1.2, planes: section.planes.map(s => ({ id: s.id, kind: s.kind, q: [...s.q], pos: [...s.pos] })), active: section.active },
     hiddenLevels: [...hiddenLevels()],
   };
 }
@@ -3600,7 +3876,15 @@ function goToView(id) {
   if (v.mode === 'top' && mode !== 'top') setMode('top');
   else if (v.mode !== 'top' && mode !== 'orbit') setMode('orbit');
   const tagsMoved = applySavedTags(prop, v) > 0;
-  section.on = v.section.on; section.height = v.section.height;
+  section.on = v.section.on;
+  if (v.section.planes) { section.planes = normalizeSections(v.section.planes); section.active = v.section.active; }
+  else if (v.section.on) {
+    // A view saved when the cut could only move up and down: one flat cut at its height.
+    const s = newSection('level');
+    s.pos[1] = v.section.height;
+    section.planes = [s]; section.active = s.id;
+  }
+  if (section.on && !activeSection()) { if (section.planes.length) section.active = section.planes[0].id; else section.on = false; }
   if (xray !== v.xray) { xray = v.xray; applyXray(); }
   const hidden = hiddenLevels();
   hidden.clear(); for (const lid of v.hiddenLevels) if (prop.levels.some(l => l.id === lid)) hidden.add(lid);
@@ -3683,6 +3967,8 @@ function menuGroups() {
     ]),
     g('Display', 'model.modes', false, 'The ORBIT to NOTES bar over the model', [
       { label: 'Section cut', key: 'C', active: section.on, run: toggleSection },
+      ...SECTION_KINDS.map(k => ({ label: 'Add a section cut: ' + SECTION_LABELS[k].toLowerCase(), run: () => addSection(k) })),
+      { label: 'Snap section cuts', active: sectionSnap, keep: true, run: () => setSectionSnap(!sectionSnap) },
       { label: 'X-ray', key: 'X', active: xray, run: toggleXray },
       { label: 'Sun and environment', run: () => { hud.env.hidden = false; hud.env.classList.add('open'); renderEnvPanel(); } },
       { label: 'Photo pins', active: markersShown('pins'), run: () => toggleMarkers('pins') },
@@ -3869,6 +4155,7 @@ export function mount(root) {
     return;
   }
   ensureDefaults(prop);
+  section = sectionsByProp[prop.id] || (sectionsByProp[prop.id] = { on: false, planes: [], active: null });
   setTextureQuality(prop.env.quality);
   root.innerHTML = `
     <div class="editor-layout v-layout">
@@ -3876,6 +4163,7 @@ export function mount(root) {
       <div class="canvas-wrap v-wrap">
         <div class="v-views" role="tablist" aria-label="Saved views"></div>
         <div class="v-modes"></div>
+        <div class="v-sections" role="group" aria-label="Section cuts" hidden></div>
         <div class="v-compass" title="North"><div class="v-rose"><span class="n">N</span><span class="e">E</span><span class="s">S</span><span class="w">W</span><i></i></div></div>
         <div class="v-env"></div>
         <div class="v-progress"><div class="v-prog-label"></div><div class="v-prog-bar"><div class="v-prog-fill"></div></div></div>
@@ -3887,7 +4175,7 @@ export function mount(root) {
   wrapEl = root.querySelector('.canvas-wrap');
   inspEl = root.querySelector('.inspector');
   hud = {
-    modes: wrapEl.querySelector('.v-modes'), compass: wrapEl.querySelector('.v-rose'), env: wrapEl.querySelector('.v-env'),
+    modes: wrapEl.querySelector('.v-modes'), sections: wrapEl.querySelector('.v-sections'), compass: wrapEl.querySelector('.v-rose'), env: wrapEl.querySelector('.v-env'),
     progress: wrapEl.querySelector('.v-progress'), toast: wrapEl.querySelector('.v-toast'), hint: wrapEl.querySelector('.v-hint'),
     views: wrapEl.querySelector('.v-views'), compassBox: wrapEl.querySelector('.v-compass'),
   };
@@ -4065,9 +4353,13 @@ export function unmount() {
   if (mode === 'walk' && walk) { if (walkLocked) walk.unlock(); }
   if (walk) { walk.dispose(); walk = null; }
   if (gizmo) { gizmo.detach(); gizmo.dispose(); gizmo = null; }
+  // Materials are shared between mounts, so the planes come off them here; the cuts
+  // themselves stay with the property and are put back by the next mount.
+  if (scene) { const on = section.on; section.on = false; applySection(); section.on = on; }
+  for (const g of [secMove, secTurn]) if (g) { g.detach(); g.dispose(); }
+  secMove = null; secTurn = null; sheetRoot = null; sectionBoxCache = null; clipPlanes = []; capMeshes = [];
   if (controls) { controls.dispose(); controls = null; }
-  if (modelGroup) { section.on = false; applySection(); disposeBuilt(modelGroup); modelGroup = null; }
-  if (capMesh) { capMesh.geometry.dispose(); capMesh = null; }
+  if (modelGroup) { disposeBuilt(modelGroup); modelGroup = null; }
   interiorFill = false;
   if (groundGroup) { disposeBuilt(groundGroup); groundGroup = null; }
   if (lightRoot) { lightRoot.traverse(o => { if (o.geometry) o.geometry.dispose(); }); lightRoot = null; }
@@ -4109,7 +4401,6 @@ export function fieldState() {
   if (!scene || !prop) return null;
   const hidden = hiddenLevels();
   const counts = tagCounts(prop);
-  const lo = Math.min(0.3, lowestElevation() + 0.3);
   return {
     mode,
     cameras: [{ id: 'frame', label: 'Overview' }, { id: 'front', label: 'Front' }, { id: 'iso', label: 'Corner' }],
@@ -4121,7 +4412,12 @@ export function fieldState() {
       { id: 'pins', label: 'Photos', on: markersShown('pins'), count: prop.photos.filter(ph => ph.pin).length },
       { id: 'notes', label: 'Notes', on: markersShown('notes'), count: prop.notePins.length },
     ],
-    section: section.on ? { min: lo, max: modelTop() + 0.3, value: section.height, label: fmtLen(section.height) } : null,
+    section: (() => {
+      const s = section.on && activeSection();
+      if (!s) return null;
+      const sp = sliderSpan(s), r = sectionReadout(s);
+      return { min: sp.min, max: sp.max, step: sp.step, value: r.d, label: r.label, kinds: SECTION_KINDS.map(k => ({ id: k, label: SECTION_LABELS[k][0] + SECTION_LABELS[k].slice(1).toLowerCase(), on: s.kind === k })) };
+    })(),
     levels: prop.levels.map(l => ({ id: l.id, label: l.name, on: !hidden.has(l.id) })),
     // One switch per tag that holds something; Untagged only when objects sit on no tag.
     tags: [...prop.tags.map(t => ({ id: t.id, label: t.name, color: t.color, on: t.visible !== false })),
@@ -4142,16 +4438,20 @@ export function fieldAction(kind, id, value) {
   else if (kind === 'save-view') addView();
   else if (kind === 'tag') toggleTag(id || UNTAGGED);
   else if (kind === 'level') toggleLevel(id);
-  else if (kind === 'section-height') {
-    section.height = Number(value);
-    applySection();
-    renderHud();
-  }
+  else if (kind === 'section-height') { slideSection(Number(value)); updateSectionReadout(); }
+  else if (kind === 'section-kind') setSectionKind(id);
   else if (kind === 'show') {
     if (id === 'section') toggleSection();
     else if (id === 'xray') toggleXray();
     else if (id === 'pins' || id === 'notes') toggleMarkers(id);
   }
+}
+// The section cuts as plain data: every plane's cut-away direction and where it sits.
+export function sectionState() {
+  return {
+    on: section.on, snap: sectionSnap, sheets: sectionSheets, active: section.active,
+    planes: section.planes.map(s => { const { n, d } = planeOf(s); return { id: s.id, kind: s.kind, normal: n, d, pos: [...s.pos] }; }),
+  };
 }
 // Hold-to-move for walking on a touch screen: dir is forward | back | left | right.
 const WALK_CODES = { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD' };

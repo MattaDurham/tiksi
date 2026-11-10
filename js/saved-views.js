@@ -4,10 +4,13 @@
 // them as tabs over the view, and a DOCUMENTS 3D view can start from one.
 //
 // prop.savedViews = [{ id, name, camera: { position: [x,y,z], target: [x,y,z], fov },
-//   mode: 'orbit' | 'top', tags: { tagId | '_untagged': shown }, section: { on, height },
-//   xray, hiddenLevels: [levelId] }]
+//   mode: 'orbit' | 'top', tags: { tagId | '_untagged': shown },
+//   section: { on, height, planes: [{ id, kind, q, pos }], active }, xray, hiddenLevels: [levelId] }]
+// `planes` (section-planes.js) is every cut the view was saved with and `active` the one whose
+// handles show; a view saved before cuts could be rotated has only `height`, one flat cut.
 
 import { OVERRIDE_UNTAGGED } from './tags.js';
+import { normalizeSections } from './section-planes.js';
 
 const ID_RE = /^[\w.:-]{1,80}$/;
 const MAX_VIEWS = 100;
@@ -30,10 +33,16 @@ export function normalizeSavedView(v, taken = new Set()) {
     for (const [k, on] of Object.entries(v.tags).slice(0, 500)) if (ID_RE.test(k) && typeof on === 'boolean') tags[k] = on;
   }
   const s = v.section && typeof v.section === 'object' ? v.section : {};
+  const section = { on: s.on === true, height: Number.isFinite(num(s.height)) ? num(s.height) : 1.2 };
+  const planes = normalizeSections(s.planes);
+  if (planes.length) {
+    section.planes = planes;
+    section.active = planes.some(x => x.id === s.active) ? s.active : planes[0].id;
+  }
   return {
     id, name: clean(v.name) || 'View', camera: { position, target, fov },
     mode: v.mode === 'top' ? 'top' : 'orbit', tags,
-    section: { on: s.on === true, height: Number.isFinite(num(s.height)) ? num(s.height) : 1.2 },
+    section,
     xray: v.xray === true,
     hiddenLevels: Array.isArray(v.hiddenLevels) ? [...new Set(v.hiddenLevels.filter(x => typeof x === 'string' && ID_RE.test(x)))].slice(0, 100) : [],
   };
