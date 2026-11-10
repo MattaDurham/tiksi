@@ -242,9 +242,17 @@ class ServiceCallers(unittest.TestCase):
             self.assertIn('signed in to this tailnet', json.loads(body)['error'])
         self.assertEqual(self.call('/api/instance', 'HEAD', proxied)[0], 403)
         self.assertEqual(self.call('/index.html', headers=proxied)[0], 200, 'the page itself still loads')
-        # A browser on this Mac, by any of its own names, is served as before.
-        for host in ('localhost:8642', '127.0.0.1:8642'):
+        # A browser on this Mac, by any of its own names, is served as before, including a local
+        # name the server was told to allow.
+        self.server.allowed_hosts = ['mac.example-tailnet.ts.net', 'studio.example']
+        for host in ('localhost:8642', '127.0.0.1:8642', 'studio.example:8642'):
             self.assertEqual(self.call('/api/workspace/capabilities', headers={**PAGE_HEADERS['workspace'], 'Host': host})[0], 200, host)
+        # Under that local name, a request a proxy passed on still needs the tailnet user.
+        for added in ({'X-Forwarded-For': '203.0.113.9'}, {'Forwarded': 'for=203.0.113.9'}, {'Via': '1.1 proxy'}):
+            status, _ = self.call('/api/workspace/capabilities', headers={**PAGE_HEADERS['workspace'], 'Host': 'studio.example', **added})
+            self.assertEqual(status, 403, added)
+        self.assertEqual(self.call('/api/workspace/capabilities', headers={**PAGE_HEADERS['workspace'], 'Host': 'studio.example',
+                                    'X-Forwarded-For': '100.101.102.103', 'Tailscale-User-Login': 'owner@example.com'})[0], 200)
 
     def test_a_stolen_token_is_still_refused_for_every_method(self):
         tokens = {service: json.loads(self.call('/api/' + service + '/capabilities', headers=PAGE_HEADERS.get(service))[1])['token'] for service in SERVICES}
