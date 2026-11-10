@@ -865,6 +865,13 @@ class UnavailableProjectTests(unittest.TestCase):
         self.commit(data, service=restarted)
         self.assertEqual(project_name(self.b), 'B again', 'the rest keep saving')
 
+    def test_a_project_whose_file_is_there_but_unreadable_stays_on_the_list(self):
+        self.a.write_bytes(b'damaged, or on a failing drive')
+        self.assertEqual([(u['id'], u['reason']) for u in self.service.snapshot()['unavailable']], [('prop-a', 'unreadable')])
+        with self.assertRaises(WorkspaceError) as refused: self.service.forget('prop-a')
+        self.assertEqual(refused.exception.status, 409)
+        self.assertEqual([u['id'] for u in self.service.snapshot()['unavailable']], ['prop-a'])
+
     def test_open_and_mirror_requests_for_a_missing_project_name_the_file(self):
         self.a.unlink()
         service = self.service

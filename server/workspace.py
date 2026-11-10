@@ -1024,14 +1024,19 @@ class WorkspaceService:
         return ids
 
     def forget(self, identifier):
-        """Take a project whose file is gone for good off the Mac's list. Only a project listed as
-        unavailable can be taken off, and no file anywhere is deleted, moved or written: the
-        project's record stays in the server's saved catalog copies. If its file turns up in the
-        projects folder later, it is found again like any other project file."""
+        """Take a project whose file is gone for good off the Mac's list. Only a project whose file
+        is missing can be taken off, and no file anywhere is deleted, moved or written: the
+        project's record stays in the server's saved catalog copies, and a clean-up always keeps
+        the newest copy that holds it (cleanup_plan). If its file turns up in the projects folder
+        later, it is found again like any other project file."""
         with self.lock:
             self.refresh()
             if identifier not in self.unavailable:
-                raise WorkspaceError('Only a project whose file is missing or cannot be read can be taken off the list', 409)
+                raise WorkspaceError('Only a project whose file is missing can be taken off the list', 409)
+            if self.unavailable[identifier][1] != 'missing':
+                # The file is there but cannot be read (permissions, a failing drive, damage): it
+                # may come back, so the project stays listed.
+                raise WorkspaceError('This project file is there but cannot be read; fix that rather than taking it off the list', 409)
             if self.path.exists(): self.keep_history(self.root / 'history' / (str(self.state['revision']) + '.json'))
             path, _ = self.unavailable.pop(identifier)
             self.paths.pop(identifier, None)
