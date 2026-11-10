@@ -346,6 +346,9 @@ async function aProjectWithAMissingFileIsShown() {
   const [first, second] = await makeProperties('unavailable');
   const page = await device();
   await look(page, first);
+  // Everything this device has to say about the project is on the Mac before its file goes:
+  // a project this device had changed and not yet saved would rightly be asked about instead.
+  await saveNow(page); await page.waitForFunction(SAVED);
   const path = await page.evaluate(async id => (await import('/js/disk-workspace.js')).diskWorkspace.paths[id], second);
   await rm(path);
   const row = page.locator('#property-select option[data-unavailable]');
@@ -638,7 +641,7 @@ try {
   // The failure first: a browser that will not close must not hide it.
   console.error(error);
   console.error('Server log (last lines):\n' + serverLog.split('\n').slice(-15).join('\n'));
-  if (browser) console.error('Pages:', await Promise.all(browser.contexts().flatMap(context => context.pages()).map(page => page.evaluate(() => ({ url: location.href, status: document.querySelector('#save-status')?.textContent, title: document.querySelector('#save-status')?.title, dialog: document.querySelector('dialog[open]')?.textContent?.slice(0, 160) })).catch(() => null))));
+  if (browser) console.error('Pages:', await Promise.all(browser.contexts().flatMap(context => context.pages()).map(page => page.evaluate(() => ({ url: location.href, status: document.querySelector('#save-status')?.textContent, title: document.querySelector('#save-status')?.title, dialog: document.querySelector('dialog[open]')?.textContent?.slice(0, 700) })).catch(() => null))));
   process.exitCode = 1;
 } finally {
   // Bounded clean-up: a stuck page or server fails this suite in seconds, not at the CI job limit.
