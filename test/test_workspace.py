@@ -97,53 +97,101 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(restarted.snapshot()['revision'], revision)
         self.assertEqual([u['id'] for u in restarted.snapshot()['unavailable']], ['prop-a'])
 
-    def test_saved_catalog_copies_are_thinned_to_recent_then_daily_then_monthly(self):
-        from server.workspace import prune_history, KEEP_SAVES
-        folder = self.root / 'history-test'; folder.mkdir()
-        now = 1_800_000_000.0; day = 86400
-        # Ten saves a day for 200 days, newest last; plus copies that are never removed.
-        revision = 0
+    def test_the_thinning_rule_keeps_recent_saves_then_one_a_day_then_one_a_month(self):
+        from server.workspace import thinned_copies, KEEP_SAVES
+        now = 1_800_000_000.0; day = 86400; copies = []
         for age in range(199, -1, -1):
-            for hour in range(10):
-                revision += 1
-                path = folder / (str(revision) + '.json'); path.write_text('{}')
-                os.utime(path, (now - age * day - (10 - hour) * 3600,) * 2)
-        keep = [folder / 'conflict-x.tiksi', folder / 'unreadable-save-note-1.json', folder / '12.unreadable-3.json']
-        for path in keep: path.write_text('{}')
-        removed = prune_history(folder, now)
-        left = sorted(int(p.stem) for p in folder.glob('*.json') if p.stem.isdigit())
-        self.assertEqual(left[-KEEP_SAVES:], list(range(revision - KEEP_SAVES + 1, revision + 1)), 'every recent save is kept')
-        older = left[:-KEEP_SAVES]
-        ages = [(now - (folder / (str(r) + '.json')).stat().st_mtime) / day for r in older]
-        recent_days = {int(a) for a in ages if a <= 90}
-        self.assertGreaterEqual(len(recent_days), 85, 'one a day for the last 90 days')
+            for hour in range(10): copies.append((len(copies) + 1, now - age * day - (10 - hour) * 3600, str(len(copies) + 1) + '.json'))
+        thin = set(thinned_copies(copies, now))
+        left = sorted(r for r, _, name in copies if name not in thin)
+        self.assertEqual(left[-KEEP_SAVES:], list(range(len(copies) - KEEP_SAVES + 1, len(copies) + 1)), 'every recent save stays')
+        ages = [(now - mtime) / day for r, mtime, name in copies if name not in thin and r <= len(copies) - KEEP_SAVES]
+        self.assertGreaterEqual(len({int(a) for a in ages if a <= 90}), 85, 'one a day for the last 90 days')
         self.assertLessEqual(sum(a > 91 for a in ages), 5, 'then one a month')
-        self.assertLess(len(left), 160, 'bounded: far fewer than the 2000 saves')
-        self.assertTrue(all(p.exists() for p in keep), 'recovery copies and set-aside notes are never removed')
-        self.assertEqual(len(removed) + len(left), 2000)
 
-    def test_saving_keeps_a_bounded_number_of_catalog_copies(self):
+    def test_saving_never_removes_a_catalog_copy(self):
         for count in range(70): self.commit(workspace('A ' + str(count)))
         copies = [p for p in (self.root / 'runtime' / 'history').glob('*.json') if p.stem.isdigit()]
-        self.assertEqual(len(copies), 50, 'seventy saves in one day keep the newest fifty copies')
+        self.assertEqual(len(copies), 69, 'every save keeps the copy before it; nothing is thinned on its own')
 
-    def test_stored_originals_nothing_refers_to_are_removed_after_a_grace_period(self):
-        from server.workspace import BLOB_GRACE
+    def old(self, *paths):
+        for path in paths: os.utime(path, (time.time() - 40 * 86400,) * 2)
+
+    def test_a_clean_up_lists_first_and_removes_only_that_list_when_asked(self):
         data = self.two_with_originals()
+        blobs = self.root / 'runtime' / 'blobs'
         kept = {a['hash'] for a in self.service.state['assets'].values()}
-        old_history = self.root / 'runtime' / 'history' / '1.json'
-        stray_old, _ = self.service.store_blob(io.BytesIO(b'replaced scan, long ago'))
-        in_history, _ = self.service.store_blob(io.BytesIO(b'scan an older kept save refers to'))
-        stray_new, _ = self.service.store_blob(io.BytesIO(b'uploaded, save not here yet'))
-        old_history.write_text(json.dumps({'revision': 1, 'assets': {'s': {'hash': in_history}}}))
-        now = time.time()
-        for digest in (stray_old, in_history, *kept):
-            os.utime(self.root / 'runtime' / 'blobs' / digest, (now - BLOB_GRACE - 10,) * 2)
-        self.assertEqual(self.service.collect_blobs(now), 1)
-        held = {p.name for p in (self.root / 'runtime' / 'blobs').iterdir()}
-        self.assertNotIn(stray_old, held)
-        self.assertTrue({in_history, stray_new, *kept} <= held)
+        stray, _ = self.service.store_blob(io.BytesIO(b'replaced scan, long ago'))
+        young, _ = self.service.store_blob(io.BytesIO(b'uploaded, save not here yet'))
+        self.old(blobs / stray, *(blobs / h for h in kept))
+        plan = self.service.cleanup_plan()
+        self.assertEqual([o['hash'] for o in plan['originals']], [stray])
+        self.assertEqual((plan['count'], plan['bytes']), (1, len(b'replaced scan, long ago')))
+        self.assertTrue((blobs / stray).exists(), 'listing removes nothing')
+        with self.assertRaises(WorkspaceError) as changed: self.service.cleanup({'copies': [], 'originals': [stray, young]})
+        self.assertEqual(changed.exception.status, 409); self.assertTrue((blobs / stray).exists(), 'a different list removes nothing')
+        self.assertEqual(self.service.cleanup({'copies': [], 'originals': [stray]})['removed'], 1)
+        self.assertFalse((blobs / stray).exists())
+        self.assertTrue(all((blobs / h).exists() for h in {young, *kept}))
         self.commit(data, self.service.state['assets'])
+
+    def test_a_clean_up_keeps_a_missing_projects_last_copy_and_its_originals(self):
+        self.two_with_originals()
+        blobs = self.root / 'runtime' / 'blobs'
+        alpha = self.service.state['assets']['scan-prop-a']['hash']
+        Path(self.service.paths['prop-a']).unlink()
+        # The page saves without the missing project many times over.
+        for count in range(70):
+            data = {**workspace(), 'properties': [{'id': 'prop-z', 'name': 'Zed ' + str(count), 'scans': [{'id': 'scan-prop-z', 'name': 'Scan'}], 'photos': []}]}
+            self.commit(data, {'scan-prop-z': self.service.state['assets']['scan-prop-z']})
+        history = self.root / 'runtime' / 'history'
+        for path in history.glob('*.json'): os.utime(path, (time.time() - 200 * 86400,) * 2)
+        self.old(*blobs.iterdir())
+        self.service.part_assets.pop('prop-a', None)  # as after a restart, with the file still gone
+        plan = self.service.cleanup_plan()
+        self.service.cleanup({'copies': [c['name'] for c in plan['copies']], 'originals': [o['hash'] for o in plan['originals']]})
+        self.assertGreater(len(plan['copies']), 0, 'there was something to thin')
+        self.assertTrue(any(b'prop-a' in p.read_bytes() for p in history.glob('*.json')), "the missing project's newest copy stays")
+        self.assertTrue((blobs / alpha).exists(), 'and so does its original')
+
+    def test_an_original_a_page_was_told_is_here_is_not_cleaned_up(self):
+        blobs = self.root / 'runtime' / 'blobs'
+        def told(how):
+            digest, _ = self.service.store_blob(io.BytesIO(('sent long ago, then ' + how).encode()))
+            self.old(blobs / digest)
+            return digest
+        again = told('sent again'); self.service.store_blob(io.BytesIO(b'sent long ago, then sent again'))
+        asked = told('asked about'); self.assertTrue(self.service.held(asked))
+        resent = told('resent in pieces'); self.assertEqual(self.service.upload_piece(resent, 5, 0, io.BytesIO(b'x'), 1)[2], True)
+        listed = {o['hash'] for o in self.service.cleanup_plan()['originals']}
+        self.assertEqual(listed & {again, asked, resent}, set())
+
+    def test_unfinished_uploads_are_limited_in_number_size_and_disk_space(self):
+        from server.workspace import MAX_UPLOADS, MAX_BLOB, UPLOAD_TOTAL
+        piece = lambda n: self.service.upload_piece(('%064x' % n), MAX_BLOB, 0, io.BytesIO(b'p'), 1)
+        for n in range(1, UPLOAD_TOTAL // MAX_BLOB + 1): piece(n)
+        with self.assertRaises(WorkspaceError) as over: piece(99)
+        self.assertEqual(over.exception.status, 429, 'at most 8 GB declared by unfinished uploads')
+        for note in (self.root / 'runtime' / 'uploads').glob('*'): note.unlink()
+        small = lambda n: self.service.upload_piece(('%064x' % n), 10, 0, io.BytesIO(b'p'), 1)
+        for n in range(1, MAX_UPLOADS + 1): small(n)
+        with self.assertRaises(WorkspaceError) as many: small(1000)
+        self.assertEqual(many.exception.status, 429, 'at most 32 unfinished uploads')
+        Disk = type('Disk', (), {'free': 10})
+        with patch('server.workspace.shutil.disk_usage', return_value=Disk()), self.assertRaises(WorkspaceError) as full:
+            self.service.upload_piece('%064x' % 1, 10, 1, io.BytesIO(b'p'), 1)
+        self.assertEqual(full.exception.status, 507)
+        self.assertEqual(self.service.upload_state('%064x' % 1)[0], 1, 'nothing of the refused piece was written')
+
+    def test_a_slow_upload_keeps_its_progress_while_pieces_keep_coming(self):
+        digest = '%064x' % 7; uploads = self.root / 'runtime' / 'uploads'
+        self.service.upload_piece(digest, 10, 0, io.BytesIO(b'abc'), 3)
+        note, part = uploads / (digest + '.json'), uploads / (digest + '.part')
+        self.old(note); self.service.upload_piece(digest, 10, 3, io.BytesIO(b'def'), 3)  # a piece a week later
+        self.service.expire_uploads()
+        self.assertEqual(self.service.upload_state(digest), (6, 10), 'progress is kept')
+        self.old(note, part); self.service.expire_uploads()
+        self.assertFalse(note.exists() or part.exists(), 'an upload with no piece for a week goes, note and part together')
 
     def scanned(self, payload=b'synthetic scan ' * 200000):
         digest, size = self.service.store_blob(io.BytesIO(payload))

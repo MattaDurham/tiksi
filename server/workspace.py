@@ -146,44 +146,39 @@ def file_state(path):
     return 'file' if stat.S_ISREG(info.st_mode) else 'missing'
 
 
-# How much of its own history the server keeps: every recent save, then one a day, then one a month.
+# What a clean-up asked for by the owner offers to remove (nothing is removed on its own): of the
+# saved catalog copies, all but every recent save, one a day, then one a month; and stored
+# originals nothing kept refers to and nobody has sent or been told about for BLOB_GRACE.
 KEEP_SAVES = 50
 DAILY_DAYS = 90
-# A stored original nothing refers to is removed only after this long, so an upload whose save
-# has not arrived yet (a phone offline for a while) still finds it.
 BLOB_GRACE = 30 * 86400
 # Smaller copies of stored pictures, made on the Mac for a phone (longest side in pixels).
 PREVIEW_SIZES = (256, 512, 1024, 2048)
 PREVIEW_WORK = threading.BoundedSemaphore(2)
 # Save ids the Mac remembers having committed (newest kept), with the revision each commit made.
 KEEP_SAVE_IDS = 2000
-# An original sent in pieces: each piece at most this big, and an upload left unfinished this long is dropped.
+# An original sent in pieces: each piece at most this big; at most MAX_UPLOADS unfinished at once,
+# declaring at most UPLOAD_TOTAL between them; one with no piece for UPLOAD_KEEP is dropped (the
+# page can send it again); a piece is refused when it would leave less than DISK_RESERVE free.
 MAX_PIECE = 64 * 1024 * 1024
+MAX_UPLOADS = 32
+UPLOAD_TOTAL = 8 * 1024 ** 3
 UPLOAD_KEEP = 7 * 86400
+DISK_RESERVE = 1024 ** 3
 REVISION_COPY = re.compile(r'^(\d+)\.json$')
 
 
-def prune_history(folder, now=None):
-    """Thin the saved catalog copies (<revision>.json) in folder: keep the newest KEEP_SAVES, then
-    the newest of each day for DAILY_DAYS, then the newest of each month. Recovery copies and
-    set-aside notes are never touched. Returns the removed paths."""
+def thinned_copies(copies, now=None):
+    """Of saved catalog copies [(revision, mtime, name)], the names a clean-up may remove: all but
+    the newest KEEP_SAVES, the newest of each day for DAILY_DAYS, and the newest of each month."""
     now = time.time() if now is None else now
-    copies = []
-    for path in Path(folder).iterdir():
-        match = REVISION_COPY.match(path.name)
-        if match:
-            try: copies.append((int(match[1]), path.stat().st_mtime, path))
-            except OSError: continue
-    copies.sort(reverse=True)
-    kept, removed = set(), []
-    for index, (revision, mtime, path) in enumerate(copies):
+    kept, out = set(), []
+    for index, (revision, mtime, name) in enumerate(sorted(copies, reverse=True)):
         day = time.strftime('%Y-%m-%d', time.localtime(mtime))
         bucket = ('day', day) if now - mtime <= DAILY_DAYS * 86400 else ('month', day[:7])
-        if index < KEEP_SAVES or bucket not in kept:
-            kept.add(bucket)
-            continue
-        path.unlink(missing_ok=True); removed.append(path)
-    return removed
+        if index < KEEP_SAVES or bucket not in kept: kept.add(bucket)
+        else: out.append(name)
+    return out
 
 
 RECORDS = ('manifest.json', 'workspace.json')
@@ -257,6 +252,7 @@ class WorkspaceService:
         # Where a property made from a picked folder will be kept, until its first save writes it.
         self.planned = {}
         self.refresh()
+        self.expire_uploads()
 
     def active_jobs(self):
         return self.jobs
@@ -495,37 +491,92 @@ class WorkspaceService:
             os.fsync(out.fileno())
         os.replace(temp, self.path)
 
-    def collect_blobs(self, now=None):
-        """Remove stored originals that nothing kept refers to: not the catalog, not a project file
-        as last read, not a kept catalog copy, and not uploaded in the last BLOB_GRACE. Every
-        project file holds its own originals, so this store is a cache of them. Returns the count."""
+    def cleanup_plan(self, now=None):
+        """What a clean-up would remove, and nothing more. Saved catalog copies beyond the thinning
+        rule, except the newest copy that holds each property (a project whose file is missing is
+        left out of later saves, so its last copies may be all that is left of its record). Stored
+        originals that nothing kept refers to: not the catalog, not a project file as last read,
+        not any copy that stays, not an unavailable project, and not one sent or asked about in the
+        last BLOB_GRACE. Every project file holds its own originals, so the store is a cache of them."""
         now = time.time() if now is None else now
+        copies, read = [], {}
+        for path in (self.root / 'history').glob('*.json'):
+            try: read[path.name] = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, ValueError): read[path.name] = None
+            match = REVISION_COPY.match(path.name)
+            if match:
+                try: copies.append((int(match[1]), path.stat().st_mtime, path.name))
+                except OSError: continue
+        def properties(value):
+            data = value.get('data') if isinstance(value, dict) else None
+            return {p.get('id') for p in (data or {}).get('properties', []) if isinstance(p, dict)}
+        newest = {}
+        for revision, _, name in sorted(copies):
+            for identifier in properties(read.get(name)): newest[identifier] = name
+        thin = [name for name in thinned_copies(copies, now) if name not in set(newest.values())]
         wanted = set()
         def take(assets):
-            for asset in (assets or {}).values():
+            for asset in (assets or {}).values() if isinstance(assets, dict) else ():
                 if isinstance(asset, dict) and isinstance(asset.get('hash'), str): wanted.add(asset['hash'])
-        for path in (self.root / 'history').glob('*.json'):
-            try: take(json.loads(path.read_text(encoding='utf-8')).get('assets'))
-            except (OSError, ValueError, AttributeError): continue
-        removed = 0
+        for name, value in read.items():
+            if name not in thin and isinstance(value, dict): take(value.get('assets'))
         with self.lock:
             take(self.state.get('assets'))
             for assets in self.part_assets.values(): take(assets)
-            for path in (self.root / 'blobs').iterdir():
-                if not HASH.fullmatch(path.name) or path.name in wanted: continue
-                try:
-                    if now - path.stat().st_mtime < BLOB_GRACE: continue
-                    path.unlink(); removed += 1
-                except OSError: continue
-        previews = self.root / 'previews'
-        for path in (previews.iterdir() if previews.is_dir() else ()):
-            if not (self.root / 'blobs' / path.name.split('-')[0]).is_file(): path.unlink(missing_ok=True)
-        for path in (self.root / 'uploads').iterdir():
+        originals = []
+        for path in (self.root / 'blobs').iterdir():
+            if not HASH.fullmatch(path.name) or path.name in wanted: continue
             try:
-                if now - path.stat().st_mtime >= UPLOAD_KEEP: path.unlink()
+                found = path.stat()
+                if now - found.st_mtime >= BLOB_GRACE: originals.append((path.name, found.st_size))
             except OSError: continue
-        if removed: log.info('Removed %d stored original(s) that nothing refers to any more.', removed)
-        return removed
+        size = lambda name: (self.root / 'history' / name).stat().st_size if (self.root / 'history' / name).exists() else 0
+        plan = {'copies': sorted(({'name': n, 'bytes': size(n)} for n in thin), key=lambda c: c['name']),
+                'originals': sorted(({'hash': h, 'bytes': b} for h, b in originals), key=lambda o: o['hash'])}
+        plan['count'] = len(plan['copies']) + len(plan['originals'])
+        plan['bytes'] = sum(c['bytes'] for c in plan['copies']) + sum(o['bytes'] for o in plan['originals'])
+        return plan
+
+    def cleanup(self, asked):
+        """Remove what cleanup_plan lists, only when asked with exactly that list (the copies'
+        names and the originals' hashes). If anything changed since it was listed, nothing is
+        removed and the new list is returned to be confirmed again."""
+        if not isinstance(asked, dict) or not isinstance(asked.get('copies'), list) or not isinstance(asked.get('originals'), list):
+            raise WorkspaceError('Send back the list to remove: {"copies": [names], "originals": [hashes]}')
+        with self.lock:
+            plan = self.cleanup_plan()
+            if sorted(map(str, asked['copies'])) != [c['name'] for c in plan['copies']] or sorted(map(str, asked['originals'])) != [o['hash'] for o in plan['originals']]:
+                error = WorkspaceError('What can be removed changed since it was listed; nothing was removed. Look at the new list.', 409)
+                error.code, error.plan = 'cleanup-changed', plan
+                raise error
+            for copy in plan['copies']: (self.root / 'history' / copy['name']).unlink(missing_ok=True)
+            for original in plan['originals']: (self.root / 'blobs' / original['hash']).unlink(missing_ok=True)
+            previews = self.root / 'previews'
+            for path in (previews.iterdir() if previews.is_dir() else ()):
+                if not (self.root / 'blobs' / path.name.split('-')[0]).is_file(): path.unlink(missing_ok=True)
+        log.info('Clean-up asked for: removed %d catalog copies and %d stored originals (%d bytes).', len(plan['copies']), len(plan['originals']), plan['bytes'])
+        return {'removed': plan['count'], 'bytes': plan['bytes'], 'copies': len(plan['copies']), 'originals': len(plan['originals'])}
+
+    def held(self, digest):
+        """True when the Mac holds this original; its time is refreshed, so a clean-up does not take
+        away something a page was just told is here."""
+        path = self.root / 'blobs' / digest
+        try: os.utime(path)
+        except OSError: return False
+        return path.is_file()
+
+    def expire_uploads(self, now=None):
+        """Drop unfinished uploads that have had no piece for UPLOAD_KEEP (note and part together)."""
+        now = time.time() if now is None else now
+        folder = self.root / 'uploads'
+        for note in folder.glob('*.json'):
+            part = note.with_suffix('.part')
+            try: newest = max(p.stat().st_mtime for p in (note, part) if p.exists())
+            except (OSError, ValueError): continue
+            if now - newest >= UPLOAD_KEEP:
+                part.unlink(missing_ok=True); note.unlink(missing_ok=True)
+        for part in folder.glob('*.part'):
+            if not part.with_suffix('.json').exists(): part.unlink(missing_ok=True)
 
     def preview(self, digest, longest):
         """A JPEG copy of a stored picture, at most longest pixels on its longest side, made once
@@ -575,14 +626,19 @@ class WorkspaceService:
         becomes a stored original. Returns (received, size, done)."""
         if not HASH.fullmatch(digest): raise WorkspaceError('Invalid hash', 404)
         if not 0 < size <= MAX_BLOB: raise WorkspaceError('An original must be between 1 byte and 600 MB', 413)
-        if (self.root / 'blobs' / digest).is_file(): return size, size, True
+        if self.held(digest): return size, size, True
         with self.lock: guard = self.upload_locks.setdefault(digest, threading.Lock())
         if not guard.acquire(blocking=False): raise WorkspaceError('This original is being sent from another page; ask again in a moment', 409)
         try:
             part, note = self.root / 'uploads' / (digest + '.part'), self.root / 'uploads' / (digest + '.json')
             received, declared = self.upload_state(digest)
             if declared != size:
-                # A new upload, or one that changed its declared size: it starts again.
+                # A new upload, or one that changed its declared size: it starts again, if there is room.
+                self.expire_uploads()
+                others = [n for n in (self.root / 'uploads').glob('*.json') if n != note]
+                total = sum(self.upload_state(n.stem)[1] or 0 for n in others) + size
+                if len(others) >= MAX_UPLOADS or total > UPLOAD_TOTAL:
+                    raise WorkspaceError('The Mac already has %d unfinished uploads declaring %d MB; finish or wait for those first' % (len(others), (total - size) // 2 ** 20), 429)
                 part.unlink(missing_ok=True); received = 0
                 write_whole(note, json.dumps({'size': size}).encode('utf-8'))
             if offset != received:
@@ -590,6 +646,8 @@ class WorkspaceService:
                 error.code, error.received = 'upload-offset', received
                 raise error
             if received + length > size: raise WorkspaceError('The piece goes beyond the declared size', 413)
+            if shutil.disk_usage(self.root).free < length + DISK_RESERVE:
+                raise WorkspaceError("The Mac's disk is nearly full; this piece was not accepted. Make room on the Mac and send it again", 507)
             with part.open('ab') as out:
                 try:
                     left = length
@@ -599,6 +657,8 @@ class WorkspaceService:
                         out.write(chunk); left -= len(chunk)
                 finally: out.flush(); os.fsync(out.fileno())
             received = part.stat().st_size
+            # A slow upload stays as long as pieces keep arriving.
+            os.utime(note)
             if received < size: return received, size, False
             digest_found = hashlib.sha256()
             with part.open('rb') as source:
@@ -621,7 +681,8 @@ class WorkspaceService:
         with archive.open(member) as source:
             while chunk := source.read(1024 * 1024): digest.update(chunk)
         held = self.root / 'blobs' / digest.hexdigest()
-        if held.is_file() and held.stat().st_size == member.file_size: return digest.hexdigest(), member.file_size
+        if held.is_file() and held.stat().st_size == member.file_size:
+            self.held(digest.hexdigest()); return digest.hexdigest(), member.file_size
         with archive.open(member) as source: return self.store_blob(source)
 
     def store_blob(self, source):
@@ -640,7 +701,8 @@ class WorkspaceService:
                 os.fsync(out.fileno())
             result = digest.hexdigest()
             dest = self.root / 'blobs' / result
-            if dest.exists(): temp.unlink()
+            if dest.exists():
+                temp.unlink(); self.held(result)
             else: os.replace(temp, dest)
             return result, size
         finally:
@@ -770,7 +832,6 @@ class WorkspaceService:
                 # Keep every committed revision for recovery; assets are never garbage-collected here.
                 history = self.root / 'history' / (str(self.state['revision']) + '.json')
                 self.keep_history(history)
-                prune_history(self.root / 'history')
             slices = request.get('projectData')
             # A project file the client did not change since the revision it saved against
             # is named instead of sent; the server already holds exactly that file.
@@ -1113,7 +1174,7 @@ class WorkspaceService:
                 digest = path.removeprefix('/api/workspace/uploads/')
                 if not HASH.fullmatch(digest): raise WorkspaceError('Invalid hash', 404)
                 if h.command == 'GET':
-                    if (self.root / 'blobs' / digest).is_file():
+                    if self.held(digest):
                         size = (self.root / 'blobs' / digest).stat().st_size
                         self.reply(h, 200, {'hash': digest, 'size': size, 'received': size, 'done': True})
                     else:
@@ -1130,18 +1191,26 @@ class WorkspaceService:
                 identifier = unquote(path.removeprefix('/api/workspace/unavailable/').removesuffix('/forget'))
                 revision = self.forget(identifier)
                 with self.lock: self.reply(h, 200, {'revision': revision, 'unavailable': self.unavailable_projects()})
+            elif path == '/api/workspace/cleanup' and h.command == 'GET':
+                # What a clean-up would remove (counts, bytes, and the list); nothing is removed.
+                self.reply(h, 200, self.cleanup_plan())
+            elif path == '/api/workspace/cleanup' and h.command == 'POST':
+                # Removes exactly the list sent back, if it is still what would be removed.
+                try: asked = json.loads(self.read(h, 16 * 1024 * 1024))
+                except (ValueError, UnicodeDecodeError): raise WorkspaceError('Send back the list to remove as JSON')
+                self.reply(h, 200, self.cleanup(asked))
             elif path == '/api/workspace/blobs/held' and h.command == 'POST':
                 # Which of these stored originals the Mac already holds, in one question.
                 try: asked = json.loads(self.read(h, 2 * 1024 * 1024)).get('hashes')
                 except (ValueError, UnicodeDecodeError, AttributeError): raise WorkspaceError('Send {"hashes": [...]}')
                 if not isinstance(asked, list) or len(asked) > 10000 or not all(isinstance(d, str) for d in asked): raise WorkspaceError('Send at most 10000 hashes')
-                held = [d for d in dict.fromkeys(asked) if HASH.fullmatch(d) and (self.root / 'blobs' / d).is_file()]
+                held = [d for d in dict.fromkeys(asked) if HASH.fullmatch(d) and self.held(d)]
                 self.reply(h, 200, {'held': held, 'sizes': {d: (self.root / 'blobs' / d).stat().st_size for d in held}})
             elif path.startswith('/api/workspace/blobs/') and h.command in ('GET', 'HEAD'):
                 digest = path.removeprefix('/api/workspace/blobs/')
                 if not HASH.fullmatch(digest): raise WorkspaceError('Asset not found', 404)
                 dest = self.root / 'blobs' / digest
-                if not dest.is_file(): raise WorkspaceError('Asset not found', 404)
+                if not self.held(digest): raise WorkspaceError('Asset not found', 404)
                 # A blob is named by its content and never changes: this browser may keep it.
                 tag = '"' + digest + '"'
                 asked = parse_qs(urlsplit(h.path).query).get('size', [None])[0]
@@ -1192,7 +1261,8 @@ class WorkspaceService:
         except WorkspaceError as error:
             h.close_connection = True
             self.reply(h, error.status, {'error': str(error), **({'code': error.code} if getattr(error, 'code', None) else {}),
-                                         **({'received': error.received} if hasattr(error, 'received') else {})})
+                                         **({'received': error.received} if hasattr(error, 'received') else {}),
+                                         **({'plan': error.plan} if hasattr(error, 'plan') else {})})
         except (OSError, ValueError, TypeError, KeyError):
             # The page gets a plain sentence; the server log gets the real error and where it happened.
             log.exception('Project files could not be updated (%s %s)', h.command, path)

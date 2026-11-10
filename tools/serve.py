@@ -461,13 +461,6 @@ def main():
         sys.path.insert(0, str(ROOT))
         from server.workspace import WorkspaceService
         server.workspace = WorkspaceService(args.state_dir / 'workspace', args.projects_dir)
-        def tidy(every=86400):
-            # Stored originals nothing refers to any more are removed a minute after start, then daily.
-            while not stopping.wait(60 if every is None else every):
-                try: server.workspace.collect_blobs()
-                except Exception: log.exception('Could not tidy the stored originals')
-                every = 86400
-        threading.Thread(target=tidy, args=(None,), daemon=True).start()
         server.reconstruction = None
         server.material_research = None
         if (ROOT / 'server/reconstruction.py').exists():
