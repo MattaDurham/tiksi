@@ -452,14 +452,18 @@ gh pr checks --watch
 ```
 
 For dependent feature branches, `pr <slug> --base codex/<baseline>` reviews only
-that feature's commits; retarget to main and rerun CI before landing.
+that feature's commits; retarget the PR to main before merging.
 
 The owner chooses whether to merge, keep testing or discard. Only the owner's
 explicit merge instruction authorizes `pr <slug> --ready` followed by
-`merge <slug> --owner-approved`. Landing requires both trees clean, current local
-main included, an open ready PR at the exact local commit, successful Linux and
-macOS CI, and a local preflight. It merges and pushes main, then removes the spent
-worktree only when GitHub confirms Merged. It never restarts the live service.
+`merge <slug> --owner-approved`. Merging requires both trees clean, current local
+main included and an open ready PR at the exact local commit. It runs the quick
+local checks (`preflight.sh --merge`: syntax, names, private state, the unit tests
+and one open of the app in a windowless browser), and does not wait for online
+checks that are still running: only a check that already finished without passing
+refuses the merge. Main's own online checks, run after the push, grade it. It
+merges and pushes main, then removes the spent worktree only when GitHub confirms
+Merged. It never restarts the live service.
 A failed push leaves the actual local merge visible for recovery. A PR whose head
 is in main is never closed. `discard <slug> --owner-approved` rejects dirty trees
 and preserves their files rather than offering a force-delete shortcut.
@@ -516,8 +520,10 @@ npm run preflight  # all of the above
 ```
 
 Browser checks use synthetic scans and projects. The runner assigns temporary
-ports; tests never bind or stop the live app on 8642. CI runs preflight on macOS
-and Linux, installs headless Chromium, and retains screenshots on failure. The
+ports; tests never bind or stop the live app on 8642. The online checks run the
+syntax and unit checks on Linux, the browser suites in four groups on macOS with
+headless Chromium, and the phone suite on Safari's engine (WebKit); they keep each
+suite's record and, on failure, its screenshots. The
 branch lifecycle tests build disposable repositories and verify dirty-tree,
 stale-PID, PR-head, CI, merged-PR and preview-service protections without touching
 the real main branch, live service or owner projects. `scripts/preflight.sh --list`

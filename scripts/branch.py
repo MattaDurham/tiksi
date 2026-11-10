@@ -386,9 +386,9 @@ class Workflow:
         if not info or info['state'] != 'OPEN' or info['isDraft']:
             raise WorkflowError('An open, ready PR is required before merging.')
         if info.get('baseRefName', 'main') != 'main':
-            raise WorkflowError('Retarget the PR to main and wait for fresh CI before landing.')
+            raise WorkflowError('Retarget the PR to main, then merge again.')
         if info['headRefOid'] != self.git('rev-parse', branch):
-            raise WorkflowError('PR head differs from local head; push the branch and wait for its CI.')
+            raise WorkflowError('PR head differs from local head; push the branch (scripts/branch.sh pr), then merge again.')
         if not skip_checks: self.verdict(info.get('statusCheckRollup') or [])
         return target
 
