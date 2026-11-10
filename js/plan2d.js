@@ -12,7 +12,7 @@ import {
   addLevel, deleteLevel, levelHeight, wallHeightOf, levelOfWall, fmtDate, isoToday,
 } from './store.js';
 import { openingSchedule, connectsLabel, resizeOpening, MIN_SIZE } from './opening-schedule.js';
-import { doorSwings } from './wall-solids.js';
+import { doorSwings, wallFaceLabels } from './wall-solids.js';
 import { materialSelectHtml } from './materials.js';
 import { icon } from './icons.js';
 import { beginGeometryEdit, cancelGeometryEdit, restoreGeometryEdit } from './edit-history.js';
@@ -29,7 +29,7 @@ import { layerScans, layerHasMembers, isFurnitureFixture, meshFootprints, footpr
 
 const PRESETS = {
   interior: { thickness: 0.114, material: 'mat-drywall' },   // 4.5 in stud wall
-  exterior: { thickness: 0.165, material: 'mat-fiber' },     // 6.5 in
+  exterior: { thickness: 0.165, material: 'mat-exterior-unknown' },  // 6.5 in; cladding not yet known
 };
 const DOOR_DEFAULT = { width: 0.813, height: 2.032 };         // 32 x 80 in
 const WINDOW_DEFAULT = { width: 0.914, height: 1.219, sill: 0.762 }; // 36 x 48, sill 30
@@ -126,6 +126,11 @@ function matColor(id, fallback) {
 function lvl() { return activeLevel(prop); }
 function curWalls() { return wallsOn(prop, lvl().id); }
 function curRooms() { return roomsOn(prop, lvl().id); }
+// A finish for each long face of a wall, named by the side it looks toward and what is there.
+function faceFieldsHtml(w, rooms) {
+  const names = wallFaceLabels(w, rooms);
+  return ['pos', 'neg'].map(f => `<div class="field"><label>${escapeHtml(names[f])}</label>${materialSelectHtml('wall', f === 'pos' ? w.materialPos : w.materialNeg, 'data-matface="' + f + '"').replace('(none)', 'Automatic')}</div>`).join('');
+}
 function curOpenings() { return openingsOn(prop, lvl().id); }
 function curPlan() { return lvl().plan; }
 function levelKey() { return prop.id + ':' + lvl().id; }
@@ -2235,6 +2240,7 @@ function renderInspector() {
       </div>
       <div class="field"><label>Material</label>${materialSelectHtml('wall', w.material, 'data-mat')}</div>
       <div class="field"><label>Interior face material</label>${materialSelectHtml('wall', w.materialIn, 'data-matin').replace('(none)', 'Automatic')}</div>
+      ${faceFieldsHtml(w, roomsOn(prop, wl.id))}
       ${scopeAssignHtml(w.id)}
       <div class="stat-line"><span>Level</span><b>${escapeHtml(wl.name)}</b></div>
       <div class="stat-line"><span>Face area</span><b>${fmtArea(L * wallHeightOf(prop, w))}</b></div>
@@ -2266,6 +2272,12 @@ function renderInspector() {
     insp.querySelector('[data-mat]').onchange = e => { pushUndo('change wall material'); w.material = e.target.value || null; touch(); };
     // Room-facing faces in 3D; blank = automatic (drywall on exterior walls, the wall material otherwise).
     insp.querySelector('[data-matin]').onchange = e => { pushUndo('change interior finish'); w.materialIn = e.target.value || null; touch(); };
+    // One long face only; blank = automatic (the interior finish, or the exterior's).
+    insp.querySelectorAll('[data-matface]').forEach(sel => sel.onchange = e => {
+      pushUndo('change face finish'); const k = e.target.dataset.matface === 'pos' ? 'materialPos' : 'materialNeg';
+      if (e.target.value) w[k] = e.target.value; else delete w[k];
+      touch();
+    });
     insp.querySelector('[data-del]').onclick = deleteSelection;
     bindAssign(insp);
     return;

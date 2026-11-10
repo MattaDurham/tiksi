@@ -99,6 +99,8 @@ export const BUILTIN_MATERIALS = [
   // Exterior cladding.
   M('mat-batten',    'Board and batten',         'wall',  '#e6e2d9', 'board',    [1.2, 1.2],    0.75, 0, 1),
   M('mat-clapboard', 'Painted clapboard',        'wall',  '#d8d1bf', 'siding',   [2.4, 0.5],    0.6,  0, 0.9),
+  // What an exterior wall's outside shows until someone records the real cladding (wall-solids.js).
+  M('mat-exterior-unknown', 'Exterior, not recorded', 'wall', '#9b9d9f', 'flat',  [1, 1],        0.9,  0, 0),
 ];
 
 // What each built-in is in the real world: [category, type]. Colours and products stay empty:
@@ -119,6 +121,7 @@ const BUILTIN_IDENTITY = {
   'mat-quartz': ['stone', 'Engineered quartz'], 'mat-stainless': ['metal', 'Stainless steel, brushed'], 'mat-steel-black': ['metal', 'Blackened steel'],
   'mat-roof-seam': ['metal', 'Standing-seam steel roofing'], 'mat-glass': ['glass', 'Clear float glass'], 'mat-batten': ['wood', 'Painted board and batten'],
   'mat-clapboard': ['wood', 'Painted wood clapboard'],
+  'mat-exterior-unknown': ['other', 'Exterior finish not recorded'],
 };
 for (const m of BUILTIN_MATERIALS) {
   const [category, type] = BUILTIN_IDENTITY[m.id] || ['other', ''];
