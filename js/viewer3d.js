@@ -1322,9 +1322,14 @@ async function renderStillPrepared(options) {
 
 // A PNG of the model at width x height: the current view, or `view` (a stored camera with its
 // lens and roll, for numbered photo positions). `live()` says whether to carry on.
+// Nothing can be drawn into a lost graphics context, and what a snapshot of it holds is blank:
+// stop with a plain reason so no empty picture is saved or downloaded.
+function graphicsGone() { return contextLost || !renderer || renderer.getContext().isContextLost(); }
+const GRAPHICS_GONE = 'The 3D view has lost its graphics memory, so no image was made. Wait for the view to come back, then render again.';
 async function renderStillBlob(options) {
   const token = mountId;
   const live = options.live || (() => token === mountId);
+  if (graphicsGone()) throw new Error(GRAPHICS_GONE);
   const deadline = performance.now() + 60000;
   // Do not save a transient flat-tinted first frame. Photo decoding is counted too.
   while (pendingTextureJobs() || Object.values(scanState).some(s => s === 'loading') || splatBusy()) {
@@ -1347,6 +1352,7 @@ async function renderStillBlob(options) {
   await new Promise(resolve => requestAnimationFrame(resolve));
   try {
     if (!live()) throw new Error('Export cancelled.');
+    if (graphicsGone()) throw new Error(GRAPHICS_GONE);
     // High-resolution stills use SMAA at output size; avoid multiplying their HDR memory by MSAA.
     configureRenderQuality(options.quality, true);
     for (const [p] of savedPasses) p.enabled = false;
@@ -1369,6 +1375,8 @@ async function renderStillBlob(options) {
     for (const m of measures) m.line.material.resolution.set(width, height);
     invalidateShadows();
     renderFrame(true);
+    // A large still is itself a way to lose the context: what was just drawn is then gone.
+    if (graphicsGone()) throw new Error(GRAPHICS_GONE);
     // Snapshot synchronously before WebGL's non-preserved default framebuffer is cleared.
     const snapshot = document.createElement('canvas');
     snapshot.width = width; snapshot.height = height;
@@ -2291,7 +2299,10 @@ async function renderPositions(ids) {
     touch();
     toast('Rendered ' + made.length + ' position' + (made.length === 1 ? '' : 's') + '. The renderings are in PHOTOS and on each position.', 'ok');
   } catch (e) {
-    toast('Rendering stopped: ' + e.message, 'error');
+    // What was rendered before the stop is kept; say which positions still have no rendering.
+    if (made.length) touch();
+    const left = list.slice(made.length).map(p => p.number);
+    toast('Rendering stopped: ' + e.message + (made.length ? ' Rendered: ' + made.length + '.' : '') + ' Not rendered: position' + (left.length === 1 ? ' ' : 's ') + left.join(', ') + '.', 'error', 12000);
   } finally {
     renderingPositions = false;
     if (token === mountId) { setHint(''); renderInspector(); }
