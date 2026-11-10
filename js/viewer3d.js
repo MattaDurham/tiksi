@@ -106,7 +106,7 @@ const ORBIT_POLAR = Math.PI * 0.495, MATCH_POLAR = Math.PI - 0.01, BASE_FOV = 50
 let measureDraft = null;       // first measure point
 const measures = [];           // {a, b, line, label}
 const scanObjs = {};           // scanId -> Object3D
-const scanState = {};          // scanId -> 'loading' | 'ready' | 'missing' | 'failed'
+const scanState = {};          // scanId -> 'loading' | 'ready' | 'missing' | 'failed' | 'hidden' (not loaded: it has not been shown yet)
 const pinObjs = {};            // photoId -> {group, sprite, line, dot, aspect}
 const noteObjs = {};           // noteId -> {group, sprite, aspect, place}
 const cameraObjs = {};         // photoId -> camera pyramid group
@@ -2879,14 +2879,30 @@ async function addScanToScene(scan) {
   requestRender(scan.kind === 'splat' ? 8 : 3);
   return obj;
 }
-async function loadAllScans() {
+// A scan is loaded the first time it is shown, never just because the page opened: a hidden
+// scan (the other side of a before/after pair, say) costs no download, parse or memory until
+// someone switches it on. One at a time, in list order. Call this after anything that can show
+// a scan; scans already loaded, loading, missing or failed are left alone.
+let scanQueue = Promise.resolve();
+function loadShownScans() {
   const token = mountId;
-  for (const scan of prop.scans.slice()) {
-    try { await addScanToScene(scan); }
-    catch (e) { console.error(e); if (token === mountId) toast('Could not load scan ' + scan.name + ': ' + errMsg(e), 'error'); }
-    if (token !== mountId || !scene) return;
-  }
-  renderToolCol();
+  for (const scan of prop.scans) if (scan.visible === false && !scanObjs[scan.id] && !scanState[scan.id]) scanState[scan.id] = 'hidden';
+  const wanted = prop.scans.filter(scan => scan.visible !== false && !scanObjs[scan.id] && (!scanState[scan.id] || scanState[scan.id] === 'hidden'));
+  // Marked now, so a second call before the queue reaches them does not queue them twice.
+  for (const scan of wanted) setScanState(scan.id, 'loading');
+  if (wanted.length) renderToolCol();
+  scanQueue = scanQueue.then(async () => {
+    for (const scan of wanted) {
+      if (token !== mountId || !scene) return;
+      // Deleted, or hidden again, while it waited its turn.
+      if (!prop.scans.some(s => s.id === scan.id)) { delete scanState[scan.id]; continue; }
+      if (scan.visible === false) { setScanState(scan.id, 'hidden'); continue; }
+      try { await addScanToScene(scan); }
+      catch (e) { console.error(e); if (token === mountId) toast('Could not load scan ' + scan.name + ': ' + errMsg(e), 'error'); }
+    }
+    if (token === mountId && scene && wanted.length) renderToolCol();
+  }).catch(e => console.error(e));
+  return scanQueue;
 }
 // Scan to plan on a mesh scan that is already here. Without a plan the proposal becomes the
 // plan. A scan the plan already came from is proposed again over the floor it matches (after
@@ -3798,7 +3814,7 @@ function renderInspectorBody() {
     if (!s) { selection = null; tagPicks = []; return renderInspectorBody(); }
     const obj = scanObjs[s.id] || null;
     const state = obj ? 'ready' : (scanState[s.id] || 'loading');
-    const st = obj ? scanStats(obj) : { label: { missing: 'missing from storage - re-import it', failed: 'could not be loaded', loading: 'loading' }[state] || 'loading' };
+    const st = obj ? scanStats(obj) : { label: { missing: 'missing from storage - re-import it', failed: 'could not be loaded', loading: 'loading', hidden: 'not loaded while hidden' }[state] || 'loading' };
     const rot = s.rot || [0, s.rotY || 0, 0];
     const isPts = s.kind === 'points', isSplat = s.kind === 'splat';
     // Nothing to frame, drop or centre until the object exists; deleting mid-parse would race the loader.
@@ -3854,7 +3870,7 @@ function renderInspectorBody() {
     if (pc) pc.onchange = e => { s.pointColor = e.target.value; upd(); };
     const flip = inspEl.querySelector('[data-flip]');
     if (flip) flip.onclick = () => { s.flip = !s.flip; upd(); };
-    inspEl.querySelector('[data-vis]').onchange = e => { s.visible = e.target.checked; upd(); renderToolCol(); };
+    inspEl.querySelector('[data-vis]').onchange = e => { s.visible = e.target.checked; upd(); loadShownScans(); renderToolCol(); };
     inspEl.querySelector('[data-frame]').onclick = () => { if (obj) frameObject(obj); };
     inspEl.querySelector('[data-floor]').onclick = () => { if (obj) { dropScanToFloor(s, obj); upd(); renderInspector(); } };
     inspEl.querySelector('[data-center]').onclick = () => { if (obj) { centerScanOnModel(s, obj, modelBounds(prop)); upd(); renderInspector(); } };
@@ -4040,7 +4056,7 @@ function renderToolCol() {
   const tb = (act, ic, label, key, active) =>
     `<button class="tool-btn ${active ? 'active' : ''}" data-act="${act}" title="${label}${key ? ' (' + key + ')' : ''}">` +
     `${icon(ic)}<span class="tb-text">${label}</span>${key ? `<kbd class="key">${key}</kbd>` : ''}</button>`;
-  const scanBadge = s => scanObjs[s.id] ? (s.kind || '').toUpperCase().slice(0, 5) : ({ missing: 'GONE', failed: 'ERR' }[scanState[s.id]] || '...');
+  const scanBadge = s => scanObjs[s.id] ? (s.kind || '').toUpperCase().slice(0, 5) : ({ missing: 'GONE', failed: 'ERR', hidden: 'OFF' }[scanState[s.id]] || '...');
   const scanRows = prop.scans.map(s => `<button class="tool-btn v-scan-row ${scanSelected(s.id) ? 'active' : ''}" data-scan="${escapeHtml(s.id)}" title="${escapeHtml(s.name)}${scanObjs[s.id] ? '' : ' (' + escapeHtml(scanState[s.id] || 'loading') + ')'}">${icon(s.kind === 'splat' ? 'splat' : s.kind === 'mesh' ? 'model' : 'scan')}<span class="tb-text">${escapeHtml(s.name.length > 14 ? s.name.slice(0, 12) + '..' : s.name)}</span><kbd class="key">${escapeHtml(scanBadge(s))}</kbd></button>`).join('');
   // One toggle per storey, lit while the level is shown; the key badge is its floor elevation.
   const hidden = hiddenLevels();
@@ -4106,6 +4122,7 @@ function renderToolCol() {
     for(const id of [c.beforeId,c.afterId]) {
       const scan=prop.scans.find(s=>s.id===id);if(scan){scan.visible=id===chosen;applyScanTransform(scan,scanObjs[id]);}
     }
+    loadShownScans();   // the side now shown, if this is the first time
     if(chosen==='design')delete prop.modelSourceId;else prop.modelSourceId=chosen;
     // Select the record immediately, including while its scene object is loading.
     // setScanState refreshes this inspector when the chosen object is ready.
@@ -4259,7 +4276,7 @@ export function mount(root) {
   requestRender(4);
 
   const focus=pendingScanFocus || prop.modelSourceId,token=mountId,focusVersion=selectionVersion;pendingScanFocus=null;
-  loadAllScans().then(()=>{if(token===mountId && selectionVersion===focusVersion && !match && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
+  loadShownScans().then(()=>{if(token===mountId && selectionVersion===focusVersion && !match && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
   // Deep link from the PHOTOS view: #/model?pin=<photoId> enters PIN PHOTO for that photo.
   const m = /[?&]pin=([^&]+)/.exec(location.hash);
   if (m) {
