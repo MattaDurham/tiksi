@@ -2839,6 +2839,8 @@ const hooks = {
   toast(msg, kind) { toast(msg, kind); },
   get renderer() { return renderer; },
   get scene() { return scene; },
+  // The longest side a texture inside an imported model may have on this device.
+  get textureLimit() { return memoryLimits().importedTextureSize; },
   requestRender() { requestRender(3); },
 };
 const errMsg = e => String(e && e.message || e);

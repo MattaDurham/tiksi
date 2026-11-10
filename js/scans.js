@@ -7,7 +7,8 @@ import { setModelXray } from './model-xray.js';
 import * as THREE from 'three';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
-import { modelMaterialSlots, applyModelMaterials } from './model-materials.js';
+import { modelMaterialSlots, applyModelMaterials, sharpenModelTextures, materialTextures, ownedTextures } from './model-materials.js';
+import { shrunkSize } from './render-quality.js';
 import { prepareModelPackage } from './scanbundle.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -337,17 +338,55 @@ async function buildPoints(buffer, e, scan, inner, wrapper, hooks) {
 async function buildMesh(buffer, e, scan, inner, hooks) {
   hooks && hooks.progress && hooks.progress('Loading ' + scan.name, 0.5);
   const obj = await loadMesh(buffer, e);
+  // Before anything reaches the graphics card: the file's own pictures, no larger than this
+  // device takes (hooks.textureLimit, from render-quality.js deviceLimits).
+  const limit = hooks && hooks.textureLimit;
+  const shrunk = await capModelTextures(obj, limit);
   await applyModelMaterials(scan, obj);
+  sharpenModelTextures(obj, hooks && hooks.renderer ? Math.min(16, hooks.renderer.capabilities.getMaxAnisotropy()) : 1);
   let count = 0;
   obj.traverse(o => { if (o.isMesh) {
-    const anisotropy = hooks && hooks.renderer ? Math.min(16, hooks.renderer.capabilities.getMaxAnisotropy()) : 1;
-    for (const m of Array.isArray(o.material) ? o.material : [o.material]) for (const key of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']) {
-      if (m && m[key]) { m[key].anisotropy = anisotropy; m[key].needsUpdate = true; }
-    }
     o.castShadow = true; o.receiveShadow = true; count += o.geometry.index ? o.geometry.index.count / 3 : o.geometry.getAttribute('position').count / 3; } });
   inner.add(obj);
-  return { count, label: Math.round(count).toLocaleString() + ' triangles' };
+  // The inspector says so when this device is showing smaller pictures than the file holds.
+  const reduced = shrunk ? ' · ' + shrunk + (shrunk === 1 ? ' texture' : ' textures') + ' reduced to ' + limit + ' px' : '';
+  return { count, texturesReduced: shrunk, label: Math.round(count).toLocaleString() + ' triangles' + reduced };
 }
+// Shrink every picture inside a loaded model whose longest side is over `limit` pixels, so a
+// phone is not asked to hold (and mip) 4096 or 8192 pixel atlases. Each picture is handled once
+// however many materials use it; the full-size decode is released. Returns how many were shrunk.
+export async function capModelTextures(root, limit) {
+  if (!(limit > 0)) return 0;
+  const textures = new Set();
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m) for (const t of materialTextures(m)) textures.add(t);
+  });
+  const bySource = new Map();   // one picture can sit behind several textures
+  let shrunk = 0;
+  for (const t of textures) {
+    const image = t.image;
+    const size = image && shrunkSize(image.width, image.height, limit);
+    if (!size || t.isCompressedTexture || t.isDataTexture) continue;
+    let small = bySource.get(image);
+    if (!small) {
+      small = document.createElement('canvas');
+      small.width = size.width; small.height = size.height;
+      const ctx = small.getContext('2d');
+      ctx.imageSmoothingQuality = 'high';
+      // glTF pictures are decoded top row first and uploaded as they are (flipY off): drawn
+      // straight onto the canvas they keep their rows.
+      ctx.drawImage(image, 0, 0, size.width, size.height);
+      bySource.set(image, small);
+      shrunk++;
+    }
+    t.image = small;
+    t.needsUpdate = true;
+  }
+  for (const image of bySource.keys()) if (image.close) image.close();
+  return shrunk;
+}
+
 async function buildSplat(buffer, e, scan, inner, wrapper, hooks) {
   hooks && hooks.progress && hooks.progress('Loading splat renderer', 0.2);
   await ensureSpark(hooks.renderer, hooks.scene, () => hooks.requestRender && hooks.requestRender());
@@ -487,7 +526,9 @@ export function disposeScanObject(obj) {
     const mats = [...(Array.isArray(o.material) ? o.material : (o.material ? [o.material] : [])),...(o.userData.sourceMaterials || [])];
     for (const m of mats) {
       if(disposedMaterials.has(m))continue;disposedMaterials.add(m);
-      for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap', 'bumpMap', 'alphaMap']) if (m[k]?.dispose && !disposedTextures.has(m[k])) {disposedTextures.add(m[k]);m[k].dispose();}
+      // Every picture the material holds, the less common kinds too (clearcoat, sheen,
+      // transmission, specular...), each once.
+      for (const t of ownedTextures(m)) if (!disposedTextures.has(t)) {disposedTextures.add(t);t.dispose();}
       m.dispose();
     }
   });
