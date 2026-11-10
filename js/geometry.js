@@ -21,6 +21,7 @@ import { materialFor } from './textures.js';
 import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, pointInPoly, doorLeaves } from './wall-solids.js';
 import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
 import { applyPlanTagVisibility } from './tags-scene.js';
+import { cutPrism } from './section-planes.js';
 
 const FALLBACK_WALL = '#d8d4cc';
 const FALLBACK_FLOOR = '#97999b';
@@ -860,6 +861,33 @@ export function wallCapRects(property, height, opts) {
     }
   }
   return rects;
+}
+
+// The same caps for a cut along any plane: one polygon ([x, y, z] world corners, in order) for
+// every wall solid the plane n . p = d passes through. Each solid is an upright prism (its plan
+// footprint standing from the bottom to the top of the piece), so its cut is one convex polygon.
+export function wallCapPolygons(property, n, d, opts) {
+  const polys = [];
+  if (!Array.isArray(property.levels) || !property.levels.length) ensureLevels(property);
+  const hidden = opts && opts.hiddenLevels;
+  for (const lvl of property.levels) {
+    if (hidden && hidden.has(lvl.id)) continue;
+    const H = levelHeight(property, lvl.id);
+    const walls = wallsOn(property, lvl.id);
+    const openings = openingsOn(property, lvl.id);
+    for (const wall of walls) {
+      const { solids, L } = wallSolids(wall, openings, H);
+      if (L < 0.01) continue;
+      const f = wallFrame(wall);
+      const ends = wallEnds(wall, walls, 0);
+      for (const s of solids) {
+        const fp = solidFootprint(s, L, f.h, ends).map(([x, z]) => [wall.ax + f.ux * x + f.nx * z, wall.ay + f.uy * x + f.ny * z]);
+        const poly = cutPrism(fp, lvl.elevation + s.v0, lvl.elevation + s.v1, n, d);
+        if (poly) polys.push(poly);
+      }
+    }
+  }
+  return polys;
 }
 
 // Extent of the traced model in plan. The floorplan underlay only counts when there is
