@@ -36,6 +36,8 @@ const WINDOW_DEFAULT = { width: 0.914, height: 1.219, sill: 0.762 }; // 36 x 48,
 
 const RULER = 22;                 // px; rulers sit along the top and left canvas edges
 const DRAG_START = 4;             // px the pointer travels before a press becomes a drag
+const CALIB_MIN_PX = 20;          // px: the shortest on-screen span CALIBRATE accepts
+const MIN_WALL = 0.05;            // m: a corner move never leaves a wall shorter than this
 const FONT = 'ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
 // Palette for the drawing surface (kept in sync with css/console.css tokens by hand:
 // canvas cannot read CSS variables cheaply every frame).
@@ -1680,7 +1682,16 @@ function onPointerDown(e) {
     const pl = curPlan();
     if (!pl || !pl.img) { setHint('Upload a plan image first, then calibrate.'); return; }
     if (!calib || calib.b) calib = { a: [wx, wy], b: null };
-    else { calib.b = [wx, wy]; renderInspector(); }
+    else {
+      // Two clicks on (nearly) the same spot measure nothing: a zero length would make the
+      // scale infinite. Keep the first point and ask for a second one further away.
+      const a = w2s(calib.a);
+      if (Math.hypot(a[0] - sx, a[1] - sy) < CALIB_MIN_PX) {
+        setHint(`The two points are too close together to set a scale. Click a second point at least ${CALIB_MIN_PX} px from the first, a known distance away.`);
+        return;
+      }
+      calib.b = [wx, wy]; renderInspector();
+    }
     updateHint();
     return;
   }
@@ -2146,6 +2157,7 @@ function renderInspector() {
       const real = parseLen(input.value);
       if (isNaN(real) || real <= 0) { alert('Could not parse that distance. Try 12\'6", 150", or 3.8m.'); return; }
       const ratio = real / measured;
+      if (!(measured > 0) || !Number.isFinite(ratio) || !(pl.mPerPx * ratio > 0)) { calib = null; renderInspector(); setHint('Those two points are too close together to set a scale. Click two points further apart.'); return; }
       // Rescale the underlay mapping about its own origin so image geometry matches reality.
       pl.mPerPx = pl.mPerPx * ratio;
       pl.calibrated = true;
@@ -2440,9 +2452,13 @@ export function mount(root) {
   updateHint();
   updateCursor();
 
+  // A frame that throws is reported and skipped; the loop always schedules the next one, so
+  // one bad value never leaves the canvas dead until the page is left.
   const loop = () => {
-    if (dirty && draw()) dirty = false;
     raf = requestAnimationFrame(loop);
+    if (!dirty) return;
+    try { if (draw()) dirty = false; }
+    catch (e) { dirty = false; console.error('PLAN could not draw this frame:', e); }
   };
   raf = requestAnimationFrame(loop);
 }
