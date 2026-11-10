@@ -20,7 +20,7 @@ const IN = 0.0254, TOLERANCE = 0.001;
 // bare number is inches in imperial (what a tape blade shows) and metres in metric; the form
 // echoes the parsed value so an ambiguous entry is visible. Stray text is refused, not guessed.
 export function parseReading(text) {
-  const value = readLength(text).value;
+  const value = readLength(text, 'inches').value;
   return Number.isFinite(value) && value > 0 && value < 100 ? value : NaN;
 }
 

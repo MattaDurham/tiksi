@@ -77,16 +77,51 @@ test('typed lengths: the forms people type are read, anything else is refused wi
   assert.equal(store.readLength('').error, 'Type a length.');
 });
 
-test('a number on its own is inches in feet and inches and metres in metric, in every field', () => {
+// What a number typed on its own meant in each length field before this reader, field by
+// field. A field may not quietly start reading 12 as 12 inches where it read 12 feet.
+const BARE_UNIT_BEFORE = {
+  'js/plan2d.js': ['feet', 'feet', 'feet', 'feet', 'feet', 'feet', 'feet', 'feet'],
+  'js/viewer3d.js': ['feet', 'feet', 'feet'],
+  'js/documentcenter.js': ['feet'],
+  'js/fixtures-ui.js': ['feet'],
+  'js/materialsview.js': ['feet'],
+  'js/measurements.js': ['inches'],
+};
+
+test('every length field reads a number on its own in the unit it always did', async () => {
+  const { readFile, readdir } = await import('node:fs/promises');
+  const root = new URL('../js/', import.meta.url);
+  const found = {};
+  for (const name of (await readdir(root)).filter(n => n.endsWith('.js') && n !== 'store.js')) {
+    const src = await readFile(new URL(name, root), 'utf8');
+    // parseLen's bare number is feet unless the call says otherwise; readLength's is inches.
+    for (const m of src.matchAll(/\b(parseLen|readLength)\(([^()]*(?:\([^()]*\)[^()]*)*)\)/g)) {
+      if (/^\s*import\b/m.test(src.slice(src.lastIndexOf('\n', m.index) + 1, m.index))) continue;
+      const unit = (m[2].match(/,\s*'(feet|inches)'\s*$/) || [])[1] || (m[1] === 'parseLen' ? 'feet' : 'inches');
+      (found['js/' + name] ||= []).push(unit);
+    }
+  }
+  assert.deepEqual(found, BARE_UNIT_BEFORE);
+});
+
+test('a number on its own is feet where the field read feet, inches in MEASURE, metres in metric', () => {
   store.ws.data.settings.units = 'imperial';
-  const IN = 0.0254;
-  assert.ok(Math.abs(store.parseLen('32') - 32 * IN) < 1e-9, '32 is a 32" door, not 32 feet');
-  assert.ok(Math.abs(store.parseLen('33 1/2') - 33.5 * IN) < 1e-9);
-  assert.ok(Math.abs(store.parseLen(32) - 32 * IN) < 1e-9, 'a number argument follows the same rule');
+  const FT = 0.3048;
+  assert.equal(store.parseLen('12'), 12 * FT, 'a 12 in PLAN is still a 12-foot wall');
+  assert.equal(store.parseLen('12', 'feet'), 12 * FT);
+  assert.equal(store.parseLen('6 1/2'), 6.5 * FT);
+  assert.equal(store.parseLen(9), 9 * FT, 'a number argument follows the same rule');
+  assert.equal(store.readLength('32').value, 32 / 12 * FT, 'a tape reading of 32 is 32 inches');
+  assert.equal(store.readLength('33 1/2', 'inches').value, 33.5 / 12 * FT);
+  assert.equal(store.parseLen('32', 'inches'), 32 / 12 * FT);
   assert.equal(store.bareLengthUnit(), 'inches');
+  assert.equal(store.bareLengthUnit('feet'), 'feet');
+  assert.match(store.readLength('ten', 'feet').error, /a number on its own is feet\.$/);
+  assert.throws(() => store.readLength('12', 'yards'), /inches or feet/);
   store.ws.data.settings.units = 'metric';
-  assert.ok(Math.abs(store.parseLen('2.4') - 2.4) < 1e-12);
-  assert.equal(store.bareLengthUnit(), 'metres');
+  assert.equal(store.parseLen('2.4'), 2.4);
+  assert.equal(store.readLength('2.4').value, 2.4);
+  assert.equal(store.bareLengthUnit('feet'), 'metres');
   store.ws.data.settings.units = 'imperial';
 });
 
@@ -113,7 +148,15 @@ test('typed money: thousands, k and m are read, anything else is refused with a 
   assert.equal(val('1,250,000.50'), 1250000.5);
   assert.equal(val('-$500'), -500);
   assert.equal(val(''), 0, 'blank is no amount');
-  for (const bad of ['10x12', '2,5', 'about 300', '12,34', '$$5']) {
+  // What the earlier reader took is still read the same.
+  assert.equal(val('1200$'), 1200);
+  assert.equal(val('+500'), 500);
+  assert.equal(val('5.'), 5);
+  assert.equal(val('$ 1 200'), 1200, 'a space may group thousands');
+  assert.equal(val('250 000.75'), 250000.75);
+  assert.equal(val('$-500'), -500);
+  assert.equal(val('250 k'), 250000);
+  for (const bad of ['10x12', '2,5', 'about 300', '12,34', '$$5', '1500 2000', '1 2', '--5', '-$-500', '+-5', '$5$', '1,200 000']) {
     const r = store.readMoney(bad);
     assert.ok(Number.isNaN(r.value) && /is not an amount/.test(r.error), bad + ' is refused');
   }

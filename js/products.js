@@ -1,7 +1,7 @@
 // Product registry: researched products with vendor and manufacturer links, specs, prices
 // and their sources, linked to scope items so the model becomes a true digital twin.
 
-import { ws, uid, touch, fmtMoney, parseMoney, escapeHtml, allScopeItems, activeProperty, projectSlice } from './store.js';
+import { ws, uid, touch, fmtMoney, readMoney, escapeHtml, allScopeItems, activeProperty, projectSlice } from './store.js';
 import { icon } from './icons.js';
 import { openResearch, safeResearchUrl, researchApi } from './research.js';
 import { diskWorkspace } from './disk-workspace.js';
@@ -456,8 +456,12 @@ function renderForm() {
   };
   bindImage(form, p, changed);
   bindCombobox(form, 'prod-category', { options: availableCategories(), allowNew: true, onPick: v => { p.category = v || 'other'; changed(); } });
+  // A price that cannot be read keeps the price it had and says why: it is not recorded as $0.
   form.querySelector('[data-money=price]').onchange = e => {
-    const price = parseMoney(e.target.value);
+    const r = readMoney(e.target.value);
+    if (Number.isNaN(r.value)) { message = r.error + ' The price is still ' + (p.price ? fmtMoney(p.price) : 'blank') + '.'; renderForm(); return; }
+    const price = r.value;
+    if (/^The price is still|is not an amount/.test(message)) message = '';
     if (price !== p.price) { recordPrice(p, { price, source: p.priceSourceUrl || '', how: 'entered by hand' }); }
     changed();
   };

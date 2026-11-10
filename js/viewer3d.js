@@ -3568,14 +3568,14 @@ function renderInspectorBody() {
       <button class="btn" data-walk>WALK HERE</button>
       <button class="btn danger" data-del>DELETE WALL</button>`;
     inspEl.querySelector('[data-th]').onchange = e => {
-      const v = parseLen(e.target.value);
+      const v = parseLen(e.target.value, 'feet');
       if (!isNaN(v) && v > 0.02 && v < 1) { beginGeometryEdit(prop, 'change wall thickness'); w.thickness = v; touch(); rebuildModel(); }
       renderInspector();
     };
     inspEl.querySelector('[data-h]').onchange = e => {
       beginGeometryEdit(prop, 'change wall height');
       if (!e.target.value.trim()) w.height = null;
-      else { const v = parseLen(e.target.value); if (!isNaN(v) && v > 0.3) w.height = v; }
+      else { const v = parseLen(e.target.value, 'feet'); if (!isNaN(v) && v > 0.3) w.height = v; }
       touch(); rebuildModel(); renderInspector();
     };
     inspEl.querySelector('[data-mat]').onchange = e => { beginGeometryEdit(prop, 'change wall material'); w.material = e.target.value || null; touch(); rebuildModel(); };
@@ -3608,7 +3608,7 @@ function renderInspectorBody() {
       ${linkedProductsHtml(o.id)}
       <button class="btn" data-wall>SELECT WALL</button>
       <button class="btn danger" data-del>DELETE OPENING</button>`;
-    const num = (sel, fn, min) => { inspEl.querySelector(sel).onchange = e => { const v = parseLen(e.target.value); if (!isNaN(v) && v > (min || 0.05)) { beginGeometryEdit(prop, 'edit opening'); fn(v); touch(); rebuildModel(); } renderInspector(); }; };
+    const num = (sel, fn, min) => { inspEl.querySelector(sel).onchange = e => { const v = parseLen(e.target.value, 'feet'); if (!isNaN(v) && v > (min || 0.05)) { beginGeometryEdit(prop, 'edit opening'); fn(v); touch(); rebuildModel(); } renderInspector(); }; };
     num('[data-w]', v => o.width = v, 0.2);
     num('[data-hh]', v => o.height = v, 0.3);
     if (o.type === 'window') num('[data-s]', v => o.sill = v, -0.001);

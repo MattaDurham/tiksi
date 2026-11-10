@@ -858,20 +858,30 @@ function amount(s) {
   return m && +m[3] ? (m[1] ? +m[1] : 0) + m[2] / m[3] : NaN;
 }
 
-// The one rule for a number typed on its own, in every length field: inches in feet and
-// inches (what a tape blade shows, and how SketchUp reads it), metres in metric.
-export function bareLengthUnit() { return units() === 'metric' ? 'metres' : 'inches'; }
+// A number typed on its own (no mark or unit) is metres in metric. In feet and inches each
+// field says what it means, and keeps what that field has always meant: 'feet' for PLAN,
+// MODEL, DOCUMENTS, fixture and material fields, 'inches' for MEASURE's tape readings.
+const BARE_UNITS = ['inches', 'feet'];
+function bareUnit(bare) {
+  if (!BARE_UNITS.includes(bare)) throw new Error('A length field must say whether a bare number is inches or feet, not ' + JSON.stringify(bare));
+  return bare;
+}
+export function bareLengthUnit(bare = 'inches') { return units() === 'metric' ? 'metres' : bareUnit(bare); }
 
 // Reads a typed length. Returns { value } in metres, or { value: NaN, error } saying why it
 // cannot be read: nothing is guessed from part of the entry ("10x12", "2,5 m", "6 ft tall").
 // Accepts 12'-6", 12' 6", 12'6, 12.5', 6 ft 2 in, 6ft2in, 6 feet 2 inches, 30", 30 in,
 // 33 1/2", 33-1/2", 2'-9 1/2", 9½", 1/4", 3.8 m, 85 cm, 850 mm, a minus sign in front
-// (below the datum), and a bare number in the unit bareLengthUnit() names.
-export function readLength(text) {
-  const raw = typeof text === 'number' ? String(text) : String(text ?? '');
+// (below the datum), and a bare number in the unit bareLengthUnit(bare) names.
+export function readLength(text, bare = 'inches') {
+  bareUnit(bare);
+  // Same arithmetic as a typed bare number, so a number argument stores the same metres.
+  const bareMetres = n => units() === 'metric' ? n : bare === 'feet' ? n * M_PER_FT : n / 12 * M_PER_FT;
+  if (typeof text === 'number') return Number.isFinite(text) ? { value: bareMetres(text) } : { value: NaN, error: 'Type a length.' };
+  const raw = String(text ?? '');
   const refuse = why => ({ value: NaN, error: why });
   const example = units() === 'metric' ? '3.2 m, 850 mm or 85 cm' : '12\'-6", 33 1/2", 6 ft 2 in or 3.2 m';
-  const cannot = () => refuse('"' + raw.trim() + '" is not a length. Type it like ' + example + '; a number on its own is ' + bareLengthUnit() + '.');
+  const cannot = () => refuse('"' + raw.trim() + '" is not a length. Type it like ' + example + '; a number on its own is ' + bareLengthUnit(bare) + '.');
   let s = raw.trim().toLowerCase()
     .replace(/[¼½¾⅛⅜⅝⅞⅓⅔⅙⅚⅕]/g, c => UNICODE_FRACTIONS[c])
     .replace(/[″”“]/g, '"').replace(/[′’‘]/g, "'").replace(/''/g, '"').trim();
@@ -891,13 +901,14 @@ export function readLength(text) {
   if (!m || (!m[1] && !m[2])) return cannot();
   const ft = m[1] ? amount(m[1]) : 0, inch = m[2] ? amount(m[2]) : 0;
   if (!Number.isFinite(ft) || !Number.isFinite(inch)) return cannot();
-  // A number on its own (no mark at all): one rule everywhere.
-  if (!m[1] && !m[3]) return { value: sign * (units() === 'metric' ? inch : inch / 12 * M_PER_FT) };
+  // A number on its own (no mark at all), in the unit this field reads it in.
+  if (!m[1] && !m[3]) return { value: sign * bareMetres(inch) };
   return { value: sign * (ft + inch / 12) * M_PER_FT };
 }
 
-// The value of readLength, NaN when the entry cannot be read.
-export function parseLen(str) { return readLength(str).value; }
+// The value of readLength, NaN when the entry cannot be read. Its bare number is feet, as it
+// always was for parseLen's callers; pass 'inches' for a field that reads tape inches.
+export function parseLen(str, bare = 'feet') { return readLength(str, bare).value; }
 
 export function fmtMoney(n) {
   if (n == null || isNaN(n)) return '-';
@@ -908,19 +919,19 @@ export function fmtMoney(n) {
 }
 
 // Reads a typed amount of money. Returns { value } in dollars (blank is 0), or
-// { value: NaN, error } when the entry cannot be read. Accepts 250000, 250,000, $250,000.50,
-// 250k, $1.2m, 1.2 million, a minus sign; refuses "10x12", "2,5", "about 300".
+// { value: NaN, error } when the entry cannot be read. Accepts 250000, 250,000, 250 000,
+// $250,000.50, 1200$, +500, 5., 250k, $1.2m, 1.2 million and one minus sign; refuses
+// "10x12", "2,5", "1500 2000", "--5" and "about 300" rather than reading part of them.
+const MONEY = /^([+-])?\s*(\$)?\s*([+-])?\s*(\d{1,3}(?:,\d{3})+(?:\.\d*)?|\d{1,3}(?: \d{3})+(?:\.\d*)?|\d+(?:\.\d*)?|\.\d+)\s*(k|thousand|mm|m|million)?\s*(\$)?$/;
 export function readMoney(text) {
   const raw = String(text ?? '').trim();
   if (!raw) return { value: 0 };
-  let s = raw.toLowerCase().replace(/\s+/g, '');
-  let sign = 1;
-  if (/^-/.test(s)) { sign = -1; s = s.slice(1); }
-  s = s.replace(/^\$/, '').replace(/^-/, () => { sign = -sign; return ''; });
+  const m = raw.toLowerCase().replace(/\s+/g, ' ').match(MONEY);
+  // One sign at most, and one dollar sign, before or after the amount.
+  if (!m || (m[1] && m[3]) || (m[2] && m[6])) return { value: NaN, error: '"' + raw + '" is not an amount. Type it like 250000, $250,000, 250k or 1.2m.' };
   const mult = { k: 1e3, thousand: 1e3, m: 1e6, mm: 1e6, million: 1e6 };
-  const m = s.match(/^(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?|\.\d+)(k|thousand|mm|m|million)?$/);
-  if (!m) return { value: NaN, error: '"' + raw + '" is not an amount. Type it like 250000, $250,000, 250k or 1.2m.' };
-  return { value: sign * parseFloat(m[1].replace(/,/g, '')) * (m[2] ? mult[m[2]] : 1) };
+  const sign = (m[1] || m[3]) === '-' ? -1 : 1;
+  return { value: sign * parseFloat(m[4].replace(/[, ]/g, '')) * (m[5] ? mult[m[5]] : 1) };
 }
 
 // The value of readMoney, and 0 when the entry cannot be read (fields that do not show
