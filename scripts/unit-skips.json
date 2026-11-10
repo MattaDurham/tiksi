@@ -1,0 +1,10 @@
+{
+  "about": "How many Python tests may skip for each reason (the start of the skip message). Counted on the online checks' Linux runner, which has none of the optional tools; this Mac skips none. Lower a number when a tool is installed there; raise one only with a reason in the commit.",
+  "reasons": {
+    "SketchUp SDK not installed": 16,
+    "Optional CAD runtime not installed": 1,
+    "photo placement runtime not installed": 1,
+    "ffmpeg/ffprobe are not installed": 9,
+    "Node not installed": 0
+  }
+}
