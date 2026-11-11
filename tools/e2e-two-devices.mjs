@@ -624,7 +624,72 @@ async function anUnreadableStoredWorkspaceIsLeftAsItIs() {
   } finally { await new Promise(r => plain.close(r)); plain.closeAllConnections?.(); }
 }
 
-const parts = { view: eachDeviceKeepsItsOwnView, typing: aSaveElsewhereLeavesThePageAlone, slow: aSlowActionWritesIntoTheLiveRecord, conflict: theCopiesDifferQuestionSaysWhatDiffers, older: anOlderTabDoesNotSaveOverANewerCopy,
+// A value being typed into a record inside the property (here a photo's notes) while another
+// device saves the same property: the record the field writes into must still be the live
+// one, whether the other device changed a different record or the very same one.
+async function aNestedRecordStaysTheLiveOne() {
+  step('nested');
+  const [first] = await makeProperties('nested');
+  const maker = await device({ hash: '' });
+  await maker.evaluate(async id => {
+    const store = await import('/js/store.js'), p = store.ws.data.properties.find(p => p.id === id);
+    for (const n of ['one', 'two']) p.photos.push({ id: 'photo-' + n, name: 'Photo ' + n, thumb: '', notes: '', kind: 'photo' });
+    store.touch();
+    await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
+  }, first);
+  await maker.context().close();
+  const one = await device({ hash: '#/photos' }), two = await device({ hash: '#/photos' });
+  await look(one, first); await look(two, first);
+  const photo = (copy, id) => prop(copy, first).photos.find(p => p.id === id);
+  const editPhoto = (page, id, change) => page.evaluate(async ([prop, id, change]) => {
+    const store = await import('/js/store.js');
+    Object.assign(store.ws.data.properties.find(p => p.id === prop).photos.find(p => p.id === id), change); store.touch();
+  }, [first, id, change]);
+  // Device two opens a photo's details and starts typing its notes.
+  await two.getByRole('button', { name: /Photo one/ }).click();
+  const notes = two.locator('[data-f=notes]');
+  await notes.click(); await notes.fill('Typed while another device saved a different photo');
+  // 1. The other device saves a different record of the same property.
+  await editPhoto(one, 'photo-two', { notes: 'Saved from the other device' }); await saveNow(one);
+  await has(two, first, 'p.photos.find(ph => ph.id === "photo-two").notes === "Saved from the other device"');
+  await notes.blur();
+  let copy = await untilOnTheMac(c => photo(c, 'photo-one').notes === 'Typed while another device saved a different photo', 'Notes typed into a photo while another device saved another photo');
+  assert.equal(photo(copy, 'photo-two').notes, 'Saved from the other device');
+  await two.waitForFunction(SAVED);
+  // 2. The other device saves another field of the very same record.
+  await two.getByRole('button', { name: /Photo one/ }).click();
+  await notes.click(); await notes.fill('Typed while another device renamed this photo');
+  await editPhoto(one, 'photo-one', { name: 'Photo one, renamed' }); await saveNow(one);
+  await has(two, first, 'p.photos.find(ph => ph.id === "photo-one").name === "Photo one, renamed"');
+  await notes.blur();
+  copy = await untilOnTheMac(c => photo(c, 'photo-one').notes === 'Typed while another device renamed this photo', 'Notes typed into a photo while another device renamed that photo');
+  assert.equal(photo(copy, 'photo-one').name, 'Photo one, renamed', 'and the other device\'s change to the same record is kept beside it');
+  // The page then shows what the Mac has: the typed value has not gone back to the old one.
+  await two.waitForFunction(SAVED);
+  assert.equal(await two.evaluate(async id => (await import('/js/store.js')).ws.data.properties.find(p => p.id === id).photos.find(p => p.id === 'photo-one').notes, first), 'Typed while another device renamed this photo');
+  await one.context().close(); await two.context().close();
+}
+
+// The one-pager editor: a headline being typed while another device saves the same property
+// is still there afterwards, and is saved.
+async function theOnePagerEditorKeepsWhatIsTyped() {
+  step('onepager');
+  const [first] = await makeProperties('onepager');
+  const one = await device(), two = await device();
+  await look(one, first); await look(two, first);
+  await two.evaluate(() => document.dispatchEvent(new CustomEvent('tiksi:one-pager')));
+  const headline = two.locator('dialog[open] [data-f=headline]');
+  await headline.click(); await headline.fill('A headline typed while the other device saved');
+  await edit(one, first, { notes: 'Saved from the other device during the typing' }); await saveNow(one);
+  await has(two, first, 'p.notes === "Saved from the other device during the typing"');
+  await two.waitForTimeout(500);
+  assert.equal(await headline.inputValue(), 'A headline typed while the other device saved', 'the field still holds what was typed');
+  const copy = await untilOnTheMac(c => prop(c, first).onePager.headline === 'A headline typed while the other device saved', 'A one-pager headline typed during another device\'s save');
+  assert.equal(prop(copy, first).notes, 'Saved from the other device during the typing');
+  await one.context().close(); await two.context().close();
+}
+
+const parts = { view: eachDeviceKeepsItsOwnView, typing: aSaveElsewhereLeavesThePageAlone, slow: aSlowActionWritesIntoTheLiveRecord, nested: aNestedRecordStaysTheLiveOne, onepager: theOnePagerEditorKeepsWhatIsTyped, conflict: theCopiesDifferQuestionSaysWhatDiffers, older: anOlderTabDoesNotSaveOverANewerCopy,
   drafts: twoDraftsAreNotAConflict, unavailable: aProjectWithAMissingFileIsShown, import: aProjectFileAsksBeforeItReplaces, error: aPageThatFailsToOpenSaysSo, saveid: aKeptCopyTheMacAlreadyHasIsNotSentAgain,
   originals: originalsAreNotDownloadedAndHeldForEver, pictures: theFirstScreenDoesNotWaitForEveryPicture, stored: anUnreadableStoredWorkspaceIsLeftAsItIs, model: modelKeepsItsCamera };
 
@@ -633,6 +698,7 @@ try {
   browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   // The run is stopped after ten minutes, naming the part it was in.
   let timer;
+  for (const key of (process.env.E2E_STEP || '').split(',').filter(Boolean)) assert.ok(parts[key], 'E2E_STEP names a part that does not exist: ' + key);
   await Promise.race([(async () => { for (const [key, part] of Object.entries(parts)) if (!process.env.E2E_STEP || process.env.E2E_STEP.split(',').includes(key)) await part(); })(),
     new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('The run did not finish; it was in part ' + lastStep)), 600000); })]).finally(() => clearTimeout(timer));
   assert.deepEqual(errors, []);

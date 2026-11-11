@@ -185,13 +185,38 @@ export function replaceWorkspace(data, { source = 'import', prepare } = {}) {
   return change;
 }
 
-// Put a record's new values into the object that already stands for it. An open page, a
-// dialog or a slow action that took the record before the change then still holds the live
-// one: what it writes next is saved, not lost in a copy nothing looks at any more.
+// Put a record's new values into the objects that already stand for it, all the way down.
+// An open page, a dialog or a slow action that took the record, or anything inside it (a
+// wall, a photo, a level, a project item), before the change then still holds the live one:
+// what it writes next is saved, not lost in a copy nothing looks at any more.
+// - an object keeps its identity and gets the new fields (fields that are gone are removed);
+// - a list of records (each with its own id) keeps its array, and each record that is
+//   still there keeps its object; records that are gone are removed, new ones added, in the
+//   new order;
+// - any other list keeps its array and takes the new contents;
+// - a value that is equal already is not touched at all.
 export function adoptRecord(held, fresh) {
   if (held === fresh) return held;
   for (const key of Object.keys(held)) if (!(key in fresh)) delete held[key];
-  return Object.assign(held, fresh);
+  for (const key of Object.keys(fresh)) held[key] = adoptValue(held[key], fresh[key]);
+  return held;
+}
+const plainObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+const recordList = v => v.every(r => plainObject(r) && typeof r.id === 'string') && new Set(v.map(r => r.id)).size === v.length;
+function adoptValue(held, fresh) {
+  if (held === fresh) return held;
+  if (plainObject(held) && plainObject(fresh)) return adoptRecord(held, fresh);
+  if (Array.isArray(held) && Array.isArray(fresh)) {
+    let next = fresh;
+    if (recordList(held) && recordList(fresh)) {
+      const here = new Map(held.map(rec => [rec.id, rec]));
+      next = fresh.map(rec => here.has(rec.id) ? adoptRecord(here.get(rec.id), rec) : rec);
+    }
+    held.length = 0;
+    for (const item of next) held.push(item);
+    return held;
+  }
+  return fresh;
 }
 // Shared data arrives as whole new records. Keep the objects of the records that are already
 // here (properties, projects, products, materials), and say what changed.

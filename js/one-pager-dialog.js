@@ -218,7 +218,9 @@ export function openOnePagerEditor(prop = activeProperty(), opts = {}) {
     if (['headline', 'tagline', 'summary', 'highlights'].includes(k)) o.customized = true;
   };
   form.querySelectorAll('[data-f]').forEach(el => {
-    el.addEventListener('input', () => { readField(el); schedulePreview(); });
+    // Typing is an edit from the first key: marked as one, it is kept beside a save from
+    // another device instead of being overwritten by it.
+    el.addEventListener('input', () => { readField(el); touch(); schedulePreview(); });
     el.addEventListener('change', () => { readField(el); touch(); refreshStatus(); });
   });
   dlg.querySelector('[data-op-hero]').onchange = e => { o.hero = e.target.value; touch(); schedulePreview(); };
@@ -227,7 +229,7 @@ export function openOnePagerEditor(prop = activeProperty(), opts = {}) {
     if (o.customized && !confirm('Replace the headline, tagline, summary and highlights with text drafted from the project as it is now?')) return;
     draftOnePager(prop, ws.data, { force: true });
     touch();
-    for (const el of form.querySelectorAll('[data-f]')) el.value = el.dataset.f === 'highlights' ? o.highlights.join('\n') : o[el.dataset.f];
+    for (const el of form.querySelectorAll('[data-f]')) if (el !== document.activeElement) el.value = el.dataset.f === 'highlights' ? o.highlights.join('\n') : o[el.dataset.f];
     refreshStatus(); schedulePreview();
     say('Text drafted from the project.', 'ok');
   };
@@ -276,7 +278,7 @@ export function openOnePagerEditor(prop = activeProperty(), opts = {}) {
     const fresh = (after.properties || []).find(x => x.id === prop.id);
     if (!fresh) { dlg.close(); return; }
     prop = fresh; o = normalizeOnePager(prop); assets = null; assetsKey = null;
-    for (const el of form.querySelectorAll('[data-f]')) el.value = el.dataset.f === 'highlights' ? o.highlights.join('\n') : o[el.dataset.f];
+    for (const el of form.querySelectorAll('[data-f]')) if (el !== document.activeElement) el.value = el.dataset.f === 'highlights' ? o.highlights.join('\n') : o[el.dataset.f];
     dlg.querySelector('[data-op-hero]').innerHTML = heroOptions(prop, o);
     form.querySelectorAll('[data-show]').forEach(c => { c.checked = !!o.show[c.dataset.show]; });
     refreshStatus(); schedulePreview();
