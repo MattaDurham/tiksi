@@ -598,6 +598,7 @@ async function runExportBundle() {
   btn.disabled = true;
   setSaveStatus('BUNDLING', true);
   try {
+    if (diskWorkspace) await diskWorkspace.whenPictures();
     const r = await exportBundle();
     setSaveStatus('EXPORTED ' + r.fileCount + ' FILE' + (r.fileCount === 1 ? '' : 'S'), false);
   } catch (e) {

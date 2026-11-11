@@ -207,6 +207,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   // Projects the Mac lists but cannot read just now (file missing or unreadable), as the Mac
   // describes them: [{ id, name, path, reason, message }]. They are in no record here.
   let unavailable = [];
+  let picturesIn = Promise.resolve();
   function noteUnavailable(list) {
     const next = Array.isArray(list) ? list : [];
     if (sameJson(next, unavailable)) return;
@@ -796,6 +797,9 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   // Projects whose file the Mac cannot read just now, and taking one off the Mac's list for
   // good (no file is deleted; a Mac that does not offer this answers that it cannot).
   get unavailable() { return unavailable; },
+  // Settles when every property's pictures are in the open records: an export waits for it,
+  // so a file written in the first seconds holds its pictures and not references to them.
+  whenPictures() { return picturesIn; },
   async forgetUnavailable(id) {
     const reply = await (await request('/unavailable/' + encodeURIComponent(id) + '/forget', { method: 'POST' })).json();
     noteUnavailable(reply.unavailable);
@@ -984,7 +988,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     for (const p of ws.data.properties) if (pictures.fill(p)) filled.add(p.id);
     if (pictures.fill(ws.data) || filled.size) onRemote?.({ properties: filled, keys: new Map([...filled].map(id => [id, null])), materials: false, other: false });
   }
-  laterPictures().catch(error => console.warn('pictures of the other properties:', error));
+  picturesIn = laterPictures().catch(error => console.warn('pictures of the other properties:', error));
   onChange(changed);
   setInterval(() => {
     // Another part of the app may have written its own message over this module's state

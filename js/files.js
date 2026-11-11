@@ -139,6 +139,7 @@ export async function saveProject(prop, opts) {
   }
   let savedSig;
   const pack = async () => {
+    if (diskWorkspace) await diskWorkspace.whenPictures();
     savedSig = signatureOf(prop.id);
     setSaveStatus('PACKING', true);
     try { return await exportProjectBlob(prop.id); }
