@@ -212,6 +212,24 @@ def project_file_base(name):
     return re.sub(r'[\\/:*?"<>|\x00-\x1f]', ' ', str(name)).strip(' .')[:80] or 'Project'
 
 
+class Piece:
+    """A request body of a known length, read at most to that length; what is left of it can be
+    read and thrown away."""
+    def __init__(self, source, length): self.source, self.left = source, length
+
+    def read(self, amount):
+        if not self.left: return b''
+        data = self.source.read(min(amount, self.left))
+        self.left -= len(data)
+        if not data: self.left = 0
+        return data
+
+    def discard_rest(self):
+        try:
+            while self.read(1024 * 1024): pass
+        except OSError: self.left = 0
+
+
 class WorkspaceService:
     run = staticmethod(subprocess.run)
 
@@ -1241,10 +1259,16 @@ class WorkspaceService:
                     self.reply(h, 200, {'hash': digest, 'size': size, 'received': received, 'done': done})
                 elif h.command == 'PUT':
                     # An empty piece is allowed: it finishes an upload whose part is already whole.
-                    try: size, offset = int(h.headers.get('X-Upload-Size', '')), int(h.headers.get('X-Upload-Offset', ''))
-                    except ValueError: raise WorkspaceError('Send X-Upload-Size and X-Upload-Offset')
                     length = self.length(h, MAX_PIECE, empty=True)
-                    received, size, done = self.upload_piece(digest, size, offset, h.rfile, length)
+                    piece = Piece(h.rfile, length)
+                    try:
+                        try: size, offset = int(h.headers.get('X-Upload-Size', '')), int(h.headers.get('X-Upload-Offset', ''))
+                        except ValueError: raise WorkspaceError('Send X-Upload-Size and X-Upload-Offset')
+                        received, size, done = self.upload_piece(digest, size, offset, piece, length)
+                    finally:
+                        # A refused piece is read to its end before the answer goes, so the
+                        # browser, still sending, receives the answer instead of a cut connection.
+                        piece.discard_rest()
                     self.reply(h, 200, {'hash': digest, 'size': size, 'received': received, 'done': done})
                 else: raise WorkspaceError('Upload endpoint not found', 404)
             elif path.startswith('/api/workspace/unavailable/') and path.endswith('/forget') and h.command == 'POST':

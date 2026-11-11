@@ -169,6 +169,22 @@ class StaticFiles(unittest.TestCase):
         status, _, body = self.call('/api/workspace/uploads/' + hashlib.sha256(b'x' * 10).hexdigest(), 'PUT', {**auth, 'X-Upload-Size': '10', 'X-Upload-Offset': '0'}, b'')
         self.assertEqual((status, json.loads(body)['received'], json.loads(body)['done']), (200, 0, False), 'an empty piece on an unfinished upload changes nothing')
 
+    def test_a_refused_full_size_piece_is_answered_with_its_sentence(self):
+        from server.workspace import MAX_PIECE
+        auth = {**WORKSPACE, 'X-Tiksi-Token': self.token}
+        payload = os.urandom(MAX_PIECE); digest = hashlib.sha256(payload + b'more').hexdigest()
+        self.assertEqual(self.call('/api/workspace/uploads/' + digest, 'PUT', {**auth, 'X-Upload-Size': str(MAX_PIECE + 4), 'X-Upload-Offset': '0'}, b'abcd')[0], 200)
+        # A piece from the wrong place is refused before any of it is used; the whole piece is
+        # still being sent when the Mac decides.
+        status, _, body = self.call('/api/workspace/uploads/' + digest, 'PUT', {**auth, 'X-Upload-Size': str(MAX_PIECE + 4), 'X-Upload-Offset': '0'}, payload)
+        answer = json.loads(body)
+        self.assertEqual((status, answer['code'], answer['received']), (409, 'upload-offset', 4))
+        self.assertIn('send from there', answer['error'])
+        with patch('server.workspace.shutil.disk_usage', return_value=type('Disk', (), {'free': 10})()):
+            status, _, body = self.call('/api/workspace/uploads/' + digest, 'PUT', {**auth, 'X-Upload-Size': str(MAX_PIECE + 4), 'X-Upload-Offset': '4'}, payload)
+        self.assertEqual(status, 507); self.assertIn('nearly full', json.loads(body)['error'])
+        self.assertEqual(json.loads(self.call('/api/workspace/uploads/' + digest, headers=auth)[2])['received'], 4, 'nothing of a refused piece is kept')
+
     def test_an_original_sent_in_pieces_continues_where_a_stalled_upload_stopped(self):
         payload = bytes(range(256)) * 4000; digest = hashlib.sha256(payload).hexdigest(); size = len(payload)
         auth = {**WORKSPACE, 'X-Tiksi-Token': self.token}
