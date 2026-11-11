@@ -13,6 +13,9 @@
 //                 model waits only for the sets it uses; without a helper the picture is the same
 //   pins          pinned photos load two at a time, and at card size on a touch device
 //   lights        a touch device lights the nearest rooms; a computer lights every room
+//   reduced       with the real server: a touch device's pinned-photo cards come from the Mac's
+//                 reduced pictures, the original is asked for only when a photo is opened whole,
+//                 and a card is still drawn when no reduced picture can be had
 //   limits        a scan over a touch device's size limit is not loaded and says so; a touch
 //                 device draws fewer points; a computer has no such limits
 //   idle          nothing is drawn while nothing changes
@@ -23,7 +26,10 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import net from 'node:net';
 import { dirname, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, webkit, devices } from 'playwright';
@@ -533,6 +539,8 @@ async function computerChecks(browser, say) {
   await desk.mouse.click(sx, sy);
   await waitUntil(async () => /Shell\.glb/.test(await desk.locator('.inspector').innerText()), 'a click on the scan selects it');
   assert.equal(await desk.evaluate(() => { window.__stopPlain(); return window.__plainTests; }), 0, 'the 30,000-triangle scan is tested through its index, not triangle by triangle');
+  const trees = (await viewer(desk, 'return v.qualityState()')).pickTrees;
+  assert.ok(trees && trees.helper >= 1 && trees.page === 0, 'its tree was built by the background helper, not by the page (' + JSON.stringify(trees) + ')');
   await desk.keyboard.press('Escape');
   say('a click on a large scan goes through the pick index');
 
@@ -673,10 +681,146 @@ async function computerLightChecks(browser, say) {
   say('a computer lights all ten rooms');
 }
 
+// ---------- the picking files: a fetch that fails is tried again on the next click ----------
+async function pickRetryChecks(browser, say) {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  await context.addInitScript(PROBE);
+  const page = await context.newPage();
+  const asked = [];
+  page.on('request', r => { if (/pick-index\.js/.test(r.url())) asked.push(new URL(r.url()).search || 'first'); });
+  await page.route('**/js/pick-index.js', route => route.abort());      // the first fetch is cut off
+  await openModel(page, 'low', { shell: true });
+  await waitUntil(() => asked.length === 1, 'the picking files are asked for when the large scan loads');
+  await delay(300);
+  assert.equal((await viewer(page, 'return v.qualityState()')).pickTrees, null, 'the cut-off fetch left the scan with the plain test');
+  // Any click tries again.
+  const size = page.viewportSize();
+  await page.mouse.click(size.width * 0.4, size.height * 0.5);
+  await waitUntil(() => asked.length === 2, 'the next click asks for the picking files again');
+  await waitUntil(async () => { const t = (await viewer(page, 'return v.qualityState()')).pickTrees; return !!t && t.helper >= 1; }, 'and the scan gets its tree from the helper');
+  assert.deepEqual(asked, ['first', '?again']);
+  await context.close();
+  say('a failed fetch of the picking files is tried again on the next click');
+}
+
+// ---------- with the real server: reduced pictures for a touch device's cards ----------
+async function reducedChecks(browser, say) {
+  if (process.platform !== 'darwin') { say('reduced pictures: skipped (the Mac\'s image tool makes them)'); return; }
+  const state = await mkdtemp(tmpdir() + '/tiksi-model-tools-test-');
+  const socket = net.createServer();
+  await new Promise(resolve => socket.listen(0, '127.0.0.1', resolve));
+  const port = socket.address().port;
+  await new Promise(resolve => socket.close(resolve));
+  // TIKSI_LOG_READS=1: the server logs what it was asked to read, which is what this checks.
+  const child = spawn('python3', ['tools/serve.py', '--port', String(port), '--state-dir', state], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, TIKSI_LOG_READS: '1' } });
+  const log = [];
+  for (const stream of [child.stdout, child.stderr]) stream.on('data', d => log.push(...String(d).split('\n')));
+  const mac = 'http://127.0.0.1:' + port;
+  try {
+    for (let i = 0; i < 100; i++) { try { if ((await fetch(mac)).ok) break; } catch {} await delay(50); }
+    const context = await browser.newContext(iphone);
+    await context.addInitScript(PROBE);
+    const saved = async page => { await page.locator('#save-status').waitFor({ state: 'attached' }); await page.waitForFunction(() => document.querySelector('#save-status')?.textContent === 'SAVED TO DISK', null, { timeout: 120000 }); };
+    // A house with three photos pinned on its back wall, the second stored on its side, saved to the Mac.
+    const first = await context.newPage();
+    await first.goto(mac + '/#/plan');
+    await saved(first);
+    await first.evaluate(async () => {
+      const s = await import('/js/store.js'), photos = await import('/js/photos-store.js');
+      (await import('/js/materials.js')).ensureBuiltinMaterials();
+      const p = s.propertyTemplate('Reduced pictures house'); p.id = 'prop-reduced';
+      const L = p.levels[0].id;
+      p.env.date = '2024-06-21'; p.env.time = 15.5;
+      p.walls.push(...[[0, 0, 6, 0], [6, 0, 6, 4], [6, 4, 0, 4], [0, 4, 0, 0]].map(([ax, ay, bx, by], i) => ({ id: 'wall-' + i, level: L, ax, ay, bx, by, thickness: 0.15, material: 'mat-drywall' })));
+      p.rooms.push({ id: 'room', level: L, name: 'Room', pts: [[0, 0], [6, 0], [6, 4], [0, 4]], material: 'mat-oak' });
+      const canvas = document.createElement('canvas'); canvas.width = 2400; canvas.height = 1800;
+      const ctx = canvas.getContext('2d');
+      for (let i = 0; i < 3; i++) {
+        const g = ctx.createLinearGradient(0, 0, 2400, 1800); g.addColorStop(0, 'hsl(' + i * 90 + ' 60% 55%)'); g.addColorStop(1, '#223');
+        ctx.fillStyle = g; ctx.fillRect(0, 0, 2400, 1800);
+        for (let k = 0; k < 60; k++) { ctx.fillStyle = 'hsl(' + (k * 37 + i * 11) % 360 + ' 70% 50%)'; ctx.fillRect((k * 397) % 2300, (k * 211) % 1700, 90, 70); }
+        let blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.9));
+        if (i === 1) {
+          const bytes = new Uint8Array(await blob.arrayBuffer());
+          const exif = [0xFF, 0xE1, 0x00, 0x22, 0x45, 0x78, 0x69, 0x66, 0x00, 0x00, 0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+          blob = new Blob([bytes.slice(0, 2), new Uint8Array(exif), bytes.slice(2)], { type: 'image/jpeg' });
+        }
+        const rec = await photos.addPhotoFromFile(p, new File([blob], 'Site ' + (i + 1) + '.jpg', { type: 'image/jpeg' }));
+        rec.pin = { x: 1 + i * 1.6, y: 1.5, z: 0.09, nx: 0, ny: 0, nz: 1 };
+      }
+      s.ws.data.properties.push(p); s.ws.data.settings.activePropertyId = p.id; s.touch();
+      await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
+    });
+    await saved(first);
+    await first.close();
+
+    // A fresh page on the same phone: nothing of the photos is in its memory. Before MODEL
+    // opens, the project files get the reduced-picture reader if they do not have it yet (the
+    // function this needs in js/disk-workspace.js, stood in for here with the same requests).
+    const open = async (reader, from = context) => {
+      const page = await from.newPage();
+      await page.goto(mac + '/#/plan');
+      await saved(page);
+      const hashes = await page.evaluate(async reader => {
+        const dw = await import('/js/disk-workspace.js'), s = await import('/js/store.js');
+        const cap = await (await fetch('/api/workspace/capabilities', { headers: { 'X-Tiksi-Workspace': '1' } })).json();
+        const headers = { 'X-Tiksi-Workspace': '1', 'X-Tiksi-Token': cap.token };
+        const assets = (await (await fetch('/api/workspace', { headers })).json()).assets;
+        if (reader === 'refuses') dw.diskWorkspace.smallerPicture = async () => { throw new Error('No smaller copy of this file'); };
+        else if (typeof dw.diskWorkspace.smallerPicture !== 'function') dw.diskWorkspace.smallerPicture = async (id, longest) => {
+          const asset = assets[id];
+          if (!asset) return null;
+          const r = await fetch('/api/workspace/blobs/' + asset.hash + '?size=' + longest, { headers });
+          return r.ok ? { buffer: await r.arrayBuffer(), mime: r.headers.get('Content-Type'), smaller: r.headers.get('X-Tiksi-Preview') === 'smaller' } : null;
+        };
+        return s.activeProperty().photos.map(ph => assets[ph.id].hash);
+      }, reader);
+      log.length = 0;
+      await page.evaluate(() => { window.__probe.decodes.length = 0; window.__probe.shapes.length = 0; location.hash = '#/model'; });
+      await page.locator('canvas.v-canvas').waitFor({ state: 'attached' });
+      await settled(page, 'MODEL on the Mac\'s files');
+      await waitUntil(() => page.evaluate(() => window.__probe.decodes.length >= 3), 'each pinned photo gets its picture');
+      return { page, hashes };
+    };
+    const reads = (hashes, sized) => hashes.map(h => log.filter(line => line.includes('"GET /api/workspace/blobs/' + h + (sized ? '?size=1024 ' : ' '))).length);
+
+    const { page, hashes } = await open('mac');
+    assert.deepEqual(reads(hashes, true), [1, 1, 1], 'the Mac was asked for each pinned photo\'s reduced picture');
+    assert.deepEqual(reads(hashes, false), [0, 0, 0], 'and for no original');
+    const shapes = await page.evaluate(() => window.__probe.shapes.slice());
+    assert.deepEqual(shapes.map(([w, h]) => Math.max(w, h)), [1024, 1024, 1024], 'each card\'s picture is 1024 pixels on its long side');
+    assert.deepEqual(shapes.filter(([w, h]) => h > w), [[768, 1024]], 'the photo stored on its side comes back upright (' + JSON.stringify(shapes) + ')');
+    // Opening a photo whole is when its original is fetched.
+    await frame(page);
+    const [px, py] = await onScreen(page, [1, 1.5, 0.09]);
+    await page.touchscreen.tap(px, py);
+    await page.locator('.v-lightbox img').waitFor({ timeout: 15000 });
+    await waitUntil(() => reads(hashes, false)[0] === 1, 'the original is fetched when the photo is opened whole');
+    assert.deepEqual(reads(hashes, false), [1, 0, 0], 'and only that one');
+    await page.close();
+
+    // No reduced picture to be had: the cards are still drawn, from the originals, as before.
+    // (Another phone: this one's browser now keeps the original it opened.)
+    const other = await browser.newContext(iphone);
+    await other.addInitScript(PROBE);
+    const fallback = await open('refuses', other);
+    assert.deepEqual(reads(fallback.hashes, false), [1, 1, 1], 'with no reduced picture each card falls back to its original');
+    const drawn = await fallback.page.evaluate(() => window.__probe.shapes.slice());
+    assert.equal(drawn.length, 3, 'and all three cards get their picture');
+    assert.ok(drawn.every(([w, h]) => Math.max(w, h) === 1024), 'decoded at card size (' + JSON.stringify(drawn) + ')');
+    await other.close();
+    await context.close();
+    say('cards come from the Mac\'s reduced pictures; the original only when a photo is opened; a fallback when there is none');
+  } finally {
+    child.kill('SIGTERM');
+    await rm(state, { recursive: true, force: true });
+  }
+}
+
 async function allChecks(browser, engine) {
   const say = text => console.log('  ' + engine + ': ' + text);
   const only = process.env.E2E_TOOLS_ONLY;   // one part, for working on this file
-  const parts = { phone: phoneChecks, limits: touchLimitChecks, computer: computerChecks, textures: textureChecks, lights: computerLightChecks };
+  const parts = { phone: phoneChecks, limits: touchLimitChecks, computer: computerChecks, textures: textureChecks, lights: computerLightChecks, retry: pickRetryChecks, reduced: reducedChecks };
   for (const [name, part] of Object.entries(parts)) if (!only || only === name) await part(browser, say);
 }
 
