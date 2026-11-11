@@ -1489,15 +1489,13 @@ function pick(e, opts) {
   camera.updateMatrixWorld();
   raycaster.setFromCamera(ndcFromEvent(e), camera);
   const targets = [];
-  // `markersOnly`: photo pins, notes, photo cameras and positions, and nothing else. The plan
-  // model and the scans are not tested at all.
-  if (modelGroup && !opts.markersOnly) targets.push(modelGroup);
+  if (modelGroup) targets.push(modelGroup);
   if (opts.pins !== false && pinRoot) targets.push(pinRoot);
   if (opts.notes !== false && noteRoot) targets.push(noteRoot);
   if (opts.pins !== false && cameraRoot) targets.push(cameraRoot);
   if (opts.pins !== false && positionRoot) targets.push(positionRoot);
-  if (opts.scans !== false && scanRoot && !opts.markersOnly) targets.push(scanRoot);
-  if (opts.ground && groundGroup && !opts.markersOnly) targets.push(groundGroup);
+  if (opts.scans !== false && scanRoot) targets.push(scanRoot);
+  if (opts.ground && groundGroup) targets.push(groundGroup);
   const hits = raycaster.intersectObjects(targets, true);
   for (const h of hits) {
     if (!isVisibleChain(h.object)) continue;
@@ -1542,9 +1540,10 @@ function onPointerUp(e) {
   if (tool === 'pin') return placePin(e);
   if (tool === 'note') return placeNote(e);
   if (match && match.points && match.points.mode === 'model') return addMatchModelPoint(e);
-  // The phone layout has no inspector, so a tap can only open a photo pin or a note: only those
-  // markers are tested, never the model's and the scans' triangles for a result nobody uses.
-  const hit = pick(e, fieldLayout() ? { markersOnly: true } : undefined);
+  // The phone layout has no inspector, so a tap only acts on a photo pin or a note. It is still
+  // the nearest thing under the finger that counts: a pin or note behind a wall or a scan is
+  // not opened through it. (Large scans are tested through the pick index, so this is cheap.)
+  const hit = pick(e);
   if (!hit || hit.kind === 'ground') { setSelection(null); return; }
   if (fieldLayout() && hit.kind === 'note') { setSelection(null); openNoteEditor({ note: noteById(hit.id), at: { x: e.clientX, y: e.clientY } }); return; }
   if (fieldLayout() && hit.kind !== 'pin') { setSelection(null); return; }
