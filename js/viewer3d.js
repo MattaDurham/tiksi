@@ -1538,6 +1538,7 @@ function onPointerUp(e) {
   if (tool === 'pin') return placePin(e);
   if (tool === 'note') return placeNote(e);
   if (match && match.points && match.points.mode === 'model') return addMatchModelPoint(e);
+  retryPickIndex();
   // The phone layout has no inspector, so a tap only acts on a photo pin or a note. It is still
   // the nearest thing under the finger that counts: a pin or note behind a wall or a scan is
   // not opened through it. (Large scans are tested through the pick index, so this is cheap.)
@@ -3154,6 +3155,28 @@ const errMsg = e => String(e && e.message || e);
 // which pick-index.js gives it a tree; smaller ones keep three's own test and need no file).
 const PICK_INDEX_MIN = 20000;
 let pickIndex = null, pickIndexLoading = 0;
+// Fetch the picking files (once) and give this scan its indexed test. A fetch that fails, a
+// dropped connection, is remembered and tried again on the next tap or click (retryPickIndex);
+// until then the scan is tested three's own way, which is slower and no less right.
+const pickIndexMissed = new Set();   // scan ids whose index is still owed
+function loadPickIndex(scanId, again = false) {
+  pickIndexLoading++;
+  // A second try asks for the same file at a slightly different address: a browser may
+  // remember the failed import of the first and answer with that failure again.
+  const retry = new URL('./pick-index.js', import.meta.url);
+  retry.search = '?again';
+  (again ? import(retry.href) : import('./pick-index.js')).then(m => {
+    pickIndex = m;
+    const obj = scanObjs[scanId];
+    if (obj && m.indexForPicking(obj) && !ownQuality()) m.buildPickIndexes(obj);
+  }).catch(e => { console.error('pick index', e); pickIndexMissed.add(scanId); }).then(() => { pickIndexLoading--; });
+}
+function retryPickIndex() {
+  if (!pickIndexMissed.size || pickIndexLoading) return;
+  const ids = [...pickIndexMissed];
+  pickIndexMissed.clear();
+  for (const id of ids) if (scanObjs[id]) loadPickIndex(id, true);
+}
 function needsPickIndex(obj) {
   let large = false;
   obj.traverse(o => {
@@ -3226,13 +3249,7 @@ async function addScanToScene(scan) {
   // them, never at start-up. A computer then asks for the tree at once, ahead of the first
   // click; a touch device when a tap or a pinch first reaches the scan, so it costs no memory
   // until then.
-  if (needsPickIndex(obj)) {
-    pickIndexLoading++;
-    import('./pick-index.js').then(m => {
-      pickIndex = m;
-      if (scanObjs[scan.id] === obj && m.indexForPicking(obj) && !ownQuality()) m.buildPickIndexes(obj);
-    }).catch(e => console.error('pick index', e)).then(() => { pickIndexLoading--; });
-  }
+  if (needsPickIndex(obj)) loadPickIndex(scan.id);
   setModelXray(obj, xray ? prop.env.xrayOpacity : null);
   fitShadow();
   applyEnvironment();
@@ -4796,6 +4813,8 @@ export function qualityState() {
     quality: quality(), touch: ownQuality(), phoneLayout: fieldLayout(), shared: prop.env.quality, shadowMap: sun.shadow.mapSize.x, smoothingSamples: composer.renderTarget1.samples,
     shading: aoWanted, glow: passes.bloom.enabled, pixelRatio: renderer.getPixelRatio(), limits: memoryLimits(),
     roomLights: lampLights.length, litRooms: lampKey ? lampKey.split('|').filter(Boolean) : [],
+    // Pick trees made so far, by the background helper and by the page itself (null: the picking files are not loaded).
+    pickTrees: pickIndex ? pickIndex.pickTreeCounts() : null,
   };
 }
 export function scanStates() {
