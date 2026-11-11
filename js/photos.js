@@ -29,6 +29,8 @@ let lightbox = null;        // { ids, idx } while the lightbox is open
 let dragDepth = 0;
 let previewToken = 0;       // guards async preview loads against stale selections
 let pointerAt = null;       // { x, y } client position while the pointer is over the deck
+let searchTimer = 0;        // the search waits for a pause in typing before it filters
+let sheetOpen = false;      // the details sheet is up (small screens); a background redraw keeps it
 
 // ---------- data helpers ----------
 function photos() { return prop.photos || (prop.photos = []); }
@@ -132,15 +134,23 @@ async function addFiles(list) {
   let last = null;
   while (batch.queue.length) {
     const { file, prop: target } = batch.queue.shift();
-    try { last = await addPhotoFromFile(target, file); }
+    let added = null;
+    try { added = last = await addPhotoFromFile(target, file); }
     catch (e) { batch.failed.push(file.name); }
     batch.done++;
-    if (el) { renderHead(); renderGrid(); }
+    // One new card, not the whole gallery again: a few hundred photos are megabytes of thumbnails.
+    if (el) { renderHead(); if (added && target === prop) addCard(added); }
   }
   importing = null;
   if (el) {
-    if (last && photoById(prop, last.id)) selectedId = last.id;
-    render();
+    // The last photo in is selected; its card is already in the gallery.
+    if (last && photoById(prop, last.id)) {
+      selectedId = last.id;
+      el.querySelectorAll('.ph-card.active').forEach(c => { c.classList.remove('active'); c.setAttribute('aria-pressed', 'false'); });
+      const card = el.querySelector(`.ph-card[data-id="${CSS.escape(last.id)}"]`);
+      if (card) { card.classList.add('active'); card.setAttribute('aria-pressed', 'true'); }
+    }
+    renderHead(); renderDetail();
   }
   if (batch.failed.length) alert('Could not read ' + batch.failed.length + ' file(s): ' + batch.failed.join(', '));
 }
@@ -416,7 +426,7 @@ function renderFilters() {
     <span class="sp"></span>
     <span class="ph-count mono"></span>`;
   bar.querySelectorAll('select[data-filter]').forEach(s => s.onchange = () => { filters[s.dataset.filter] = s.value; renderGrid(); });
-  bar.querySelector('[data-filter=q]').oninput = e => { filters.q = e.target.value; renderGrid(); };
+  bar.querySelector('[data-filter=q]').oninput = e => { filters.q = e.target.value; clearTimeout(searchTimer); searchTimer = setTimeout(() => { if (el) renderGrid(); }, 200); };
 }
 
 function cardHtml(p) {
@@ -484,18 +494,7 @@ function renderGrid() {
     return;
   }
   grid.innerHTML = list.map(cardHtml).join('');
-  grid.querySelectorAll('.ph-card').forEach(card => {
-    card.onclick = () => {
-      if (selectedId === card.dataset.id) return;
-      const prev = grid.querySelector('.ph-card.active');
-      if (prev) { prev.classList.remove('active'); prev.setAttribute('aria-pressed', 'false'); }
-      selectedId = card.dataset.id;
-      card.classList.add('active');
-      card.setAttribute('aria-pressed', 'true');
-      renderDetail();
-    };
-    card.ondblclick = () => openLightbox(card.dataset.id);
-  });
+  grid.querySelectorAll('.ph-card').forEach(bindCard);
   let frame = 0;
   grid.onpointermove = e => {
     if (e.pointerType === 'touch') return;
@@ -505,6 +504,41 @@ function renderGrid() {
   grid.onpointerleave = () => { if (frame) cancelAnimationFrame(frame); frame = 0; pointerAt = null; liftCardAt(grid, null); };
   // A re-render under a still pointer keeps the same card lifted.
   if (pointerAt) liftCardAt(grid, pointerAt.x, pointerAt.y);
+}
+
+function bindCard(card) {
+  const grid = card.parentElement;
+  card.onclick = () => {
+    // Tapping the open photo again brings its details back (on a phone they are a sheet).
+    if (selectedId === card.dataset.id) { setSheet(true); return; }
+    const prev = grid.querySelector('.ph-card.active');
+    if (prev) { prev.classList.remove('active'); prev.setAttribute('aria-pressed', 'false'); }
+    selectedId = card.dataset.id;
+    card.classList.add('active');
+    card.setAttribute('aria-pressed', 'true');
+    renderDetail();
+    setSheet(true);
+  };
+  card.ondblclick = () => openLightbox(card.dataset.id);
+}
+
+// A photo just imported: its card goes in front (the gallery is newest first), or the gallery
+// is drawn once when this is its first card or the filters hide it.
+function addCard(rec) {
+  const grid = el && el.querySelector('.ph-grid');
+  if (!grid) return;
+  if (grid.classList.contains('is-empty') || !grid.querySelector('.ph-card') || !visiblePhotos().some(p => p.id === rec.id)) { renderGrid(); return; }
+  grid.insertAdjacentHTML('afterbegin', cardHtml(rec));
+  bindCard(grid.firstElementChild);
+  const count = el.querySelector('.ph-count'), all = photos(), n = grid.querySelectorAll('.ph-card').length;
+  if (count) count.textContent = n !== all.length ? `${n} OF ${all.length}` : '';
+}
+
+// The details slide over the gallery on a small screen (css/photos.css); this says whether.
+function setSheet(on) {
+  sheetOpen = !!on && !!selectedId;
+  const layout = el && el.querySelector('.ph-layout');
+  if (layout) layout.classList.toggle('sheet-open', sheetOpen);
 }
 
 // The cards overlap, so whichever card is on top is not the one being pointed at: a card's own
@@ -563,6 +597,7 @@ function renderDetail() {
   const p = selectedId ? photoById(prop, selectedId) : null;
   if (!p) {
     selectedId = null;
+    setSheet(false);
     pane.innerHTML = `<div class="ph-detail-body"><h3>PHOTO</h3>
       <div class="empty">Select a photo to name it, add notes, link it to rooms, walls and scope items, or send it to the plan, the model or the material library.<br><br>
       Double-click a card to open the viewer.</div></div>`;
@@ -572,6 +607,7 @@ function renderDetail() {
   const isSky = prop.env && prop.env.sky === 'pano' && prop.env.panoPhotoId === p.id;
   const token = ++previewToken;
   pane.innerHTML = `
+    <button type="button" class="ph-sheet-close" data-act="sheet-close" aria-label="Close the photo details">CLOSE</button>
     <div class="ph-preview ${p.kind === 'pano' ? 'pano' : ''}">
       <img src="${escapeHtml(p.thumb || '')}" alt="${escapeHtml(p.name)}" draggable="false">
       <button class="ph-zoom" data-act="zoom" title="Open viewer (double-click a card also works)" aria-label="Open viewer">ZOOM</button>
@@ -661,6 +697,7 @@ function renderDetail() {
     touch(); renderGrid();
   });
   const act = (name, fn) => { const b = pane.querySelector(`[data-act=${name}]`); if (b) b.onclick = () => fn(p); };
+  act('sheet-close', () => setSheet(false));
   act('zoom', () => openLightbox(p.id));
   act('underlay', useAsUnderlay);
   act('sky', useAsSky);
@@ -686,13 +723,14 @@ export function mount(root) {
   el = root;
   if (!prop) {
     root.innerHTML = `<div class="view-scroll"><div class="kicker">PHOTOS</div>
-      <p class="muted">No property yet. Create one from the PROPERTY selector in the top bar.</p></div>`;
+      <p class="muted">No property yet. Create one with NEW PROPERTY under FILE.</p></div>`;
     return;
   }
   // Deep link from PROJECTS: #/photos?select=<photoId> selects that photo.
   const m = /[?&]select=([^&]+)/.exec(location.hash);
+  let opened = false;
   if (m) {
-    if (photoById(prop, decodeURIComponent(m[1]))) { selectedId = decodeURIComponent(m[1]); Object.assign(filters, { kind: '', room: '', pin: '', q: '' }); }
+    if (photoById(prop, decodeURIComponent(m[1]))) { selectedId = decodeURIComponent(m[1]); opened = true; Object.assign(filters, { kind: '', room: '', pin: '', q: '' }); }
     history.replaceState(null, '', '#/photos');
   }
   if (selectedId && !photoById(prop, selectedId)) selectedId = null;
@@ -710,6 +748,9 @@ export function mount(root) {
       <div class="ph-drop" hidden><div class="ph-drop-box">DROP PHOTOS TO ADD THEM TO ${escapeHtml(prop.name).toUpperCase()}</div></div>
     </div>`;
   render();
+  // Sent here to see one photo (a capture, a link from PROJECTS): its details open. A redraw of
+  // the page (a background save brings it back) keeps them open if they were.
+  if (opened || sheetOpen) setSheet(true);
 
   // #view outlives the view, so these come off again in unmount().
   dropRoot = root;
@@ -733,6 +774,7 @@ export function unmount() {
   window.removeEventListener('keydown', onKeyDown);
   // A running upload batch keeps going (it owns its state); the preview and lightbox URLs go.
   revokePhotoUrls();
+  clearTimeout(searchTimer);
   lightbox = null; dragDepth = 0; pointerAt = null;
   el = null; prop = null;
 }

@@ -2,7 +2,12 @@
    views, switches and pages. Everything here is scoped to html.phone, so the desktop
    console is untouched. Safe-area insets keep controls clear of notches and the home bar. */
 
-.fd-bar, .fd-frame, .fd-walk, .fd-scrim, .fd-panel { display: none; }
+.fd-bar, .fd-frame, .fd-walk, .fd-scrim, .fd-panel, .fd-task { display: none; }
+/* The way back to the phone layout, in the desktop layout's top bar (js/field.js shows it). */
+.fd-return[hidden] { display: none !important; }
+.fd-return { border-color: var(--accent); color: var(--accent); }
+/* The desktop layout on a touch screen: its top bar is tapped with a finger too. */
+html.touch #topbar :is(.tb-btn, .tb-select, .tk-button) { min-height: 44px; min-width: 44px; }
 .fd-frame[hidden], .fd-walk[hidden], html:not(.phone) .fd-frame { display: none !important; }
 
 html.phone {
@@ -18,6 +23,9 @@ html.phone body { overscroll-behavior: none; -webkit-tap-highlight-color: transp
 html.phone #topbar, html.phone #rail { display: none; }
 html.phone #app { grid-template: minmax(0, 1fr) / minmax(0, 1fr); grid-template-areas: "view"; height: 100vh; height: 100dvh; }
 html.phone:not(.fd-model) #view { padding-top: calc(var(--fd-bar-h) + var(--fd-top)); }
+/* Page content keeps clear of the notch held sideways and of the home bar. Margins, not
+   padding: several pages pad #view themselves. */
+html.phone:not(.fd-model) #view { margin: 0 var(--fd-right) var(--fd-bottom) var(--fd-left); }
 /* The model's empty state (no property yet) starts below the floating menu button. */
 html.phone.fd-model #view > .view-scroll { padding-top: calc(64px + var(--fd-top)); }
 
@@ -59,7 +67,7 @@ html.phone .fd-bar .history-actions .tb-btn { position: relative; min-width: 44p
 /* Over the model the bar is see-through: the state sits on a dark chip, and shrinks to its
    dot while everything is saved. */
 html.phone.fd-model .fd-save {
-  height: 32px; padding: 0 12px; border-radius: 16px; color: var(--ink);
+  height: 44px; min-width: 44px; justify-content: center; padding: 0 14px; border-radius: 22px; color: var(--ink);
   background: rgba(12, 16, 19, 0.62); border: 1px solid rgba(139, 154, 167, 0.24);
   -webkit-backdrop-filter: blur(12px) saturate(1.2); backdrop-filter: blur(12px) saturate(1.2);
 }
@@ -109,7 +117,7 @@ html.phone.fd-model .fd-walk:not([hidden]) {
 html.phone .v-layout { display: block; height: 100%; overflow: hidden; }
 html.phone .v-layout > .tool-col, html.phone .v-layout > .inspector, html.phone .v-layout > .side-handle { display: none; }
 html.phone .v-layout .v-wrap { height: 100%; }
-html.phone .v-modes, html.phone .v-sections, html.phone .v-compass, html.phone .v-env, html.phone .v-hint, html.phone .v-views { display: none !important; }
+html.phone .v-modes, html.phone .v-sections, html.phone .v-compass, html.phone .v-env:not(.file-env), html.phone .v-hint, html.phone .v-views { display: none !important; }
 html.phone .v-toast { top: calc(14px + var(--fd-top)); max-width: calc(100% - 132px); text-align: center; }
 html.phone .v-progress { top: calc(66px + var(--fd-top)); width: min(280px, calc(100% - 32px)); }
 html.phone .v-progress.show ~ .v-toast { top: calc(118px + var(--fd-top)); }
@@ -140,13 +148,13 @@ html.phone.fd-open .fd-panel { transform: none; visibility: visible; transition:
 .fd-section { padding: 14px 0 6px; border-bottom: 1px solid var(--line); }
 .fd-section h2 { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; color: var(--faint); margin-bottom: 10px; }
 
-.fd-segs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 3px; border-radius: 12px; background: var(--panel-3); border: 1px solid var(--line); }
-.fd-seg { height: 40px; border: 0; border-radius: 9px; background: transparent; color: var(--dim); font-size: 15px; touch-action: manipulation; }
+.fd-segs { display: grid; grid-auto-columns: minmax(0, 1fr); grid-auto-flow: column; gap: 2px; padding: 3px; border-radius: 12px; background: var(--panel-3); border: 1px solid var(--line); }
+.fd-seg { height: 44px; min-width: 0; border: 0; border-radius: 9px; background: transparent; color: var(--dim); font-size: 15px; touch-action: manipulation; }
 .fd-seg.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
 .fd-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 6px; }
 .fd-chips:first-child { margin-top: 0; }
 .fd-chip {
-  min-height: 40px; padding: 8px 14px; border-radius: 20px; font-size: 14.5px; color: var(--ink); text-align: left;
+  min-height: 44px; padding: 8px 14px; border-radius: 20px; font-size: 14.5px; color: var(--ink); text-align: left;
   background: var(--panel-2); border: 1px solid var(--line-2); touch-action: manipulation;
 }
 .fd-chip:active { border-color: var(--accent); color: var(--accent); }
@@ -170,6 +178,28 @@ html.phone.fd-open .fd-panel { transform: none; visibility: visible; transition:
 .fd-range output { font-family: var(--mono); font-size: 12px; color: var(--accent); }
 .fd-range input { grid-column: 1 / -1; width: 100%; height: 32px; accent-color: var(--accent); }
 
+/* Capture: the first thing the panel offers. */
+.fd-capture { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.fd-cap {
+  min-height: 52px; border-radius: 12px; font-size: 15.5px; font-weight: 600; color: var(--accent-ink);
+  background: var(--accent); border: 1px solid var(--accent); touch-action: manipulation;
+}
+.fd-cap + .fd-cap { background: var(--panel-2); color: var(--ink); border-color: var(--line-2); }
+.fd-cap-note { margin: 10px 0 0; font-size: 13.5px; line-height: 1.4; color: var(--dim); }
+
+/* While MODEL waits for the tap a capture needs: what to tap, and DONE. */
+html.phone.fd-model .fd-task:not([hidden]) {
+  display: flex; align-items: center; gap: 12px; position: fixed; z-index: 35;
+  left: calc(70px + var(--fd-left)); right: calc(14px + var(--fd-right)); top: calc(8px + var(--fd-top));
+  min-height: 48px; padding: 6px 6px 6px 14px; border-radius: 14px; color: var(--ink); font-size: 14.5px; line-height: 1.3;
+  background: rgba(12, 16, 19, 0.82); border: 1px solid var(--accent);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2); backdrop-filter: blur(12px) saturate(1.2);
+}
+.fd-task span { flex: 1; min-width: 0; }
+.fd-task-done { flex: none; min-width: 64px; min-height: 44px; border-radius: 10px; border: 0; background: var(--accent); color: var(--accent-ink); font-weight: 600; font-size: 15px; touch-action: manipulation; }
+/* The save chip moves below the banner while it is up. */
+html.phone.fd-model:has(.fd-task:not([hidden])) .fd-save { visibility: hidden; }
+
 .fd-links { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; }
 .fd-link { display: flex; align-items: center; min-height: 44px; padding: 0; background: transparent; border: 0; color: var(--dim); font-size: 15px; text-decoration: none; text-align: left; }
 .fd-link.on { color: var(--accent); }
@@ -183,7 +213,7 @@ html.phone.fd-open .fd-panel { transform: none; visibility: visible; transition:
   html.phone .fd-save i { animation: none; }
 }
 @media print {
-  .fd-bar, .fd-frame, .fd-walk, .fd-scrim, .fd-panel, .fd-save-note { display: none !important; }
+  .fd-bar, .fd-frame, .fd-walk, .fd-scrim, .fd-panel, .fd-save-note, .fd-task, .fd-return { display: none !important; }
 }
 
 /* ---------- save state, both layouts ----------

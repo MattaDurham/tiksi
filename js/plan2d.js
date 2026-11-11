@@ -2702,7 +2702,7 @@ export function mount(root) {
   if (!prop) {
     root.innerHTML = `<div class="view-scroll"><div class="kicker">PLAN</div>
       <div class="empty-state"><span class="empty-ic">${icon('plan')}</span><b>No property yet</b>
-      Create one from the PROPERTY selector in the top bar.</div></div>`;
+      Create one with NEW PROPERTY under FILE.</div></div>`;
     return;
   }
   ensureLevels(prop);
