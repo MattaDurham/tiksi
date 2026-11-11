@@ -47,7 +47,7 @@ function stalled(ms) {
   const error = new Error('The connection to the Mac stopped: nothing moved for ' + Math.round(ms / 1000) + ' seconds');
   error.stalled = true; return error;
 }
-const answer = (status, buffer) => ({ status, ok: status >= 200 && status < 300, async arrayBuffer() { return buffer; }, async json() { return JSON.parse(new TextDecoder().decode(buffer)); } });
+const answer = (status, buffer, headers = { get: () => null }) => ({ status, ok: status >= 200 && status < 300, headers, async arrayBuffer() { return buffer; }, async json() { return JSON.parse(new TextDecoder().decode(buffer)); } });
 // A request with a body. XMLHttpRequest reports the bytes as they leave, which fetch cannot.
 function sendBody(url, method, headers, body) {
   return new Promise((resolve, reject) => {
@@ -69,7 +69,7 @@ function sendBody(url, method, headers, body) {
       try { if (xhr.status) said = xhr.status; if (xhr.responseText) words = xhr.responseText; } catch (ignored) {}
     };
     const refusedEarly = () => said >= 400 ? answer(said, bytes(words)) : null;
-    xhr.onload = () => { clearTimeout(timer); resolve(answer(xhr.status, bytes(xhr.responseText))); };
+    xhr.onload = () => { clearTimeout(timer); resolve(answer(xhr.status, bytes(xhr.responseText), { get: name => xhr.getResponseHeader(name) })); };
     xhr.onerror = () => { clearTimeout(timer); const early = refusedEarly(); if (early) resolve(early); else reject(new TypeError('Could not reach the Mac')); };
     xhr.onabort = () => { clearTimeout(timer); const early = refusedEarly(); if (early) resolve(early); else reject(stalled(waited)); };
     watch(transferLimits.stallMs); xhr.send(body);
@@ -90,7 +90,7 @@ async function readBody(url, method, headers, cache) {
     // (Chromium also reports a body read piece by piece as a cancelled request now and then,
     // though every byte arrived; small answers are most of the requests.)
     const stated = Number(r.headers.get('Content-Length'));
-    if (!r.body || Number.isInteger(stated) && stated <= SMALL_ANSWER_BYTES) { watch(transferLimits.stallMs); return answer(r.status, await r.arrayBuffer()); }
+    if (!r.body || Number.isInteger(stated) && stated <= SMALL_ANSWER_BYTES) { watch(transferLimits.stallMs); return answer(r.status, await r.arrayBuffer(), r.headers); }
     // A file: the bytes go straight into their final place, and the limit is on each pause.
     let bytes = new Uint8Array(Number.isInteger(stated) && stated > 0 ? stated : 65536), size = 0;
     for (const reader = r.body.getReader(); ;) {
@@ -100,7 +100,7 @@ async function readBody(url, method, headers, cache) {
       if (size + value.byteLength > bytes.byteLength) { const grown = new Uint8Array(Math.max(bytes.byteLength * 2, size + value.byteLength)); grown.set(bytes.subarray(0, size)); bytes = grown; }
       bytes.set(value, size); size += value.byteLength;
     }
-    return answer(r.status, size === bytes.byteLength ? bytes.buffer : bytes.slice(0, size).buffer);
+    return answer(r.status, size === bytes.byteLength ? bytes.buffer : bytes.slice(0, size).buffer, r.headers);
   } catch (error) { throw control.signal.aborted ? stalled(waited) : error; }
   finally { clearTimeout(timer); }
 }
@@ -961,7 +961,10 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       if (!remote || changedFiles.has(id)) return null;
       try {
         const r = await request('/blobs/' + remote.hash + '?size=' + longest, { cache: 'default' });
-        return { buffer: await r.arrayBuffer(), mime: r.headers.get('Content-Type') || 'image/jpeg', smaller: r.headers.get('X-Tiksi-Preview') === 'smaller' };
+        // With no smaller copy the Mac sends the original under a general type: leave the type
+        // out then, so the browser reads it from the picture's own first bytes.
+        const smaller = r.headers.get('X-Tiksi-Preview') === 'smaller';
+        return { buffer: await r.arrayBuffer(), mime: smaller ? r.headers.get('Content-Type') || 'image/jpeg' : remote.mime || '', smaller };
       } catch (error) {
         if ([400, 404, 415].includes(error.status)) return null;   // no smaller copy of this file
         throw error;

@@ -226,6 +226,8 @@ async function theAppOpensWhileTheKeptCopyIsSent(name, profile) {
   await phone.getByRole('button', { name: /Slow to send/ }).waitFor({ timeout: 20000 });
   await phone.waitForFunction(() => document.querySelector('#save-status').textContent === 'SENDING WHAT THIS DEVICE KEPT', null, { timeout: 20000 });
   assert.equal((await bar(phone)).label, 'Sending');
+  // The page first asks the Mac which originals it holds, so the upload starts a moment after the status shows.
+  for (let i = 0; i < 200 && !uploading; i++) await new Promise(r => setTimeout(r, 100));
   assert.equal(uploading, true, 'the original was still on its way while the app was open');
   assert.equal((await onTheMac()).assets[photo.id], undefined, 'and had not reached the Mac yet');
   release();

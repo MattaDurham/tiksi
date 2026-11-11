@@ -42,7 +42,7 @@ export function describePlan(plan, fmtBytes) {
   if (!plan.count) return 'Nothing on the Mac can be removed: every saved copy and stored original is still in use or recent.';
   return 'A clean-up would remove ' + count(plan.copies.length, 'saved copy', 'saved copies') + ' and ' +
     count(plan.originals.length, 'stored original', 'stored originals') + ', ' + fmtBytes(plan.bytes) + ' in all. ' +
-    'Always kept: the newest saved copy holding each property, every original a project file or a kept copy refers to, and anything sent or asked for in the last 30 days.';
+    'Removing cannot be undone. Always kept: the newest saved copy holding each property, every original a project file or a kept copy refers to, and anything sent or asked for in the last 30 days.';
 }
 
 export function describeResult(result, fmtBytes) {
