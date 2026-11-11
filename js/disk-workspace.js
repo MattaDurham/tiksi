@@ -6,6 +6,7 @@ import { syncMirror, mirrorCapabilities, mirrorSpec, specSignature, mirrorFileNa
 import { pictureFiles, pictureRefs, mapStrings } from './picture-assets.js';
 import { unsentStore } from './unsent.js';
 import { touchDevice } from './render-quality.js';
+import { sha256 } from './sha256.js';
 
 export let diskWorkspace = null;
 // A JSON-shaped copy whose objects are all new; strings are immutable and shared.
@@ -24,6 +25,14 @@ export const transferLimits = { stallMs: 45000, answerMs: 120000 };
 export const originalLimits = touchDevice()
   ? { fileBytes: 16 * 1024 * 1024, totalBytes: 64 * 1024 * 1024 }
   : { fileBytes: 48 * 1024 * 1024, totalBytes: 256 * 1024 * 1024 };
+// How originals are sent to a Mac that takes them in pieces. One larger than `piecesFrom` goes
+// in pieces of `pieceBytes`, each its own request: the Mac keeps whatever part of a piece
+// arrived, so after a stall, a dropped connection or a reload the page asks how far the
+// upload got and goes on from there. 8 MB: a phone photo (2 to 6 MB) still goes in one
+// request, as before, without the two extra questions pieces cost; scans and videos, which
+// are the ones a slow link cannot finish in one go, are above it. A piece of 8 MB keeps one
+// request short on a slow link and stays far under the Mac's 64 MB limit for a piece.
+export const uploadLimits = { piecesFrom: 8 * 1024 * 1024, pieceBytes: 8 * 1024 * 1024 };
 // The largest original the Mac stores (MAX_BLOB in server/workspace.py).
 const MAX_FILE_BYTES = 600 * 1024 * 1024;
 // True on every device but the Mac's own desktop browser: another machine on the network,
@@ -371,8 +380,9 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     }
     if (!r.ok) {
       let message = 'Project-file request failed (' + r.status + ')', code;
-      try { const body = await r.json(); message = body.error || message; code = body.code; } catch (ignored) {}
-      const error = new Error(message); error.status = r.status; error.code = code; throw error;
+      let received;
+      try { const body = await r.json(); message = body.error || message; code = body.code; received = body.received; } catch (ignored) {}
+      const error = new Error(message); error.status = r.status; error.code = code; error.received = received; throw error;
     }
     return r;
   }
@@ -443,7 +453,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     // Refused for good: records the Mac will not take (400), too large (413), a tab too old
     // to save (426). Anything else it answers may pass by itself, a project file another
     // program is still writing for one (422), and is tried again.
-    const refused = answered && [400, 413, 426].includes(error.status) && !error.resend;
+    const refused = answered && ([400, 413, 426].includes(error.status) || error.refused === true) && !error.resend;
     const tries = (failure && !failure.hold ? failure.tries : 0) + 1;
     // A Mac that answers with a fault is sent the same save less and less often, up to once a
     // minute. One that cannot be reached is asked again at the usual pace: reconnecting is cheap.
@@ -501,8 +511,52 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     })().finally(() => inFlightFiles.delete(key)));
     return inFlightFiles.get(key);
   }
+  // An original's name on the Mac is the SHA-256 of its bytes; worked out once for each file.
+  const sums = new WeakMap();
+  const sumOf = async buffer => { if (!sums.has(buffer)) sums.set(buffer, await sha256(buffer)); return sums.get(buffer); };
+  // Whether this Mac answers "which of these do you hold" and takes originals in pieces: not
+  // known until asked (null), then yes or no for as long as the page is open. An older Mac
+  // answers that it has no such address, and everything goes the way it always did.
+  let takesPieces = null;
+  // Which of these originals the Mac already holds: hash -> size. Null from a Mac that cannot say.
+  async function heldOnMac(buffers) {
+    if (takesPieces === false) return null;
+    try {
+      // (The first question carries no hashes: an older Mac is found out before any file is hashed.)
+      if (takesPieces === null) { await request('/blobs/held', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"hashes":[]}' }); takesPieces = true; }
+      if (!buffers.length) return new Map();
+      const hashes = []; for (const buffer of buffers) hashes.push(await sumOf(buffer));
+      const reply = await (await request('/blobs/held', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hashes }) })).json();
+      return new Map(Object.entries(reply.sizes || {}));
+    } catch (error) {
+      if (error.status !== 404 || takesPieces) throw error;
+      takesPieces = false; return null;
+    }
+  }
+  // Send one original in pieces. The Mac is asked first how far an earlier try got, and the
+  // sending goes on from there. Once the last byte is in, the Mac checks the whole against
+  // its hash: if that fails the upload starts again once, and a second failure is reported.
+  async function sendInPieces(hash, local, secondTry = false) {
+    const buffer = local.buffer, size = buffer.byteLength;
+    let state = await (await request('/uploads/' + hash)).json();
+    let at = state.done ? size : state.size === size ? Number(state.received) || 0 : 0;
+    for (let corrections = 0; !state.done;) {
+      const piece = new Uint8Array(buffer, at, Math.min(uploadLimits.pieceBytes, size - at));
+      try { state = await (await request('/uploads/' + hash, { method: 'PUT', body: piece, headers: { 'X-Upload-Size': String(size), 'X-Upload-Offset': String(at) } })).json(); }
+      catch (error) {
+        // The Mac has a different amount than this page thought: go on from what it has.
+        if (error.code === 'upload-offset' && Number.isInteger(error.received) && corrections++ < 5) { at = error.received; continue; }
+        if (error.status !== 422) throw error;
+        if (!secondTry) return sendInPieces(hash, local, true);
+        const damaged = new Error((local.name || 'An original') + ' did not arrive on the Mac intact, twice. It is not saved: add it again, or send it over another connection');
+        damaged.status = 422; damaged.refused = true; throw damaged;
+      }
+      at = Number(state.received) || 0;
+    }
+    return { hash, size };
+  }
   async function fileManifest(data, starting, identifiers = listAllFileIds(data), uploadedFiles = new Map()) {
-    const out = {};
+    const out = {}, toSend = [];
     for (const id of new Set(identifiers)) {
       const local = await getCachedFile(id);
       if (starting[id] && !changedFiles.has(id) && (!migration || !local?.buffer)) { out[id] = starting[id]; continue; }
@@ -512,21 +566,32 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
         const error = new Error((local.name || 'A file') + ' is ' + Math.round(local.buffer.byteLength / 1048576) + ' MB; the Mac accepts files up to ' + MAX_FILE_BYTES / 1048576 + ' MB');
         error.status = 413; throw error;
       }
-      const held = heldByMac.get(id);
+      toSend.push({ id, local });
+    }
+    // One question for the whole save: an original the Mac already holds is not sent at all.
+    const unknown = toSend.filter(({ id, local }) => heldByMac.get(id)?.buffer !== local.buffer);
+    const holds = unknown.length ? await heldOnMac(unknown.map(({ local }) => local.buffer)) : null;
+    for (const { id, local } of toSend) {
+      const held = heldByMac.get(id), size = local.buffer.byteLength;
       let uploaded = held && held.buffer === local.buffer ? held.entry : null;
       if (uploaded && held.round !== round) reusedEarlier = true;
-      // An earlier page noted that the Mac acknowledged this original: ask the Mac, once.
-      const hint = !uploaded && heldHints.get(id);
+      if (!uploaded && holds) {
+        const hash = await sumOf(local.buffer);
+        if (holds.get(hash) === size) uploaded = { hash, size };
+        else if (size > uploadLimits.piecesFrom) uploaded = await sendInPieces(hash, local);
+      }
+      // (A Mac that cannot say what it holds.) An earlier page noted that the Mac acknowledged
+      // this original: ask the Mac, once.
+      const hint = !uploaded && !holds && heldHints.get(id);
       if (hint) {
         heldHints.delete(id);
-        if (hint.size === local.buffer.byteLength && await macHolds(hint.hash)) { uploaded = hint; reusedEarlier = true; heldByMac.set(id, { buffer: local.buffer, entry: hint, round: 0 }); }
+        if (hint.size === size && await macHolds(hint.hash)) { uploaded = hint; reusedEarlier = true; heldByMac.set(id, { buffer: local.buffer, entry: hint, round: 0 }); }
       }
       if (!uploaded) {
         uploaded = await (await request('/blobs', { method: 'POST', body: local.buffer })).json();
-        if (uploaded.size !== local.buffer.byteLength) throw new Error('An upload was incomplete');
-        heldByMac.set(id, { buffer: local.buffer, entry: uploaded, round });
-        keepSoon();
+        if (uploaded.size !== size) throw new Error('An upload was incomplete');
       }
+      if (heldByMac.get(id)?.buffer !== local.buffer) { heldByMac.set(id, { buffer: local.buffer, entry: uploaded, round }); keepSoon(); }
       out[id] = { ...uploaded };
       for (const k of ['name', 'format', 'kind', 'mime']) if (typeof local[k] === 'string') out[id][k] = local[k];
       // A later replacement must remain dirty while this upload is in progress.
