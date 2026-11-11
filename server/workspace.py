@@ -212,6 +212,24 @@ def project_file_base(name):
     return re.sub(r'[\\/:*?"<>|\x00-\x1f]', ' ', str(name)).strip(' .')[:80] or 'Project'
 
 
+class Piece:
+    """A request body of a known length, read at most to that length; what is left of it can be
+    read and thrown away."""
+    def __init__(self, source, length): self.source, self.left = source, length
+
+    def read(self, amount):
+        if not self.left: return b''
+        data = self.source.read(min(amount, self.left))
+        self.left -= len(data)
+        if not data: self.left = 0
+        return data
+
+    def discard_rest(self):
+        try:
+            while self.read(1024 * 1024): pass
+        except OSError: self.left = 0
+
+
 class WorkspaceService:
     run = staticmethod(subprocess.run)
 
@@ -656,28 +674,60 @@ class WorkspaceService:
                 error.code, error.received = 'upload-offset', received
                 raise error
             if received + length > size: raise WorkspaceError('The piece goes beyond the declared size', 413)
-            if shutil.disk_usage(self.root).free < length + DISK_RESERVE:
-                raise WorkspaceError("The Mac's disk is nearly full; this piece was not accepted. Make room on the Mac and send it again", 507)
-            with part.open('ab') as out:
-                try:
-                    left = length
-                    while left:
-                        chunk = body.read(min(1024 * 1024, left))
-                        if not chunk: raise WorkspaceError('Upload was truncated; ask how far it got and send the rest')
-                        out.write(chunk); left -= len(chunk)
-                finally: out.flush(); os.fsync(out.fileno())
-            received = part.stat().st_size
-            # A slow upload stays as long as pieces keep arriving.
-            os.utime(note)
+            if length:
+                if shutil.disk_usage(self.root).free < length + DISK_RESERVE:
+                    raise WorkspaceError("The Mac's disk is nearly full; this piece was not accepted. Make room on the Mac and send it again", 507)
+                with part.open('ab') as out:
+                    try:
+                        left = length
+                        while left:
+                            chunk = body.read(min(1024 * 1024, left))
+                            if not chunk: raise WorkspaceError('Upload was truncated; ask how far it got and send the rest')
+                            out.write(chunk); left -= len(chunk)
+                    finally: out.flush(); os.fsync(out.fileno())
+                received = part.stat().st_size
+                # A slow upload stays as long as pieces keep arriving.
+                os.utime(note)
+            # An empty piece on a part that is already whole (the Mac stopped before checking it)
+            # finishes the upload as the last piece would have.
             if received < size: return received, size, False
-            digest_found = hashlib.sha256()
-            with part.open('rb') as source:
-                while chunk := source.read(1024 * 1024): digest_found.update(chunk)
-            if digest_found.hexdigest() != digest:
-                part.unlink(missing_ok=True); note.unlink(missing_ok=True)
-                raise WorkspaceError('The upload does not match its hash; send it again from the start', 422)
-            os.replace(part, self.root / 'blobs' / digest)
-            note.unlink(missing_ok=True)
+            self.finish_upload(digest)
+            return size, size, True
+        finally:
+            guard.release()
+            with self.lock:
+                if not guard.locked(): self.upload_locks.pop(digest, None)
+
+    def finish_upload(self, digest):
+        """Check a whole upload against its hash: it becomes a stored original, or on a mismatch
+        it is cleared and 422 raised. The caller holds the upload's guard."""
+        part, note = self.root / 'uploads' / (digest + '.part'), self.root / 'uploads' / (digest + '.json')
+        digest_found = hashlib.sha256()
+        with part.open('rb') as source:
+            while chunk := source.read(1024 * 1024): digest_found.update(chunk)
+        if digest_found.hexdigest() != digest:
+            part.unlink(missing_ok=True); note.unlink(missing_ok=True)
+            raise WorkspaceError('The upload does not match its hash; send it again from the start', 422)
+        os.replace(part, self.root / 'blobs' / digest)
+        note.unlink(missing_ok=True)
+
+    def upload_status(self, digest):
+        """How far an upload has come, as (received, size, done). A part already whole (the Mac
+        stopped between its last piece and the hash check) is checked now: it becomes a stored
+        original, or on a mismatch it is cleared and the upload starts again from nothing."""
+        if self.held(digest):
+            size = (self.root / 'blobs' / digest).stat().st_size
+            return size, size, True
+        received, size = self.upload_state(digest)
+        if size is None or received != size: return received, size, False
+        with self.lock: guard = self.upload_locks.setdefault(digest, threading.Lock())
+        if not guard.acquire(blocking=False): return received, size, False
+        try:
+            if self.held(digest): return size, size, True
+            received, size = self.upload_state(digest)
+            if size is None or received != size: return received, size, False
+            try: self.finish_upload(digest)
+            except WorkspaceError: return 0, None, False
             return size, size, True
         finally:
             guard.release()
@@ -1205,17 +1255,20 @@ class WorkspaceService:
                 digest = path.removeprefix('/api/workspace/uploads/')
                 if not HASH.fullmatch(digest): raise WorkspaceError('Invalid hash', 404)
                 if h.command == 'GET':
-                    if self.held(digest):
-                        size = (self.root / 'blobs' / digest).stat().st_size
-                        self.reply(h, 200, {'hash': digest, 'size': size, 'received': size, 'done': True})
-                    else:
-                        received, size = self.upload_state(digest)
-                        self.reply(h, 200, {'hash': digest, 'size': size, 'received': received, 'done': False})
+                    received, size, done = self.upload_status(digest)
+                    self.reply(h, 200, {'hash': digest, 'size': size, 'received': received, 'done': done})
                 elif h.command == 'PUT':
-                    try: size, offset = int(h.headers.get('X-Upload-Size', '')), int(h.headers.get('X-Upload-Offset', ''))
-                    except ValueError: raise WorkspaceError('Send X-Upload-Size and X-Upload-Offset')
-                    length = self.length(h, MAX_PIECE)
-                    received, size, done = self.upload_piece(digest, size, offset, h.rfile, length)
+                    # An empty piece is allowed: it finishes an upload whose part is already whole.
+                    length = self.length(h, MAX_PIECE, empty=True)
+                    piece = Piece(h.rfile, length)
+                    try:
+                        try: size, offset = int(h.headers.get('X-Upload-Size', '')), int(h.headers.get('X-Upload-Offset', ''))
+                        except ValueError: raise WorkspaceError('Send X-Upload-Size and X-Upload-Offset')
+                        received, size, done = self.upload_piece(digest, size, offset, piece, length)
+                    finally:
+                        # A refused piece is read to its end before the answer goes, so the
+                        # browser, still sending, receives the answer instead of a cut connection.
+                        piece.discard_rest()
                     self.reply(h, 200, {'hash': digest, 'size': size, 'received': received, 'done': done})
                 else: raise WorkspaceError('Upload endpoint not found', 404)
             elif path.startswith('/api/workspace/unavailable/') and path.endswith('/forget') and h.command == 'POST':
@@ -1308,10 +1361,10 @@ class WorkspaceService:
         return {'saveId': save_id, 'committed': revision is not None, 'revision': revision}
 
     @staticmethod
-    def length(h, limit):
+    def length(h, limit, empty=False):
         try: length = int(h.headers.get('Content-Length', '0'))
         except ValueError: raise WorkspaceError('Invalid content length')
-        if not 0 < length <= limit: raise WorkspaceError('Upload exceeds the workspace limit', 413)
+        if not (0 if empty else 1) <= length <= limit: raise WorkspaceError('Upload exceeds the workspace limit', 413)
         h.connection.settimeout(120)
         return length
 

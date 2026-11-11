@@ -141,6 +141,50 @@ class StaticFiles(unittest.TestCase):
         self.assertEqual(json.loads(body), {'held': [digest], 'sizes': {digest: len(payload)}})
 
 
+    def test_an_upload_left_whole_by_a_stopped_mac_is_finished_when_asked_or_sent_an_empty_piece(self):
+        auth = {**WORKSPACE, 'X-Tiksi-Token': self.token}
+        uploads = self.server.workspace.root / 'uploads'; uploads.mkdir(exist_ok=True)
+        def left_whole(payload, digest=None):
+            # The Mac received every byte, then stopped before the hash check.
+            digest = digest or hashlib.sha256(payload).hexdigest()
+            (uploads / (digest + '.part')).write_bytes(payload)
+            (uploads / (digest + '.json')).write_text(json.dumps({'size': len(payload)}))
+            return digest
+        held = lambda digest: self.call('/api/workspace/blobs/' + digest, headers=auth)
+        asked = left_whole(b'asked about after a restart')
+        status, _, body = self.call('/api/workspace/uploads/' + asked, headers=auth)
+        self.assertEqual((status, json.loads(body)), (200, {'hash': asked, 'size': 27, 'received': 27, 'done': True}), 'asking finishes it')
+        self.assertEqual(held(asked)[2], b'asked about after a restart')
+        sent = left_whole(b'sent an empty piece after a restart')
+        status, _, body = self.call('/api/workspace/uploads/' + sent, 'PUT', {**auth, 'X-Upload-Size': '35', 'X-Upload-Offset': '35'}, b'')
+        self.assertEqual((status, json.loads(body)), (200, {'hash': sent, 'size': 35, 'received': 35, 'done': True}), 'an empty piece finishes it')
+        self.assertEqual(held(sent)[2], b'sent an empty piece after a restart')
+        wrong = left_whole(b'damaged', digest=hashlib.sha256(b'what was meant').hexdigest())
+        status, _, body = self.call('/api/workspace/uploads/' + wrong, headers=auth)
+        self.assertEqual((status, json.loads(body)), (200, {'hash': wrong, 'size': None, 'received': 0, 'done': False}), 'a damaged part is cleared; it starts again')
+        damaged = left_whole(b'damaged', digest=hashlib.sha256(b'what was meant too').hexdigest())
+        status, _, body = self.call('/api/workspace/uploads/' + damaged, 'PUT', {**auth, 'X-Upload-Size': '7', 'X-Upload-Offset': '7'}, b'')
+        self.assertEqual(status, 422, 'an empty piece on a damaged part is answered as a last piece would be')
+        self.assertEqual(sorted(p.name for p in uploads.iterdir()), [], 'nothing is left to hold the saves')
+        status, _, body = self.call('/api/workspace/uploads/' + hashlib.sha256(b'x' * 10).hexdigest(), 'PUT', {**auth, 'X-Upload-Size': '10', 'X-Upload-Offset': '0'}, b'')
+        self.assertEqual((status, json.loads(body)['received'], json.loads(body)['done']), (200, 0, False), 'an empty piece on an unfinished upload changes nothing')
+
+    def test_a_refused_full_size_piece_is_answered_with_its_sentence(self):
+        from server.workspace import MAX_PIECE
+        auth = {**WORKSPACE, 'X-Tiksi-Token': self.token}
+        payload = os.urandom(MAX_PIECE); digest = hashlib.sha256(payload + b'more').hexdigest()
+        self.assertEqual(self.call('/api/workspace/uploads/' + digest, 'PUT', {**auth, 'X-Upload-Size': str(MAX_PIECE + 4), 'X-Upload-Offset': '0'}, b'abcd')[0], 200)
+        # A piece from the wrong place is refused before any of it is used; the whole piece is
+        # still being sent when the Mac decides.
+        status, _, body = self.call('/api/workspace/uploads/' + digest, 'PUT', {**auth, 'X-Upload-Size': str(MAX_PIECE + 4), 'X-Upload-Offset': '0'}, payload)
+        answer = json.loads(body)
+        self.assertEqual((status, answer['code'], answer['received']), (409, 'upload-offset', 4))
+        self.assertIn('send from there', answer['error'])
+        with patch('server.workspace.shutil.disk_usage', return_value=type('Disk', (), {'free': 10})()):
+            status, _, body = self.call('/api/workspace/uploads/' + digest, 'PUT', {**auth, 'X-Upload-Size': str(MAX_PIECE + 4), 'X-Upload-Offset': '4'}, payload)
+        self.assertEqual(status, 507); self.assertIn('nearly full', json.loads(body)['error'])
+        self.assertEqual(json.loads(self.call('/api/workspace/uploads/' + digest, headers=auth)[2])['received'], 4, 'nothing of a refused piece is kept')
+
     def test_an_original_sent_in_pieces_continues_where_a_stalled_upload_stopped(self):
         payload = bytes(range(256)) * 4000; digest = hashlib.sha256(payload).hexdigest(); size = len(payload)
         auth = {**WORKSPACE, 'X-Tiksi-Token': self.token}

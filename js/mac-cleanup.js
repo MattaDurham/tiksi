@@ -2,7 +2,13 @@
 // removes nothing on its own: this lists what a clean-up would remove, shows it, and removes
 // exactly that list when asked. A changed list is shown again to be confirmed.
 // Loaded only when that section is opened.
+import { touchDevice } from './render-quality.js';
+
 const HEADERS = { 'X-Tiksi-Workspace': '1' };
+
+// REMOVE is offered on the Mac, not on a touch device (the same test every page uses). Only the
+// page holds it back: the Mac accepts a clean-up from any device it serves.
+export const removesHere = () => !touchDevice();
 
 async function call(token, method, body) {
   const r = await fetch('/api/workspace/cleanup', {
