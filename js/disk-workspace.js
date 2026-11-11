@@ -892,7 +892,23 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     catch (error) { console.warn('disk mirror:', error.message); }
     finally { mirrorRunning = false; }
   }
-  diskWorkspace = { sync, changed, syncSketchUp: prop => mirror(prop), async openSketchUp(prop) {
+  diskWorkspace = { sync, changed,
+    // The Mac's reduced copy of a stored picture, at most `longest` pixels on its longest side
+    // (a size the server offers): { buffer, mime, smaller } or null when there is none to be had
+    // (not on the Mac yet, changed here since, or refused). A Mac that has no smaller copy sends
+    // the original with `smaller` false; the bytes still decode.
+    async smallerPicture(id, longest) {
+      const remote = assets[id];
+      if (!remote || changedFiles.has(id)) return null;
+      try {
+        const r = await request('/blobs/' + remote.hash + '?size=' + longest, { cache: 'default' });
+        return { buffer: await r.arrayBuffer(), mime: r.headers.get('Content-Type') || 'image/jpeg', smaller: r.headers.get('X-Tiksi-Preview') === 'smaller' };
+      } catch (error) {
+        if ([400, 404, 415].includes(error.status)) return null;   // no smaller copy of this file
+        throw error;
+      }
+    },
+    syncSketchUp: prop => mirror(prop), async openSketchUp(prop) {
     await sync();
     const deadline = Date.now() + 120000;
     while (mirrorRunning) { if (Date.now() > deadline) throw new Error('SketchUp sync is still busy; try again after it finishes.'); await new Promise(r => setTimeout(r, 100)); }

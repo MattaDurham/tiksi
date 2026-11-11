@@ -44,12 +44,6 @@
       "why": "found 2026-11-10; the file belongs to another session"
     },
     {
-      "file": "test/test_model_conversion.py",
-      "kind": "unused-import",
-      "name": "zipfile",
-      "why": "found 2026-11-10; the file belongs to another session"
-    },
-    {
       "file": "test/test_photo_placement.py",
       "kind": "unused-import",
       "name": "shutil",

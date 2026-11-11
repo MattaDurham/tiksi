@@ -10,6 +10,7 @@
   "e2e-imports": 6,
   "e2e-kept-copy": 75,
   "e2e-load-budget": 20,
+  "e2e-mac-cleanup": 20,
   "e2e-measurement-video": 45,
   "e2e-model-batching": 293,
   "e2e-model-notes": 105,
