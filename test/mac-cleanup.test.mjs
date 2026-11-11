@@ -21,6 +21,6 @@ test('REMOVE follows the touch test every page uses', t => {
 test('a plan and its result are said in plain sentences', () => {
   assert.match(describePlan({ count: 0, bytes: 0, copies: [], originals: [] }, bytes), /^Nothing on the Mac can be removed/);
   const plan = { count: 3, bytes: 30, copies: [{ name: '1.json', bytes: 10 }], originals: [{ hash: 'a', bytes: 10 }, { hash: 'b', bytes: 10 }] };
-  assert.match(describePlan(plan, bytes), /^A clean-up would remove 1 saved copy and 2 stored originals, 30 B in all\. Always kept: /);
+  assert.match(describePlan(plan, bytes), /^A clean-up would remove 1 saved copy and 2 stored originals, 30 B in all\. Removing cannot be undone\. Always kept: /);
   assert.equal(describeResult({ copies: 1, originals: 2, bytes: 30 }, bytes), 'Removed 1 saved copy and 2 stored originals from the Mac; 30 B freed.');
 });
