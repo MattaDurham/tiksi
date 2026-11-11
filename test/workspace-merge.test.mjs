@@ -74,6 +74,21 @@ test('two drafts of a one-pager nobody wrote by hand are not a conflict; hand-wr
   assert.ok(mergeShared(draft('Old'), written, draft('Drafted on the Mac')).conflicts.includes('onePager.headline'), 'hand-written text against a new draft is put to the person');
 });
 
+test('fields entered by hand on a one-pager merge as usual, also while its text is still a draft', () => {
+  const page = fields => ({ id: 'p', onePager: { headline: 'Draft', customized: false, draftedAt: '1970-01-01T00:00:00.000Z', client: '', preparedBy: '', show: { budget: true, schedule: true }, versions: [], ...fields } });
+  // One device enters the client, the other drafts a new headline: both stay.
+  const apart = mergeShared(page({}), page({ client: 'Entered here' }), page({ headline: 'Drafted on the Mac' }));
+  assert.deepEqual(apart.conflicts, []);
+  assert.equal(apart.value.onePager.client, 'Entered here', 'a field entered by hand is not discarded with the draft');
+  assert.equal(apart.value.onePager.headline, 'Drafted on the Mac');
+  // Both devices draft a headline and each enters something by hand elsewhere.
+  const both = mergeShared(page({}), page({ headline: 'Drafted here', preparedBy: 'Entered here', show: { budget: false, schedule: true } }), page({ headline: 'Drafted on the Mac', client: 'Entered on the Mac', versions: [{ n: 1, date: '2026-11-01', documentId: 'doc-1' }] }));
+  assert.deepEqual(both.conflicts, []);
+  assert.deepEqual([both.value.onePager.headline, both.value.onePager.preparedBy, both.value.onePager.client, both.value.onePager.show.budget, both.value.onePager.versions.length], ['Drafted on the Mac', 'Entered here', 'Entered on the Mac', false, 1]);
+  // The same hand-entered field changed on both sides is still a visible choice.
+  assert.deepEqual(mergeShared(page({}), page({ client: 'One' }), page({ client: 'Two' })).conflicts, ['onePager.client']);
+});
+
 test('the same project drafted by two devices saves the same one-pager record', async () => {
   const { draftOnePager } = await import('../js/one-pager.js');
   const { propertyTemplate, emptyWorkspace } = await import('../js/store.js');

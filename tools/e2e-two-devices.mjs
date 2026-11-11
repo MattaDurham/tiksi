@@ -403,6 +403,23 @@ async function aProjectFileAsksBeforeItReplaces() {
   answer = 'accept';
   await openFile();
   assert.equal(await page.evaluate(async id => (await import('/js/store.js')).ws.data.properties.find(p => p.id === id).notes, first), '', 'answering yes opens the file\'s copy');
+  // An export of the project, then an edit to one of its projects only (a budget line), then
+  // the export opened again: the property is the same, the project is not, and that is asked too.
+  await page.evaluate(async id => {
+    const s = await import('/js/store.js');
+    s.ws.data.projects.push({ id: 'proj-import', name: 'Kitchen', propertyId: id, category: 'kitchen', items: [{ id: 'item-1', name: 'Cabinets', cost: 4000 }] }); s.touch();
+    await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
+  }, first);
+  await writeFile(file, await page.evaluate(async id => JSON.stringify((await import('/js/store.js')).projectSlice(id)), first));
+  const cost = () => page.evaluate(async () => (await import('/js/store.js')).ws.data.projects.find(p => p.id === 'proj-import').items[0].cost);
+  await page.evaluate(async () => { const s = await import('/js/store.js'); s.ws.data.projects.find(p => p.id === 'proj-import').items[0].cost = 5500; s.touch(); await (await import('/js/disk-workspace.js')).diskWorkspace.sync(); });
+  asked.length = 0; answer = 'dismiss';
+  await openFile();
+  assert.equal(asked.length, 1, 'a file whose project differs from the open one asks first, though the property is the same');
+  assert.match(asked[0], /1 project open here differs from Harbour house, as exported\.json[\s\S]*“Kitchen”/);
+  assert.equal(await cost(), 5500, 'answering no keeps today\'s project edit');
+  await saveNow(page);
+  assert.equal((await mac()).data.projects.find(p => p.id === 'proj-import').items[0].cost, 5500);
   // The demo, twice.
   const addDemo = async () => {
     await page.locator('#btn-file').click();

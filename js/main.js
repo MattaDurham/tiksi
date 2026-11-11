@@ -510,17 +510,22 @@ function freshDemo() {
   return JSON.parse(text);
 }
 
-// A project file that holds a property already open here: say what would be replaced by what,
-// and ask. The open copy carries no date of its own, so the file's date and what each holds
-// are shown.
-function confirmReplace({ file, same }) {
+// A project file that holds something already open here and different: say what would be
+// replaced by what, and ask. The open copy carries no date of its own, so the file's date and
+// what each holds are shown.
+function confirmReplace({ file, same, others }) {
   const count = (n, one) => n + ' ' + one + (n === 1 ? '' : 's');
   const holds = (p, projects) => [count((p.walls || []).length, 'wall'), count((p.rooms || []).length, 'room'), count((p.photos || []).length, 'photo'), count((p.scans || []).length, 'model'), count(projects, 'project')].join(', ');
+  const named = file ? file.name : 'the file';
   const when = file && file.lastModified ? ' (saved ' + new Date(file.lastModified).toLocaleString() + ')' : '';
   const lines = same.map(({ incoming, current, projects }) =>
     '“' + (current.name || incoming.name) + '” is already open here.\n  Open here: ' + holds(current, ws.data.projects.filter(pr => pr.propertyId === current.id).length) +
-    '\n  In ' + (file ? file.name : 'the file') + when + ': ' + holds(incoming, projects));
-  return confirm(lines.join('\n\n') + '\n\nReplace what is open here with the file\'s? Its projects that are not in the file are removed, and undo is cleared. Cancel keeps what is open.');
+    '\n  In ' + named + when + ': ' + holds(incoming, projects));
+  // Projects, products and custom materials with the same id and different content.
+  const list = (records, one) => records.length ? [count(records.length, one) + ' open here ' + (records.length === 1 ? 'differs' : 'differ') + ' from ' + named + when + ': ' +
+    records.slice(0, 6).map(r => '“' + (r.name || r.id) + '”').join(', ') + (records.length > 6 ? ' and ' + (records.length - 6) + ' more' : '') + '.'] : [];
+  if (others) lines.push(...list(others.projects, 'project'), ...list(others.products, 'product'), ...list(others.materials, 'material'));
+  return confirm(lines.join('\n\n') + '\n\nReplace what is open here with the file\'s? ' + (same.length ? 'A replaced property\'s projects that are not in the file are removed, and undo is cleared. ' : '') + 'Cancel keeps what is open.');
 }
 
 // EDIT IN SKETCHUP (PLAN and MODEL tool columns): open this project's .skp in SketchUp. Without a

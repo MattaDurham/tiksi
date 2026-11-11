@@ -212,14 +212,18 @@ export async function openFromFile(file, opts) {
   } else parsed = await readBundle(file);
   const { data, manifest } = parsed;
   const before = new Set(ws.data.properties.map(p => p.id));
-  // A property in the file that is already open here would be replaced by the file's, and
-  // its projects that are not in the file removed. That is asked first, never done unasked.
-  // (A file that holds the very same records replaces nothing, and is not asked about.)
+  // Whatever in the file has the id of something open here replaces it: a property (and its
+  // projects that are not in the file are removed), a project, a product, a custom
+  // material. Where the two differ that is asked first, never done unasked. (A file that
+  // holds the very same records replaces nothing, and is not asked about.)
   const open = new Map(ws.data.properties.map(p => [p.id, p]));
   const inFile = new Set((data.projects || []).map(pr => pr.id));
   const same = (data.properties || []).filter(p => p && open.has(p.id) &&
     (!sameJson(open.get(p.id), p) || ws.data.projects.some(pr => pr.propertyId === p.id && !inFile.has(pr.id))));
-  if (same.length && !(opts && opts.asked) && !await app.confirmReplace({ file, same: same.map(p => ({ incoming: p, current: open.get(p.id), projects: (data.projects || []).filter(pr => pr.propertyId === p.id).length })) })) {
+  const differing = (incoming, here) => { const held = new Map((here || []).map(r => [r.id, r])); return (incoming || []).filter(r => r && held.has(r.id) && !sameJson(held.get(r.id), r)).map(r => held.get(r.id)); };
+  const others = { projects: differing(data.projects, ws.data.projects), products: differing(data.products, ws.data.products), materials: differing((data.materials || []).filter(m => m && m.custom), ws.data.materials) };
+  const replaces = same.length + others.projects.length + others.products.length + others.materials.length;
+  if (replaces && !(opts && opts.asked) && !await app.confirmReplace({ file, others, same: same.map(p => ({ incoming: p, current: open.get(p.id), projects: (data.projects || []).filter(pr => pr.propertyId === p.id).length })) })) {
     setSaveStatus('KEPT WHAT IS OPEN', false);
     return [];
   }
