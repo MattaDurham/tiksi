@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { modelMaterialSlots, applyModelMaterials, sharpenModelTextures, materialTextures, ownedTextures } from './model-materials.js';
-import { shrunkSize } from './render-quality.js';
+import { shrunkSize, scanTooLarge, megabytes } from './render-quality.js';
 import { prepareModelPackage } from './scanbundle.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -154,7 +154,7 @@ export async function importScanBytes(buffer, name, prop, hooks, extra) {
     catch (err) { await deleteFile(id); throw err; }
   }
   const scan = Object.assign({
-    id, name, originalName, originalFileId, importWarnings: prepared.warnings || [], conversionJobId: prepared.conversionJobId || null, materialIdentities: info?.materialIdentities || {}, format: e, kind, pos: [0, 0, 0], rotY: 0, rot: [0, 0, 0], scale: 1, visible: true,
+    id, name, bytes: buffer.byteLength, originalName, originalFileId, importWarnings: prepared.warnings || [], conversionJobId: prepared.conversionJobId || null, materialIdentities: info?.materialIdentities || {}, format: e, kind, pos: [0, 0, 0], rotY: 0, rot: [0, 0, 0], scale: 1, visible: true,
     pointSize: 0.02, pointColor: 'rgb', budget: DEFAULT_BUDGET, flip: kind === 'splat',
   }, extra || {});
   prop.scans = prop.scans || [];
@@ -338,11 +338,15 @@ async function buildPoints(buffer, e, scan, inner, wrapper, hooks) {
   // An empty cloud would import "successfully" and sit invisibly in the list forever.
   if (!data.count) throw new Error('No points found in ' + scan.name);
   const total = data.count;
-  data = decimate(data, scan.budget || DEFAULT_BUDGET);
+  // The scan's own limit, and below it the device's (hooks.pointBudget, from render-quality.js
+  // deviceLimits: a touch device draws fewer points; 0 or nothing means no device limit).
+  const own = scan.budget || DEFAULT_BUDGET, device = hooks && hooks.pointBudget;
+  const reducedForDevice = device > 0 && device < own && total > device;
+  data = decimate(data, device > 0 ? Math.min(own, device) : own);
   const pts = makePointCloud(data, scan);
   inner.add(pts);
   wrapper.userData.points = pts;
-  return { count: data.count, label: data.count.toLocaleString() + (data.decimatedFrom ? ' of ' + total.toLocaleString() : '') + ' points' };
+  return { count: data.count, reducedForDevice, label: data.count.toLocaleString() + (data.decimatedFrom ? ' of ' + total.toLocaleString() : '') + ' points' };
 }
 async function buildMesh(buffer, e, scan, inner, hooks) {
   hooks && hooks.progress && hooks.progress('Loading ' + scan.name, 0.5);
@@ -425,9 +429,15 @@ export function redoSplatAfterContextLoss(obj) {
   return true;
 }
 
-export async function loadScanObject(scan, hooks, wanted) {
+// A scan over the device's size limit (hooks.scanBytes) is not parsed: the load stops with an
+// error marked `tooLarge` that carries the file's size, unless `force` says to load it anyway.
+export async function loadScanObject(scan, hooks, wanted, force = false) {
   const rec = await getFile(scan.id);
   if (wanted && !wanted()) return null;
+  if (rec && rec.buffer && hooks && hooks.scanSize) hooks.scanSize(scan, rec.buffer.byteLength);
+  if (rec && rec.buffer && !force && scanTooLarge(rec.buffer.byteLength, hooks && hooks.scanBytes)) {
+    throw Object.assign(new Error(scan.name + ' is too large for this device (' + megabytes(rec.buffer.byteLength) + '; it loads scans up to ' + megabytes(hooks.scanBytes) + ').'), { tooLarge: true, bytes: rec.buffer.byteLength });
+  }
   if (!rec || !rec.buffer) {
     hooks && hooks.toast && hooks.toast('Scan "' + scan.name + '" is missing from browser storage; re-import it.', 'warn');
     return null;

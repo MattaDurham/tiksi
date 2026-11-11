@@ -22,6 +22,8 @@ try {
   await new Promise(r => server.listen(0, 'localhost', r));
   browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
   await page.goto(`http://localhost:${server.address().port}/`);
   await page.waitForSelector('#view canvas');
   const result = await page.evaluate(async () => {
@@ -116,6 +118,43 @@ try {
   assert.ok(mixed.unchanged && mixed.sourceUnchanged, 'Proposal/rendering changed the source');
   assert.deepEqual(mixed.roundtrip, mixed.report, 'Review evidence survives a project bundle');
   assert.match(mixed.summary, /Review floor datums/);
+  // A helper that dies mid-job is reported, not rerun in the page (where a very large scan would
+  // freeze it); one that could not load runs the job in the page, as when no helper can be made.
+  const died = await page.evaluate(async () => {
+    const THREE = await import('three');
+    const { mixedScan } = await import('/test/fixtures/mixed-scan.mjs');
+    const { analyseMesh } = await import('/js/scan2plan.js');
+    const { proposeFixtures } = await import('/js/fixtures-ui.js');
+    const { pos, idx } = mixedScan();
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geometry.setIndex(new THREE.BufferAttribute(idx, 1));
+    const root = new THREE.Group(); root.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial()));
+    const RealWorker = window.Worker;
+    // Stand-in helpers: one dies after taking the job, one fails to load before taking it.
+    const helper = tookJob => class { postMessage() {
+      if (tookJob) setTimeout(() => this.onmessage && this.onmessage({ data: { type: 'started' } }), 0);
+      setTimeout(() => this.onerror && this.onerror(new ErrorEvent('error', { message: tookJob ? 'out of memory' : 'could not load' })), 5);
+    } terminate() {} };
+    const outcome = async run => { try { const r = await run(); return r ? 'resolved' : 'resolved empty'; } catch (e) { return String(e && e.message); } };
+    const prop = { levels: [{ id: 'L1', name: 'Main', elevation: 0 }], walls: [] };
+    const run = async tookJob => {
+      window.Worker = helper(tookJob);
+      let progress = 0;
+      const scan = await outcome(() => analyseMesh(root, { progress: (m, f) => { if (f > 0.1) progress++; } }));
+      const fixtures = await outcome(() => proposeFixtures(prop, { id: 's', name: 'synthetic.obj', kind: 'mesh' }, null, root));
+      return { scan, fixtures, progress };
+    };
+    try { return { dead: await run(true), unloaded: await run(false) }; }
+    finally { window.Worker = RealWorker; geometry.dispose(); }
+  });
+  assert.match(died.dead.scan, /Scan analysis stopped \(out of memory\)/, 'A helper that dies mid-job is reported: ' + died.dead.scan);
+  assert.equal(died.dead.progress, 0, 'The page did not run the scan analysis itself');
+  assert.match(died.dead.fixtures, /Fixture detection stopped \(out of memory\)/, 'A fixture helper that dies mid-job is reported: ' + died.dead.fixtures);
+  assert.equal(died.unloaded.scan, 'resolved', 'A helper that could not load leaves the scan analysis to the page: ' + died.unloaded.scan);
+  assert.ok(died.unloaded.progress > 0, 'and the page ran it');
+  assert.match(died.unloaded.fixtures, /^resolved/, 'and fixture detection too: ' + died.unloaded.fixtures);
+  console.log('Helper failures passed: one that dies mid-job is reported; one that could not load runs the job in the page.');
   await page.goto(`http://localhost:${server.address().port}/#/model`);
   await page.locator('canvas.v-canvas').waitFor();
   await page.locator('#rail a[data-view=plan]').click({ noWaitAfter: true });
@@ -132,6 +171,7 @@ try {
     await review.locator('summary').click();
     await page.screenshot({ path: process.env.E2E_SHOTS + '/mixed-floor-review.png' });
   }
+  assert.deepEqual(errors, [], 'no page errors');
   console.log('Mixed underlay passed: indoor floor, yard and lower landing pixels retained; review report persists.');
 
 } finally {

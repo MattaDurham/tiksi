@@ -224,7 +224,12 @@ try {
   // is only decided by then too, so check it after the bar, not after the topbar.
   await page.locator('.fd-bar').waitFor({ state: 'attached', timeout: BOOT_MS });
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('phone')), false, 'desktop layout survives a reload');
-  await page.locator('[data-field-layout=phone]').evaluate(a => a.click());
+  // The way back is on screen in the desktop layout too (the rail's FIELD VIEW is hidden on a
+  // narrow screen): PHONE LAYOUT in the top bar, tapped with a finger.
+  assert.equal(await shown(page, '#topbar .fd-return'), true, 'the desktop layout on a phone keeps PHONE LAYOUT on screen');
+  const backBox = await page.locator('#topbar .fd-return').boundingBox();
+  assert.ok(backBox.width >= 44 && backBox.height >= 44 && backBox.x >= 0 && backBox.x + backBox.width <= page.viewportSize().width, 'and it is a whole finger-sized target on screen: ' + JSON.stringify(backBox));
+  await page.locator('#topbar .fd-return').tap();
   await page.waitForFunction(() => document.documentElement.classList.contains('phone') && location.hash === '#/model', null, { timeout: BOOT_MS });
   assert.equal(await page.evaluate(() => localStorage.getItem('tiksi.layout')), null, 'back to following the screen');
   await phone.close();
@@ -237,7 +242,8 @@ try {
   assert.equal(await desk.evaluate(() => document.documentElement.classList.contains('phone')), false);
   for (const sel of ['#topbar', '#rail', '.v-views', '.v-compass']) assert.equal(await shown(desk, sel), true, sel + ' shows on desktop');
   for (const sel of ['.fd-bar', '.fd-frame', '.fd-panel']) assert.equal(await shown(desk, sel), false, sel + ' stays out of the desktop');
-  assert.equal(await shown(desk, '[data-field-layout=phone]'), true, 'FIELD VIEW is offered in the rail');
+  assert.equal(await shown(desk, '#rail [data-field-layout=phone]'), true, 'FIELD VIEW is offered in the rail');
+  assert.equal(await shown(desk, '#topbar .fd-return'), false, 'a computer at full width needs no PHONE LAYOUT button');
 
   assert.deepEqual(errors, []);
   console.log(`Phone layout passed on ${ENGINE}: opens on a full-screen model with no toolbars; the side panel switches section and x-ray; holding the walk pad walks and lifting stops; a one-finger drag orbits; the overview button frames the model; the panel reaches other pages; desktop layout is remembered and FIELD VIEW returns; desktop is unchanged.`);

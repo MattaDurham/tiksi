@@ -19,8 +19,8 @@
 // project and the two stay connected both ways (sketchup-mirror.js).
 
 import {
-  ws, activeProperty, projectSlice, projectFileName, exportProjectBlob, importProject, readBundle, importBundle,
-  putFile, getFile, deleteFile, handleKey, setSaveStatus, mergeWorkspace, replaceWorkspace, touch,
+  ws, activeProperty, projectSlice, projectFileName, exportProjectBlob, importProject, readBundle,
+  putFile, getFile, deleteFile, handleKey, setSaveStatus, mergeWorkspace, touch,
 } from './store.js';
 import { syncMirror, mirrorCapabilities, mirrorChangedOnDisk, MirrorBusy, openInSketchUp } from './sketchup-mirror.js';
 import { diskWorkspace } from './disk-workspace.js';

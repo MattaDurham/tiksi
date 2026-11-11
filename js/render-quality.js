@@ -67,13 +67,27 @@ export function effectiveQuality({ touch, shared, choice } = {}) {
 //   importedTextureSize          longest side, in pixels, of a texture inside an imported model.
 //                                16384 is the most a graphics card takes, so off a touch device
 //                                nothing is shrunk here and three does what it always did.
+//   roomLights                   how many rooms' ceiling fixtures cast light at once (0: all)
+//   pointBudget                  the most points of a point cloud that are drawn (0: the scan's
+//                                own setting, as before)
+//   scanBytes                    the largest scan file this device loads; a larger one is not
+//                                downloaded or parsed and says so (0: no limit, as before)
 const MB = 1024 * 1024;
 export function deviceLimits({ touch, quality } = {}) {
   const q = known(quality) ? quality : 'high';
-  if (!touch) return { textureBytes: 256 * MB, textureSets: 56, textureQuality: q, importedTextureSize: 16384 };
+  if (!touch) return { textureBytes: 256 * MB, textureSets: 56, textureQuality: q, importedTextureSize: 16384, roomLights: 0, pointBudget: 0, scanBytes: 0 };
   const light = q === 'low' || q === 'medium';
-  return { textureBytes: 96 * MB, textureSets: 24, textureQuality: light ? 'low' : q, importedTextureSize: q === 'low' ? 1024 : 2048 };
+  return { textureBytes: 96 * MB, textureSets: 24, textureQuality: light ? 'low' : q, importedTextureSize: q === 'low' ? 1024 : 2048,
+    roomLights: 4, pointBudget: 500000, scanBytes: 150 * MB };
 }
+
+// Whether a scan file of `bytes` is over this device's limit (`limit` 0: there is none). A scan
+// whose size is not known yet is not: it is checked again once its bytes have arrived.
+export function scanTooLarge(bytes, limit) {
+  return Number.isFinite(limit) && limit > 0 && Number.isFinite(bytes) && bytes > limit;
+}
+// "152 MB", for the message that says so.
+export function megabytes(bytes) { return Math.max(1, Math.round(bytes / MB)) + ' MB'; }
 
 // The size a picture is shrunk to so its longest side fits `limit`, keeping its shape.
 // Returns null when it already fits.

@@ -205,6 +205,24 @@ class ResearchTests(unittest.TestCase):
                 manager.close()
             self.assertTrue(all(a['status']=='cancelled' for a in manager.get(job['id'])['agents']))
 
+    def test_a_full_research_history_says_so_with_its_size_and_removes_nothing(self):
+        with tempfile.TemporaryDirectory() as state:
+            manager=MaterialResearchManager(state, runner=Runner(), max_concurrent_jobs=1, max_records=3)
+            try:
+                made=[]
+                for _ in range(3):
+                    job=manager.create(REQUEST); made.append(job['id'])
+                    for _ in range(200):
+                        if manager.get(job['id'])['status'] not in ('queued','running'): break
+                        time.sleep(0.01)
+                with self.assertRaises(ResearchError) as full:
+                    manager.create(REQUEST)
+                self.assertEqual(full.exception.status,507)
+                self.assertIn('3 records',str(full.exception)); self.assertIn('MB',str(full.exception))
+                self.assertEqual(sorted(p.stem for p in Path(state).glob('*.json')),sorted(made),'every finished record is kept')
+            finally:
+                manager.close()
+
     def test_restart_marks_interrupted_job_failed(self):
         with tempfile.TemporaryDirectory() as state:
             p=Path(state)/'record.json'

@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Serve public Tiksi assets and optional local services, excluding private files."""
 import argparse
+import email.utils
 import errno
+import gzip
+import hashlib
 import html
 import io
 import ipaddress
 import json
 import logging
 import os
+import re
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import faulthandler
@@ -15,14 +19,98 @@ import signal
 import socket
 import sys
 import threading
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
+LOG_READS = os.environ.get('TIKSI_LOG_READS') == '1'
 # The service packages live at the repository root, whatever folder this file is started from.
 if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
 from server.peers import refusal, this_mac_tailscale_address, trusted_peer
+from server.ranges import Part, byte_range
 PUBLIC_FILES = {'index.html', 'manifest.webmanifest', 'app-icon.svg'}
 PUBLIC_DIRS = {'css', 'js', 'vendor'}
+# Text the browser accepts compressed; pictures, video and models are compressed already.
+COMPRESSIBLE = {'text/javascript', 'text/css', 'text/html', 'text/plain', 'application/json', 'application/manifest+json', 'image/svg+xml'}
+# Files the page addresses with ?v=<content fingerprint> (see versioned_page): the libraries in
+# vendor/ and the style sheets. A browser keeps those for a year without asking again, since a
+# changed file gets a new address. The page's own scripts in js/ are asked about each time.
+VERSIONED = ('vendor', 'css')
+IMMUTABLE = 'public, max-age=31536000, immutable'
+PROXY_HEADERS = ('x-forwarded-', 'forwarded', 'via', 'tailscale-')
+PROXY_REFUSED = 'Through a proxy such as Tailscale Serve, Tiksi services answer only devices signed in to this tailnet'
+
+
+class Fingerprints:
+    """Content fingerprints and compressed copies of public files, kept while a file's time and
+    size stay the same."""
+    def __init__(self, limit=64 * 1024 * 1024):
+        self.lock = threading.Lock(); self.hashes = {}; self.packed = {}; self.limit = limit; self.held = 0
+
+    def version(self, path):
+        info = path.stat(); key = (info.st_mtime_ns, info.st_size)
+        with self.lock:
+            found = self.hashes.get(path)
+            if found and found[0] == key: return found[1]
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+        with self.lock: self.hashes[path] = (key, digest)
+        return digest
+
+    def gzip(self, path, info):
+        key = (info.st_mtime_ns, info.st_size)
+        with self.lock:
+            found = self.packed.get(path)
+            if found and found[0] == key: return found[1]
+        packed = gzip.compress(path.read_bytes(), 6, mtime=0)
+        with self.lock:
+            old = self.packed.pop(path, None)
+            if old: self.held -= len(old[1])
+            while self.packed and self.held + len(packed) > self.limit:
+                self.held -= len(self.packed.pop(next(iter(self.packed)))[1])
+            self.packed[path] = (key, packed); self.held += len(packed)
+        return packed
+
+
+FINGERPRINTS = Fingerprints()
+
+
+def versioned_page(document):
+    """index.html with every library and style sheet addressed by its content fingerprint: the
+    import map's entries (and an exact entry for each library module, so relative imports
+    between them resolve to the same address) and the style sheet links."""
+    def address(relative):
+        target = ROOT / relative
+        return './' + relative + '?v=' + FINGERPRINTS.version(target) if target.is_file() else None
+    match = re.search(r'(<script type="importmap">)(.*?)(</script>)', document, re.S)
+    if match:
+        try: given = json.loads(match[2]).get('imports', {})
+        except (ValueError, AttributeError): given = None
+        if isinstance(given, dict):
+            imports = {}
+            for key, value in given.items():
+                relative = str(value).removeprefix('./')
+                if key.endswith('/') and relative.startswith(VERSIONED):
+                    imports[key] = value
+                    for module in sorted((ROOT / relative).rglob('*.js')):
+                        imports[key + module.relative_to(ROOT / relative).as_posix()] = address(module.relative_to(ROOT).as_posix())
+                else: imports[key] = (address(relative) if relative.startswith(VERSIONED) else None) or value
+            for folder in VERSIONED:
+                for module in sorted((ROOT / folder).rglob('*.js')):
+                    relative = module.relative_to(ROOT).as_posix()
+                    if not any(part.startswith('.') for part in module.relative_to(ROOT).parts): imports['./' + relative] = address(relative)
+            document = document[:match.start(2)] + '\n' + json.dumps({'imports': imports}, indent=1) + '\n' + document[match.end(2):]
+    def link(found):
+        versioned = address(found[2])
+        return found[1] + (versioned or './' + found[2]) + found[3]
+    return re.sub(r'(<link rel="stylesheet" href=")\./((?:%s)/[^"?]+)(")' % '|'.join(VERSIONED), link, document)
+
+class NoBody:
+    """Where a HEAD answer's body goes: nowhere."""
+    def write(self, data): return len(data)
+    def flush(self): pass
+
+
+NO_BODY = NoBody()
+
 
 class AppHandler(SimpleHTTPRequestHandler):
     extensions_map = {**SimpleHTTPRequestHandler.extensions_map,
@@ -44,6 +132,13 @@ class AppHandler(SimpleHTTPRequestHandler):
     def send_response(self, code, message=None):
         self.response_status = code
         super().send_response(code, message)
+
+    def log_request(self, code='-', size='-'):
+        # Every open page asks for the revision every few seconds; a successful read is not news.
+        # Writes, refusals and failures are still logged.
+        # TIKSI_LOG_READS=1 logs them too, for a check that counts what a page asked the Mac for.
+        if not LOG_READS and self.command in ('GET', 'HEAD') and isinstance(code, int) and code < 400: return
+        super().log_request(code, size)
 
     def log_error(self, format, *args):
         # An idle connection timing out is the normal end of a persistent connection, not an error.
@@ -70,14 +165,31 @@ class AppHandler(SimpleHTTPRequestHandler):
         # can pass by under a different spelling.
         path = urlsplit(self.path).path
         if path != '/api' and not path.startswith('/api/'): return False
-        return not trusted_peer(self.client_address[0])
+        if not trusted_peer(self.client_address[0]): return True
+        return self.through_proxy() and not self.headers.get('Tailscale-User-Login', '').strip()
+
+    def through_proxy(self):
+        """True when a request reached this Mac through a proxy on it, such as Tailscale Serve or
+        Funnel: the caller is this Mac, and the browser addressed a tailnet name (*.ts.net) or the
+        proxy added its own headers (X-Forwarded-*, Forwarded, Via, Tailscale-*). Tailscale Serve
+        adds the signed-in user (Tailscale-User-Login) to requests from devices on the tailnet and
+        removes any such header a caller sent itself; Funnel, which serves the open internet, adds
+        none. So through a proxy only a request carrying that header is served. The Mac's own
+        browser, under any name the server allows, sends none of these and is served as before."""
+        try:
+            if not ipaddress.ip_address(self.client_address[0].split('%')[0]).is_loopback: return False
+        except ValueError: return False
+        host = (urlsplit('//' + self.headers.get('Host', '')).hostname or '').lower().rstrip('.')
+        if host.endswith('.ts.net'): return True
+        return any(name.lower().startswith(PROXY_HEADERS) for name in self.headers.keys())
 
     def dispatch(self):
         if not self.valid_host():
             self.send_error(403, 'Host is not allowed')
             return True
         if self.service_caller_refused():
-            payload = (json.dumps({'error': refusal(self.client_address[0])}) + '\n').encode('utf-8')
+            reason = PROXY_REFUSED if trusted_peer(self.client_address[0]) else refusal(self.client_address[0])
+            payload = (json.dumps({'error': reason}) + '\n').encode('utf-8')
             self.send_response(403)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(payload)))
@@ -94,6 +206,15 @@ class AppHandler(SimpleHTTPRequestHandler):
         if not self.dispatch(): super().do_GET()
 
     def do_HEAD(self):
+        path = urlsplit(self.path).path
+        if (path == '/api' or path.startswith('/api/')) and path != '/api/instance':
+            # A service answers HEAD as it answers GET, and only its headers are sent: a page can
+            # ask whether the Mac holds a stored original without downloading it.
+            real, self.drop_body = self.wfile, True
+            try:
+                if not self.dispatch(): self.send_error(404)
+            finally: self.wfile, self.drop_body = real, False
+            return
         if not self.valid_host(): self.send_error(403, 'Host is not allowed')
         else: super().do_HEAD()
 
@@ -128,7 +249,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_error(403, 'Host is not allowed'); return None
         # HEAD reaches here without passing dispatch().
         if self.service_caller_refused():
-            self.send_error(403, refusal(self.client_address[0])); return None
+            self.send_error(403, PROXY_REFUSED if trusted_peer(self.client_address[0]) else refusal(self.client_address[0])); return None
         path = unquote(urlsplit(self.path).path)
         if path == '/api/instance':
             payload = (json.dumps(self.instance()) + '\n').encode('utf-8')
@@ -144,17 +265,97 @@ class AppHandler(SimpleHTTPRequestHandler):
         if target == ROOT: target = ROOT / 'index.html'
         if target == ROOT / 'index.html':
             document = target.read_text(encoding='utf-8').replace('name="tiksi-storage" content="portable"', 'name="tiksi-storage" content="project-files"')
+            document = versioned_page(document)
             if not getattr(self.server, 'instance_file', None):
                 return self.bytes_response(document.encode('utf-8'), 'text/html; charset=utf-8')
             metadata = self.instance()
             badge = '<div style="position:fixed;bottom:8px;right:8px;z-index:2147483647;padding:6px 10px;background:#f3c467;color:#1b1b1b;font:12px monospace;border-radius:4px;pointer-events:none" aria-label="Branch preview">PREVIEW ' + html.escape(metadata.get('branch', 'unknown')) + ' / ' + html.escape(metadata.get('head', '')[:8]) + '</div>'
             document = document.replace('</body>', badge + '\n</body>')
             return self.bytes_response(document.encode('utf-8'), 'text/html; charset=utf-8')
-        return super().send_head()
+        return self.static_file(target)
+
+    def static_file(self, target):
+        """A public file, with a validator for reuse and a single byte range when one is asked
+        for (video in the guide plays and seeks without downloading the whole clip)."""
+        if not target.is_file():
+            self.send_error(404); return None
+        try:
+            source = target.open('rb'); info = os.fstat(source.fileno())
+        except OSError:
+            self.send_error(404); return None
+        tag = '"%x-%x"' % (info.st_mtime_ns, info.st_size)
+        modified = email.utils.formatdate(info.st_mtime, usegmt=True)
+        kind = self.guess_type(str(target))
+        # A range is honoured unless If-Range names another version of the file.
+        asked = self.headers.get('Range') if self.headers.get('If-Range', tag) in (tag, modified) else None
+        wanted = byte_range(asked, info.st_size)
+        packed = not wanted and self.compressible(kind)
+        if packed: tag = tag[:-1] + '-gz"'
+        # Addressed by its current fingerprint: the browser keeps it without asking again.
+        version = parse_qs(urlsplit(self.path).query).get('v', [''])[0]
+        immutable = bool(version) and target.relative_to(ROOT).parts[0] in VERSIONED and version == FINGERPRINTS.version(target)
+        if self.not_modified(tag, info.st_mtime):
+            source.close()
+            self.send_response(304); self.send_header('ETag', tag)
+            if immutable: self.send_header('Cache-Control', IMMUTABLE)
+            if self.compressible(kind, accepted=False): self.send_header('Vary', 'Accept-Encoding')
+            self.end_headers()
+            return None
+        if packed:
+            source.close()
+            payload = FINGERPRINTS.gzip(target, info)
+            self.send_response(200)
+            self.send_header('Content-Type', kind); self.send_header('Content-Encoding', 'gzip'); self.send_header('Vary', 'Accept-Encoding')
+            self.send_header('Content-Length', str(len(payload))); self.send_header('Last-Modified', modified); self.send_header('ETag', tag)
+            if immutable: self.send_header('Cache-Control', IMMUTABLE)
+            self.end_headers()
+            return io.BytesIO(payload)
+        if wanted == 'unsatisfiable':
+            source.close()
+            self.send_response(416); self.send_header('Content-Range', 'bytes */%d' % info.st_size)
+            self.send_header('Content-Length', '0'); self.end_headers()
+            return None
+        if wanted:
+            start, end = wanted
+            source.seek(start)
+            self.send_response(206)
+            self.send_header('Content-Range', 'bytes %d-%d/%d' % (start, end, info.st_size))
+            length, body = end - start + 1, Part(source, end - start + 1)
+        else:
+            self.send_response(200)
+            length, body = info.st_size, source
+        self.send_header('Content-Type', kind)
+        self.send_header('Content-Length', str(length))
+        self.send_header('Last-Modified', modified)
+        self.send_header('ETag', tag)
+        self.send_header('Accept-Ranges', 'bytes')
+        if immutable: self.send_header('Cache-Control', IMMUTABLE)
+        if self.compressible(kind, accepted=False): self.send_header('Vary', 'Accept-Encoding')
+        self.end_headers()
+        return body
+
+    def compressible(self, kind, accepted=True):
+        """True for text worth compressing; with accepted, only when this browser takes gzip."""
+        if kind.split(';')[0].strip() not in COMPRESSIBLE: return False
+        if not accepted: return True
+        offered = [part.split(';')[0].strip().lower() for part in self.headers.get('Accept-Encoding', '').split(',')]
+        return 'gzip' in offered and not any(part.replace(' ', '') == 'gzip;q=0' for part in self.headers.get('Accept-Encoding', '').split(','))
+
+    def not_modified(self, tag, mtime):
+        match = self.headers.get('If-None-Match')
+        if match is not None: return tag in [t.strip() for t in match.split(',')] or match.strip() == '*'
+        since = self.headers.get('If-Modified-Since')
+        if not since: return False
+        try: return int(mtime) <= email.utils.parsedate_to_datetime(since).timestamp()
+        except (TypeError, ValueError, IndexError, OverflowError): return False
 
     def bytes_response(self, payload, content_type):
+        packed = len(payload) > 1024 and self.compressible(content_type)
+        if packed: payload = gzip.compress(payload, 6, mtime=0)
         self.send_response(200)
         self.send_header('Content-Type', content_type)
+        if self.compressible(content_type, accepted=False): self.send_header('Vary', 'Accept-Encoding')
+        if packed: self.send_header('Content-Encoding', 'gzip')
         self.send_header('Content-Length', str(len(payload)))
         self.end_headers()
         return io.BytesIO(payload)
@@ -181,6 +382,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.send_header('Connection', 'close')
         self.body_framed = False
         super().end_headers()
+        if getattr(self, 'drop_body', False): self.wfile = NO_BODY
 
 class AppServer(ThreadingHTTPServer):
     daemon_threads = True
@@ -263,6 +465,8 @@ def main():
         sys.path.insert(0, str(ROOT))
         from server.workspace import WorkspaceService
         server.workspace = WorkspaceService(args.state_dir / 'workspace', args.projects_dir)
+        from server.code_version import CodeVersion
+        server.workspace.code_version = CodeVersion(ROOT)
         server.reconstruction = None
         server.material_research = None
         if (ROOT / 'server/reconstruction.py').exists():

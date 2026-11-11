@@ -94,7 +94,14 @@ try {
   const box = await boxOf(hit);
   const inch = box.width / plan.w;
   await page.mouse.move(box.x + 20, box.y + 20); await page.mouse.down();
-  await page.mouse.move(box.x + 20 + inch * 0.5, box.y + 20 + inch * 0.25, { steps: 5 }); await page.mouse.up();
+  // While dragging, the view moves on screen and the sheet is not rebuilt for each step.
+  const groupAt = id => page.evaluate(id => document.querySelector(`.dc-paper svg g[data-vp-group="${id}"]`).getAttribute('transform'), plan.id);
+  const startAt = await groupAt(plan.id);
+  await page.evaluate(() => { window.__dragSvg = document.querySelector('.dc-paper svg'); });
+  await page.mouse.move(box.x + 20 + inch * 0.5, box.y + 20 + inch * 0.25, { steps: 5 });
+  const during = await page.evaluate(() => window.__dragSvg === document.querySelector('.dc-paper svg'));
+  check(during && (await groupAt(plan.id)) !== startAt, 'a drag moves the view on screen without rebuilding the sheet');
+  await page.mouse.up();
   list = await vps();
   check(Math.abs(list[0].x - (plan.x + 0.5)) < 0.13 && Math.abs(list[0].y - (plan.y + 0.25)) < 0.13 && (list[0].x * 8) % 1 === 0, `dragging moves the plan half an inch right and a quarter down (${plan.x} -> ${list[0].x})`);
   const handle = page.locator(`.dc-vp-handle[data-handle="${plan.id}"]`);
@@ -102,6 +109,8 @@ try {
   await page.mouse.move(hb.x + 4, hb.y + 4); await page.mouse.down();
   await page.mouse.move(hb.x + 4 + inch, hb.y + 4, { steps: 5 }); await page.mouse.up();
   list = await vps();
+  const drawnW = await page.evaluate(id => +document.querySelector(`.dc-paper svg g[data-vp-group="${id}"] clipPath rect`).getAttribute('width'), plan.id);
+  check(Math.abs(drawnW - list[0].w * 72) < 0.5, 'after a resize the sheet is redrawn at the new size');
   check(Math.abs(list[0].w - (plan.w + 1)) < 0.13, `the corner handle makes the plan an inch wider (${plan.w} -> ${list[0].w})`);
 
   // Double-click to adjust: scrolling steps the scale, Esc finishes.
@@ -174,18 +183,20 @@ try {
   await page.evaluate(() => window.__restoreBlob());
   const afterBlank = await prop('return { revs: p.docSets[0].revisions.length, docs: p.photos.filter(x => x.kind === "document").length }');
   check(afterBlank.revs === 0 && afterBlank.docs === 0, 'a sheet image the browser cannot make leaves no revision');
-  check(await page.locator('[data-status]').textContent() === 'The PDF could not be made: this browser could not draw sheet 1 as a 4964 x 3212 pixel image (292 dpi)', 'and says which sheet and size failed');
+  check(await page.locator('[data-status]').textContent() === 'The PDF could not be made: this browser could not draw sheet 1 as a 5100 x 3300 pixel image (300 dpi)', 'and says which sheet and size failed');
 
   const sizes = await page.evaluate(async () => {
     const { sheetDpi } = await import('/js/documentcenter.js'); const { PAPERS } = await import('/js/doc-sets.js');
-    return PAPERS.map(p => { const d = sheetDpi(p); return { id: p.id, dpi: d, px: Math.round(p.w * d) * Math.round(p.h * d) }; });
+    const size = (p, touch) => { const d = sheetDpi(p, touch); return { id: p.id, dpi: d, px: Math.round(p.w * d) * Math.round(p.h * d) }; };
+    return { touch: PAPERS.map(p => size(p, true)), mac: PAPERS.map(p => size(p, false)), here: PAPERS.map(p => sheetDpi(p)) };
   });
-  check(sizes.every(s => s.px <= 16e6) && sizes.find(s => s.id === 'tabloid').dpi === 292, 'every paper size stays under 16 million pixels, which iPhone and iPad Safari can draw (' + sizes.map(s => s.id + ' ' + s.dpi + ' dpi').join(', ') + ')');
+  check(sizes.touch.every(s => s.px <= 16e6) && sizes.touch.find(s => s.id === 'tabloid').dpi === 292, 'on a touch device every paper size stays under 16 million pixels, which iPhone and iPad Safari can draw (' + sizes.touch.map(s => s.id + ' ' + s.dpi + ' dpi').join(', ') + ')');
+  check(sizes.mac.every(s => s.dpi === 300) && sizes.here.every(d => d === 300), 'on a computer every paper is drawn at 300 dpi, never under the 150 dpi of before (' + sizes.mac.map(s => s.id + ' ' + s.dpi + ' dpi').join(', ') + ')');
 
   // Save a PDF of the set into the property as revision 1.
   await page.locator('[data-save]').click();
   await page.waitForFunction(() => /Saved/.test(document.querySelector('[data-status]')?.textContent || ''), null, { timeout: 120000 });
-  check(/\(sheets at 292 dpi\)\.$/.test(await page.locator('[data-status]').textContent()), 'the save says the resolution it used');
+  check(/\(sheets at 300 dpi\)\.$/.test(await page.locator('[data-status]').textContent()), 'the save says the resolution it used');
   const info = await page.evaluate(async () => {
     const s = await import('/js/store.js'); const { photoBytes } = await import('/js/photos-store.js');
     const p = s.activeProperty(); const r = p.docSets[0].revisions[0]; const d = p.photos.find(x => x.id === r.documentId);
@@ -194,14 +205,15 @@ try {
   });
   check(info.n === 1 && info.mime === 'application/pdf' && /rev 1/.test(info.name), 'SAVE PDF TO PROJECT stores revision 1 as a PDF document (' + info.name + ')');
   check(info.head === '%PDF-1.4' && info.count === 2 && info.pages === 2, 'the PDF has one page per sheet (' + info.count + ')');
-  check(info.widths.length === 2 && info.widths.every(w => w === 17 * 292), 'each tabloid sheet is drawn at 292 dpi, so small dimensions stay sharp (' + info.widths.join(', ') + ' px wide)');
+  check(info.widths.length === 2 && info.widths.every(w => w === 17 * 300), 'each tabloid sheet is drawn at 300 dpi on a computer, so small dimensions stay sharp (' + info.widths.join(', ') + ' px wide)');
   check(/>1 {3}\d{4}-\d{2}-\d{2} {3}Issued</.test(await page.locator('.dc-paper svg').innerHTML()), 'the title block lists revision 1');
   await page.locator('[data-doc]').first().click();
   await page.locator('.dc-viewer-page img').waitFor();
   check((await page.locator('.dc-pager').textContent()).includes('Page 1 of 2'), 'the saved PDF opens in SAVED DOCUMENTS with its two pages');
 
   // The set is part of the property: it is still there after a reload.
-  await page.waitForTimeout(800);
+  // Reload once the browser's saved copy holds the revision (autosave runs a moment after a change).
+  await page.waitForFunction(() => { try { return JSON.parse(localStorage.getItem('tiksi.workspace.v1')).properties.some(p => p.docSets?.[0]?.revisions.length === 1); } catch { return false; } });
   await page.reload();
   await page.locator('[data-set]').first().waitFor();
   const kept = await prop('return { sheets: p.docSets[0].sheets.length, views: p.docSets[0].sheets.flatMap(s => s.viewports).length, revs: p.docSets[0].revisions.length }');

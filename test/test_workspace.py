@@ -7,11 +7,17 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 import zipfile
 from server.peers import Tailnet
 from server.workspace import WorkspaceService, WorkspaceError, MAX_JSON
+
+
+def fresh(data):
+    """A copy, as a save request arrives: never the same objects the server already holds."""
+    return json.loads(json.dumps(data))
 
 
 def workspace(name='A'):
@@ -48,6 +54,214 @@ class WorkspaceTests(unittest.TestCase):
         restored = WorkspaceService(self.root / 'runtime', self.root / 'projects')
         self.assertEqual(restored.snapshot()['data']['properties'], data['properties'])
         self.assertEqual((restored.root / 'blobs' / digest).read_bytes(), payload)
+
+    def two_with_originals(self):
+        """Two properties, listed Zed before Alpha (the reverse of their file paths), each with an original."""
+        data = {**workspace(), 'properties': []}; assets = {}
+        for identifier, name in (('prop-z', 'Zed'), ('prop-a', 'Alpha')):
+            digest, size = self.service.store_blob(io.BytesIO(name.encode() * 50000))
+            data['properties'].append({'id': identifier, 'name': name, 'scans': [{'id': 'scan-' + identifier, 'name': 'Scan'}], 'photos': []})
+            assets['scan-' + identifier] = {'hash': digest, 'size': size, 'format': 'glb', 'name': 'room.glb'}
+        self.commit(data, assets)
+        return data
+
+    def test_a_restart_with_nothing_changed_copies_nothing_and_changes_no_revision(self):
+        data = self.two_with_originals()
+        before = self.service.snapshot()
+        with patch.object(WorkspaceService, 'store_blob', side_effect=AssertionError('an original was copied again')):
+            restarted = WorkspaceService(self.root / 'runtime', self.root / 'projects')
+            after = restarted.snapshot()
+        self.assertEqual(after['revision'], before['revision'], 'open pages do not reload')
+        self.assertEqual([p['name'] for p in after['data']['properties']], ['Zed', 'Alpha'], 'the order is kept')
+        self.assertEqual(after['data'], before['data']); self.assertEqual(after['assets'], before['assets'])
+        # Saving after the restart still works and the next restart is still quiet.
+        self.service = restarted
+        data['properties'][0]['name'] = 'Zed revised'
+        self.commit(data, before['assets'])
+        revision = restarted.snapshot()['revision']
+        self.assertEqual(WorkspaceService(self.root / 'runtime', self.root / 'projects').snapshot()['revision'], revision)
+
+    def test_a_project_file_changed_elsewhere_is_fingerprinted_without_copying_originals_already_held(self):
+        self.two_with_originals()
+        path = Path(self.service.paths['prop-a'])
+        os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 10 ** 9))  # touched by another program
+        with patch.object(WorkspaceService, 'store_blob', side_effect=AssertionError('an original already held was copied again')):
+            restarted = WorkspaceService(self.root / 'runtime', self.root / 'projects')
+        self.assertEqual([p['name'] for p in restarted.snapshot()['data']['properties']], ['Zed', 'Alpha'])
+
+    def test_a_restart_with_a_project_still_missing_changes_no_revision(self):
+        self.two_with_originals()
+        Path(self.service.paths['prop-a']).unlink()
+        revision = self.service.snapshot()['revision']
+        restarted = WorkspaceService(self.root / 'runtime', self.root / 'projects')
+        self.assertEqual(restarted.snapshot()['revision'], revision)
+        self.assertEqual([u['id'] for u in restarted.snapshot()['unavailable']], ['prop-a'])
+
+    def test_the_thinning_rule_keeps_recent_saves_then_one_a_day_then_one_a_month(self):
+        from server.workspace import thinned_copies, KEEP_SAVES
+        now = 1_800_000_000.0; day = 86400; copies = []
+        for age in range(199, -1, -1):
+            for hour in range(10): copies.append((len(copies) + 1, now - age * day - (10 - hour) * 3600, str(len(copies) + 1) + '.json'))
+        thin = set(thinned_copies(copies, now))
+        left = sorted(r for r, _, name in copies if name not in thin)
+        self.assertEqual(left[-KEEP_SAVES:], list(range(len(copies) - KEEP_SAVES + 1, len(copies) + 1)), 'every recent save stays')
+        ages = [(now - mtime) / day for r, mtime, name in copies if name not in thin and r <= len(copies) - KEEP_SAVES]
+        self.assertGreaterEqual(len({int(a) for a in ages if a <= 90}), 85, 'one a day for the last 90 days')
+        self.assertLessEqual(sum(a > 91 for a in ages), 5, 'then one a month')
+
+    def test_saving_never_removes_a_catalog_copy(self):
+        for count in range(70): self.commit(workspace('A ' + str(count)))
+        copies = [p for p in (self.root / 'runtime' / 'history').glob('*.json') if p.stem.isdigit()]
+        self.assertEqual(len(copies), 69, 'every save keeps the copy before it; nothing is thinned on its own')
+
+    def old(self, *paths):
+        for path in paths: os.utime(path, (time.time() - 40 * 86400,) * 2)
+
+    def test_a_clean_up_lists_first_and_removes_only_that_list_when_asked(self):
+        data = self.two_with_originals()
+        blobs = self.root / 'runtime' / 'blobs'
+        kept = {a['hash'] for a in self.service.state['assets'].values()}
+        stray, _ = self.service.store_blob(io.BytesIO(b'replaced scan, long ago'))
+        young, _ = self.service.store_blob(io.BytesIO(b'uploaded, save not here yet'))
+        self.old(blobs / stray, *(blobs / h for h in kept))
+        plan = self.service.cleanup_plan()
+        self.assertEqual([o['hash'] for o in plan['originals']], [stray])
+        self.assertEqual((plan['count'], plan['bytes']), (1, len(b'replaced scan, long ago')))
+        self.assertTrue((blobs / stray).exists(), 'listing removes nothing')
+        with self.assertRaises(WorkspaceError) as changed: self.service.cleanup({'copies': [], 'originals': [stray, young]})
+        self.assertEqual(changed.exception.status, 409); self.assertTrue((blobs / stray).exists(), 'a different list removes nothing')
+        self.assertEqual(self.service.cleanup({'copies': [], 'originals': [stray]})['removed'], 1)
+        self.assertFalse((blobs / stray).exists())
+        self.assertTrue(all((blobs / h).exists() for h in {young, *kept}))
+        self.commit(data, self.service.state['assets'])
+
+    def test_a_clean_up_keeps_a_missing_projects_last_copy_and_its_originals(self):
+        self.two_with_originals()
+        blobs = self.root / 'runtime' / 'blobs'
+        alpha = self.service.state['assets']['scan-prop-a']['hash']
+        Path(self.service.paths['prop-a']).unlink()
+        # The page saves without the missing project many times over.
+        for count in range(70):
+            data = {**workspace(), 'properties': [{'id': 'prop-z', 'name': 'Zed ' + str(count), 'scans': [{'id': 'scan-prop-z', 'name': 'Scan'}], 'photos': []}]}
+            self.commit(data, {'scan-prop-z': self.service.state['assets']['scan-prop-z']})
+        history = self.root / 'runtime' / 'history'
+        for path in history.glob('*.json'): os.utime(path, (time.time() - 200 * 86400,) * 2)
+        self.old(*blobs.iterdir())
+        self.service.part_assets.pop('prop-a', None)  # as after a restart, with the file still gone
+        plan = self.service.cleanup_plan()
+        self.service.cleanup({'copies': [c['name'] for c in plan['copies']], 'originals': [o['hash'] for o in plan['originals']]})
+        self.assertGreater(len(plan['copies']), 0, 'there was something to thin')
+        self.assertTrue(any(b'prop-a' in p.read_bytes() for p in history.glob('*.json')), "the missing project's newest copy stays")
+        self.assertTrue((blobs / alpha).exists(), 'and so does its original')
+
+    def test_an_original_a_page_was_told_is_here_is_not_cleaned_up(self):
+        blobs = self.root / 'runtime' / 'blobs'
+        def told(how):
+            digest, _ = self.service.store_blob(io.BytesIO(('sent long ago, then ' + how).encode()))
+            self.old(blobs / digest)
+            return digest
+        again = told('sent again'); self.service.store_blob(io.BytesIO(b'sent long ago, then sent again'))
+        asked = told('asked about'); self.assertTrue(self.service.held(asked))
+        resent = told('resent in pieces'); self.assertEqual(self.service.upload_piece(resent, 5, 0, io.BytesIO(b'x'), 1)[2], True)
+        listed = {o['hash'] for o in self.service.cleanup_plan()['originals']}
+        self.assertEqual(listed & {again, asked, resent}, set())
+
+    def test_unfinished_uploads_are_limited_in_number_size_and_disk_space(self):
+        from server.workspace import MAX_UPLOADS, MAX_BLOB, UPLOAD_TOTAL
+        piece = lambda n: self.service.upload_piece(('%064x' % n), MAX_BLOB, 0, io.BytesIO(b'p'), 1)
+        for n in range(1, UPLOAD_TOTAL // MAX_BLOB + 1): piece(n)
+        with self.assertRaises(WorkspaceError) as over: piece(99)
+        self.assertEqual(over.exception.status, 429, 'at most 8 GB declared by unfinished uploads')
+        for note in (self.root / 'runtime' / 'uploads').glob('*'): note.unlink()
+        small = lambda n: self.service.upload_piece(('%064x' % n), 10, 0, io.BytesIO(b'p'), 1)
+        for n in range(1, MAX_UPLOADS + 1): small(n)
+        with self.assertRaises(WorkspaceError) as many: small(1000)
+        self.assertEqual(many.exception.status, 429, 'at most 32 unfinished uploads')
+        Disk = type('Disk', (), {'free': 10})
+        with patch('server.workspace.shutil.disk_usage', return_value=Disk()), self.assertRaises(WorkspaceError) as full:
+            self.service.upload_piece('%064x' % 1, 10, 1, io.BytesIO(b'p'), 1)
+        self.assertEqual(full.exception.status, 507)
+        self.assertEqual(self.service.upload_state('%064x' % 1)[0], 1, 'nothing of the refused piece was written')
+
+    def test_a_slow_upload_keeps_its_progress_while_pieces_keep_coming(self):
+        digest = '%064x' % 7; uploads = self.root / 'runtime' / 'uploads'
+        self.service.upload_piece(digest, 10, 0, io.BytesIO(b'abc'), 3)
+        note, part = uploads / (digest + '.json'), uploads / (digest + '.part')
+        self.old(note); self.service.upload_piece(digest, 10, 3, io.BytesIO(b'def'), 3)  # a piece a week later
+        self.service.expire_uploads()
+        self.assertEqual(self.service.upload_state(digest), (6, 10), 'progress is kept')
+        self.old(note, part); self.service.expire_uploads()
+        self.assertFalse(note.exists() or part.exists(), 'an upload with no piece for a week goes, note and part together')
+
+    def scanned(self, payload=b'synthetic scan ' * 200000):
+        digest, size = self.service.store_blob(io.BytesIO(payload))
+        data = workspace(); data['properties'][0]['scans'] = [{'id': 'scan-a', 'name': 'Scan'}]
+        assets = {'scan-a': {'hash': digest, 'size': size, 'format': 'glb', 'name': 'room.glb'}}
+        self.commit(data, assets)
+        return data, assets, payload
+
+    def test_a_save_that_changes_only_records_rewrites_only_the_end_of_the_project_file(self):
+        data, assets, payload = self.scanned()
+        path = Path(self.service.paths['prop-a'])
+        with zipfile.ZipFile(path) as archive: before = {i.filename: i.header_offset for i in archive.infolist()}
+        data = fresh(data); data['properties'][0]['notes'] = 'one word'
+        with patch.object(WorkspaceService, 'bundle', side_effect=AssertionError('the whole project file was written again')):
+            self.commit(data, assets)
+        with zipfile.ZipFile(path) as archive:
+            self.assertIsNone(archive.testzip())
+            self.assertEqual(json.loads(archive.read('workspace.json'))['properties'][0]['notes'], 'one word')
+            item = json.loads(archive.read('manifest.json'))['files'][0]
+            self.assertEqual(archive.read(item['path']), payload)
+            self.assertEqual(archive.getinfo(item['path']).header_offset, before[item['path']], 'the scan stays where it was')
+        # A restart reads it back the same, and a second records-only save works too.
+        restarted = WorkspaceService(self.root / 'runtime', self.root / 'projects')
+        self.assertEqual(restarted.snapshot()['data']['properties'][0]['notes'], 'one word')
+        self.service = restarted
+        data = fresh(data); data['properties'][0]['notes'] = 'two words'
+        with patch.object(WorkspaceService, 'bundle', side_effect=AssertionError('the whole project file was written again')):
+            self.commit(data, assets)
+        self.assertEqual(WorkspaceService(self.root / 'runtime', self.root / 'projects').snapshot()['data']['properties'][0]['notes'], 'two words')
+
+    def test_a_save_that_changes_originals_or_meets_a_file_changed_elsewhere_writes_the_whole_file(self):
+        data, assets, payload = self.scanned()
+        path = Path(self.service.paths['prop-a'])
+        digest, size = self.service.store_blob(io.BytesIO(b'a photo'))
+        data = fresh(data); data['properties'][0]['photos'] = [{'id': 'photo-a', 'name': 'Photo'}]
+        assets['photo-a'] = {'hash': digest, 'size': size, 'mime': 'image/jpeg'}
+        real = WorkspaceService.bundle; calls = []
+        def counted(*args, **kwargs): calls.append(1); return real(*args, **kwargs)
+        with patch.object(WorkspaceService, 'bundle', counted): self.commit(data, assets)
+        self.assertEqual(len(calls), 1, 'a new original: the whole file')
+        # A file another program rewrote is read again before the save, whatever its layout.
+        with zipfile.ZipFile(path) as archive: members = {i.filename: archive.read(i) for i in archive.infolist()}
+        with zipfile.ZipFile(path, 'w') as archive:
+            for name in ('workspace.json', 'manifest.json'): archive.writestr(name, members[name])
+            for name, value in members.items():
+                if name not in ('workspace.json', 'manifest.json'): archive.writestr(name, value)
+        data = fresh(data); data['properties'][0]['notes'] = 'after an outside change'
+        with patch.object(WorkspaceService, 'bundle', counted): self.commit(data, assets)
+        self.assertEqual(len(calls), 2, 'records ahead of the originals: the whole file')
+        with zipfile.ZipFile(path) as archive:
+            self.assertEqual(json.loads(archive.read('workspace.json'))['properties'][0]['notes'], 'after an outside change')
+            self.assertEqual(archive.namelist()[-1], 'workspace.json', 'written afresh with the records last')
+
+    def test_a_records_rewrite_that_fails_leaves_the_project_file_whole_and_the_save_still_goes_through(self):
+        data, assets, payload = self.scanned()
+        path = Path(self.service.paths['prop-a']); before = path.read_bytes()
+        real = zipfile.ZipFile.writestr; seen = []
+        def failing(archive, name, *args, **kwargs):
+            seen.append(name)
+            if archive.mode == 'a' and name == 'workspace.json': raise OSError(28, 'No space left on device')
+            return real(archive, name, *args, **kwargs)
+        data = fresh(data); data['properties'][0]['notes'] = 'after a failed rewrite'
+        with patch.object(zipfile.ZipFile, 'writestr', failing), self.assertLogs('tiksi.workspace', 'WARNING'):
+            self.commit(data, assets)
+        self.assertIn('workspace.json', seen)
+        with zipfile.ZipFile(path) as archive:
+            self.assertEqual(json.loads(archive.read('workspace.json'))['properties'][0]['notes'], 'after a failed rewrite')
+            self.assertEqual(archive.read(json.loads(archive.read('manifest.json'))['files'][0]['path']), payload)
+        self.assertEqual([p.name for p in path.parent.iterdir() if p.suffix == '.tmp'], [])
+        self.assertNotEqual(path.read_bytes(), before)
 
     def test_videos_and_measurement_frames_travel_in_the_project_bundle(self):
         video, frame, stray = b'\x00\x00\x00\x18ftypmp42 synthetic video', b'\xff\xd8 synthetic frame', b'unreferenced'
@@ -342,6 +556,31 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(source.with_suffix('.skp').read_bytes(), b'synthetic skp')
         self.assertEqual([p.name for p in source.parent.glob('.*.tmp') if p.is_file()], [])
 
+    def test_a_sketchup_model_upload_is_received_in_pieces_into_its_own_spare_file(self):
+        self.commit(workspace())
+        source = Path(self.service.paths['prop-a']); model = source.with_suffix('.skp')
+        body = bytes(range(256)) * (6 * 4096)
+        test = self
+        class Pieces(io.BytesIO):
+            def read(self, amount=-1):
+                test.assertTrue(0 < amount <= 4 * 1024 * 1024, 'the model is read in pieces, not whole: ' + str(amount))
+                return super().read(amount)
+        def put(stamp, data):
+            class Handler:
+                path = '/api/workspace/mirror/prop-a'; command = 'PUT'; client_address = ('127.0.0.1', 1)
+                connection = type('C', (), {'settimeout': lambda self, t: None})()
+                def send_response(self, status): self.status = status
+                def send_header(self, *args): pass
+                def end_headers(self): pass
+            h = Handler(); h.rfile = Pieces(data); h.wfile = io.BytesIO()
+            h.headers = {'Host': 'localhost:8888', 'X-Tiksi-Workspace': '1', 'X-Tiksi-Token': self.service.token, 'Content-Length': str(len(data)), 'X-File-Mtime': stamp}
+            self.service.dispatch(h); return h.status
+        self.assertEqual(put('0', body), 200)
+        self.assertEqual(model.read_bytes(), body)
+        self.assertEqual(put('0', b'stale'), 409, 'a model changed meanwhile is not overwritten')
+        self.assertEqual(model.read_bytes(), body)
+        self.assertEqual([p.name for p in source.parent.iterdir() if p.name.endswith('.tmp')], [], 'no spare file is left')
+
     def test_http_reads_require_trusted_peer_same_origin_and_custom_header(self):
         class Handler:
             path = '/api/workspace'; command = 'GET'; client_address = ('100.80.1.2', 1234)
@@ -566,7 +805,7 @@ class UnavailableProjectTests(unittest.TestCase):
             self.a.chmod(0)
         real_zip = zipfile.ZipFile
         def failing(path, *args, **kwargs):
-            if Path(path) == self.a: raise OSError(5, 'Input/output error')
+            if isinstance(path, (str, os.PathLike)) and Path(path) == self.a: raise OSError(5, "Input/output error")
             return real_zip(path, *args, **kwargs)
         cases = {'no read permission': (no_permission, None),
                  'workspace.json is a list': (zipped('[]'), None),
@@ -594,6 +833,44 @@ class UnavailableProjectTests(unittest.TestCase):
                 self.a.write_bytes(original)
                 names, snapshot = self.visible(restarted)
                 self.assertEqual(sorted(names), ['A', 'B ' + label], 'it returns once readable')
+
+    def test_a_project_gone_for_good_can_be_taken_off_the_list_and_no_file_is_touched(self):
+        self.a.rename(self.away)
+        self.assertEqual([u['id'] for u in self.service.snapshot()['unavailable']], ['prop-a'])
+        with self.assertRaises(WorkspaceError) as refused: self.service.forget('prop-b')
+        self.assertEqual(refused.exception.status, 409, 'a project whose file is there cannot be taken off')
+        files = {p: p.read_bytes() for p in self.root.rglob('*.tiksi')}
+        def call(identifier):
+            class Handler:
+                path = '/api/workspace/unavailable/' + identifier + '/forget'; command = 'POST'; client_address = ('127.0.0.1', 1)
+                headers = {'Host': 'localhost:8888', 'X-Tiksi-Workspace': '1', 'X-Tiksi-Token': self.service.token}
+                def send_response(self, status): self.status = status
+                def send_header(self, *args): pass
+                def end_headers(self): pass
+            h = Handler(); h.wfile = io.BytesIO(); self.service.dispatch(h)
+            return h.status, json.loads(h.wfile.getvalue())
+        before = self.service.snapshot()['revision']
+        status, reply = call('prop-a')
+        self.assertEqual((status, reply['unavailable']), (200, []))
+        self.assertGreater(reply['revision'], before, 'every device sees it leave on its next poll')
+        names, snapshot = self.visible()
+        self.assertEqual((names, snapshot['unavailable']), (['B'], []))
+        self.assertNotIn('prop-a', snapshot['paths'])
+        self.assertEqual({p: p.read_bytes() for p in self.root.rglob('*.tiksi')}, files, 'no project file was deleted, moved or written')
+        self.assertTrue(any(b'prop-a' in p.read_bytes() for p in (self.root / 'workspace' / 'history').glob('*.json')), 'its record stays in the saved copies')
+        restarted = WorkspaceService(self.root / 'workspace', self.root / 'projects')
+        self.assertEqual(restarted.snapshot()['unavailable'], [])
+        self.assertEqual(call('prop-a')[0], 409, 'nothing left to take off')
+        data = two('A', 'B again'); data['properties'] = data['properties'][1:]
+        self.commit(data, service=restarted)
+        self.assertEqual(project_name(self.b), 'B again', 'the rest keep saving')
+
+    def test_a_project_whose_file_is_there_but_unreadable_stays_on_the_list(self):
+        self.a.write_bytes(b'damaged, or on a failing drive')
+        self.assertEqual([(u['id'], u['reason']) for u in self.service.snapshot()['unavailable']], [('prop-a', 'unreadable')])
+        with self.assertRaises(WorkspaceError) as refused: self.service.forget('prop-a')
+        self.assertEqual(refused.exception.status, 409)
+        self.assertEqual([u['id'] for u in self.service.snapshot()['unavailable']], ['prop-a'])
 
     def test_open_and_mirror_requests_for_a_missing_project_name_the_file(self):
         self.a.unlink()

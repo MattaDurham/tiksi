@@ -36,6 +36,8 @@ export async function convertAgain(prop, scan, oldWrapper) {
     for (const k of Object.keys(tagOf)) if (k.startsWith(prefix)) delete tagOf[k];
     prop.tagOf = Object.assign(tagOf, assigned);
     scan.format = 'glb';
+    // The stored file is the new one: its size is what a device's size limit goes by.
+    scan.bytes = converted.buffer.byteLength;
     scan.conversionJobId = converted.conversionJobId || scan.conversionJobId || null;
     scan.importWarnings = converted.warnings || [];
     scan.convertedAgainAt = new Date().toISOString();

@@ -304,7 +304,7 @@ function cardHtml(e, board) {
       <span class="sbar status-${escapeHtml(p.status)}"></span>
       <div class="p-title">
         <b>${escapeHtml(p.name)}</b>
-        <input type="checkbox" ${p.selected ? 'checked' : ''} data-sel="${escapeHtml(p.id)}" title="Include in program budget/schedule">
+        <label class="bd-sel-tap"><input type="checkbox" ${p.selected ? 'checked' : ''} data-sel="${escapeHtml(p.id)}" title="Include in program budget/schedule" aria-label="In the program: ${escapeHtml(p.name)}"></label>
       </div>
       <div class="p-chips">
         ${board ? '' : `<span class="chip status-${escapeHtml(p.status)}">${escapeHtml(p.status)}</span>`}
@@ -347,7 +347,8 @@ function setStatus(p, status) {
 function bindList(list, v) {
   const open = id => { activeProjectId = id; renderList(); renderDetail(projectById(id)); };
   list.querySelectorAll('.card, .sub-row').forEach(c => c.onclick = e => {
-    if (e.target.matches('input')) return;
+    // The in-program checkbox and the finger-sized label around it flip that, not open the card.
+    if (e.target.closest('input, label')) return;
     open(c.dataset.id);
   });
   list.querySelectorAll('[data-sel]').forEach(cb => cb.onchange = () => {
@@ -620,20 +621,20 @@ function itemRow(p, it) {
   const links = linkSummary(p, it);
   const open = openItems.has(it.id), done = it.status === 'done';
   return `<tr data-item="${escapeHtml(it.id)}" class="${done ? 'it-done' : ''} ${open ? 'it-open' : ''}">
-    <td class="it-check"><input type="checkbox" data-done ${done ? 'checked' : ''} aria-label="Done: ${escapeHtml(it.name)}" title="${done && it.doneAt ? 'Done ' + escapeHtml(it.doneAt) : 'Mark done'}"></td>
-    <td><div class="it-name"><button type="button" class="it-toggle" data-toggle aria-expanded="${open}" title="${open ? 'Hide' : 'Show'} notes and links">${icon(open ? 'chevron-down' : 'chevron-right', { size: 13 })}</button>
+    <td class="it-check"><label class="it-done-tap"><input type="checkbox" data-done ${done ? 'checked' : ''} aria-label="Done: ${escapeHtml(it.name)}" title="${done && it.doneAt ? 'Done ' + escapeHtml(it.doneAt) : 'Mark done'}"></label></td>
+    <td class="it-namecell"><div class="it-name"><button type="button" class="it-toggle" data-toggle aria-expanded="${open}" title="${open ? 'Hide' : 'Show'} notes and links">${icon(open ? 'chevron-down' : 'chevron-right', { size: 13 })}</button>
       <input type="text" data-if="name" value="${escapeHtml(it.name)}"></div>
       <button type="button" class="it-links ${links ? '' : 'none'}" data-toggle title="Status, notes, linked model elements, products and photos">${it.status === 'ordered' || it.status === 'in-progress' ? `<span class="it-state">${ITEM_LABEL[it.status]}</span>` : ''}${escapeHtml(links || 'add notes and links')}</button></td>
-    <td class="num" style="width:64px"><input type="number" class="num" data-if="qty" value="${escapeHtml(it.qty ?? 1)}" min="0" step="0.5"></td>
-    <td style="width:56px"><input type="text" data-if="unit" value="${escapeHtml(it.unit || 'ls')}"></td>
-    <td class="num" style="width:80px"><input type="text" class="num" data-money="low" value="${it.low ? fmtMoney(it.low) : ''}" placeholder="-"></td>
-    <td class="num" style="width:80px"><input type="text" class="num" data-money="likely" value="${it.likely ? fmtMoney(it.likely) : ''}" placeholder="no price"></td>
-    <td class="num" style="width:80px"><input type="text" class="num" data-money="high" value="${it.high ? fmtMoney(it.high) : ''}" placeholder="-"></td>
-    <td class="num" style="width:56px"><input type="number" class="num" data-if="durationDays" value="${escapeHtml(it.durationDays || 0)}" min="0"></td>
-    <td style="width:112px"><div class="dep-wrap" title="${escapeHtml(summary === '-' ? 'No predecessors; click to pick (cmd-click for several)' : 'After: ' + summary)}">
+    <td class="num it-qty" data-label="Qty" style="width:64px"><input type="number" class="num" data-if="qty" value="${escapeHtml(it.qty ?? 1)}" min="0" step="0.5"></td>
+    <td class="it-unit" data-label="Unit" style="width:56px"><input type="text" data-if="unit" value="${escapeHtml(it.unit || 'ls')}"></td>
+    <td class="num it-low" data-label="Low" style="width:80px"><input type="text" class="num" data-money="low" value="${it.low ? fmtMoney(it.low) : ''}" placeholder="-"></td>
+    <td class="num it-likely" data-label="Likely" style="width:80px"><input type="text" class="num" data-money="likely" value="${it.likely ? fmtMoney(it.likely) : ''}" placeholder="no price"></td>
+    <td class="num it-high" data-label="High" style="width:80px"><input type="text" class="num" data-money="high" value="${it.high ? fmtMoney(it.high) : ''}" placeholder="-"></td>
+    <td class="num it-days" data-label="Days" style="width:56px"><input type="number" class="num" data-if="durationDays" value="${escapeHtml(it.durationDays || 0)}" min="0"></td>
+    <td class="it-deps" data-label="After" style="width:112px"><div class="dep-wrap" title="${escapeHtml(summary === '-' ? 'No predecessors; click to pick (cmd-click for several)' : 'After: ' + summary)}">
       <button type="button" class="dep-summary ${summary === '-' ? 'none' : ''}" data-dep-open ${others.length ? '' : 'disabled'}>${escapeHtml(summary)}</button>
       <select multiple size="${Math.min(6, Math.max(2, others.length))}" data-deps>${depOpts}</select></div></td>
-    <td><span class="row-del" data-del-item="${escapeHtml(it.id)}" title="Remove item">${icon('close', { size: 13 })}</span></td>
+    <td class="it-del"><button type="button" class="row-del" data-del-item="${escapeHtml(it.id)}" title="Remove item" aria-label="Remove ${escapeHtml(it.name || 'item')}">${icon('close', { size: 13 })}</button></td>
   </tr>${moneyProblem && moneyProblem.itemId === it.id ? `<tr class="item-money-problem"><td colspan="10" role="alert" data-money-problem style="color:var(--red)">${escapeHtml(moneyProblem.text)}</td></tr>` : ''}${open ? `<tr class="item-more" data-more="${escapeHtml(it.id)}"><td colspan="10">${itemPanel(p, it)}</td></tr>` : ''}`;
 }
 
@@ -760,8 +761,12 @@ function bindItemRows(p) {
       openResearch({ kind: 'scope-item', id: it.id, name: it.name, propertyId: p.propertyId, itemIds: [it.id] });
     };
   });
+  // PROJECTS has no undo, and on a phone the button sits where a thumb lands: ask first.
   det.querySelectorAll('[data-del-item]').forEach(x => x.onclick = () => {
-    const id = x.dataset.delItem;
+    const id = x.dataset.delItem, it = p.items.find(i => i.id === id);
+    if (!it) return;
+    const linked = (it.elementIds || []).length + productsFor(it).length + sitePhotosFor(it).length;
+    if (!confirm('Remove "' + (it.name || 'this item') + '" from ' + (p.name || 'this project') + '?' + (linked ? ' Its links to ' + linkSummary(p, it) + ' go with it.' : '') + ' This cannot be undone.')) return;
     p.items = p.items.filter(i => i.id !== id);
     for (const i of p.items) i.deps = (i.deps || []).filter(d => d !== id);
     openItems.delete(id);

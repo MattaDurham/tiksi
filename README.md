@@ -182,7 +182,15 @@ installation's paths, service label and restart instructions in the private
 
 With Tailscale connected on both devices and the Mac awake, open
 `http://<Mac-Tailscale-IP>:8642/` on your phone. Tailscale Serve can optionally
-provide an HTTPS URL once Serve/HTTPS is enabled for the tailnet. The shell and
+provide an HTTPS URL once Serve/HTTPS is enabled for the tailnet: run
+`tailscale serve --bg 8642` on the Mac and add `--allowed-host <the Mac's name>.<tailnet>.ts.net`
+to the server's arguments, then open `https://<the Mac's name>.<tailnet>.ts.net/` on the phone.
+Over https the phone gets the share sheet, the clipboard, video fingerprints and installing
+as an app. Its browser keeps what it holds (unsent changes, view settings) per address, so
+let the phone send its changes over the old address first. Through a proxy on the Mac the
+server serves only requests that Tailscale Serve marks with a signed-in tailnet user; a
+request through Tailscale Funnel, which reaches the open internet, carries none and is refused.
+The shell and
 forms adapt to narrow screens; detailed model editing still benefits from a
 desktop. Both devices read and edit the same `.tiksi` files on the Mac. Each
 project gets its own folder, with original scans and photos embedded in its bundle;
@@ -217,6 +225,35 @@ that changed. A workspace saved before this moves its pictures on first load,
 byte for byte. A tab still running an older Tiksi is refused until it is reloaded.
 The static GitHub Pages edition retains its portable browser mode and is separate
 from the Mac's private files.
+
+The server sends the page's text compressed and addresses its libraries and style
+sheets by content fingerprint, so a browser keeps those without asking again. It
+answers byte ranges, so video plays and seeks without a whole download. A save
+that changes only records rewrites only the end of the project file (its originals
+stay where they are), and a restart re-reads records without fingerprinting every
+original again or making open pages reload. A page can send an original in pieces
+(`PUT /api/workspace/uploads/<hash>` with `X-Upload-Size` and `X-Upload-Offset`;
+`GET` on the same address says how far it got), ask which originals the Mac holds
+(`HEAD /api/workspace/blobs/<hash>`, or `POST /api/workspace/blobs/held`), ask for a
+smaller copy of a picture (`?size=256|512|1024|2048`), mark a save with a `saveId`
+so a repeat is not committed twice (`GET /api/workspace/saves?id=<id>`), and take a
+project whose file is gone for good off the list
+(`POST /api/workspace/unavailable/<id>/forget`, for a project whose file is missing;
+no file is touched). The revision answer (`/api/workspace/head`) also carries
+`codeVersion`, a fingerprint of `index.html`, `js/`, `css/` and `vendor/` by path,
+size and time modified, read again at most every 5 seconds, so an open page notices
+that the Mac now serves different code without a restart. Nothing the Mac cannot make again is removed on its own: every
+saved catalog copy and stored original stays until a clean-up is asked for.
+`GET /api/workspace/cleanup` lists what one would remove (catalog copies beyond the
+newest 50, one a day for 90 days and one a month; stored originals nothing kept refers
+to and nobody sent or asked about for 30 days), with counts and bytes, and
+`POST /api/workspace/cleanup` with exactly that list removes it. The newest copy that
+holds each property, and every original an unavailable project or a kept copy refers
+to, always stay. Model conversion keeps its newest 20 jobs within 2 GB, removing the
+oldest to make room, since their sources came from the page and their results can be
+made again. Material research keeps every record; when its 100 are full it says so
+with their size. Unfinished uploads in pieces are limited to 32 and 8 GB between
+them, and go after a week with no piece. Successful reads are not logged.
 
 ### Live material and fixture sourcing
 
@@ -462,14 +499,18 @@ gh pr checks --watch
 ```
 
 For dependent feature branches, `pr <slug> --base codex/<baseline>` reviews only
-that feature's commits; retarget to main and rerun CI before landing.
+that feature's commits; retarget the PR to main before merging.
 
 The owner chooses whether to merge, keep testing or discard. Only the owner's
 explicit merge instruction authorizes `pr <slug> --ready` followed by
-`merge <slug> --owner-approved`. Landing requires both trees clean, current local
-main included, an open ready PR at the exact local commit, successful Linux and
-macOS CI, and a local preflight. It merges and pushes main, then removes the spent
-worktree only when GitHub confirms Merged. It never restarts the live service.
+`merge <slug> --owner-approved`. Merging requires both trees clean, current local
+main included and an open ready PR at the exact local commit. It runs the quick
+local checks (`preflight.sh --merge`: syntax, names, private state, the unit tests
+and one open of the app in a windowless browser), and does not wait for online
+checks that are still running: only a check that already finished without passing
+refuses the merge. Main's own online checks, run after the push, grade it. It
+merges and pushes main, then removes the spent worktree only when GitHub confirms
+Merged. It never restarts the live service.
 A failed push leaves the actual local merge visible for recovery. A PR whose head
 is in main is never closed. `discard <slug> --owner-approved` rejects dirty trees
 and preserves their files rather than offering a force-delete shortcut.
@@ -526,8 +567,10 @@ npm run preflight  # all of the above
 ```
 
 Browser checks use synthetic scans and projects. The runner assigns temporary
-ports; tests never bind or stop the live app on 8642. CI runs preflight on macOS
-and Linux, installs headless Chromium, and retains screenshots on failure. The
+ports; tests never bind or stop the live app on 8642. The online checks run the
+syntax and unit checks on Linux, the browser suites in four groups on macOS with
+headless Chromium, and the phone suite on Safari's engine (WebKit); they keep each
+suite's record and, on failure, its screenshots. The
 branch lifecycle tests build disposable repositories and verify dirty-tree,
 stale-PID, PR-head, CI, merged-PR and preview-service protections without touching
 the real main branch, live service or owner projects. `scripts/preflight.sh --list`
