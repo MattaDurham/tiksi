@@ -274,16 +274,23 @@ async function theCopiesDifferQuestionSaysWhatDiffers() {
 }
 
 // A copy saved by newer code holds values an older tab would tidy away. The older tab loads
-// the newer code once when it has nothing unsaved, and never saves over the newer copy.
+// the newer code once when it has nothing unsaved, never saves over the newer copy, and keeps
+// for later only what was changed in it: not what its own loading tidied.
 async function anOlderTabDoesNotSaveOverANewerCopy() {
   step('older');
   const [first] = await makeProperties('older');
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  // To this browser, the copy on the Mac looks saved by a later Tiksi.
+  // A narrow window, which keeps what it has not sent.
+  const context = await browser.newContext({ viewport: { width: 390, height: 800 } });
+  // To this browser, the copy on the Mac looks saved by a later Tiksi, with a kind of photo
+  // this code does not know.
   await context.route(url + '/api/workspace', async route => {
     if (route.request().method() !== 'GET') return route.continue();
     const answer = await route.fetch(), body = await answer.json();
-    if (body.data) body.data.version = 99;
+    if (body.data) {
+      body.data.version = 99;
+      const p = body.data.properties.find(p => p.id === first);
+      if (p) p.photos = [{ id: 'photo-future', name: 'A later kind of photo', thumb: '', notes: '', kind: 'a-later-kind' }];
+    }
     return route.fulfill({ response: answer, json: body });
   });
   let loads = 0; const saves = [];
@@ -299,12 +306,22 @@ async function anOlderTabDoesNotSaveOverANewerCopy() {
   assert.equal(loads, 2, 'the older tab loaded the newer code once, and only once');
   await look(page, first);
   await edit(page, first, { notes: 'Typed in a tab running older code' });
-  await page.waitForTimeout(1500);
-  assert.equal(await page.evaluate(() => document.querySelector('#save-status').dataset.saveState), 'refused');
+  await page.waitForFunction(() => /kept and is sent after the reload/.test(document.querySelector('#save-status').title), null, { timeout: 20000 });
   assert.match(await page.evaluate(() => document.querySelector('#save-status').textContent), /older Tiksi/i, 'the status says the tab is older than the saved copy');
   await page.waitForTimeout(4000);
   assert.deepEqual(saves, [], 'an older tab sends no save over a newer copy');
   assert.notEqual(prop(await mac(), first).notes, 'Typed in a tab running older code');
+  // What it keeps for the newer code to send: the note, measured against what this tab made
+  // of the copy. The photo kind it tidied is the same on both sides, so it is not an edit.
+  const kept = await page.evaluate(async id => {
+    const db = await new Promise(r => { const q = indexedDB.open('tiksi-unsent'); q.onsuccess = () => r(q.result); });
+    const states = await new Promise(r => { const q = db.transaction('states').objectStore('states').getAll(); q.onsuccess = () => r(q.result); });
+    const of = text => { const data = JSON.parse(text); const p = (data.data || data).properties.find(p => p.id === id); return [p.notes, p.photos[0].kind]; };
+    return states.map(state => ({ agreed: of(state.base), here: of(state.local) }));
+  }, first);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].here[0], 'Typed in a tab running older code'); assert.notEqual(kept[0].agreed[0], kept[0].here[0], 'the note is kept as a change made here');
+  assert.equal(kept[0].agreed[1], kept[0].here[1], 'the photo kind this tab tidied is not kept as a change made here');
   await context.close();
 }
 
@@ -483,7 +500,7 @@ async function aKeptCopyTheMacAlreadyHasIsNotSentAgain() {
   await edit(page, first, { notes: 'Sent, and the reply was lost' });
   await untilOnTheMac(c => prop(c, first).notes === 'Sent, and the reply was lost', 'The save whose reply was lost');
   await page.waitForFunction(() => /kept on this device/.test(document.querySelector('#save-status').title), null, { timeout: 20000 });
-  assert.equal(typeof lostId, 'string', 'every save carries an id of its own'); assert.ok(lostId.length > 8);
+  assert.match(String(lostId), /^[0-9a-f]{32}$/, 'every save carries an id of its own: 128 random bits');
   await page.waitForTimeout(600);
   await page.close();
   await context.unroute(url + '/api/workspace');
@@ -706,8 +723,88 @@ async function theOnePagerEditorKeepsWhatIsTyped() {
   await one.context().close(); await two.context().close();
 }
 
+// Two saves arrive and are confirmed; then, out of reach, the second is undone, so the open
+// records equal what the first save held. That is not the first save: the Mac holds the
+// second. The kept copy must be sent, not dropped because the Mac "has" an equal one.
+async function recordsThatEqualAnEarlierSaveAreStillSent() {
+  step('undone');
+  const [first] = await makeProperties('undone');
+  const context = await browser.newContext({ viewport: { width: 390, height: 800 } });
+  const sentIds = new Set();
+  context.on('request', r => { if (r.method() === 'PUT' && new URL(r.url()).pathname === '/api/workspace') { try { sentIds.add(JSON.parse(r.postData()).saveId); } catch {} } });
+  let page = await device({ context });
+  await look(page, first);
+  await saveNow(page); await page.waitForFunction(SAVED);
+  await edit(page, first, { notes: 'First' });
+  await untilOnTheMac(c => prop(c, first).notes === 'First', 'The first edit'); await page.waitForFunction(SAVED);
+  await edit(page, first, { notes: 'Second' });
+  await untilOnTheMac(c => prop(c, first).notes === 'Second', 'The second edit'); await page.waitForFunction(SAVED);
+  await context.setOffline(true);
+  await edit(page, first, { notes: 'First' });   // the second edit, undone
+  await page.waitForFunction(() => /kept on this device/.test(document.querySelector('#save-status').title), null, { timeout: 20000 });
+  await page.close();
+  await context.setOffline(false);
+  // A stand-in for a Mac that keeps save ids: it committed every save this page ever sent.
+  const askedAbout = [];
+  await context.route('**/api/workspace/head?saveId=*', async route => {
+    const id = new URL(route.request().url()).searchParams.get('saveId'); askedAbout.push(id);
+    const answer = await route.fetch({ url: url + '/api/workspace/head' }), body = await answer.json();
+    return route.fulfill({ response: answer, json: { ...body, save: { saveId: id, committed: sentIds.has(id), revision: sentIds.has(id) ? body.revision : null } } });
+  });
+  page = await device({ context, ready: null });
+  await untilOnTheMac(c => prop(c, first).notes === 'First', 'An undo made out of reach, whose records equal an earlier save\'s');
+  assert.deepEqual(askedAbout.filter(id => sentIds.has(id)), [], 'the kept copy named no save that the Mac had already confirmed');
+  await context.close();
+}
+
+// The Mac serves newer code than an open page was loaded with (a stand-in adds the code
+// fingerprint to the Mac's answers). An idle page loads the new code. A page with something
+// unsaved stops saving, says so, keeps what was changed, and sends it after the reload.
+async function aPageOnOlderCodeReloadsOrStopsSaving() {
+  step('code');
+  const [first] = await makeProperties('code');
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  let served = 'aaaaaaaaaaaaaaaa';
+  await context.route(url + '/api/workspace/head', async route => {
+    const answer = await route.fetch(), body = await answer.json();
+    return route.fulfill({ response: answer, json: { ...body, codeVersion: served } });
+  });
+  const page = await context.newPage();
+  page.on('pageerror', e => errors.push(e.message));
+  let loads = 0; page.on('load', () => { loads++; });
+  const saves = []; page.on('request', r => { if (r.method() === 'PUT' && new URL(r.url()).pathname === '/api/workspace') saves.push(r.postData()); });
+  await page.goto(url + '/#/plan'); await page.waitForFunction(SAVED, null, { timeout: 60000 });
+  await look(page, first);
+  await saveNow(page); await page.waitForFunction(SAVED);
+  await page.waitForTimeout(3000);
+  assert.equal(loads, 1, 'the same code served: nothing happens');
+  // 1. Idle when the code changes: the page loads the new code by itself.
+  served = 'bbbbbbbbbbbbbbbb';
+  for (const end = Date.now() + 15000; loads < 2 && Date.now() < end;) await new Promise(r => setTimeout(r, 100));
+  assert.equal(loads, 2, 'an idle page reloads when the Mac serves other code');
+  await page.waitForFunction(SAVED, null, { timeout: 60000 });
+  await page.waitForTimeout(3000);
+  assert.equal(loads, 2, 'and only once');
+  // 2. Something unsaved when the code changes: no save, a clear message, the change kept.
+  saves.length = 0;
+  served = 'cccccccccccccccc';
+  await edit(page, first, { notes: 'Typed in a tab whose code had just been replaced' });
+  await page.waitForFunction(() => document.querySelector('#save-status').dataset.saveState === 'refused', null, { timeout: 20000 });
+  const line = await page.evaluate(() => [document.querySelector('#save-status').textContent, document.querySelector('#save-status').title]);
+  assert.match(line[0], /updated while this tab was open/); assert.match(line[1], /kept and is sent after the reload/);
+  await page.waitForTimeout(4000);
+  assert.equal(loads, 2, 'a page with something unsaved is not reloaded under the person');
+  assert.equal(saves.filter(body => /just been replaced/.test(body)).length, 0, 'and sends no save made with the older code');
+  assert.notEqual(prop(await mac(), first).notes, 'Typed in a tab whose code had just been replaced');
+  // The person reloads: the change is sent by the new page.
+  await page.reload();
+  await untilOnTheMac(c => prop(c, first).notes === 'Typed in a tab whose code had just been replaced', 'What was typed before the reload');
+  await page.waitForFunction(SAVED, null, { timeout: 30000 });
+  await context.close();
+}
+
 const parts = { view: eachDeviceKeepsItsOwnView, typing: aSaveElsewhereLeavesThePageAlone, slow: aSlowActionWritesIntoTheLiveRecord, nested: aNestedRecordStaysTheLiveOne, onepager: theOnePagerEditorKeepsWhatIsTyped, conflict: theCopiesDifferQuestionSaysWhatDiffers, older: anOlderTabDoesNotSaveOverANewerCopy,
-  drafts: twoDraftsAreNotAConflict, unavailable: aProjectWithAMissingFileIsShown, import: aProjectFileAsksBeforeItReplaces, error: aPageThatFailsToOpenSaysSo, saveid: aKeptCopyTheMacAlreadyHasIsNotSentAgain,
+  drafts: twoDraftsAreNotAConflict, unavailable: aProjectWithAMissingFileIsShown, import: aProjectFileAsksBeforeItReplaces, error: aPageThatFailsToOpenSaysSo, saveid: aKeptCopyTheMacAlreadyHasIsNotSentAgain, undone: recordsThatEqualAnEarlierSaveAreStillSent, code: aPageOnOlderCodeReloadsOrStopsSaving,
   originals: originalsAreNotDownloadedAndHeldForEver, pictures: theFirstScreenDoesNotWaitForEveryPicture, stored: anUnreadableStoredWorkspaceIsLeftAsItIs, model: modelKeepsItsCamera };
 
 try {

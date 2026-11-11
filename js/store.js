@@ -185,6 +185,11 @@ export function replaceWorkspace(data, { source = 'import', prepare } = {}) {
   return change;
 }
 
+// What this page's code makes of a set of records when it loads them: every default filled in
+// and every value it does not recognise tidied to one it does. A fresh copy; nothing shown
+// or stored changes.
+export function tidiedCopy(data) { return migrate(JSON.parse(JSON.stringify(data))); }
+
 // Put a record's new values into the objects that already stand for it, all the way down.
 // An open page, a dialog or a slow action that took the record, or anything inside it (a
 // wall, a photo, a level, a project item), before the change then still holds the live one:

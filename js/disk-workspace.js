@@ -1,6 +1,6 @@
 // The Mac's project files are authoritative. Browser state is an in-memory working
 // copy; legacy browser stores are read once and removed only after a disk save.
-import { ws, emptyWorkspace, replaceWorkspace, adoptRecord, onChange, touch, whenHydrated, projectSlice, listAllFileIds, storedFileIds, getCachedFile, cacheFile, deleteFiles, setFileBackend, useDiskPersistence, finishBrowserMigration, setSaveStatus } from './store.js';
+import { ws, emptyWorkspace, replaceWorkspace, adoptRecord, tidiedCopy, onChange, touch, whenHydrated, projectSlice, listAllFileIds, storedFileIds, getCachedFile, cacheFile, deleteFiles, setFileBackend, useDiskPersistence, finishBrowserMigration, setSaveStatus } from './store.js';
 import { mergeShared, sameJson } from './workspace-merge.js';
 import { syncMirror, mirrorCapabilities, mirrorSpec, specSignature, mirrorFileName } from './sketchup-mirror.js';
 import { pictureFiles, pictureRefs, mapStrings } from './picture-assets.js';
@@ -214,25 +214,48 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     unavailable = next;
     onRemote?.({ properties: new Set(), keys: new Map(), materials: false, other: false });
   }
-  // The data version this page's code writes. A copy saved by newer code holds values this
-  // page would tidy away; it must not save over them.
+  // A page whose code is older than the copy on the Mac was saved with, or than the code the
+  // Mac serves now, tidies newer values to ones it knows. It must not save. `stale` holds
+  // why, and what this page's own code makes of the agreed copy: what differs from that is
+  // what was really changed here, and only that is kept for after the reload.
   const ownVersion = emptyWorkspace().version;
-  function refuseIfOlder(...copies) {
-    const newest = Math.max(0, ...copies.map(c => Number(c && c.version) || 0));
-    if (newest <= ownVersion) return;
-    const error = new Error('This tab runs an older Tiksi than the copy on the Mac was saved with. Reload it before changing anything here');
+  let stale = null, codeAtLoad = null;
+  async function refuse(why, message) {
+    if (!stale) stale = { why };
+    if (!stale.base && base) {
+      const made = tidiedCopy(pictures ? pictures.inflate(base.data) : base.data);
+      stale.base = { data: view.shared(pictures ? pictures.slim(made).data : made, base.data), assets: base.assets };
+    }
+    // Also on the Mac's own browser, which otherwise keeps nothing: the reload would lose it.
+    if (!unsent) unsent = unsentStore();
+    await keepUnsent();
+    const error = new Error(message + (keptHere ? '. What you changed here is kept and is sent after the reload' : pending ? '. What you changed here could not be kept in this browser: note it down before you reload' : ''));
     error.status = 426; throw error;
   }
-  // Every save carries an id of this page's own, so a Mac that keeps save ids can say later
-  // whether a save arrived (the reply may never have reached a page that was then dropped).
-  // `upcoming` is the id of the next save, which will hold everything the page holds when it
-  // is made. `sentSaves` are the last saves sent, each with the records it was made from
-  // and the ids it went out under (a retry of the same records adds an id). A kept copy
-  // lists the ids of every sent save made from exactly its records, and `upcoming`: if the
-  // Mac committed any of them, it has everything in that copy.
-  let saveCount = 0, sentSaves = [];
-  const nextSaveId = () => owner + '-save-' + (++saveCount);
-  let upcoming = null;
+  async function refuseIfOlder(...copies) {
+    const newest = Math.max(0, ...copies.map(c => Number(c && c.version) || 0));
+    if (newest > ownVersion) await refuse('data', 'This tab runs an older Tiksi than the copy on the Mac was saved with. Reload it before changing anything here');
+  }
+  // The Mac says which code it serves with every look at the workspace (a Mac that does not
+  // sends nothing, and nothing happens). When that changes under an open page: with nothing
+  // unsaved the page loads the new code at once; otherwise it stops saving and says so.
+  async function codeServed(version) {
+    if (typeof version !== 'string' || !version) return;
+    if (!codeAtLoad) { codeAtLoad = version; return; }
+    if (version === codeAtLoad) return;
+    if (!pending) { location.reload(); await new Promise(() => {}); }
+    await refuse('code', 'Tiksi on the Mac was updated while this tab was open. Reload this tab to go on');
+  }
+  // Every save carries an id of its own, 128 random bits, so a Mac that keeps save ids can
+  // say later whether a save arrived (the reply may never have reached a page that was then
+  // dropped). `sentSaves` are the saves sent since the last copy agreed with the Mac, each
+  // with the exact records it was made from and the ids it went out under. A kept copy
+  // lists only the ids of saves made from exactly its own records, and it is written before
+  // such a save leaves: if the Mac committed one of them, it has exactly that copy.
+  // A save the Mac confirmed changes the agreed copy, and with it this list starts again:
+  // records that later come to equal an earlier save's are not that save.
+  let sentSaves = [];
+  const newSaveId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
   const coveredBy = local => sentSaves.filter(sent => sameJson(sent.form, local)).flatMap(sent => sent.ids);
   // Away from the Mac, what has not reached it is also kept in this browser's storage, so a
   // locked phone, a switched app or a dropped tab loses nothing; the next page opened on
@@ -267,8 +290,9 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
         keepAgain = false;
         if (settling || taking) continue;   // the step in progress brings the kept copy up to date when it ends
         for (const id of [...notKept.keys()]) if (!changedFiles.has(id)) notKept.delete(id);
-        if (!upcoming) upcoming = nextSaveId();
-        const mark = [edits, pending, changedFiles.size, heldByMac.size, mine.size, notKept.size, sentSaves.map(sent => sent.ids.length).join(), upcoming].join('|'), agreed = base;
+        // A page that must not save (see `stale`) keeps against what its own code makes of the
+        // agreed copy, so only what was changed here is kept, not what its loading tidied.
+        const mark = [edits, pending, changedFiles.size, heldByMac.size, mine.size, notKept.size, sentSaves.map(sent => sent.ids.length).join(), !!stale].join('|'), agreed = stale && stale.base || base;
         if (mark === keptMark && keptBase === agreed) continue;
         // While an older browser store is still being moved to the Mac, that store is the kept
         // copy. Without an agreed copy there is nothing to merge a kept one against later.
@@ -286,7 +310,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
           if (baseJson.of !== agreed) baseJson = { of: agreed, text: JSON.stringify(agreed) };
           const held = {}; for (const [id, at] of heldByMac) held[id] = at.entry;
           written = keptHere = await unsent.keepState(owner, { at: Date.now(), base: baseJson.text, assets: JSON.stringify(assets), local: JSON.stringify(local), held,
-            saveIds: [...coveredBy(local), upcoming],
+            saveIds: coveredBy(local),
             spaces: [...new Set([owner, ...mine.values()])], notKept: Object.fromEntries([...notKept].filter(([id]) => changedFiles.has(id))) });
           if (written) await unsent.settle(owner, { files: keys });
         }
@@ -563,6 +587,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     round++; reusedEarlier = false;
     await whenHydrated();
     const head = await (await request('/head')).json();
+    await codeServed(head.codeVersion);
     if (!pending && head.revision === revision) {
       if (cleanupNotice) {
         await cleanupMigration();
@@ -582,17 +607,13 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
         if (Number(remote.data.version) > ownVersion && reloadOnceFor(remote.data.version)) return;
         await fetchPictures(remote.data, remote.assets);
         if (!pending) {
-          revision = remote.revision; assets = remote.assets; base = { data: remote.data, assets };
+          revision = remote.revision; assets = remote.assets; base = { data: remote.data, assets }; sentSaves = [];
           await apply(remote.data); status('SAVED TO DISK'); return;
         }
       }
     }
-    refuseIfOlder(remote && remote.data, base && base.data);
+    await refuseIfOlder(remote && remote.data, base && base.data);
     const remoteRevision = remote ? remote.revision : revision;
-    // The id this round's save will carry, taken before the records are read: a copy kept
-    // before this moment is wholly inside the save.
-    const saveId = upcoming || nextSaveId();
-    upcoming = nextSaveId();
     const saved = pictures ? await pictures.slimStored(() => ws.data) : { data: copy(ws.data) };
     const sentData = view.shared(saved.data, base?.data);
     const uploadedFiles = new Map();
@@ -630,14 +651,16 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       dataJson = JSON.stringify({ ...accepted.data, properties: accepted.data.properties.filter(p => !held.has(p.id) || !sameJson(p, held.get(p.id))) });
       order = ',"propertyOrder":' + JSON.stringify(accepted.data.properties.map(p => p.id));
     }
+    const saveId = newSaveId();
     const body = '{"revision":' + JSON.stringify(remoteRevision) + ',"data":' + (dataJson ?? JSON.stringify(accepted.data)) + order + ',"assets":' + JSON.stringify(accepted.assets) +
       ',"projectData":{' + sent.join(',') + '}' + (features.has('partial-projects') ? ',"unchangedProjects":' + JSON.stringify(unchanged) : '') +
       (pictures ? ',"pictureFiles":true' : '') + (migrationPack ? ',"migration":' + JSON.stringify(migrationPack) : '') + ',"saveId":' + JSON.stringify(saveId) + '}';
-    // Remember what this save was made from, so a kept copy of the same records can name it.
+    // Remember what this save was made from, and bring the kept copy up to date before the
+    // save leaves: a kept copy of exactly these records then names this save.
     const again = sentSaves.find(sent => sameJson(sent.form, sentData));
     if (again) again.ids = [...again.ids, saveId].slice(-20);
     else sentSaves = [...sentSaves, { form: sentData, ids: [saveId] }].slice(-3);
-    keepUnsent();
+    await keepUnsent();
     let reply;
     try {
       reply = await (await request('', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body })).json();
@@ -654,7 +677,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
         const remoteState = remote && remote.data ? { data: remote.data, assets: remote.assets } : base;
         settling = true;
         try {
-          base = remoteState; assets = accepted.assets;
+          base = remoteState; assets = accepted.assets; sentSaves = [];
           for (const [id, buffer] of uploadedFiles) if (accepted.assets[id]?.hash !== sentAssets[id]?.hash && (await getCachedFile(id))?.buffer === buffer) { changedFiles.delete(id); heldByMac.delete(id); }
           await fetchPictures(accepted.data, accepted.assets);
           const current = savedFormNow(), retry = mergeShared(sentData, current, accepted.data).value;
@@ -667,7 +690,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     let current;
     settling = true;
     try {
-      revision = reply.revision; assets = accepted.assets; base = accepted;
+      revision = reply.revision; assets = accepted.assets; base = accepted; sentSaves = [];
       noteUnavailable(reply.unavailable);
       savedSlices = { revision, json: sliceJson };
       paths = reply.paths || (await (await request()).json()).paths || {};
@@ -938,7 +961,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
         }
         // Without the copy it last agreed with the Mac there is no common ancestor: every
         // difference is then put to the person instead of being decided either way.
-        base = kept.base || undefined;
+        base = kept.base || undefined; sentSaves = [];
         assets = kept.assets || {}; revision = -1; savedSlices = { revision: -1, json: {} };
         await apply(kept.local);
         pending = true; edits++; replaying = true; status(savingText(), true);
@@ -1017,6 +1040,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   };
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tryNow(); else leaving(); });
   window.addEventListener('pagehide', leaving);
-  window.addEventListener('beforeunload', e => { if (pending) { e.preventDefault(); e.returnValue = ''; } });
+  // (A page that was told to reload and has kept what was changed loses nothing by leaving.)
+  window.addEventListener('beforeunload', e => { if (pending && !(stale && keptHere)) { e.preventDefault(); e.returnValue = ''; } });
   return diskWorkspace;
 }
