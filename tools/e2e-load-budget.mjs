@@ -5,8 +5,9 @@
 //
 // Files and bytes count the app's own files: every response except the /api/ calls, whose
 // number changes from run to run with how often the empty project is saved; they are printed.
-// Bytes are uncompressed bodies, which is what the phone stores and parses (the server does
-// not compress). Time to settle is printed, not graded: it depends on the machine.
+// Bytes are what the phone downloads: each file's body as sent, compressed where the server
+// compresses it. The uncompressed total, what the phone stores and parses, is printed beside
+// it for reference. Time to settle is printed, not graded: it depends on the machine.
 //
 // Every request of the first load must be answered. Chromium also reports a request as
 // cancelled when the page has read its whole answer but lets go of it before the browser has
@@ -19,10 +20,11 @@ import { tmpdir } from 'node:os';
 import net from 'node:net';
 import { chromium, devices, webkit } from 'playwright';
 
-// Measured on 2026-11-10 (main at f292de2), three runs alike: 151 files and 3,842,709 bytes on
-// Chromium; WebKit also fetches the 363-byte app manifest. The limits leave 5 percent for
-// growth. Lower them when the download shrinks; raise them only with a reason in the commit.
-export const LIMITS = { requests: 159, bytes: 4_035_000 };
+// Measured on 2026-11-10 on the combined audit branch (codex/audit-fixes-4 at eab73c8), three
+// runs alike on Chromium: 159 files and 1,191,021 bytes downloaded (4,062,859 uncompressed).
+// WebKit also fetches the 363-byte app manifest. The limits leave about 5 percent for growth.
+// Lower them when the download shrinks; raise them only with a reason in the commit.
+export const LIMITS = { requests: 167, bytes: 1_250_000 };
 const ENGINE = process.env.E2E_BROWSER === 'webkit' ? 'webkit' : 'chromium';
 
 const state = await mkdtemp(tmpdir() + '/tiksi-load-budget-test-');
@@ -79,18 +81,20 @@ try {
   let count = -1;
   while (count !== responses.length) { count = responses.length; await page.waitForTimeout(2000); }
   const settledMs = Date.now() - started - 2000;
-  let bytes = 0;
+  let bytes = 0, decoded = 0;
   const byType = {};
   const api = responses.filter(r => new URL(r.url()).pathname.startsWith('/api/')).length;
   const files = responses.filter(r => !new URL(r.url()).pathname.startsWith('/api/'));
   for (const response of files) {
     const body = await response.body().catch(() => Buffer.alloc(0));
-    bytes += body.length;
+    const sent = (await response.request().sizes().catch(() => null))?.responseBodySize ?? body.length;
+    bytes += sent;
+    decoded += body.length;
     const type = (response.headers()['content-type'] || 'other').split(';')[0];
-    byType[type] = (byType[type] || 0) + body.length;
+    byType[type] = (byType[type] || 0) + sent;
   }
   const heaviest = Object.entries(byType).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([t, n]) => `${t} ${n.toLocaleString('en-US')}`).join(', ');
-  console.log(`Phone first load on ${ENGINE}: ${files.length} files (limit ${LIMITS.requests}), ${bytes.toLocaleString('en-US')} bytes (limit ${LIMITS.bytes.toLocaleString('en-US')}), ${api} calls to the server, settled in ${(settledMs / 1000).toFixed(1)} s. Largest kinds: ${heaviest}.`);
+  console.log(`Phone first load on ${ENGINE}: ${files.length} files (limit ${LIMITS.requests}), ${bytes.toLocaleString('en-US')} bytes downloaded (limit ${LIMITS.bytes.toLocaleString('en-US')}), ${decoded.toLocaleString('en-US')} bytes uncompressed, ${api} calls to the server, settled in ${(settledMs / 1000).toFixed(1)} s. Largest kinds downloaded: ${heaviest}.`);
   const named = request => `${request.method()} ${new URL(request.url()).pathname} (${request.failure()?.errorText || 'failed'})`;
   const late = [], failed = [];
   for (const request of failures) (whole(request) ? late : failed).push(request);
