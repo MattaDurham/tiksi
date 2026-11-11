@@ -218,7 +218,7 @@ Here every group is ON SCREEN (Tiksi menu); by default the tools live in the men
 2. Click a wall, floor or ceiling to inspect it. Change the offered dimensions or material in the inspector.
 3. Choose MOVE WALLS, select a native wall and drag its gizmo. Joined walls and room corners follow. Return to PLAN for exact outlines; imported mesh surfaces do not expose native wall controls.
 4. Use SECTION to cut through the building and reveal interiors: the cut floats in the view as a see-through plane. Drag its arrow to slide it and a ring to turn it. Use X-RAY to inspect overlapping references.
-5. For lighting and render quality, open FILE → Settings → Model environment. For an image export, use FILE → 3D exchange → SAVE VIEW IMAGE while MODEL is open.
+5. For lighting, choose LIGHT (or FILE → Settings → Model environment, which also holds render quality). For an image export, use FILE → 3D exchange → SAVE VIEW IMAGE while MODEL is open.
 
 ### Other features here
 
@@ -229,6 +229,8 @@ Here every group is ON SCREEN (Tiksi menu); by default the tools live in the men
 **Measure surfaces.** Choose MEASURE and click two surface points to display a distance. CLEAR MEASURES removes temporary measurements; image export can include them.
 
 **Section cuts.** SECTION starts with one flat cut that slides up and down. The strip at the bottom of the view adds more: UP AND DOWN, SIDE TO SIDE, FRONT TO BACK, or CUSTOM, an upright cut facing you that the rings turn to any angle. Up to six cuts work at once; click a numbered cut to move its handles there. SNAP holds turns to 15° and slides to 5 cm (1 inch in feet and inches); switch it off to move freely. FLIP cuts away the other side, PLANES hides the floating planes while the cut stays, and REMOVE deletes the cut. A saved view keeps its cuts.
+
+**Lighting.** LIGHT opens the lighting panel, saved with the property. NATURAL, OVERCAST and BRIGHT WORK LIGHT set everything at once; BRIGHT WORK LIGHT lights a closed model evenly for arranging things. BRIGHTNESS is the camera exposure, SUN and FILL LIGHT set the direct sun and the soft sky light, CORNERS sets how dark corners get (0 turns that shading off), and CAMERA LIGHT is a lamp that moves with you, for models with no traced rooms. ROOM LIGHTS, one per traced room, come on after dark, always or never, with their own level and colour. SUN SHADOWS off lets the sun light every surface turned to it, inside too.
 
 **Levels.** Show or hide levels in the model while retaining their geometry in the property.
 

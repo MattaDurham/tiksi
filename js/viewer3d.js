@@ -6,6 +6,7 @@
 
 import { environmentSun, dayOfYear, dateForDay, daysInYear, validTimeZone } from './solar.js';
 import { setModelXray } from './model-xray.js';
+import { lightingSettings, normalizeLighting, lampLevel, kelvinToRgb, matchingPreset, applyPreset, LIGHTING_PRESETS, PRESET_LABELS, LIGHTING_RANGES } from './lighting.js';
 import * as THREE from 'three';
 import { modelPanelHtml, bindModelPanel, partComponentName } from './model-panel.js';
 import { beginGeometryEdit, restoreGeometryEdit, revertGeometryEdit } from './edit-history.js';
@@ -92,6 +93,9 @@ let batches = null;
 // edges); the full frame follows once it has been still this long.
 const SETTLE_MS = 150;
 let lastMotion = -Infinity, lastFrameFast = false, aoWanted = true;
+let cameraLight = null;
+// Candela of the camera light at CAMERA LIGHT 1 (about a 100 W bulb's worth, softened).
+const CAMERA_LIGHT_CD = 10;
 const frameCounts = { fastFrames: 0, fullFrames: 0, shadowRefreshes: 0, skyBakes: 0, modelBuilds: 0 };
 function markMotion() { lastMotion = performance.now(); }
 const moving = () => performance.now() - lastMotion < SETTLE_MS;
@@ -169,7 +173,7 @@ function requestRender(n) { framesLeft = Math.max(framesLeft, n || 2); }
 // ---------- defaults for old data ----------
 function ensureDefaults(p) {
   const defaults = defaultEnv();
-  p.env = Object.assign({}, defaults, p.env || {});
+  p.env = normalizeLighting(Object.assign({}, defaults, p.env || {}), p.env || {});
   const date = new Date(p.env.date + 'T00:00:00Z');
   if (!Number.isFinite(+date) || date.toISOString().slice(0, 10) !== p.env.date) p.env.date = defaults.date;
   if (!validTimeZone(p.env.timeZone)) p.env.timeZone = defaults.timeZone;
@@ -325,6 +329,12 @@ function setupScene() {
   hemi = new THREE.HemisphereLight(0xdfe6ee, 0x6b7a4a, 0.7);
   scene.add(hemi);
 
+  // CAMERA LIGHT: a soft lamp just above the camera that goes where it goes. It stays in the
+  // scene at zero when it is off, so turning it on never recompiles a shader.
+  cameraLight = new THREE.PointLight(0xfff3e4, 0, 0, 2);
+  cameraLight.name = 'camera light';
+  scene.add(cameraLight);
+
   lightRoot = new THREE.Group(); lightRoot.name = 'nightlights'; scene.add(lightRoot);
   scanRoot = new THREE.Group(); scanRoot.name = 'scans'; scene.add(scanRoot);
   pinRoot = new THREE.Group(); pinRoot.name = 'pins'; scene.add(pinRoot);
@@ -414,6 +424,16 @@ function setupComposer() {
   passes.gtao.blendIntensity = 0.85;
   passes.gtao.updateGtaoMaterial({ radius: 0.35, distanceExponent: 1.2, thickness: 1, scale: 1.1, samples: 16, distanceFallOff: 1, screenSpaceRadius: false });
   passes.gtao.updatePdMaterial({ lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 4, radiusExponent: 1, rings: 2, samples: 16 });
+  // The shading pass draws every surface once more with its own material to learn which way
+  // each pixel faces. A SketchUp model arrives with no normals in its geometry and with every
+  // face two-sided (half of them face away from the room): drawn one-sided from normals that
+  // are not there, the pass read every wall as facing nowhere and shaded the whole interior
+  // to half its brightness, which showed as the view going dark each time the camera stopped.
+  // The facing worked out on screen from the surface itself, front or back, is right for every
+  // model, and it is what the shading looks at anyway.
+  passes.gtao.normalMaterial.flatShading = true;
+  passes.gtao.normalMaterial.side = THREE.DoubleSide;
+  passes.gtao.normalMaterial.needsUpdate = true;
   // Splats are drawn by Spark inside the render pass; they must not feed the AO normal buffer.
   // Nor may photo-pin and note cards: under the pass's override material a sprite is no
   // billboard but a flat quad in world space, which shades the floor and darkens the card.
@@ -654,6 +674,7 @@ function panoReady() { return prop.env.sky === 'pano' && !!panoTex && panoId ===
 
 function applyEnvironment() {
   const env = prop.env;
+  const lit = lightingSettings(env);
   const { elevation: el, azimuth } = currentSun();
   // Continuous dusk: the sun fades out just below the horizon, night fades in through civil
   // twilight (-2 .. -6 deg), and everything keyed on "night" blends across that band.
@@ -680,12 +701,12 @@ function applyEnvironment() {
   const sunWas = sun.position.clone();
   if (sunUp > 0) {
     sun.color.setHex(0xfff1dc).lerp(new THREE.Color(0xffa860), 1 - dusk);
-    sun.intensity = sunUp * (0.6 + 2.6 * Math.pow(Math.sin(THREE.MathUtils.degToRad(Math.max(el, 0.5))), 0.6));
+    sun.intensity = lit.sunStrength * sunUp * (0.6 + 2.6 * Math.pow(Math.sin(THREE.MathUtils.degToRad(Math.max(el, 0.5))), 0.6));
     sun.position.copy(sun.target.position).addScaledVector(dir, R * 3);
   } else {
     const moon = sunDirection(38, azimuth + 160);
     sun.color.setHex(0x9fb4d6);
-    sun.intensity = 0.28 * nightMix;
+    sun.intensity = lit.sunStrength * 0.28 * nightMix;
     sun.position.copy(sun.target.position).addScaledVector(moon, R * 3);
   }
   // Fill is mostly the neutral hemisphere (skylight plus warm ground bounce) with a smaller
@@ -701,8 +722,16 @@ function applyEnvironment() {
     hemi.color.lerp(new THREE.Color(0xe9e2d6), k); hemi.groundColor.lerp(new THREE.Color(0x8c8478), k);
     hemi.intensity = THREE.MathUtils.lerp(hemi.intensity, 0.9, k); scene.environmentIntensity *= 1 + 0.3 * k;
   }
+  // FILL LIGHT scales the sky and ground light together; the sun is SUN's.
+  hemi.intensity *= lit.fill;
+  scene.environmentIntensity *= lit.fill;
+  // SUN SHADOWS: switching them changes the shaders, so only on a real change.
+  if (sun.castShadow !== lit.sunShadows) { sun.castShadow = lit.sunShadows; invalidateShadows(); }
+  // CORNER SHADING: how dark corners and contact lines get; 0 skips the pass altogether.
+  passes.gtao.blendIntensity = lit.shading;
+  cameraLight.intensity = CAMERA_LIGHT_CD * lit.cameraLight;
   // A camera would open up at dusk; lift the exposure as the sun drops, then settle for night.
-  renderer.toneMappingExposure = (env.exposure || 1) * 0.85 * THREE.MathUtils.lerp(1 + 0.45 * (1 - dusk), 0.6, nightMix);
+  renderer.toneMappingExposure = lit.exposure * 0.85 * THREE.MathUtils.lerp(1 + 0.45 * (1 - dusk), 0.6, nightMix);
 
   // Distant neutral haze hides the ground edge without bleaching the model or blooming.
   const fogColor = env.sky === 'studio' ? new THREE.Color(0x171d23) : new THREE.Color(0x9cabb4).lerp(new THREE.Color(0x101923), nightMix);
@@ -711,17 +740,22 @@ function applyEnvironment() {
   if (usePano) scene.fog = null;
   else scene.fog = new THREE.Fog(fogColor, Math.max(span * 12, 150), Math.max(span * 40, 600));
 
-  // Night lights (and a gentle daytime level while walking through rooms).
-  const lampMix = env.nightLights !== false ? nightMix : 0;
-  const lightsOn = lampMix > 0 || interiorFill;
+  // ROOM LIGHTS: one per traced room. 'auto' comes up through dusk (and gently while the camera
+  // is in a room by day), 'on' is always lit, 'off' never; brightness and colour are their own.
+  const lampMix = lampLevel(lit.lamps, nightMix, interiorFill);
+  const lightsOn = lampMix > 0 && lit.lampBrightness > 0;
   lightRoot.visible = lightsOn;
-  const lampI = interiorFill ? Math.max(5, 14 * lampMix) : 14 * lampMix;
-  const discI = interiorFill ? Math.max(1.4, 5 * lampMix) : 5 * lampMix;
-  lightRoot.traverse(o => { if (o.isPointLight) o.intensity = lampI; if (o.isMesh) o.material.emissiveIntensity = discI; });
+  const lampI = 14 * lampMix * lit.lampBrightness;
+  const discI = 5 * lampMix * Math.min(lit.lampBrightness, 1.5);
+  const [lr, lg, lb] = kelvinToRgb(lit.lampKelvin);
+  lightRoot.traverse(o => {
+    if (o.isPointLight) { o.intensity = lampI; o.color.setRGB(lr, lg, lb); }
+    if (o.isMesh) { o.material.emissiveIntensity = discI; o.material.emissive.setRGB(lr, lg, lb); }
+  });
   if (modelGroup && modelGroup.userData.glass) {
     const g = modelGroup.userData.glass;
     g.emissive.setHex(0xffcf9a);
-    g.emissiveIntensity = 0.5 * lampMix;
+    g.emissiveIntensity = 0.5 * (lit.lamps === 'off' ? 0 : nightMix) * Math.min(lit.lampBrightness, 1.5);
   }
   // Background / IBL per sky mode. The sky lighting is baked again only when what it is baked
   // from has changed (skyBakeKey): this runs for every slider step, and for walking in or out
@@ -1283,6 +1317,7 @@ function pointInPolygon(px, py, pts) {
   return hit;
 }
 
+const _lampOffset = new THREE.Vector3();
 // `still`: a frame that must be complete whatever the camera is doing (image export).
 function renderFrame(still = false) {
   if (sunDirty) updateSun();
@@ -1302,7 +1337,10 @@ function renderFrame(still = false) {
   updateCompass();
   // Fast frames while the camera moves: the passes are switched, never resized or reallocated.
   const fast = !still && moving();
-  passes.gtao.enabled = aoWanted && !fast;
+  passes.gtao.enabled = aoWanted && passes.gtao.blendIntensity > 0 && !fast;
+  // The camera light rides just above and behind the eye, so it lights what is in view without
+  // a hot spot on the nearest wall.
+  if (cameraLight.intensity > 0) cameraLight.position.copy(camera.position).add(_lampOffset.set(0, 0.35, 0.25).applyQuaternion(camera.quaternion));
   passes.smaa.enabled = !(fast && composer.renderTarget1.samples > 0);
   lastFrameFast = fast;
   frameCounts[fast ? 'fastFrames' : 'fullFrames']++;
@@ -3440,7 +3478,7 @@ function renderHud() {
     <button class="v-pill ${xray ? 'active' : ''}" data-xray aria-pressed="${xray}" title="X-ray (X)">X-RAY</button>
     ${xray ? `<label class="v-xray-control">TRANSPARENCY<input type="range" class="v-xray-range" min="0" max="100" step="1" value="${Math.round((1 - prop.env.xrayOpacity) * 100)}" aria-label="X-ray transparency"><output>${Math.round((1 - prop.env.xrayOpacity) * 100)}%</output></label>` : ''}
     <span class="v-pill-sep"></span>
-    <button class="v-pill" data-environment title="Sun and environment settings">SUN</button>
+    <button class="v-pill" data-environment title="Lighting, sun and environment">LIGHT</button>
     <button class="v-pill ${markersShown('pins') ? 'active' : ''}" data-show="pins" aria-pressed="${markersShown('pins')}" title="${markersShown('pins') ? 'Hide' : 'Show'} photo pins (${prop.photos.filter(ph => ph.pin).length})">PHOTOS</button>
     <button class="v-pill ${markersShown('notes') ? 'active' : ''}" data-show="notes" aria-pressed="${markersShown('notes')}" title="${markersShown('notes') ? 'Hide' : 'Show'} notes (${prop.notePins.length}); right-click the model to pin one">NOTES</button>`;
   bar.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => setMode(b.dataset.mode));
@@ -3577,6 +3615,37 @@ function moveToTag(keys, tagId) {
 }
 
 // ---------- environment panel ----------
+// The LIGHTING controls (lighting.js): ready-made presets, then each value on its own.
+const pct = v => Math.round(v * 100) + '%';
+const LIGHT_FORMAT = { exposure: v => v.toFixed(2), sunStrength: pct, fill: pct, shading: pct, cameraLight: pct, lampBrightness: pct, lampKelvin: v => Math.round(v) + 'K' };
+const LIGHT_STEPS = { exposure: 0.05, sunStrength: 0.05, fill: 0.05, shading: 0.05, cameraLight: 0.05, lampBrightness: 0.05, lampKelvin: 100 };
+function lightRow(label, key, value, title) {
+  const [min, max] = LIGHTING_RANGES[key];
+  return `<label class="v-row" title="${escapeHtml(title)}"><span>${label}</span><input type="range" min="${min}" max="${max}" step="${LIGHT_STEPS[key]}" value="${value}" data-env="${key}" aria-label="${escapeHtml(title)}"><em>${LIGHT_FORMAT[key](value)}</em></label>`;
+}
+function lightingHtml(env) {
+  const lit = lightingSettings(env), chosen = matchingPreset(env);
+  const rooms = (prop.rooms || []).length;
+  return `
+      <div class="v-light-presets" role="group" aria-label="Lighting presets">${Object.keys(LIGHTING_PRESETS).map(k => `<button type="button" class="v-pill ${chosen === k ? 'active' : ''}" data-light-preset="${k}" aria-pressed="${chosen === k}">${escapeHtml(PRESET_LABELS[k].toUpperCase())}</button>`).join('')}</div>
+      ${lightRow('BRIGHTNESS', 'exposure', lit.exposure, 'Brightness of the whole picture (camera exposure)')}
+      ${lightRow('SUN', 'sunStrength', lit.sunStrength, 'Strength of the sun, or the moon at night')}
+      ${lightRow('FILL LIGHT', 'fill', lit.fill, 'Soft light from the sky and ground: lifts shadows and the inside of closed models')}
+      ${lightRow('CORNERS', 'shading', lit.shading, 'How dark corners and contact lines get (0 turns corner shading off)')}
+      ${lightRow('CAMERA LIGHT', 'cameraLight', lit.cameraLight, 'A light that moves with the camera, for dark interiors')}
+      <div class="v-row v-row-sel"><span>ROOM LIGHTS</span>
+        <select data-env="lamps" aria-label="Room lights"><option value="auto" ${lit.lamps === 'auto' ? 'selected' : ''}>After dark</option><option value="on" ${lit.lamps === 'on' ? 'selected' : ''}>Always on</option><option value="off" ${lit.lamps === 'off' ? 'selected' : ''}>Off</option></select>
+      </div>
+      ${lit.lamps !== 'off' ? lightRow('LAMP LEVEL', 'lampBrightness', lit.lampBrightness, 'How bright the room lights are') + lightRow('LAMP COLOR', 'lampKelvin', lit.lampKelvin, 'Room light colour temperature: low is warm, high is daylight') : ''}
+      ${rooms ? '' : '<p class="v-env-help">Room lights hang one per traced room, and this property has none. Use CAMERA LIGHT or FILL LIGHT to light the inside of a model.</p>'}
+      <div class="v-checks"><label><input type="checkbox" data-env="sunShadows" ${lit.sunShadows ? 'checked' : ''}> SUN SHADOWS</label></div>
+      <div class="v-env-rule" aria-hidden="true"></div>`;
+}
+// Light up the preset the values match now (none once a value is changed by hand).
+function markPreset(p) {
+  const chosen = matchingPreset(prop.env);
+  p.querySelectorAll('[data-light-preset]').forEach(b => { const on = b.dataset.lightPreset === chosen; b.classList.toggle('active', on); b.setAttribute('aria-pressed', String(on)); });
+}
 function sunLabel(el) { return el >= 0 ? 'SUN ' + Math.round(el) + '&deg;' : (el > -6 ? 'TWILIGHT' : 'NIGHT'); }
 function renderEnvPanel(p = hud.env) {
   if (!p) return;
@@ -3587,7 +3656,7 @@ function renderEnvPanel(p = hud.env) {
   const timeLabel = String(Math.floor(minutes / 60)).padStart(2, '0') + ':' + String(minutes % 60).padStart(2, '0');
   const year = Number(env.date.slice(0, 4));
   p.innerHTML = `
-    <button class="v-env-head" data-toggle><span>ENVIRONMENT</span><span class="v-env-sun">${sunLabel(el)} &middot; ${timeLabel}</span><span class="v-env-caret">${p.classList.contains('open') ? '&#9662;' : '&#9656;'}</span></button>
+    <button class="v-env-head" data-toggle><span>LIGHTING</span><span class="v-env-sun">${sunLabel(el)} &middot; ${timeLabel}</span><span class="v-env-caret">${p.classList.contains('open') ? '&#9662;' : '&#9656;'}</span></button>
     <div class="v-env-body">
       <label class="v-row v-row-sel"><span>SUN PATH</span><select data-env="sunMode"><option value="manual" ${env.sunMode !== 'location' ? 'selected' : ''}>Manual lighting</option><option value="location" ${env.sunMode === 'location' ? 'selected' : ''}>Location + date</option></select></label>
       ${env.sunMode === 'location' ? `
@@ -3602,7 +3671,7 @@ function renderEnvPanel(p = hud.env) {
       <label class="v-row"><span>TIME</span><input type="range" min="0" max="24" step="0.1" value="${finiteNum(env.time, 14.5)}" data-env="time"><em data-time-readout>${timeLabel}</em></label>
       ${env.sunMode !== 'location' ? `<label class="v-row"><span>SUN AZIMUTH</span><input type="range" min="0" max="360" step="1" value="${finiteNum(env.azimuth, 200)}" data-env="azimuth"><em>${Math.round(finiteNum(env.azimuth, 200))}&deg;</em></label>` : ''}
       <label class="v-row"><span>NORTH</span><input type="range" min="0" max="360" step="1" value="${finiteNum(env.north, 0)}" data-env="north"><em>${Math.round(finiteNum(env.north, 0))}&deg;</em></label>
-      <label class="v-row"><span>EXPOSURE</span><input type="range" min="0.3" max="2.2" step="0.05" value="${finiteNum(env.exposure, 1)}" data-env="exposure"><em>${finiteNum(env.exposure, 1).toFixed(2)}</em></label>
+      ${lightingHtml(env)}
       <div class="v-row v-row-sel"><span>SKY</span>
         <select data-env="sky"><option value="dynamic" ${env.sky === 'dynamic' ? 'selected' : ''}>Dynamic sun</option><option value="studio" ${env.sky === 'studio' ? 'selected' : ''}>Studio</option><option value="pano" ${env.sky === 'pano' ? 'selected' : ''}>Panorama</option></select>
         ${env.sky === 'pano' ? `<select data-env="panoPhotoId"><option value="">(choose pano)</option>${panos.map(ph => `<option value="${escapeHtml(ph.id)}" ${ph.id === env.panoPhotoId ? 'selected' : ''}>${escapeHtml(ph.name)}</option>`).join('')}</select>` : ''}
@@ -3615,7 +3684,6 @@ function renderEnvPanel(p = hud.env) {
         <label><input type="checkbox" data-env="showCeilings" ${env.showCeilings !== false ? 'checked' : ''}> CEILINGS</label>
         <label><input type="checkbox" data-env="showGround" ${env.showGround !== false ? 'checked' : ''}> GROUND</label>
         <label><input type="checkbox" data-env="showGrid" ${env.showGrid ? 'checked' : ''}> GRID</label>
-        <label><input type="checkbox" data-env="nightLights" ${env.nightLights !== false ? 'checked' : ''}> NIGHT LIGHTS</label>
       </div>
     </div>`;
   p.querySelector('[data-toggle]').onclick = () => { p.classList.toggle('open'); renderEnvPanel(p); };
@@ -3641,7 +3709,8 @@ function renderEnvPanel(p = hud.env) {
         p.querySelector('[data-env=date]').value = env.date;
       } else env[key] = Number(r.value);
       const em = r.parentElement.querySelector('em');
-      if (em) em.textContent = key === 'exposure' ? Number(r.value).toFixed(2) : Math.round(r.value) + (key === 'dayOfYear' ? '' : '°');
+      if (em) em.textContent = LIGHT_FORMAT[key] ? LIGHT_FORMAT[key](Number(r.value)) : Math.round(r.value) + (key === 'dayOfYear' ? '' : '°');
+      markPreset(p);
       updateSun(); applyEnvironment(); commit();
     };
   });
@@ -3668,9 +3737,13 @@ function renderEnvPanel(p = hud.env) {
       renderEnvPanel(p);
     };
   });
+  p.querySelectorAll('[data-light-preset]').forEach(b => {
+    b.onclick = () => { applyPreset(env, b.dataset.lightPreset); applyEnvironment(); touch(); renderEnvPanel(p); };
+  });
   p.querySelectorAll('input[type=checkbox]').forEach(c => {
     c.onchange = () => {
       env[c.dataset.env] = c.checked;
+      markPreset(p);
       if (c.dataset.env === 'showGrid') rebuildGround();
       if (c.dataset.env === 'showGround') groundGroup.visible = c.checked;
       applyEnvironment();
@@ -4442,7 +4515,7 @@ function menuGroups() {
       ...SECTION_KINDS.map(k => ({ label: 'Add a section cut: ' + SECTION_LABELS[k].toLowerCase(), run: () => addSection(k) })),
       { label: 'Snap section cuts', active: sectionSnap, keep: true, run: () => setSectionSnap(!sectionSnap) },
       { label: 'X-ray', key: 'X', active: xray, run: toggleXray },
-      { label: 'Sun and environment', run: () => { hud.env.hidden = false; hud.env.classList.add('open'); renderEnvPanel(); } },
+      { label: 'Lighting and sun', run: () => { hud.env.hidden = false; hud.env.classList.add('open'); renderEnvPanel(); } },
       { label: 'Photo pins', active: markersShown('pins'), run: () => toggleMarkers('pins') },
       { label: 'Notes', active: markersShown('notes'), run: () => toggleMarkers('notes') },
       { label: 'Render a still image', run: openStillDialog },
@@ -4784,6 +4857,29 @@ export function drawStats({ grouped } = {}) {
   try { renderFrame(true); } finally { info.autoReset = auto; }
   return { calls: info.render.calls, triangles: Math.round(info.render.triangles), groups: batches.stats(),
     camera: { projection: camera.projectionMatrix.toArray(), inverse: camera.matrixWorldInverse.toArray() } };
+}
+// For the browser checks: draw one frame now, as the still view (`fast` false) or as a frame
+// drawn while the camera moves (`fast` true), and return its mean brightness, 0 to 1, read
+// straight off the canvas before the browser shows it.
+// `view` ({ position, target }, metres, x/y/z) first puts the orbiting camera there.
+export function frameBrightness({ fast = false, view = null } = {}) {
+  if (!scene || !composer || contextLost) return null;
+  if (view) {
+    if (mode === 'walk') setMode('orbit');
+    camera.position.set(...view.position);
+    controls.target.set(...view.target);
+    controls.update();
+  }
+  const was = lastMotion;
+  lastMotion = fast ? performance.now() : -Infinity;
+  try { renderFrame(); } finally { lastMotion = was; }
+  const gl = renderer.getContext(), w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+  const px = new Uint8Array(w * h * 4);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  let sum = 0;
+  for (let i = 0; i < px.length; i += 4) sum += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
+  requestRender(1);   // put the view back as it should be
+  return sum / (w * h * 255);
 }
 // Whether the last frame was a fast one (camera moving), whether a shadow refresh is pending, and
 // how many fast frames, full frames and shadow refreshes this view has drawn.

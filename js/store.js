@@ -11,6 +11,7 @@ import { normalizeSavedViews } from './saved-views.js';
 import { isPictureRef, inlineBundlePictures } from './picture-assets.js';
 import { normalizeOnePager, emptyOnePager } from './one-pager-record.js';
 import { sameJson } from './workspace-merge.js';
+import { LIGHTING_DEFAULTS, normalizeLighting } from './lighting.js';
 
 const LS_KEY = 'tiksi.workspace.v1';   // storage slot, not the schema version (see migrate)
 const SCHEMA_VERSION = 2;
@@ -455,8 +456,10 @@ export function defaultEnv() {
     sunMode: 'manual', latitude: null, longitude: null, date: isoToday(),
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', xrayOpacity: 0.35,
     sky: 'dynamic', panoPhotoId: null,
-    showCeilings: true, showGround: true, showGrid: false, nightLights: true,
+    showCeilings: true, showGround: true, showGrid: false,
     showPins: true, showNotes: true,
+    // Sun strength, fill light, corner shading, room lights and the camera light (lighting.js).
+    ...LIGHTING_DEFAULTS,
   };
 }
 
@@ -709,7 +712,7 @@ function migrate(d) {
     // v2: photos, environment, richer scan and room records. Merge over whatever is there
     // so partially filled objects from hand-edited or older exports keep their values.
     p.photos = p.photos || [];
-    p.env = Object.assign(defaultEnv(), p.env || {});
+    p.env = normalizeLighting(Object.assign(defaultEnv(), p.env || {}), p.env || {});
     // Where the property came from (a Polycam share link, say); null for a hand-made one.
     if (p.source === undefined) p.source = null;
     for (const s of p.scans) {

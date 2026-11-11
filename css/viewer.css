@@ -100,6 +100,9 @@
 .v-row-sel { grid-template-columns: 78px 1fr; }
 .v-row-sel select { width: 100%; font-size: 11px; padding: 3px 5px; }
 .v-row-sel select + select { grid-column: 2; margin-top: 4px; }
+.v-light-presets { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0 4px; }
+.v-light-presets .v-pill { font-size: 9px; padding: 4px 7px; }
+.v-env-rule { border-top: 1px solid rgba(139, 154, 167, 0.18); margin: 10px 0 4px; }
 .v-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; margin-top: 8px; }
 .v-checks label { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; color: var(--dim); cursor: pointer; }
 
