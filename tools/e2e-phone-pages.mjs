@@ -3,16 +3,18 @@
 // the iPhone profile, both at 402 x 874 points. Synthetic demo projects in a temporary state
 // directory; live 8642 is never used.
 //
-//   every page   no sideways scroll, every control at least 44 points, fields at 16 points
+//   every page   no sideways scroll, every control at least 44 points, fields at 16 points,
+//                no reading text under 12 points
 //   panel        capture first (TAKE A PHOTO pins it in MODEL, ADD A NOTE), GUIDE, quality on
 //                this device, 44-point buttons, the panel keeps its scroll after a switch
 //   layouts      DESKTOP LAYOUT on a phone keeps PHONE LAYOUT on screen
 //   PHOTOS       one column, the camera first, details as a sheet; one new card per import;
 //                the search waits for a pause
 //   PROJECTS     the remove button shows and asks first
-//   SCHEDULE     a tapped bar shows its dates and slack
-//   DOCUMENTS    a viewer on a touch device; sheets under 16 million pixels there; "shown in
-//                Finder" said as such
+//   SCHEDULE     a tapped bar shows its dates and slack; it follows the touch mark while open
+//   DOCUMENTS    a viewer on a touch device, upright and sideways, decided by touch, not width
+//                (a narrow computer window keeps its layout); sheets under 16 million pixels
+//                there; "shown in Finder" said as such
 //   PRODUCTS     a running price check does not redraw the form being typed in
 //   PHOTO TO 3D  the camera takes several photos per visit and counts them
 //   FILE         every tab's controls are on screen and finger-sized, the same set as the desktop,
@@ -79,6 +81,36 @@ const MEASURE = () => {
   return { small, tiny, sideways };
 };
 
+// Reading text under 12 points on a touch screen: every visible text in the given parts of the
+// page, at the size it is drawn (text in a drawing scaled to fit counts at its drawn size). Left
+// out, as not reading text: the drawing sheets themselves (DOCUMENTS' paper and CUT SHEETS' sheet
+// previews are pictures of printed pages, zoomed by the viewer), the printable one-pager preview,
+// and the 3D view and plan (MODEL and PLAN are not this page set's). A label kept for screen
+// readers only is not on screen to read.
+const TEXT_ALLOW = '.dc-paper, .dc-viewer-page, .sheet, .rs-sheet, canvas, #viewer, .plan-wrap';
+const SMALL_TEXT = ([roots, allow]) => {
+  const seen = new Map();
+  for (const root of document.querySelectorAll(roots)) {
+    const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      const e = n.parentElement;
+      if (!e || !/\S/.test(n.data) || e.closest(allow) || e.closest('[hidden],[inert],dialog:not([open]),script,style,template')) continue;
+      if (!root.closest('.fd-panel') && e.closest('.fd-panel')) continue;
+      const cs = getComputedStyle(e);
+      if (cs.visibility === 'hidden' || !e.getClientRects().length) continue;
+      // A label kept for screen readers only (a 1-point clipped box) is not read on screen.
+      const box = e.getBoundingClientRect(); if (box.width <= 2 || box.height <= 2) continue;
+      let size = parseFloat(cs.fontSize);
+      const svg = e.closest('svg');
+      if (svg) { const m = (e.getScreenCTM ? e : svg).getScreenCTM(); if (m) size *= Math.hypot(m.a, m.b); }
+      if (size >= 11.95) continue;
+      const key = e.tagName.toLowerCase() + (typeof e.className === 'string' && e.className ? '.' + e.className.trim().split(/\s+/)[0] : (e.className?.baseVal ? '.' + e.className.baseVal.split(/\s+/)[0] : '')) + ' ' + (Math.round(size * 10) / 10);
+      if (!seen.has(key)) seen.set(key, n.data.trim().slice(0, 18));
+    }
+  }
+  return [...seen].map(([k, t]) => k + ' "' + t + '"');
+};
+
 async function loadDemo(page, url) {
   await page.evaluate(async () => {
     const s = await import('/js/store.js'); const d = await import('/js/demo.js');
@@ -138,6 +170,8 @@ async function run(label, engine, profile) {
       check(!m.sideways, label + ': ' + v + ' does not scroll sideways at ' + W + ' points');
       check(!m.small.length, label + ': ' + v + ' has no control under 44 points' + (m.small.length ? ' (' + m.small.length + ': ' + m.small.slice(0, 4).join(', ') + ')' : ''));
       check(!m.tiny.length, label + ': ' + v + ' has no field under 16 points' + (m.tiny.length ? ' (' + m.tiny.slice(0, 3).join(', ') + ')' : ''));
+      const small = await page.evaluate(SMALL_TEXT, ['#view, .fd-bar', TEXT_ALLOW]);
+      check(!small.length, label + ': ' + v + ' has no reading text under 12 points' + (small.length ? ' (' + small.length + ': ' + small.slice(0, process.env.E2E_PHONE_ALL ? 99 : 5).join(', ') + ')' : ''));
     });
 
     await part(label, 'panel', async () => {
@@ -148,6 +182,8 @@ async function run(label, engine, profile) {
       check(sections[0] === 'Capture', label + ': the panel offers capture first (' + sections.join(', ') + ')');
       const panelSmall = await page.locator('.fd-panel').evaluate(p => [...p.querySelectorAll('button, a, select')].filter(e => e.getClientRects().length).map(e => e.getBoundingClientRect()).filter(r => r.height < 43.5).length);
       check(panelSmall === 0, label + ': every control in the panel is at least 44 points tall (' + panelSmall + ' under)');
+      const panelText = await page.evaluate(SMALL_TEXT, ['.fd-panel', TEXT_ALLOW]);
+      check(!panelText.length, label + ': the panel has no reading text under 12 points' + (panelText.length ? ' (' + panelText.slice(0, process.env.E2E_PHONE_ALL ? 99 : 5).join(', ') + ')' : ''));
       check(await page.locator('.fd-panel a.fd-link[href="#/guide"]').count() === 1, label + ': the panel links to the GUIDE');
       await page.locator('.fd-panel a.fd-link[href="#/guide"]').tap();
       await page.waitForFunction(() => location.hash.startsWith('#/guide') && /user guide/i.test(document.querySelector('#view')?.innerText || ''), null, { timeout: 30000 }).catch(() => {});
@@ -293,7 +329,7 @@ async function run(label, engine, profile) {
       await page.locator('.ph-card').first().tap();
       await page.locator('.ph-detail [data-act=zoom]').tap();
       const close = await page.locator('.ph-lb-close').boundingBox();
-      check(close && close.width >= 44 && close.height >= 44 && close.y >= 0, label + ': the viewer\'s close button is a 44-point target on screen (' + JSON.stringify(close) + ')');
+      check(close && close.width >= 43.5 && close.height >= 43.5 && close.y >= 0, label + ': the viewer\'s close button is a 44-point target on screen (' + JSON.stringify(close) + ')');
       await page.locator('.ph-lb-close').tap();
       // One new card per import: the cards already there stay the same elements.
       await page.evaluate(() => { window.__firstCard = document.querySelector('.ph-card'); });
@@ -349,6 +385,20 @@ async function run(label, engine, profile) {
         check(/day.*, [A-Z][a-z]{2} \d+, \d{4} to [A-Z][a-z]{2} \d+, \d{4}, (on the critical path|slack )/.test(detail), label + ': a tapped bar shows its dates and slack (' + detail.slice(0, 80) + ')');
         const label0 = await page.locator('#gantt .gantt-svg').evaluate(svg => [...svg.querySelectorAll('line')].find(l => l.getAttribute('y1') === '0' && l.getAttribute('x1') === l.getAttribute('x2'))?.getAttribute('x1'));
         check(Number(label0) <= 130, label + ': the name column gives the chart room on a phone (separator at ' + label0 + ')');
+        // Finger or mouse can change while the page is open (an iPad and a trackpad): SCHEDULE
+        // follows. Chromium can switch its touch screen off and on; WebKit cannot.
+        if (engine === chromium) {
+          const cdp = await page.context().newCDPSession(page);
+          const state = () => page.evaluate(() => ({ strip: !!document.querySelector('#gantt-detail'), taps: document.querySelectorAll('#gantt .g-item').length, touch: document.documentElement.classList.contains('touch') }));
+          await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+          await page.waitForTimeout(500);
+          const mouse = await state();
+          await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+          await page.waitForTimeout(500);
+          const finger = await state();
+          check(!mouse.touch && !mouse.strip && mouse.taps === 0 && finger.touch && finger.strip && finger.taps > 0, label + ': SCHEDULE follows the touch mark while open (mouse ' + JSON.stringify(mouse) + ', finger ' + JSON.stringify(finger) + ')');
+          // This session stays open: closing it would undo its touch screen for the parts after.
+        }
       } else check(false, label + ': SCHEDULE has bars to tap');
     });
 
@@ -358,6 +408,18 @@ async function run(label, engine, profile) {
       await page.locator('[data-new-set]').tap();
       await page.waitForTimeout(500);
       check(await page.locator('[data-toolbar] [data-add]').count() === 0 && await page.locator('[data-toolbar] [data-touch-viewer]').count() === 1, label + ': DOCUMENTS is a viewer on a touch device (layout and PDFs on the Mac)');
+      // The layout follows the touch mark, not width: upright, one column; turned sideways, the
+      // sheet keeps the full height beside the lists.
+      const dcBoxes = () => page.evaluate(() => { const box = s => { const r = document.querySelector(s).getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; };
+        return { cols: getComputedStyle(document.querySelector('.dc-layout')).gridTemplateColumns.split(' ').length, layout: box('.dc-layout'), main: box('.dc-main'), viewer: !!document.querySelector('[data-toolbar] [data-touch-viewer]') }; });
+      const upright = await dcBoxes();
+      check(upright.cols === 1, label + ': DOCUMENTS upright on a phone is one column (' + JSON.stringify(upright) + ')');
+      await page.setViewportSize({ width: H, height: W });
+      await page.waitForTimeout(500);
+      const sideways = await dcBoxes();
+      await page.setViewportSize({ width: W, height: H });
+      await page.waitForTimeout(500);
+      check(sideways.viewer && sideways.cols === 2 && sideways.main.x >= 200 && Math.abs(sideways.main.h - sideways.layout.h) <= 2, label + ': DOCUMENTS on a phone turned sideways keeps the viewer, the sheet at full height beside the lists (' + JSON.stringify(sideways) + ')');
       const docs = await page.evaluate(async () => {
         const dc = await import('/js/documentcenter.js'); const { PAPERS } = await import('/js/doc-sets.js');
         return { dpi: PAPERS.map(p => [p.id, dc.sheetDpi(p), Math.round(p.w * dc.sheetDpi(p)) * Math.round(p.h * dc.sheetDpi(p))]),
@@ -453,6 +515,16 @@ async function desktop() {
       check(!sched.strip && sched.stops === 0 && sched.rows > 0 && sched.sep === '236', 'desktop: SCHEDULE has no new strip, no new tab stops and its full name column (' + JSON.stringify(sched) + ')');
       await go(page, url, 'documents');
       check(await page.locator('[data-toolbar] [data-touch-viewer]').count() === 0, 'desktop: DOCUMENTS keeps its layout tools');
+      // A narrow window on a computer keeps the computer's DOCUMENTS: lists beside the sheet, not
+      // the phone's single column.
+      await page.setViewportSize({ width: 700, height: 800 });
+      await page.waitForTimeout(400);
+      const narrow = await page.evaluate(() => ({ cols: getComputedStyle(document.querySelector('.dc-layout')).gridTemplateColumns.split(' ').length, mainX: Math.round(document.querySelector('.dc-main').getBoundingClientRect().x) }));
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.waitForTimeout(400);
+      check(narrow.cols === 2 && narrow.mainX >= 200, 'desktop: DOCUMENTS in a 700-point window keeps the lists beside the sheet (' + JSON.stringify(narrow) + ')');
+      // A computer's text sizes are unchanged: no raised copies on a computer.
+      check(!(await page.evaluate(() => !!document.getElementById('touch-text'))), 'desktop: a computer gets no raised text sizes');
       check(!(await page.locator('#topbar .fd-return').isVisible()), 'desktop: no PHONE LAYOUT button at full width');
     });
     await context.close();

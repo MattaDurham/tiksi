@@ -736,6 +736,7 @@ html.touch .gantt-svg .g-item { cursor: pointer; outline: none; }
 .gantt-detail { min-height: 44px; display: flex; align-items: center; margin-bottom: 8px; padding: 8px 12px; border-left: 2px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); font-size: 13px; line-height: 1.4; color: var(--ink); }
 .gantt-detail[hidden] { display: none; }
 .gantt-svg text { font-family: var(--mono); }
+.gantt-legend { font-size: 11px; }
 .gantt-svg .g-row { fill: transparent; transition: fill var(--dur) var(--ease); }
 .gantt-svg .g-row:hover { fill: rgba(255, 255, 255, 0.035); }
 .gantt-svg .g-row:hover ~ .g-label { fill: var(--ink); }
@@ -838,6 +839,7 @@ html.touch .gantt-svg .g-item { cursor: pointer; outline: none; }
 .sheet-layout { display: grid; grid-template-columns: 280px 1fr; height: 100%; }
 .sheet-list { background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; padding: 14px 12px; }
 .sheet-list .sl-group { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.14em; color: var(--faint); text-transform: uppercase; margin: 14px 0 4px; padding: 0 8px; }
+.sheet-list .sl-empty { font-size: 11px; }
 .sheet-list .sl-item {
   display: block; width: 100%; text-align: left; background: transparent; border: 1px solid transparent;
   color: var(--dim); padding: 6px 9px; border-radius: var(--radius); cursor: pointer; font-size: 12px;
@@ -1236,6 +1238,8 @@ html.touch .file-dialog label { min-height: 44px; }
    choices (MEASURE's confidence): the whole label is the target. */
 html.touch #view :is(.pv-check, .ms-seg label):not([hidden]) { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
 html.touch #view :is(.pv-check, .ms-seg label) input { width: 20px; height: 20px; }
+html.touch #view .ms-seg label { min-width: 44px; justify-content: center; }
+html.touch #view .ms-seg span { padding: 6px 4px; letter-spacing: 0; }
 /* The GUIDE's map of the views: each name is a link to that view. */
 html.touch #view .guide-view-map a:not([hidden]) { display: inline-flex; align-items: center; min-height: 44px; min-width: 44px; }
 

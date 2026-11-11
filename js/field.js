@@ -15,6 +15,7 @@ import { fieldState, fieldAction, fieldWalk } from './viewer3d.js';
 import { touchDevice } from './render-quality.js';
 import { addPhotoFromFile } from './photos-store.js';
 import { SMALL } from './screen.js';
+import { raiseSmallText } from './touch-text.js';
 
 const PREF = 'tiksi.layout';          // 'phone' | 'desktop' | absent (follow the screen)
 const MENU_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
@@ -47,7 +48,8 @@ export function initField() {
   media = window.matchMedia(SMALL);
   media.addEventListener('change', apply);
   // A finger, not a mouse: controls grow to finger size (css/field.css, css/console.css).
-  const markTouch = () => document.documentElement.classList.toggle('touch', touchDevice());
+  // On a touch device the pages' small text is raised to 12 points (js/touch-text.js), once.
+  const markTouch = () => { const on = touchDevice(); document.documentElement.classList.toggle('touch', on); if (on) raiseSmallText(); };
   markTouch();
   try { window.matchMedia('(hover: none) and (pointer: coarse)').addEventListener('change', markTouch); } catch (e) { /* older browser: decided once */ }
   build();

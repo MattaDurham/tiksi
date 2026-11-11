@@ -69,9 +69,20 @@
   .dc-layout { grid-template-columns: 220px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
   .dc-inspector { grid-column: 1 / -1; max-height: 40vh; border-left: 0; border-top: 1px solid var(--line); }
 }
+/* A touch device's DOCUMENTS is a viewer (documentcenter.js): the sheet gets the room. It is
+   decided by the touch mark (html.touch, from touchDevice()), not by width, so a narrow window on
+   a computer keeps the computer's layout above, with its tools. Upright on a phone: the lists, the
+   sheet, then the inspector, stacked. Turned sideways: the lists and inspector share the left
+   column and the sheet keeps the full height. */
 @media (max-width: 760px) {
-  .dc-layout { grid-template: auto minmax(0, 1fr) auto / minmax(0, 1fr); }
-  .dc-side { max-height: 200px; border-right: 0; border-bottom: 1px solid var(--line); }
+  html.touch .dc-layout { grid-template: auto minmax(0, 1fr) auto / minmax(0, 1fr); }
+  html.touch .dc-side { max-height: 200px; border-right: 0; border-bottom: 1px solid var(--line); }
+}
+@media (min-width: 761px) and (max-height: 500px) {
+  html.touch .dc-layout { grid-template: minmax(0, 1fr) minmax(0, 1fr) / 220px minmax(0, 1fr); }
+  html.touch .dc-side { grid-area: 1 / 1; }
+  html.touch .dc-main { grid-area: 1 / 2 / 3 / 3; }
+  html.touch .dc-inspector { grid-area: 2 / 1; max-height: none; border-left: 0; border-right: 1px solid var(--line); border-top: 1px solid var(--line); }
 }
 .dc-tags { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 10px; font-size: 12px; color: var(--dim); }
 .dc-tag-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 8px; align-items: center; }

@@ -221,3 +221,8 @@ html.phone.fd-model:has(.fd-task:not([hidden])) .fd-save { visibility: hidden; }
    red and still; one being retried keeps the amber pulse of a save in progress. */
 .save-status[data-save-state="refused"] { color: var(--red); }
 .save-status.busy[data-save-state="refused"]::before { background: var(--red); box-shadow: 0 0 6px rgba(224, 82, 82, 0.6); animation: none; }
+
+/* On a touch device no reading text in the bar or the panel is under 12 points (finding
+   small-targets); a computer in the phone layout keeps the sizes above. The pages' own small
+   text is raised by js/touch-text.js. */
+html.touch.phone :is(.fd-title, .fd-save, .fd-section h2, .fd-switch small, .v-lb-close) { font-size: 12px; }
