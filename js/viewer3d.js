@@ -54,6 +54,7 @@ import {
   scanStats, dropScanToFloor, centerScanOnModel, releaseSplatRenderer, splatDrawables, splatBusy,
 } from './scans.js';
 import { attachSketchupNavigation } from './sketchup-nav.js';
+import { diskWorkspace } from './disk-workspace.js';
 import { ModelBatches } from './model-batch.js';
 import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown } from './tags.js';
 import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags } from './saved-views.js';
@@ -1537,6 +1538,7 @@ function onPointerUp(e) {
   if (tool === 'pin') return placePin(e);
   if (tool === 'note') return placeNote(e);
   if (match && match.points && match.points.mode === 'model') return addMatchModelPoint(e);
+  retryPickIndex();
   // The phone layout has no inspector, so a tap only acts on a photo pin or a note. It is still
   // the nearest thing under the finger that counts: a pin or note behind a wall or a scan is
   // not opened through it. (Large scans are tested through the pick index, so this is cheap.)
@@ -1884,19 +1886,38 @@ function nextPinPicture() {
 async function pinPicture(photo, wanted) {
   if (!wanted()) return null;
   if (ownQuality() && typeof createImageBitmap === 'function') {
-    const bytes = await photoBytes(photo.id);
-    if (!bytes || !wanted()) return null;
-    const blob = new Blob([bytes], { type: photo.mime || 'image/jpeg' });
     const landscape = photoAspect(photo) >= 1;
     // 'from-image': a phone photo is stored on its side with a note to turn it. The card is
     // shaped from the turned picture, so the decode must turn it too (never left to a default).
     const size = landscape ? { resizeWidth: PIN_CARD } : { resizeHeight: PIN_CARD };
-    try { return await createImageBitmap(blob, { ...size, resizeQuality: 'high', imageOrientation: 'from-image' }); }
+    const decode = (bytes, mime) => createImageBitmap(new Blob([bytes], { type: mime || 'image/jpeg' }), { ...size, resizeQuality: 'high', imageOrientation: 'from-image' });
+    // First the Mac's own reduced copy of the picture (about a fifth of a camera original to
+    // download), when the project files can supply one. Anything that goes wrong there, an
+    // older Mac, a file that is not a picture, a copy that will not decode, falls back to the
+    // original, as before: a card is never left broken for want of the smaller copy.
+    const reduced = await reducedPicture(photo.id, PIN_CARD);
+    if (!wanted()) return null;
+    if (reduced) { try { return await decode(reduced.buffer, reduced.mime); } catch (e) { /* the original, below */ } }
+    const bytes = await photoBytes(photo.id);
+    if (!bytes || !wanted()) return null;
+    try { return await decode(bytes, photo.mime); }
     catch (e) { /* a browser without resize options: fall through to the plain decode */ }
   }
   const url = await photoUrl(photo.id);
   if (!url || !wanted()) return null;
   return new Promise(resolve => { const img = new Image(); img.onload = () => resolve(img); img.onerror = () => resolve(null); img.src = url; });
+}
+// The Mac's reduced copy of a stored picture, at most `longest` pixels on its longest side:
+// { buffer, mime }, or null when there is none to be had. Asked of the project files
+// (disk-workspace.js), which hold the address, the token and the cache rules; a page whose
+// project files cannot supply one (not connected to a Mac, or a version without it) gets null.
+async function reducedPicture(id, longest) {
+  const files = diskWorkspace;
+  if (!files || typeof files.smallerPicture !== 'function') return null;
+  try {
+    const got = await files.smallerPicture(id, longest);
+    return got && got.buffer && got.buffer.byteLength ? got : null;
+  } catch (e) { return null; }
 }
 function removePin(id) {
   const rec = pinObjs[id];
@@ -3134,6 +3155,28 @@ const errMsg = e => String(e && e.message || e);
 // which pick-index.js gives it a tree; smaller ones keep three's own test and need no file).
 const PICK_INDEX_MIN = 20000;
 let pickIndex = null, pickIndexLoading = 0;
+// Fetch the picking files (once) and give this scan its indexed test. A fetch that fails, a
+// dropped connection, is remembered and tried again on the next tap or click (retryPickIndex);
+// until then the scan is tested three's own way, which is slower and no less right.
+const pickIndexMissed = new Set();   // scan ids whose index is still owed
+function loadPickIndex(scanId, again = false) {
+  pickIndexLoading++;
+  // A second try asks for the same file at a slightly different address: a browser may
+  // remember the failed import of the first and answer with that failure again.
+  const retry = new URL('./pick-index.js', import.meta.url);
+  retry.search = '?again';
+  (again ? import(retry.href) : import('./pick-index.js')).then(m => {
+    pickIndex = m;
+    const obj = scanObjs[scanId];
+    if (obj && m.indexForPicking(obj) && !ownQuality()) m.buildPickIndexes(obj);
+  }).catch(e => { console.error('pick index', e); pickIndexMissed.add(scanId); }).then(() => { pickIndexLoading--; });
+}
+function retryPickIndex() {
+  if (!pickIndexMissed.size || pickIndexLoading) return;
+  const ids = [...pickIndexMissed];
+  pickIndexMissed.clear();
+  for (const id of ids) if (scanObjs[id]) loadPickIndex(id, true);
+}
 function needsPickIndex(obj) {
   let large = false;
   obj.traverse(o => {
@@ -3206,13 +3249,7 @@ async function addScanToScene(scan) {
   // them, never at start-up. A computer then asks for the tree at once, ahead of the first
   // click; a touch device when a tap or a pinch first reaches the scan, so it costs no memory
   // until then.
-  if (needsPickIndex(obj)) {
-    pickIndexLoading++;
-    import('./pick-index.js').then(m => {
-      pickIndex = m;
-      if (scanObjs[scan.id] === obj && m.indexForPicking(obj) && !ownQuality()) m.buildPickIndexes(obj);
-    }).catch(e => console.error('pick index', e)).then(() => { pickIndexLoading--; });
-  }
+  if (needsPickIndex(obj)) loadPickIndex(scan.id);
   setModelXray(obj, xray ? prop.env.xrayOpacity : null);
   fitShadow();
   applyEnvironment();
@@ -4776,6 +4813,8 @@ export function qualityState() {
     quality: quality(), touch: ownQuality(), phoneLayout: fieldLayout(), shared: prop.env.quality, shadowMap: sun.shadow.mapSize.x, smoothingSamples: composer.renderTarget1.samples,
     shading: aoWanted, glow: passes.bloom.enabled, pixelRatio: renderer.getPixelRatio(), limits: memoryLimits(),
     roomLights: lampLights.length, litRooms: lampKey ? lampKey.split('|').filter(Boolean) : [],
+    // Pick trees made so far, by the background helper and by the page itself (null: the picking files are not loaded).
+    pickTrees: pickIndex ? pickIndex.pickTreeCounts() : null,
   };
 }
 export function scanStates() {

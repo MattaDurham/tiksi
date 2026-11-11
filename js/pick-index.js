@@ -38,7 +38,7 @@ function helperReady() {
     if (!job) return;
     const kept = job.geometry.userData.pickTree;
     if (!kept || kept.stamp !== job.stamp || kept.tree) return;     // replaced, or disposed, meanwhile
-    if (d.ok) kept.tree = { box: d.box, a: d.a, b: d.b, order: d.order, nodes: d.nodes };
+    if (d.ok) { kept.tree = { box: d.box, a: d.a, b: d.b, order: d.order, nodes: d.nodes }; made.helper++; }
     else { console.error('pick index: the helper could not build a tree', d.error); delete job.geometry.userData.pickTree; }
   };
   helper.onerror = err => {
@@ -52,6 +52,10 @@ function helperReady() {
   };
   return true;
 }
+// How many trees have been made, and by whom: a helper that silently stopped working shows here
+// as trees made by the page (or none at all).
+const made = { helper: 0, page: 0 };
+export function pickTreeCounts() { return { ...made }; }
 // How many trees the helper is still building (MODEL waits for none of them; the checks do).
 export function pendingPickBuilds() { return building.size; }
 
@@ -74,6 +78,7 @@ function treeOf(geometry, points) {
   if (!helperReady()) {
     const tree = buildNow(geometry, points);
     geometry.userData.pickTree = { stamp, tree };
+    made.page++;
     return tree;
   }
   // The helper gets its own copy of the vertices: the page keeps drawing from its own.
