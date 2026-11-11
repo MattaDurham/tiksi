@@ -2,18 +2,6 @@
   "about": "Known cases scripts/check-names.mjs and scripts/check-names.py report that are not fixed yet. A case that no longer happens is named in a warning: delete its entry. Fix the code rather than adding entries to get a change through.",
   "allow": [
     {
-      "file": "js/files.js",
-      "kind": "unused-import",
-      "name": "importBundle",
-      "why": "app code, found 2026-11-10; left for the session that owns js/"
-    },
-    {
-      "file": "js/files.js",
-      "kind": "unused-import",
-      "name": "replaceWorkspace",
-      "why": "app code, found 2026-11-10; left for the session that owns js/"
-    },
-    {
       "file": "js/main.js",
       "kind": "unused-import",
       "name": "listAllFileIds",
@@ -23,12 +11,6 @@
       "file": "js/main.js",
       "kind": "unused-import",
       "name": "FSA",
-      "why": "app code, found 2026-11-10; left for the session that owns js/"
-    },
-    {
-      "file": "js/viewer3d.js",
-      "kind": "unused-import",
-      "name": "openNewPropertyDialog",
       "why": "app code, found 2026-11-10; left for the session that owns js/"
     },
     {

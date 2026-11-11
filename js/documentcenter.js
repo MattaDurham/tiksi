@@ -298,15 +298,16 @@ function fitZoom() {
   return Math.max(0.2, Math.min((stage.clientWidth - 48) / (p.w * PT), (stage.clientHeight - 48) / (p.h * PT)));
 }
 
-// Model renders this sheet needs, in screen pixels, keyed by what they depend on.
-function renderKey(v, px, py) {
+// Model renders this sheet needs, in screen pixels, keyed by what they depend on. `geo` is the
+// model's fingerprint (geometryKey), worked out once per redraw rather than once per view.
+function geometryKey() { const geo = geometrySignature(prop); return geo.length + ':' + hash(geo); }
+function renderKey(v, px, py, geo = geometryKey()) {
   const base = { kind: v.kind, w: v.w, h: v.h, style: v.style, px, py };
   if (v.kind === 'image') return JSON.stringify({ ...base, photoId: v.photoId, page: v.page });
-  const geo = geometrySignature(prop);
   const params = v.kind === 'plan' ? { levelId: v.levelId, cut: v.cut, center: v.center, scale: v.scale, model: v.layers.model }
     : v.kind === 'view3d' ? { camera: v.camera } : { line: v.line, flip: v.flip, center: v.center, scale: v.scale, clip: v.clip, depth: v.depth };
   const tags = tagSignature(prop, v);
-  return geo.length + ':' + hash(geo) + ':' + hash(tags) + JSON.stringify({ ...base, ...params });
+  return geo + ':' + hash(tags) + JSON.stringify({ ...base, ...params });
 }
 function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); }
 
@@ -318,10 +319,11 @@ function drawSheet(refit) {
   const z = zoom || fitZoom();
   const p = paperOf(set);
   const dpr = window.devicePixelRatio || 1;
+  const geo = geometryKey();
   for (const v of sheet.viewports) {
     if (v.kind === 'schedule' || v.kind === 'text') continue;
     const px = Math.min(2400, Math.round(v.w * PT * z * dpr)), py = Math.min(2400, Math.round(v.h * PT * z * dpr));
-    const key = renderKey(v, px, py);
+    const key = renderKey(v, px, py, geo);
     const hit = cache.get(key);
     if (hit) images.set(v.id, { ...hit, key });
     else enqueue(v, key, px, py);
@@ -421,12 +423,14 @@ function bindSheet(svg) {
       if (mode === 'move') { v.x = snap(orig.x + dx); v.y = snap(orig.y + dy); }
       else if (mode === 'resize') { v.w = Math.max(0.5, snap(orig.w + dx)); v.h = Math.max(0.5, snap(orig.h + dy)); }
       else adjustDrag(v, orig, dx, dy, ev.shiftKey);
-      drawSheet();
+      // Moving or resizing only places the drawing on screen until the drag ends; a view being
+      // adjusted shows new content, so it is redrawn, at most once a frame.
+      if (mode === 'adjust') scheduleRedraw(); else placeDragged(v);
     };
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
-      if (moved) { touch(); renderInspector(); }
+      if (moved) { if (mode !== 'adjust') drawSheet(); touch(); renderInspector(); }
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -450,6 +454,23 @@ function bindSheet(svg) {
     } else v.scale = nextScale(v.scale, e.deltaY > 0 ? 1 : -1);
     drawSheet(); touchSoon(); renderInspector();
   }, { passive: false });
+}
+
+// A view being moved or resized, shown where it now is without rebuilding the sheet: its group
+// and the selection frame over it are translated and, for a resize, stretched from the size they
+// were drawn at (a finished render can redraw the sheet mid-drag).
+function placeDragged(v) {
+  const live = el?.querySelector('.dc-paper svg');
+  if (!live) return;
+  const place = (node, drawn) => {
+    const w = parseFloat(drawn?.getAttribute('width')) || v.w * PT, h = parseFloat(drawn?.getAttribute('height')) || v.h * PT;
+    const stretch = Math.abs(w - v.w * PT) > 1e-6 || Math.abs(h - v.h * PT) > 1e-6;
+    node.setAttribute('transform', `translate(${v.x * PT} ${v.y * PT})` + (stretch ? ` scale(${v.w * PT / w} ${v.h * PT / h})` : ''));
+  };
+  const group = [...live.querySelectorAll('[data-vp-group]')].find(g => g.dataset.vpGroup === v.id);
+  if (group) place(group, group.querySelector('clipPath rect'));
+  const hit = [...live.querySelectorAll('[data-vp]')].find(r => r.dataset.vp === v.id);
+  if (hit && hit.parentNode !== group) place(hit.parentNode, hit);
 }
 
 let touchTimer = null;

@@ -33,7 +33,6 @@ import {
 import { placeScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import { chooseScanPlacement } from './scanplace.js';
 import { proposeFixtures, openFixtureReview, fixtureInspectorHtml, bindFixtureInspector, addFixtureHtml, addFixture } from './fixtures-ui.js';
-import { openNewPropertyDialog } from './newproperty.js';
 import { materialSelectHtml } from './materials.js';
 import { pendingTextureJobs, setTextureQuality, setTextureLimits, beginTextureBuild, setTextureUse } from './textures.js';
 import { qualityProfile, stillDimensions, effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, touchDevice, scanTooLarge, megabytes, QUALITY_NAMES } from './render-quality.js';

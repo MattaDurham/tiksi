@@ -6,6 +6,8 @@ import { scanToPlan } from './scan2plan-core.js';
 
 self.onmessage = e => {
   const { pos, idx, options } = e.data;
+  // The helper loaded and has the job: from here a failure is the job's, not the helper's.
+  self.postMessage({ type: 'started' });
   try {
     const result = scanToPlan(pos, idx, options, (stage, frac) => self.postMessage({ type: 'progress', stage, frac }));
     self.postMessage({ type: 'done', result });
