@@ -190,7 +190,15 @@ export function pictureFiles({ upload, download, concurrency = 6 }) {
     for (const id of assetById.keys()) if (!keepIds.has(id)) assetById.delete(id);
   }
 
-  return { slim, store, slimStored, fetchMissing, inflate, assetsFor, forget, get size() { return urlByRef.size; } };
+  // Put pictures that have arrived since into records that are already open, in place.
+  // Returns how many references were filled.
+  function fill(data) {
+    let filled = 0;
+    replaceInPlace(data, s => { const url = s.startsWith(PICTURE_PREFIX) && urlByRef.get(s); if (!url) return s; filled++; return url; });
+    return filled;
+  }
+
+  return { slim, store, slimStored, fetchMissing, inflate, fill, assetsFor, forget, get size() { return urlByRef.size; } };
 }
 
 async function pool(items, limit, work) {

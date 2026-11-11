@@ -62,6 +62,22 @@ async function makeProperty(id) {
   }, id);
   await context.close();
 }
+// A device that has not opened this workspace before starts on the property the Mac's copy
+// names; which property is open is then each device's own choice. Choose it the way the
+// phone panel does, through the property list.
+async function look(page, id) {
+  for (const end = Date.now() + 30000; ;) {
+    // The list is filled, and listens, a moment after the page first reads SAVED TO DISK.
+    const open = await page.evaluate(async id => {
+      const list = document.querySelector('#property-select');
+      if (list.onchange && list.value !== id && [...list.options].some(o => o.value === id)) { list.value = id; list.dispatchEvent(new Event('change')); }
+      return (await import('/js/store.js')).activeProperty()?.id === id && list.value === id;
+    }, id);
+    if (open) return;
+    if (Date.now() > end) assert.fail('the property did not open');
+    await new Promise(r => setTimeout(r, 100));
+  }
+}
 const prop = (mac, id) => mac.data.properties.find(p => p.id === id);
 const bar = page => page.evaluate(() => ({ state: document.querySelector('.fd-save').dataset.state, label: document.querySelector('.fd-save span').textContent }));
 // A photo of about `size` bytes: a real small PNG followed by noise, which still opens as a picture.
@@ -92,6 +108,7 @@ async function originalsThatWereNotKept(name, profile) {
   const id = 'prop-originals-' + name; await makeProperty(id);
   const context = await browser.newContext({ ...profile });
   let phone = await openPage(context);
+  await look(phone, id);
   // Stand in for a video too large to copy into the phone's storage: nothing over 30 kB is kept.
   await setLimit(phone, 30000);
   await context.setOffline(true);
@@ -143,6 +160,7 @@ async function twoPagesKeepTheirOwn(name, profile) {
   const id = 'prop-pages-' + name; await makeProperty(id);
   const context = await browser.newContext({ ...profile });
   const first = await openPage(context);
+  await look(first, id);
   await context.setOffline(true);
   await edit(first, id, { notes: 'From the page that was dropped' });
   await first.waitForFunction(KEPT, null, { timeout: 20000 });
@@ -188,6 +206,7 @@ async function theAppOpensWhileTheKeptCopyIsSent(name, profile) {
   const id = 'prop-start-' + name; await makeProperty(id);
   const context = await browser.newContext({ ...profile });
   let phone = await openPage(context);
+  await look(phone, id);
   await context.setOffline(true);
   const photo = await addPhoto(phone, id, 'Slow to send.png', 90000);
   await phone.waitForFunction(KEPT, null, { timeout: 20000 });
@@ -224,6 +243,7 @@ async function unreadableStorageIsLeftAlone(name) {
   // A computer, not a phone: a narrow window keeps what is unsent, a wide one does not.
   const context = await browser.newContext({ viewport: { width: 390, height: 800 } });
   const narrow = await openPage(context);
+  await look(narrow, id);
   await context.setOffline(true);
   await edit(narrow, id, { notes: 'Kept by the narrow window' });
   await narrow.waitForFunction(KEPT, null, { timeout: 20000 });
@@ -252,6 +272,7 @@ async function theBarFits(name, profile) {
   for (const width of [375, 390]) {
     const context = await browser.newContext({ ...profile, viewport: { width, height: 667 } });
     const phone = await openPage(context, { hash: '#/plan' });
+    await look(phone, id);
     await phone.locator('#btn-undo').waitFor();
     await context.setOffline(true);
     await edit(phone, id, { notes: 'Waiting at ' + width });

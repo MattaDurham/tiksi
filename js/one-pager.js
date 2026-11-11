@@ -126,9 +126,13 @@ export function draftOnePager(prop, data, { force = false } = {}) {
   const t = draftText(onePagerFacts(prop, data));
   const same = o.headline === t.headline && o.tagline === t.tagline && o.summary === t.summary && o.highlights.join('\n') === t.highlights.join('\n');
   if (same && o.draftedAt) return false;
-  Object.assign(o, t, { customized: false, draftedAt: new Date().toISOString() });
+  // `draftedAt` says only that a draft was written. It is not the clock: two devices that
+  // draft the same text a moment apart must save the same record, or the second would be
+  // asked to choose between two copies that differ in nothing but that moment.
+  Object.assign(o, t, { customized: false, draftedAt: o.draftedAt || DRAFTED });
   return true;
 }
+const DRAFTED = '1970-01-01T00:00:00.000Z';
 
 // ---------- what changed ----------
 

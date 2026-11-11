@@ -35,6 +35,7 @@ const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 // lens) merges whole, so two devices' views conflict instead of mixing into a third view. A pin
 // (its point and its wall place) and a lens are whole for the same reason.
 const WHOLE = new Set(['view', 'pin', 'lens', 'wall']);
+const DRAFTED = new Set(['headline', 'tagline', 'summary', 'highlights', 'draftedAt']);
 const keyed = v => Array.isArray(v) && v.every(r => object(r) && typeof r.id === 'string') && new Set(v.map(r => r.id)).size === v.length;
 
 export function mergeShared(base, local, remote) {
@@ -43,9 +44,16 @@ export function mergeShared(base, local, remote) {
     if (equal(l, r) || equal(b, r)) return l;
     if (equal(b, l)) return r;
     if (object(l) && object(r) && (b === undefined || object(b)) && !WHOLE.has(field)) {
+      // The drafted text of a one-pager nobody wrote by hand comes from the project, written
+      // by whichever page opens it. Two different drafts are not two people's work: for the
+      // drafted fields the saved one stays, unasked, and the next page to open drafts again
+      // from the merged project. Everything else on the one-pager (client, prepared by,
+      // contact, picture, section switches, versions) is entered by hand and merges as usual.
+      const drafts = field === 'onePager' && l.customized !== true && r.customized !== true;
       const out = {};
       for (const key of new Set([...Object.keys(b || {}), ...Object.keys(l), ...Object.keys(r)])) {
-        const value = merge(b?.[key], l[key], r[key], [...path, key], key);
+        const both = drafts && DRAFTED.has(key) && !equal(l[key], r[key]) && !equal(b?.[key], r[key]) && !equal(b?.[key], l[key]);
+        const value = both ? r[key] : merge(b?.[key], l[key], r[key], [...path, key], key);
         if (value !== undefined) out[key] = value;
       }
       return out;

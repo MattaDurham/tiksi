@@ -105,7 +105,7 @@ Open FILE, look at Project, switch to Import, inspect 3D exchange, then open Set
 
 **Keyboard saving.** Cmd/Ctrl+S saves; Cmd/Ctrl+Shift+S saves a new copy; Cmd/Ctrl+O opens a project file.
 
-**Shared project folders.** Desktop and Tailscale clients of the same local server see the same project files and original assets. A different server or the static edition is a separate workspace.
+**Shared project folders.** Desktop and Tailscale clients of the same local server see the same project files and original assets. Each device keeps its own open property, level and tag choices; changing them on one does not move the other. A different server or the static edition is a separate workspace.
 
 **File copy vs design fork.** SAVE AS preserves the property IDs. Reopening that copy updates the same property; it does not create a second independent design in this workspace.
 
@@ -113,7 +113,7 @@ Open FILE, look at Project, switch to Import, inspect 3D exchange, then open Set
 
 **Whole-workspace backup.** FILE → Settings → Workspace backup & maintenance → SAVE WORKSPACE BACKUP includes every property.
 
-> **Good to know:** The local server saves project bundles on the Mac and keeps browser working data in memory. First connection migrates old browser data to disk with a recovery bundle. Keep the Mac reachable until SAVED TO DISK appears; closing unsaved offline work warns. The static edition retains browser autosave and portable exports.
+> **Good to know:** The local server saves project bundles on the Mac. First connection migrates old browser data to disk with a recovery bundle. On the Mac itself, wait for SAVED TO DISK before closing; closing with unsaved work warns. A phone or another computer keeps what it has not sent yet in its own browser and sends it the next time Tiksi is opened there; while an original too large to keep is unsent, the phone bar reads Keep open. The static edition retains browser autosave and portable exports.
 
 <a id="capture"></a>
 

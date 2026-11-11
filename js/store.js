@@ -10,6 +10,7 @@ import { normalizeTags } from './tags.js';
 import { normalizeSavedViews } from './saved-views.js';
 import { isPictureRef, inlineBundlePictures } from './picture-assets.js';
 import { normalizeOnePager, emptyOnePager } from './one-pager-record.js';
+import { sameJson } from './workspace-merge.js';
 
 const LS_KEY = 'tiksi.workspace.v1';   // storage slot, not the schema version (see migrate)
 const SCHEMA_VERSION = 2;
@@ -80,6 +81,8 @@ let saveFailed = false;
 let savePending = false;
 export function save(skipPlanQueue = false) {
   if (diskPersistence) return; // disk-workspace observes edits and owns save acknowledgments
+  // The stored workspace could not be read: writing now would replace it with an empty one.
+  if (unreadable) { setSaveStatus('NOT SAVED — STORED WORKSPACE UNREADABLE', true); return; }
   // Never write a copy with inline thumbnails while hydrateThumbs() is still moving them into
   // IndexedDB: a freshly imported gallery would not fit and would raise the quota alert for nothing.
   if (hydration) {
@@ -129,18 +132,49 @@ function persistable(d) {
   });
 }
 
-export function load() {
+// A workspace stored in this browser that could not be read: { raw, error }. While it is
+// set, save() writes nothing, so the stored text stays exactly as it was found. The app
+// shows what happened and lets the person keep the text before starting again (main.js).
+let unreadable = null;
+export function unreadableWorkspace() { return unreadable; }
+// Move the unreadable text aside under its own key and start again. False when the copy
+// could not be written: then nothing is cleared.
+export function setAsideUnreadableWorkspace() {
+  if (!unreadable) return true;
   try {
-    const raw = localStorage.getItem(LS_KEY);
+    const key = LS_KEY + '.unreadable.' + new Date().toISOString().replace(/[:.]/g, '-');
+    localStorage.setItem(key, unreadable.raw);
+    if (localStorage.getItem(key) !== unreadable.raw) return false;
+    localStorage.removeItem(LS_KEY);
+  } catch (e) { console.error(e); return false; }
+  unreadable = null;
+  return true;
+}
+
+export function load() {
+  let raw = null;
+  try {
+    raw = localStorage.getItem(LS_KEY);
     if (raw) { ws.data = migrate(JSON.parse(raw)); thumbsStored.clear(); plansStored.clear(); hydrateThumbs(); return true; }
-  } catch (e) { console.error('load failed', e); }
+  } catch (e) {
+    console.error('load failed', e);
+    if (raw) unreadable = { raw, error: String(e && e.message || e) };
+  }
   ws.data = emptyWorkspace();
   return false;
 }
 
-export function replaceWorkspace(data, { source = 'import' } = {}) {
+// `source: 'shared'` is another device's change, or this device's own save merged with one.
+// The records it brings are put into the objects already here (see keepRecords), and what
+// changed is returned: { properties: Set of ids, keys: Map id -> changed fields (null when
+// more than its own fields changed), materials, other }. `prepare(next)` may adjust the
+// incoming data before it is compared and shown.
+export function replaceWorkspace(data, { source = 'import', prepare } = {}) {
   const before = ws.data;
-  ws.data = migrate(data);
+  const next = migrate(data);
+  if (prepare) prepare(next);
+  const change = source === 'shared' && before ? keepRecords(before, next) : null;
+  ws.data = next;
   for (const fn of replaceListeners) fn(before, ws.data, source);
   // Thumbnails arrive inline (JSON/bundle); hydrateThumbs() copies them into IndexedDB and
   // save() waits for it, so the first localStorage copy is already the slim one.
@@ -148,6 +182,74 @@ export function replaceWorkspace(data, { source = 'import' } = {}) {
   plansStored.clear();
   hydrateThumbs();
   touch();
+  return change;
+}
+
+// What this page's code makes of a set of records when it loads them: every default filled in
+// and every value it does not recognise tidied to one it does. A fresh copy; nothing shown
+// or stored changes.
+export function tidiedCopy(data) { return migrate(JSON.parse(JSON.stringify(data))); }
+
+// Put a record's new values into the objects that already stand for it, all the way down.
+// An open page, a dialog or a slow action that took the record, or anything inside it (a
+// wall, a photo, a level, a project item), before the change then still holds the live one:
+// what it writes next is saved, not lost in a copy nothing looks at any more.
+// - an object keeps its identity and gets the new fields (fields that are gone are removed);
+// - a list of records (each with its own id) keeps its array, and each record that is
+//   still there keeps its object; records that are gone are removed, new ones added, in the
+//   new order;
+// - any other list keeps its array and takes the new contents;
+// - a value that is equal already is not touched at all.
+export function adoptRecord(held, fresh) {
+  if (held === fresh) return held;
+  for (const key of Object.keys(held)) if (!(key in fresh)) delete held[key];
+  for (const key of Object.keys(fresh)) held[key] = adoptValue(held[key], fresh[key]);
+  return held;
+}
+const plainObject = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+const recordList = v => v.every(r => plainObject(r) && typeof r.id === 'string') && new Set(v.map(r => r.id)).size === v.length;
+function adoptValue(held, fresh) {
+  if (held === fresh) return held;
+  if (plainObject(held) && plainObject(fresh)) return adoptRecord(held, fresh);
+  if (Array.isArray(held) && Array.isArray(fresh)) {
+    let next = fresh;
+    if (recordList(held) && recordList(fresh)) {
+      const here = new Map(held.map(rec => [rec.id, rec]));
+      next = fresh.map(rec => here.has(rec.id) ? adoptRecord(here.get(rec.id), rec) : rec);
+    }
+    held.length = 0;
+    for (const item of next) held.push(item);
+    return held;
+  }
+  return fresh;
+}
+// Shared data arrives as whole new records. Keep the objects of the records that are already
+// here (properties, projects, products, materials), and say what changed.
+function keepRecords(before, next) {
+  const change = { properties: new Set(), keys: new Map(), materials: false, other: false };
+  const note = (list, rec, old) => {
+    if (list === 'properties') {
+      change.properties.add(rec.id);
+      change.keys.set(rec.id, old && old !== rec ? [...new Set([...Object.keys(old), ...Object.keys(rec)])].filter(key => !sameJson(old[key], rec[key])) : null);
+    } else if (list === 'projects') { for (const r of [rec, old]) if (r) { change.properties.add(r.propertyId); change.keys.set(r.propertyId, null); } }
+    else if (list === 'materials') change.materials = true;
+    else change.other = true;
+  };
+  for (const list of ['properties', 'projects', 'products', 'materials']) {
+    const held = new Map((before[list] || []).map(rec => [rec && rec.id, rec]));
+    next[list] = (next[list] || []).map(rec => {
+      const old = rec && held.get(rec.id);
+      held.delete(rec && rec.id);
+      if (old && sameJson(old, rec)) return old;
+      note(list, rec, old);
+      return old ? adoptRecord(old, rec) : rec;
+    });
+    // What is here and no longer in the shared data was removed elsewhere.
+    for (const gone of held.values()) if (gone) note(list, gone, null);
+  }
+  const rest = d => { const o = { ...d }; for (const list of ['properties', 'projects', 'products', 'materials']) delete o[list]; return o; };
+  if (!sameJson(rest(before), rest(next))) change.other = true;
+  return change;
 }
 
 // Merge a project file (or any workspace-shaped JSON) into the current workspace: properties,
@@ -1074,6 +1176,9 @@ export async function getFile(id) {
   const file = await fileBackend.read(id, local);
   // IndexedDB used to return an owned copy. Preserve that contract: renderers
   // may mutate bytes or transfer them to a worker, detaching the supplied buffer.
+  // A file the backend did not keep (`owned`: too large to hold in page memory) is the
+  // caller's already: it is handed over as it is, not copied a second time.
+  if (file?.owned) { const { owned, ...mine } = file; return mine; }
   return file?.buffer ? { ...file, buffer: file.buffer.slice(0) } : file;
 }
 
