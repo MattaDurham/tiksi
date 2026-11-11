@@ -956,6 +956,8 @@ async function aCodeChangeWaitsForTheFieldInUse() {
   let loads = 0; page.on('load', () => { loads++; });
   await page.goto(url + '/#/plan'); await page.waitForFunction(SAVED, null, { timeout: 60000 });
   await look(page, first);
+  // (No question about the one-pager when the name changes: an open dialog is its own case below.)
+  await page.evaluate(async () => { const s = await import('/js/store.js'); s.ws.data.settings.onePagerPrompt = 'never'; s.touch(); });
   await saveNow(page); await page.waitForFunction(SAVED);
   const name = page.locator('[data-prop-name]');
   await name.click(); await name.fill('Harbour house, typed while the code changed');
@@ -968,9 +970,209 @@ async function aCodeChangeWaitsForTheFieldInUse() {
   await page.waitForFunction(() => /kept and is sent after the reload/.test(document.querySelector('#save-status').title), null, { timeout: 20000 });
   assert.equal(loads, 1);
   assert.notEqual(prop(await mac(), first).name, 'Harbour house, typed while the code changed');
+  // The page says to reload, and the person does so with the cursor still in a field: what
+  // is in the field is entered first, and the page asks before it goes until that is kept.
+  await name.click(); await name.fill('Harbour house, typed and then reloaded at once');
+  const leave = () => page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; });
+  assert.equal(await leave(), true, 'leaving with a field in use asks first');
+  assert.equal(await page.evaluate(async id => (await import('/js/store.js')).ws.data.properties.find(p => p.id === id).name, first), 'Harbour house, typed and then reloaded at once', 'and what was typed is entered, not dropped');
+  for (const end = Date.now() + 20000; await leave(); ) { assert.ok(Date.now() < end, 'the entered text is kept within 20 s'); await page.waitForTimeout(200); }
   await page.reload();
-  await untilOnTheMac(c => prop(c, first).name === 'Harbour house, typed while the code changed', 'The name typed while the code changed');
+  await untilOnTheMac(c => prop(c, first).name === 'Harbour house, typed and then reloaded at once', 'The name typed just before the reload');
+  await page.waitForFunction(SAVED, null, { timeout: 30000 });
+  // An open dialog holds the reload off in the same way; closing it lets the page reload.
+  await page.waitForTimeout(3000);
+  const before = loads;
+  await page.evaluate(() => { const d = document.createElement('dialog'); d.dataset.testDialog = ''; d.textContent = 'A dialog someone is in'; document.body.append(d); d.showModal(); });
+  served = 'cccccccccccccccc';
+  await page.waitForTimeout(9000);
+  assert.equal(loads, before, 'the page is not reloaded while a dialog is open');
+  await page.evaluate(() => { const d = document.querySelector('dialog[data-test-dialog]'); d.close(); d.remove(); });
+  for (const end = Date.now() + 15000; loads === before && Date.now() < end;) await new Promise(r => setTimeout(r, 100));
+  assert.equal(loads, before + 1, 'and reloads by itself once the dialog is closed');
   await context.close();
+}
+
+// Newer code was seen while a field was in use, so the reload waits. Another device saves,
+// and the person leaves the field while this page is reading the Mac's copy: what was
+// entered must be kept for the new code, not saved by the old.
+async function anOlderPageDoesNotSaveOnceAfterTheCodeChanged() {
+  step('coderace');
+  const [first] = await makeProperties('coderace');
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  let served = 'aaaaaaaaaaaaaaaa';
+  await context.route(url + '/api/workspace/head', async route => {
+    const answer = await route.fetch(), body = await answer.json();
+    return route.fulfill({ response: answer, json: { ...body, codeVersion: served } });
+  });
+  let holdReads = false, reading = false, release; const go = new Promise(r => { release = r; });
+  await context.route(url + '/api/workspace', async route => {
+    if (route.request().method() !== 'GET' || !holdReads) return route.continue();
+    reading = true; await go; return route.continue();
+  });
+  const page = await context.newPage();
+  page.on('pageerror', e => errors.push(e.message));
+  let loads = 0; page.on('load', () => { loads++; });
+  const saves = []; page.on('request', r => { if (r.method() === 'PUT' && new URL(r.url()).pathname === '/api/workspace') saves.push(r.postData()); });
+  await page.goto(url + '/#/plan'); await page.waitForFunction(SAVED, null, { timeout: 60000 });
+  await look(page, first);
+  await saveNow(page); await page.waitForFunction(SAVED);
+  const name = page.locator('[data-prop-name]');
+  await name.click(); await name.fill('Harbour house, entered during the read');
+  served = 'bbbbbbbbbbbbbbbb';
+  await page.waitForTimeout(6000);   // two looks: the newer code is seen, the reload waits
+  assert.equal(loads, 1);
+  // Another device saves; this page starts reading the Mac's copy, and the field is left meanwhile.
+  holdReads = true;
+  const other = await device(); await look(other, first);
+  await edit(other, first, { notes: 'Saved by the other device' }); await saveNow(other);
+  for (const end = Date.now() + 15000; !reading && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
+  assert.equal(reading, true, 'the page is reading the Mac\'s copy');
+  await name.blur();
+  release();
+  await page.waitForFunction(() => /kept and is sent after the reload/.test(document.querySelector('#save-status').title), null, { timeout: 20000 });
+  await page.waitForTimeout(4000);
+  assert.equal(saves.filter(body => /entered during the read/.test(body)).length, 0, 'the page on older code sends no save');
+  assert.notEqual(prop(await mac(), first).name, 'Harbour house, entered during the read');
+  assert.equal(loads, 1);
+  await page.reload();
+  const copy = await untilOnTheMac(c => prop(c, first).name === 'Harbour house, entered during the read', 'The name entered while the copy was read');
+  assert.equal(prop(copy, first).notes, 'Saved by the other device', 'with the other device\'s change beside it');
+  await other.context().close(); await context.close();
+}
+
+// A photo is being taken, or one just taken is being read: nothing is unsaved yet, and a
+// reload for new code would lose the photo. The page waits, and the photo arrives.
+async function aPhotoOnItsWayInHoldsTheReloadOff() {
+  step('camera');
+  const [first] = await makeProperties('camera');
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  let served = 'aaaaaaaaaaaaaaaa';
+  await context.route(url + '/api/workspace/head', async route => {
+    const answer = await route.fetch(), body = await answer.json();
+    return route.fulfill({ response: answer, json: { ...body, codeVersion: served } });
+  });
+  const page = await context.newPage();
+  page.on('pageerror', e => errors.push(e.message));
+  let loads = 0; page.on('load', () => { loads++; });
+  await page.goto(url + '/#/photos'); await page.waitForFunction(SAVED, null, { timeout: 60000 });
+  await look(page, first);
+  await saveNow(page); await page.waitForFunction(SAVED);
+  // 1. The camera was opened and has not answered yet. (The test holds the chooser open.)
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.locator('button[data-act="camera"]').first().click()]);
+  served = 'bbbbbbbbbbbbbbbb';
+  await page.waitForTimeout(9000);   // three looks at the Mac
+  assert.equal(loads, 1, 'the page is not reloaded while the camera is open');
+  // 2. The photo comes back and is slow to read: still nothing unsaved, still no reload.
+  await page.evaluate(async () => {
+    (await import('/js/work-in-progress.js')).workLimits.handingMs = 0;   // only the import itself counts from here
+    const real = window.createImageBitmap;
+    window.createImageBitmap = async (...args) => { await new Promise(r => { window.letDecode = r; }); return real(...args); };
+  });
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP8z8Dwn4GBgYGJAQoAHxcCAr7oHdkAAAAASUVORK5CYII=', 'base64');
+  await chooser.setFiles({ name: 'taken-just-now.png', mimeType: 'image/png', buffer: png });
+  await until(page, () => typeof window.letDecode === 'function', null, 'the photo being read');
+  await page.waitForTimeout(9000);
+  assert.equal(loads, 1, 'nor while the photo just taken is being read');
+  assert.equal(await page.evaluate(async id => (await import('/js/store.js')).ws.data.properties.find(p => p.id === id).photos.length, first), 0);
+  await page.evaluate(() => window.letDecode());
+  // It is an edit made on the older code: kept, and sent by the new code after the reload.
+  await page.waitForFunction(() => /kept and is sent after the reload/.test(document.querySelector('#save-status').title), null, { timeout: 20000 });
+  assert.equal(loads, 1);
+  await page.reload();
+  const copy = await untilOnTheMac(c => prop(c, first).photos.some(p => p.name === 'taken-just-now.png'), 'The photo taken while the code changed');
+  const photo = prop(copy, first).photos.find(p => p.name === 'taken-just-now.png');
+  assert.equal(copy.assets[photo.id]?.size, png.length, 'with its original');
+  await context.close();
+}
+
+// The copy on the Mac was saved with a newer data version while someone has the cursor in a
+// field here: the page must not reload under them for that either.
+async function aNewerCopyWaitsForTheFieldInUse() {
+  step('olderfield');
+  const [first] = await makeProperties('olderfield');
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  let future = false, reads = 0;
+  await context.route(url + '/api/workspace', async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const answer = await route.fetch(), body = await answer.json();
+    if (future) { reads++; if (body.data) body.data.version = 99; }
+    return route.fulfill({ response: answer, json: body });
+  });
+  const page = await context.newPage();
+  page.on('pageerror', e => errors.push(e.message));
+  let loads = 0; page.on('load', () => { loads++; });
+  await page.goto(url + '/#/plan'); await page.waitForFunction(SAVED, null, { timeout: 60000 });
+  await look(page, first);
+  await saveNow(page); await page.waitForFunction(SAVED);
+  const name = page.locator('[data-prop-name]');
+  await name.click(); await name.fill('Harbour house, typed under a newer copy');
+  future = true;
+  const other = await device(); await look(other, first);
+  await edit(other, first, { notes: 'Saved by a later Tiksi' }); await saveNow(other);
+  await page.waitForTimeout(10000);   // several looks at the Mac
+  assert.equal(loads, 1, 'the page is not reloaded for a newer copy while a text field has the cursor');
+  assert.equal(await name.inputValue(), 'Harbour house, typed under a newer copy', 'what was typed is still in the field');
+  assert.ok(reads <= 1, 'and the copy is not read again at every look (' + reads + ' reads)');
+  // Leaving the field enters the name: an edit this page may not save, kept for the newer code.
+  await name.blur();
+  await page.waitForFunction(() => /kept and is sent after the reload/.test(document.querySelector('#save-status').title), null, { timeout: 20000 });
+  assert.match(await page.evaluate(() => document.querySelector('#save-status').textContent), /older Tiksi/i);
+  assert.equal(loads, 1);
+  assert.notEqual(prop(await mac(), first).name, 'Harbour house, typed under a newer copy');
+  await other.context().close(); await context.close();
+}
+
+// A save is on its way, with another device's change in it, when a wall starts to be dragged.
+// The drag is still moving when the save is answered and the two are merged: the wall must
+// not be merged, and saved, where it happened to be.
+async function aDragBegunDuringASaveIsPutBack() {
+  step('dragsave');
+  const [first] = await makeProperties('dragsave');
+  const one = await device(), two = await device();
+  await look(one, first); await look(two, first);
+  const canvas = two.locator('.plan-canvas canvas');
+  await canvas.waitFor();
+  await two.evaluate(() => Promise.all(document.getAnimations().filter(a => a.animationName === 'view-in').map(a => a.finished)));
+  await two.keyboard.press('f');
+  await two.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const RULER = 22, box = await canvas.boundingBox(), wrap = await two.locator('.plan-canvas').evaluate(e => ({ w: e.clientWidth, h: e.clientHeight }));
+  const w = wrap.w - RULER, h = wrap.h - RULER, zoom = Math.min(w / (5 * 1.22), h / (3.5 * 1.22), 250);
+  const panX = -(w / zoom - 5) / 2 - RULER / zoom, panY = -(h / zoom - 3.5) / 2 - RULER / zoom;
+  const at = (x, y) => [box.x + (x - panX) * zoom, box.y + (y - panY) * zoom];
+  const wall = (page, id) => page.evaluate(async ([prop, id]) => { const w = (await import('/js/store.js')).ws.data.properties.find(p => p.id === prop).walls.find(w => w.id === id); return [w.ax, w.ay, w.bx, w.by]; }, [first, id]);
+  // Device two sees nothing of the Mac for a moment; device one saves a change meanwhile.
+  let blind = true, seeAgain; const sees = new Promise(r => { seeAgain = r; });
+  await two.route(url + '/api/workspace/head', async route => { if (blind) await sees; return route.continue(); });
+  let held = false, release; const go = new Promise(r => { release = r; });
+  await two.route(url + '/api/workspace', async route => {
+    if (route.request().method() !== 'PUT' || held) return route.continue();
+    held = true; await go; return route.continue();
+  });
+  await two.waitForTimeout(3000);   // any look already on its way has ended
+  await one.evaluate(async id => { const s = await import('/js/store.js'); const w = s.ws.data.properties.find(p => p.id === id).walls.find(w => w.id === 'w-w'); w.ax = -1; w.bx = -1; s.touch(); }, first);
+  await saveNow(one); await one.waitForFunction(SAVED);
+  // Device two has an edit of its own: its next save reads device one's change and is sent.
+  await edit(two, first, { notes: 'An edit sent together with the other device\'s change' });
+  blind = false; seeAgain();
+  for (const end = Date.now() + 15000; !held && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
+  assert.equal(held, true, 'the save is on its way');
+  // Now the east wall is dragged, and is still held when the save is answered.
+  await two.mouse.move(...at(5, 1.75)); await two.mouse.down();
+  await two.mouse.move(...at(5.6, 1.75), { steps: 8 });
+  assert.ok((await wall(two, 'w-e'))[0] > 5.2, 'the east wall is being dragged');
+  release();
+  await has(two, first, 'p.walls.find(w => w.id === "w-w").ax === -1');
+  await two.waitForTimeout(1500);
+  await two.mouse.up();
+  await saveNow(two); await two.waitForFunction(SAVED, null, { timeout: 30000 });
+  await two.waitForTimeout(3500); await two.waitForFunction(SAVED, null, { timeout: 30000 });
+  const saved = prop(await mac(), first);
+  assert.deepEqual([saved.walls.find(w => w.id === 'w-e').ax, saved.walls.find(w => w.id === 'w-e').bx], [5, 5], 'the half-dragged wall is back where it was, on the Mac too');
+  assert.deepEqual(await wall(two, 'w-e'), [5, 0, 5, 3.5]);
+  assert.equal(saved.walls.find(w => w.id === 'w-w').ax, -1, 'and the other device\'s change that came with the save is still there');
+  assert.equal(saved.notes, 'An edit sent together with the other device\'s change');
+  await one.context().close(); await two.context().close();
 }
 
 // On the Mac's own browser, which keeps nothing as a rule: an original is added while a save
@@ -1023,7 +1225,7 @@ async function anOriginalAddedBeforeARefusalIsKept() {
 }
 
 const parts = { view: eachDeviceKeepsItsOwnView, typing: aSaveElsewhereLeavesThePageAlone, slow: aSlowActionWritesIntoTheLiveRecord, nested: aNestedRecordStaysTheLiveOne, drag: undoAfterAnInterruptedDragKeepsTheOtherDevicesChange, onepager: theOnePagerEditorKeepsWhatIsTyped, conflict: theCopiesDifferQuestionSaysWhatDiffers, older: anOlderTabDoesNotSaveOverANewerCopy,
-  drafts: twoDraftsAreNotAConflict, unavailable: aProjectWithAMissingFileIsShown, import: aProjectFileAsksBeforeItReplaces, error: aPageThatFailsToOpenSaysSo, saveid: aKeptCopyTheMacAlreadyHasIsNotSentAgain, undone: recordsThatEqualAnEarlierSaveAreStillSent, code: aPageOnOlderCodeReloadsOrStopsSaving, codetyping: aCodeChangeWaitsForTheFieldInUse, codeoriginal: anOriginalAddedBeforeARefusalIsKept,
+  drafts: twoDraftsAreNotAConflict, unavailable: aProjectWithAMissingFileIsShown, import: aProjectFileAsksBeforeItReplaces, error: aPageThatFailsToOpenSaysSo, saveid: aKeptCopyTheMacAlreadyHasIsNotSentAgain, undone: recordsThatEqualAnEarlierSaveAreStillSent, code: aPageOnOlderCodeReloadsOrStopsSaving, codetyping: aCodeChangeWaitsForTheFieldInUse, coderace: anOlderPageDoesNotSaveOnceAfterTheCodeChanged, camera: aPhotoOnItsWayInHoldsTheReloadOff, olderfield: aNewerCopyWaitsForTheFieldInUse, dragsave: aDragBegunDuringASaveIsPutBack, codeoriginal: anOriginalAddedBeforeARefusalIsKept,
   originals: originalsAreNotDownloadedAndHeldForEver, pictures: theFirstScreenDoesNotWaitForEveryPicture, stored: anUnreadableStoredWorkspaceIsLeftAsItIs, model: modelKeepsItsCamera };
 
 try {

@@ -17,6 +17,7 @@ import { uid, touch, putFile, getFile, deleteFile, materialById, ws } from './st
 import { isLAS, lasHeader, parsePLYHeader, parseAndRecentre, recentre } from './las.js';
 import { makePointCloud, updatePointCloud, decimate, fromGeometry } from './pointcloud.js';
 import { ensureSpark, loadSplat, disposeSplat, splatBounds, splatDrawables, splatBusy, releaseSplatRenderer } from './splats.js';
+import { working } from './work-in-progress.js';
 
 export { splatDrawables, splatBusy, releaseSplatRenderer };
 
@@ -107,14 +108,16 @@ export async function importScanFile(file, prop, hooks, extra) {
   const name = file.name;
   const progress = (l, f) => hooks && hooks.progress && hooks.progress(l, f);
   progress('Reading ' + name, 0.1);
-  const buffer = await file.arrayBuffer();
+  const buffer = await working(file.arrayBuffer());
   return importScanBytes(buffer, name, prop, hooks, extra);
 }
 
 // Same contract for bytes that did not arrive as a File (a download from a share link).
 // `extra` is merged into the record (a source link, for instance). Throws on a file the
 // sniffer refuses; returns null for a supported-but-not-yet type after a toast.
-export async function importScanBytes(buffer, name, prop, hooks, extra) {
+// (Counted as work in progress until the scan is in the store: see work-in-progress.js.)
+export function importScanBytes(buffer, name, prop, hooks, extra) { return working(importBytes(buffer, name, prop, hooks, extra)); }
+async function importBytes(buffer, name, prop, hooks, extra) {
   const progress = (l, f) => hooks && hooks.progress && hooks.progress(l, f);
   const signal = hooks && hooks.signal;
   const cancelled = () => { if (signal && signal.aborted) throw signal.reason || new Error('Import cancelled'); };

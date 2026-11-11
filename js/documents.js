@@ -9,6 +9,7 @@
 import { uid, touch, putFile, storeThumb } from './store.js';
 import { photoBytes } from './photos-store.js';
 import { pointsToMetres, DOCUMENT_DEFAULT_WIDTH } from './pins.js';
+import { working } from './work-in-progress.js';
 
 const THUMB_MAX = 360;
 let pdfjs = null;
@@ -63,7 +64,9 @@ function thumbOf(canvasOrImg, w, h) {
 }
 
 // Add a PDF or an image as a document. Returns the new record (unpinned).
-export async function addDocumentFromFile(prop, file) {
+// (Counted as work in progress from the first byte read: see work-in-progress.js.)
+export function addDocumentFromFile(prop, file) { return working(addDocument(prop, file)); }
+async function addDocument(prop, file) {
   const buffer = await file.arrayBuffer();
   const name = file.name || 'Document';
   const id = uid('ph');

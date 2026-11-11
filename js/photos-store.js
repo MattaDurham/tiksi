@@ -13,6 +13,7 @@
 
 import { uid, touch, putFile, getFile, deleteFile, storeThumb, deleteThumb } from './store.js';
 import { readExif, lensFromExif } from './photo-exif.js';
+import { working } from './work-in-progress.js';
 
 const THUMB_MAX = 360;
 // Object URLs for full-resolution images. Each one pins a Blob copy of the IndexedDB buffer
@@ -46,7 +47,9 @@ async function decode(file) {
 export function isPanoramaAspect(w, h) { return Math.abs(w / h - 2) < 0.12; }
 
 // Add a photo (File or Blob) to a property. Returns the new record.
-export async function addPhotoFromFile(prop, file, opts) {
+// (Counted as work in progress from the first byte read: see work-in-progress.js.)
+export function addPhotoFromFile(prop, file, opts) { return working(addPhoto(prop, file, opts)); }
+async function addPhoto(prop, file, opts) {
   opts = opts || {};
   const img = await decode(file);
   const w = img.width, h = img.height;

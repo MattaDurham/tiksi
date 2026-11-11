@@ -7,6 +7,7 @@
 //   [{ t, score, area, elongation, box }], error, analyzedAt } }
 
 import { ws, uid, touch, putFile, getFile, deleteFile } from './store.js';
+import { working } from './work-in-progress.js';
 
 export const VIDEO_ACCEPT = '.mp4,.mov,.m4v,video/mp4,video/quicktime,video/x-m4v';
 export const MAX_VIDEO_BYTES = 600 * 1024 * 1024;   // the project asset limit
@@ -22,7 +23,9 @@ export function isVideoFile(file) {
 
 // Refuses honestly what Tiksi cannot read; keeps everything it can (even a video this browser
 // cannot play: the frame service may still decode it).
-export async function addVideoFromFile(prop, file) {
+// (Counted as work in progress from the first byte read: see work-in-progress.js.)
+export function addVideoFromFile(prop, file) { return working(addVideo(prop, file)); }
+async function addVideo(prop, file) {
   const kind = ext(file.name);
   if (!MIME_BY_EXT[kind] && !['video/mp4', 'video/quicktime', 'video/x-m4v'].includes(file.type)) throw new Error(file.name + ': only MP4 and MOV videos are supported (convert it to MP4 first)');
   if (file.size > MAX_VIDEO_BYTES) throw new Error(file.name + ': videos over 600 MB cannot be kept in a project; trim it or export it at a lower resolution');

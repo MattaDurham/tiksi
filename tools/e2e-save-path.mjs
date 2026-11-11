@@ -363,6 +363,33 @@ async function largeOriginalsGoInPiecesAndResume() {
   await page.waitForFunction(SAVED, null, { timeout: 30000 });
   assert.equal((await onTheMac()).assets.refused?.size, 250000);
   await page.unroute('**/api/workspace/uploads/*');
+
+  // 4b. The Mac refuses a piece before it has read it, and closes the connection. The browser
+  // then reports a request that failed, though the status, and here the Mac's sentence, did
+  // arrive: the status bar must say what the Mac said, not that the Mac cannot be reached.
+  await page.evaluate(() => {
+    const Real = window.XMLHttpRequest;
+    window.cutShort = { status: 507, text: JSON.stringify({ error: "The Mac's disk is nearly full; this piece was not accepted. Make room on the Mac and send it again" }) };
+    window.XMLHttpRequest = class extends Real {
+      open(method, url, ...rest) { this.cut = method === 'PUT' && /\/api\/workspace\/uploads\//.test(url) && window.cutShort; return super.open(method, url, ...rest); }
+      send(body) {
+        if (!this.cut) return super.send(body);
+        const now = (readyState, status, responseText) => { for (const [key, value] of Object.entries({ readyState, status, responseText })) Object.defineProperty(this, key, { value, configurable: true }); this.onreadystatechange?.(); };
+        setTimeout(() => { now(2, this.cut.status, ''); now(3, this.cut.status, this.cut.text); now(4, 0, ''); this.onerror?.(); }, 20);
+      }
+    };
+  });
+  await page.evaluate(() => window.addOriginal('cut-short', 250000, 5));
+  await page.waitForFunction(() => /disk is nearly full/.test(document.querySelector('#save-status').textContent), null, { timeout: 30000 });
+  line = await statusLine();
+  assert.equal(line.kind, 'waiting'); assert.match(line.detail, /Make room on the Mac/, 'a refusal that arrived before the connection closed is shown in the Mac\'s words');
+  // Only the status arrived, without its sentence: the page still says which refusal it was.
+  await page.evaluate(() => { window.cutShort = { status: 429, text: '' }; });
+  await page.waitForFunction(() => /too many unfinished uploads/.test(document.querySelector('#save-status').textContent), null, { timeout: 60000 });
+  assert.doesNotMatch((await statusLine()).text, /CANNOT REACH/);
+  await page.evaluate(() => { window.cutShort = null; });
+  await page.waitForFunction(SAVED, null, { timeout: 90000 });
+  assert.equal((await onTheMac()).assets['cut-short']?.size, 250000);
   await context.close();
 
   // 5. A Mac that does not take pieces and cannot say what it holds (an older Tiksi on it):

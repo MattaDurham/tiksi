@@ -7,6 +7,7 @@ import { pictureFiles, pictureRefs, mapStrings } from './picture-assets.js';
 import { unsentStore } from './unsent.js';
 import { touchDevice } from './render-quality.js';
 import { sha256 } from './sha256.js';
+import { workInProgress } from './work-in-progress.js';
 
 export let diskWorkspace = null;
 // A JSON-shaped copy whose objects are all new; strings are immutable and shared.
@@ -53,14 +54,24 @@ function sendBody(url, method, headers, body) {
     const xhr = new XMLHttpRequest();
     let timer, waited = 0;
     const watch = ms => { clearTimeout(timer); waited = ms; timer = setTimeout(() => xhr.abort(), ms); };
-    xhr.open(method, url); xhr.responseType = 'arraybuffer';
+    xhr.open(method, url);   // (every answer to a request with a body is JSON text)
     for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
     xhr.upload.onprogress = () => watch(transferLimits.stallMs);
     xhr.upload.onload = () => watch(transferLimits.answerMs);
     xhr.onprogress = () => watch(transferLimits.stallMs);
-    xhr.onload = () => { clearTimeout(timer); resolve(answer(xhr.status, xhr.response)); };
-    xhr.onerror = () => { clearTimeout(timer); reject(new TypeError('Could not reach the Mac')); };
-    xhr.onabort = () => { clearTimeout(timer); reject(stalled(waited)); };
+    // The Mac may refuse before it has read the whole body and close the connection: the
+    // browser then reports a failed request although the status, and often the sentence
+    // with it, arrived. Both are noted as they come in, and such an answer is the answer.
+    const bytes = text => new TextEncoder().encode(text || '').buffer;
+    let said = 0, words = '';
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState < 2) return;
+      try { if (xhr.status) said = xhr.status; if (xhr.responseText) words = xhr.responseText; } catch (ignored) {}
+    };
+    const refusedEarly = () => said >= 400 ? answer(said, bytes(words)) : null;
+    xhr.onload = () => { clearTimeout(timer); resolve(answer(xhr.status, bytes(xhr.responseText))); };
+    xhr.onerror = () => { clearTimeout(timer); const early = refusedEarly(); if (early) resolve(early); else reject(new TypeError('Could not reach the Mac')); };
+    xhr.onabort = () => { clearTimeout(timer); const early = refusedEarly(); if (early) resolve(early); else reject(stalled(waited)); };
     watch(transferLimits.stallMs); xhr.send(body);
   });
 }
@@ -247,9 +258,13 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
         ' too large to keep in this browser: after the reload ' + (only.length === 1 ? 'it has' : 'they have') + ' to be added again'));
     error.status = 426; throw error;
   }
+  // In use: a text field with the cursor, an open dialog, or work that is in the page and not
+  // yet in the store (a photo just taken being read, an opened camera: work-in-progress.js).
+  // None of it shows as unsaved, and all of it would be gone with a reload.
+  const fieldInUse = a => !!a && (a.isContentEditable || a.matches('textarea, input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=button]):not([type=file]):not([type=color])'));
   const inUse = () => {
     const a = document.activeElement;
-    return !!document.querySelector('dialog[open]') || !!a && (a.isContentEditable || a.matches('textarea, input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=button]):not([type=file]):not([type=color])'));
+    return !!document.querySelector('dialog[open]') || fieldInUse(a) || workInProgress();
   };
   async function refuseIfOlder(...copies) {
     const newest = Math.max(0, ...copies.map(c => Number(c && c.version) || 0));
@@ -258,10 +273,15 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   // The Mac says which code it serves with every look at the workspace (a Mac that does not
   // sends nothing, and nothing happens). When that changes under an open page: with nothing
   // unsaved the page loads the new code at once; otherwise it stops saving and says so.
+  // `newerCode` is true from the first such look on: the reload may have to wait (below), and
+  // until it happens this page saves nothing, whatever becomes unsaved in the meantime.
+  const CODE_CHANGED = 'Tiksi on the Mac was updated while this tab was open. Reload this tab to go on';
+  let newerCode = false;
   async function codeServed(version) {
     if (typeof version !== 'string' || !version) return;
     if (!codeAtLoad) { codeAtLoad = version; return; }
-    if (version === codeAtLoad) return;
+    newerCode = version !== codeAtLoad;
+    if (!newerCode) return;
     if (!pending) {
       // Nothing unsaved in the records, but a text field with the cursor or an open dialog may
       // hold what was typed and not yet entered: wait until it is left. What is entered then
@@ -269,7 +289,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       if (inUse()) return;
       location.reload(); await new Promise(() => {});
     }
-    await refuse('code', 'Tiksi on the Mac was updated while this tab was open. Reload this tab to go on');
+    await refuse('code', CODE_CHANGED);
   }
   // Every save carries an id of its own, 128 random bits, so a Mac that keeps save ids can
   // say later whether a save arrived (the reply may never have reached a page that was then
@@ -307,6 +327,8 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   // Bring the kept copy up to date: the last copy agreed with the Mac, this page's records
   // as they would be saved, and which originals the Mac already holds. Nothing is written
   // when nothing changed since the last time, and nothing is kept once the Mac has it all.
+  // What the kept copy was last written from: it is up to date while this reads the same.
+  const markNow = () => [edits, pending, changedFiles.size, heldByMac.size, mine.size, notKept.size, lastSent ? lastSent.ids.length : 0, !!stale].join('|');
   function keepUnsent() {
     if (!unsent) return Promise.resolve();
     clearTimeout(keepTimer);
@@ -318,7 +340,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
         for (const id of [...notKept.keys()]) if (!changedFiles.has(id)) notKept.delete(id);
         // A page that must not save (see `stale`) keeps against what its own code makes of the
         // agreed copy, so only what was changed here is kept, not what its loading tidied.
-        const mark = [edits, pending, changedFiles.size, heldByMac.size, mine.size, notKept.size, lastSent ? lastSent.ids.length : 0, !!stale].join('|'), agreed = stale && stale.base || base;
+        const mark = markNow(), agreed = stale && stale.base || base;
         if (mark === keptMark && keptBase === agreed) continue;
         // While an older browser store is still being moved to the Mac, that store is the kept
         // copy. Without an agreed copy there is nothing to merge a kept one against later.
@@ -380,9 +402,9 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     }
     if (!r.ok) {
       let message = 'Project-file request failed (' + r.status + ')', code;
-      let received;
-      try { const body = await r.json(); message = body.error || message; code = body.code; received = body.received; } catch (ignored) {}
-      const error = new Error(message); error.status = r.status; error.code = code; error.received = received; throw error;
+      let received, unsaid = true;
+      try { const body = await r.json(); unsaid = !body.error; message = body.error || message; code = body.code; received = body.received; } catch (ignored) {}
+      const error = new Error(message); error.status = r.status; error.code = code; error.received = received; error.unsaid = unsaid; throw error;
     }
     return r;
   }
@@ -536,6 +558,9 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   // Send one original in pieces. The Mac is asked first how far an earlier try got, and the
   // sending goes on from there. Once the last byte is in, the Mac checks the whole against
   // its hash: if that fails the upload starts again once, and a second failure is reported.
+  const PIECE_REFUSED = { 409: 'The Mac is taking this original from another page; it is asked again shortly',
+    429: 'The Mac has too many unfinished uploads; this original is sent when there is room',
+    507: 'The Mac’s disk is nearly full; this original was not accepted. Make room on the Mac and it is sent again' };
   async function sendInPieces(hash, local, secondTry = false) {
     const buffer = local.buffer, size = buffer.byteLength;
     let state = await (await request('/uploads/' + hash)).json();
@@ -546,6 +571,8 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       catch (error) {
         // The Mac has a different amount than this page thought: go on from what it has.
         if (error.code === 'upload-offset' && Number.isInteger(error.received) && corrections++ < 5) { at = error.received; continue; }
+        // The status arrived without its sentence (the Mac closed the connection first).
+        if (error.unsaid && PIECE_REFUSED[error.status]) error.message = PIECE_REFUSED[error.status];
         if (error.status !== 422) throw error;
         if (!secondTry) return sendInPieces(hash, local, true);
         const damaged = new Error((local.name || 'An original') + ' did not arrive on the Mac intact, twice. It is not saved: add it again, or send it over another connection');
@@ -665,11 +692,25 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     try { await finishBrowserMigration(); cleanupNotice = false; }
     catch (error) { cleanupNotice = true; console.warn(error); }
   }
+  // Another device's changes are about to be merged into the open records: a page with
+  // something half done on a property they touch (a wall being dragged in PLAN) puts it back
+  // first. Called with nothing between it and the merge that follows, each time: a drag
+  // begun after an earlier call would otherwise be merged, and saved, where it happened to be.
+  function arriving(incoming, held) {
+    if (!incoming || !held || !Array.isArray(incoming.properties) || !Array.isArray(held.properties)) return;
+    const before = new Map(held.properties.map(p => [p.id, p]));
+    const ids = new Set(incoming.properties.filter(p => !before.has(p.id) || !sameJson(before.get(p.id), p)).map(p => p.id));
+    if (ids.size) sharedArriving(ids);
+  }
+  let waitingForUse = null;
   async function cycle() {
     round++; reusedEarlier = false;
     await whenHydrated();
     const head = await (await request('/head')).json();
     await codeServed(head.codeVersion);
+    // A newer copy that waits for the field in use is not read again at every look.
+    if (!pending && waitingForUse === head.revision && inUse()) return;
+    waitingForUse = null;
     if (!pending && head.revision === revision) {
       if (cleanupNotice) {
         await cleanupMigration();
@@ -685,23 +726,38 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       paths = remote.paths || {};
       noteUnavailable(remote.unavailable);
       // A page with something half done on a property this change touches puts it back now.
-      if (remote.data && base) {
-        const agreed = new Map(base.data.properties.map(p => [p.id, p]));
-        sharedArriving(new Set(remote.data.properties.filter(p => !agreed.has(p.id) || !sameJson(agreed.get(p.id), p)).map(p => p.id)));
-      }
+      if (remote.data && base) arriving(remote.data, base.data);
       if (!pending && remote.data) {
-        // Nothing unsaved here and the saved copy is from newer code: load that code, once.
-        if (Number(remote.data.version) > ownVersion && reloadOnceFor(remote.data.version)) return;
+        // Nothing unsaved here and the saved copy is from newer code: load that code, once,
+        // but not under a field in use (see `inUse`). The copy is looked at again when the
+        // field is left: with nothing entered the page reloads then, and what was entered is
+        // refused below and kept.
+        if (Number(remote.data.version) > ownVersion) {
+          if (inUse()) { waitingForUse = head.revision; return; }
+          if (reloadOnceFor(remote.data.version)) return;
+        }
         await fetchPictures(remote.data, remote.assets);
+        // (Again: a drag begun while the pictures were read. Putting it back is an edit, and
+        // the copy is then merged below instead of taken whole.)
+        if (base) arriving(remote.data, base.data);
         if (!pending) {
           revision = remote.revision; assets = remote.assets; base = { data: remote.data, assets }; lastSent = null;
           await apply(remote.data); status('SAVED TO DISK'); return;
         }
       }
     }
+    // Newer code was seen and the reload had to wait for a field in use: what has become
+    // unsaved since (the field was left while the Mac's copy was being read) is kept, not sent.
+    if (newerCode) await refuse('code', CODE_CHANGED);
     await refuseIfOlder(remote && remote.data, base && base.data);
     const remoteRevision = remote ? remote.revision : revision;
-    const saved = pictures ? await pictures.slimStored(() => ws.data) : { data: copy(ws.data) };
+    let saved = pictures ? await pictures.slimStored(() => ws.data) : { data: copy(ws.data) };
+    // (Once more before the records are taken for the save: new pictures may have been
+    // stored meanwhile, and a drag begun in that time must not be sent where it happens to be.)
+    if (remote && remote.data && base) {
+      const was = edits; arriving(remote.data, base.data);
+      if (edits !== was) saved = pictures ? await pictures.slimStored(() => ws.data) : { data: copy(ws.data) };
+    }
     const sentData = view.shared(saved.data, base?.data);
     const uploadedFiles = new Map();
     const sentAssets = { ...await fileManifest(sentData, assets, listAllFileIds(sentData), uploadedFiles), ...pictureAssets(sentData) };
@@ -765,6 +821,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
           base = remoteState; assets = accepted.assets; lastSent = null;
           for (const [id, buffer] of uploadedFiles) if (accepted.assets[id]?.hash !== sentAssets[id]?.hash && (await getCachedFile(id))?.buffer === buffer) { changedFiles.delete(id); heldByMac.delete(id); }
           await fetchPictures(accepted.data, accepted.assets);
+          if (remote && remote.data) arriving(accepted.data, sentData);
           const current = savedFormNow(), retry = mergeShared(sentData, current, accepted.data).value;
           if (!sameJson(retry, current)) await apply(retry);
         } finally { settling = false; }
@@ -787,6 +844,8 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
         if (buffer.byteLength > originalLimits.fileBytes) deleteFiles([id]); else holdOriginal(id, buffer.byteLength);
       }
       await fetchPictures(accepted.data, accepted.assets);
+      // (Only when this round merged a copy from elsewhere: a drag over a plain save goes on.)
+      if (remote && remote.data) arriving(accepted.data, sentData);
       current = savedFormNow();
       const after = mergeShared(sentData, current, accepted.data);
       pending = !sameJson(after.value, accepted.data) || listAllFileIds(after.value).some(id => changedFiles.has(id));
@@ -1064,6 +1123,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
         // difference is then put to the person instead of being decided either way.
         base = kept.base || undefined; lastSent = null;
         assets = kept.assets || {}; revision = -1; savedSlices = { revision: -1, json: {} };
+        sharedArriving(new Set(kept.local.properties.map(p => p.id)));   // (a drag in progress is put back first)
         await apply(kept.local);
         pending = true; edits++; replaying = true; status(savingText(), true);
       } finally { taking = false; }
@@ -1141,7 +1201,16 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   };
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') tryNow(); else leaving(); });
   window.addEventListener('pagehide', leaving);
-  // (A page that was told to reload and has kept what was changed loses nothing by leaving.)
-  window.addEventListener('beforeunload', e => { if (pending && !(stale && keptHere && !onlyHere().length)) { e.preventDefault(); e.returnValue = ''; } });
+  window.addEventListener('beforeunload', e => {
+    // A page that was told to reload, with the cursor still in a text field: what was typed
+    // there is entered first, as an edit like any other, so it is kept and not silently lost.
+    const told = stale || newerCode, field = document.activeElement;
+    if (told && fieldInUse(field)) field.blur();
+    // A page that was told to reload and has kept everything changed here loses nothing by
+    // leaving. One whose kept copy is not yet up to date (the edit entered just now), or
+    // with a dialog still open, asks first; the copy is brought up to date meanwhile.
+    const kept = stale && keptHere && keptMark === markNow() && !onlyHere().length;
+    if (pending && !kept || told && document.querySelector('dialog[open]')) { if (pending) keepUnsent(); e.preventDefault(); e.returnValue = ''; }
+  });
   return diskWorkspace;
 }
