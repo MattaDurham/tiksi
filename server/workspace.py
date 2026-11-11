@@ -225,6 +225,9 @@ class WorkspaceService:
         (self.root / 'uploads').mkdir(exist_ok=True)
         self.lock = threading.RLock()
         self.upload_locks = {}
+        # Held while an upload checks for room and takes its place, so two starting at once
+        # cannot both take the last one.
+        self.upload_room = threading.Lock()
         self.jobs = 0
         self.token = secrets.token_urlsafe(32)
         identity = self.root / 'identity'
@@ -640,13 +643,14 @@ class WorkspaceService:
             received, declared = self.upload_state(digest)
             if declared != size:
                 # A new upload, or one that changed its declared size: it starts again, if there is room.
-                self.expire_uploads()
-                others = [n for n in (self.root / 'uploads').glob('*.json') if n != note]
-                total = sum(self.upload_state(n.stem)[1] or 0 for n in others) + size
-                if len(others) >= MAX_UPLOADS or total > UPLOAD_TOTAL:
-                    raise WorkspaceError('The Mac already has %d unfinished uploads declaring %d MB; finish or wait for those first' % (len(others), (total - size) // 2 ** 20), 429)
-                part.unlink(missing_ok=True); received = 0
-                write_whole(note, json.dumps({'size': size}).encode('utf-8'))
+                with self.upload_room:
+                    self.expire_uploads()
+                    others = [n for n in (self.root / 'uploads').glob('*.json') if n != note]
+                    total = sum(self.upload_state(n.stem)[1] or 0 for n in others) + size
+                    if len(others) >= MAX_UPLOADS or total > UPLOAD_TOTAL:
+                        raise WorkspaceError('The Mac already has %d unfinished uploads declaring %d MB; finish or wait for those first' % (len(others), (total - size) // 2 ** 20), 429)
+                    part.unlink(missing_ok=True); received = 0
+                    write_whole(note, json.dumps({'size': size}).encode('utf-8'))
             if offset != received:
                 error = WorkspaceError('The upload has ' + str(received) + ' bytes; send from there', 409)
                 error.code, error.received = 'upload-offset', received
