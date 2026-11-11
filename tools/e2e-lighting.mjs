@@ -1,7 +1,8 @@
 // MODEL's lighting: a SketchUp-style model (no normals in its geometry, every face two-sided)
-// must not go dark each time the camera stops, and the LIGHT panel's presets and sliders must
-// change the picture and be saved with the property. Synthetic room; isolated browser storage
-// and an ephemeral HTTP port.
+// must not go dark each time the camera stops; a hidden ceiling must still keep the sun out;
+// the light fixtures drawn in the model light it after dark; and the LIGHT panel's presets and
+// sliders must change the picture and be saved with the property. Synthetic room; isolated
+// browser storage and an ephemeral HTTP port.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
@@ -57,6 +58,14 @@ try {
     box(1.2, 0.9, 0.1, 3, 0.45, 0, '#ece8df', 'Sill'); box(1.2, 0.5, 0.1, 3, 2.35, 0, '#ece8df', 'Head');
     box(2.2, 0.8, 0.9, 1.5, 0.4, 4.4, '#6d6a64', 'Sofa'); box(1.2, 0.45, 0.7, 1.5, 0.22, 3.2, '#5a4632', 'Table');
     box(0.6, 2.2, 3, 5.65, 1.1, 3, '#d9d4c8', 'Cabinets');
+    // Light fixtures, named as SketchUp and Blender exports name them: four downlights, a
+    // two-globe sconce drawn as three parts, a pendant that states its colour, and a switch.
+    for (const [x, z] of [[1.5, 1.5], [4.5, 1.5], [1.5, 3.5], [4.5, 3.5]]) box(0.17, 0.02, 0.17, x, 2.59, z, '#ffffff', 'Recessed downlight - 6 in LED trim (Halo RL6 class, proposed)');
+    box(0.02, 0.2, 0.12, 0.06, 1.8, 2.5, '#222222', 'Bath | two-globe sconce backplate');
+    box(0.1, 0.1, 0.1, 0.15, 1.85, 2.38, '#eeeeee', 'Bath | two-globe sconce globe');
+    box(0.1, 0.1, 0.1, 0.15, 1.85, 2.62, '#eeeeee', 'Bath | two-globe sconce globe.001');
+    box(0.4, 0.3, 0.4, 3, 1.9, 2.5, '#c9a46a', 'Pendant over table - brass dome 2700K');
+    box(0.07, 0.11, 0.01, 1, 1.2, 0.06, '#ffffff', 'Light switch (ceiling lights)');
     await importScanBytes(await new GLTFExporter().parseAsync(g, { binary: true }), 'synthetic-sketchup-room.glb', p);
   });
   await page.locator('#rail a[data-view=model]').click();
@@ -78,7 +87,13 @@ try {
   // The old switch carried over: NIGHT LIGHTS off is room lights off.
   const opened = await env();
   assert.equal(opened.lamps, 'off'); assert.equal('nightLights' in opened, false);
-  assert.equal(opened.fill, 1); assert.equal(opened.sunShadows, true);
+  assert.equal(opened.fill, 1); assert.equal('sunShadows' in opened, false);
+
+  // The fixtures in the model, one light each at its estimated output; the switch is no light.
+  const sources = (await page.evaluate(async () => (await import('/js/viewer3d.js')).qualityState())).lightSources;
+  const kinds = sources.map(s => s.kind + ':' + s.lumens).sort();
+  assert.deepEqual(kinds, ['downlight:850', 'downlight:850', 'downlight:850', 'downlight:850', 'pendant:800', 'sconce:900'], JSON.stringify(sources));
+  assert.equal(sources.find(s => s.kind === 'pendant').kelvin, 2700);
 
   // Inside the room the still frame keeps the brightness of the frames drawn while moving.
   // Before the fix the corner shading read this model as facing nowhere and halved it.
@@ -92,13 +107,13 @@ try {
   const panel = page.locator('.v-wrap > .v-env');
   // Room lights carried over as off: that is not NATURAL (after dark), so no preset is lit.
   assert.equal(await panel.locator('.v-light-presets [aria-pressed=true]').count(), 0);
-  assert.match(await panel.innerText(), /this property has none/);   // no traced rooms to hang room lights in
   await panel.locator('[data-light-preset=bright]').click();
   const bright = await brightness(false);
   assert.ok(bright > still * 1.15, `BRIGHT WORK LIGHT lights the room: ${still.toFixed(3)} -> ${bright.toFixed(3)}`);
   const saved = await env();
-  assert.equal(saved.sunShadows, false); assert.equal(saved.lamps, 'on'); assert.ok(saved.fill > 2 && saved.cameraLight > 0);
-  assert.equal(await page.evaluate(() => window.testScene.children.find(o => o.isDirectionalLight).castShadow), false);
+  assert.equal(saved.lamps, 'on'); assert.ok(saved.fill > 2 && saved.cameraLight > 0); assert.equal(saved.sunStrength, 1);
+  // The work light never takes the sun's shadows away.
+  assert.equal(await page.evaluate(() => window.testScene.children.find(o => o.isDirectionalLight).castShadow), true);
   assert.equal(await panel.locator('[data-light-preset=bright]').getAttribute('aria-pressed'), 'true');
   await page.screenshot({ path: resolve(output, 'bright.png') });
 
@@ -121,11 +136,42 @@ try {
   assert.equal((await env()).lamps, 'auto');
   const back = await brightness(false);
   assert.ok(Math.abs(back - still) < 0.01, `NATURAL restores the picture: ${still.toFixed(3)} vs ${back.toFixed(3)}`);
-  assert.equal(await page.evaluate(() => window.testScene.children.find(o => o.isDirectionalLight).castShadow), true);
   // Corner shading at 0 switches the pass off: the still frame matches the moving one.
   await slide('shading', 0);
   const flat = await brightness(false);
   assert.ok(Math.abs(flat - await brightness(true)) < 0.002, 'no corner shading: still and moving frames match');
+  await panel.locator('[data-light-preset=natural]').click();
+
+  // The sun comes in through the window, never through a ceiling hidden to look inside. Looking
+  // straight down at the floor away from the window, the floor is as bright with the ceiling's
+  // tag hidden as with it shown.
+  const floorView = { position: [3, 2.2, 3.5], target: [3.01, 0, 3.6] };
+  const floor = () => page.evaluate(async v => (await import('/js/viewer3d.js')).frameBrightness({ view: v }), floorView);
+  const roofed = await floor();
+  await page.evaluate(async () => {
+    const store = await import('/js/store.js'), tags = await import('/js/tags.js'), scene = await import('/js/tags-scene.js');
+    const p = store.activeProperty(), ceiling = window.testScene.getObjectByName('Ceiling');
+    let wrapper = ceiling; while (wrapper && !(wrapper.userData && wrapper.userData.inner)) wrapper = wrapper.parent;
+    const part = scene.modelParts(wrapper).find(x => x.object === ceiling);
+    tags.assignTag(p, [scene.partKey(p.scans[0].id, part)], tags.CANON.ceiling.id);
+  });
+  await page.locator('[data-tag-eye="tag-ceiling"]').click();
+  assert.equal(await page.evaluate(() => window.testScene.getObjectByName('Ceiling').visible), false, 'the ceiling is hidden from view');
+  const open = await floor();
+  assert.ok(Math.abs(open - roofed) < 0.01, `a hidden ceiling still keeps the sun off the floor: ${roofed.toFixed(3)} roofed, ${open.toFixed(3)} with it hidden`);
+  await page.locator('[data-tag-eye="tag-ceiling"]').click();
+
+  // After dark the fixtures light the room; switched off, it is dark.
+  await slide('time', 22);
+  const night = await brightness(false);
+  await panel.locator('[data-env=lamps]').selectOption('off');
+  const dark = await brightness(false);
+  assert.ok(night > 0.2 && night > dark * 5, `the fixtures light the room at night: ${night.toFixed(3)} on, ${dark.toFixed(3)} off`);
+  await panel.locator('[data-env=lamps]').selectOption('auto');
+  await slide('lampBrightness', 0.5);
+  const dimmed = await brightness(false);
+  assert.ok(dimmed < night - 0.03 && dimmed > dark, `LAMP LEVEL dims them: ${night.toFixed(3)} -> ${dimmed.toFixed(3)}`);
+  assert.match(await panel.locator('.v-light-list summary').innerText(), /6 light fixtures · 5,100 lm estimated/);
   assert.deepEqual(errors, []);
-  console.log('ok   SketchUp-style model keeps its brightness at rest, old night-lights switch carried over, presets, sliders, saved values, natural restore, corner shading off');
+  console.log('ok   SketchUp-style model keeps its brightness at rest, old night-lights switch carried over, fixtures found with estimated lumens, presets, sliders, saved values, natural restore, corner shading off, hidden ceiling keeps the sun out, fixtures light the room at night and dim');
 } finally { await browser.close(); server.close(); }

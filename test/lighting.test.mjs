@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { LIGHTING_DEFAULTS, LIGHTING_PRESETS, lightingSettings, normalizeLighting, matchingPreset, applyPreset, lampLevel, kelvinToRgb, DAYTIME_LAMP_LEVEL } from '../js/lighting.js';
+import { LIGHTING_DEFAULTS, LIGHTING_PRESETS, lightingSettings, normalizeLighting, matchingPreset, applyPreset, lampLevel, kelvinToRgb } from '../js/lighting.js';
 
 // A property saved before these settings existed opens with the defaults, and its NIGHT LIGHTS
 // switch carries over: off stays off, on becomes the old automatic behaviour.
@@ -12,7 +12,7 @@ assert.equal(lightingSettings({ nightLights: false, lamps: 'on' }).lamps, 'on');
 assert.equal(lightingSettings({ exposure: 1.4 }).exposure, 1.4);
 
 // Numbers out of range are pulled in; anything that is not a number falls back to the default.
-const odd = lightingSettings({ exposure: 99, fill: -3, shading: '0.5', lampKelvin: 900, cameraLight: 'bright', sunStrength: null, lamps: 'disco', sunShadows: 'no' });
+const odd = lightingSettings({ exposure: 99, fill: -3, shading: '0.5', lampKelvin: 900, cameraLight: 'bright', sunStrength: null, lamps: 'disco' });
 assert.equal(odd.exposure, 3);
 assert.equal(odd.fill, 0);
 assert.equal(odd.shading, 0.5);
@@ -20,16 +20,18 @@ assert.equal(odd.lampKelvin, 2200);
 assert.equal(odd.cameraLight, 0);
 assert.equal(odd.sunStrength, 1);
 assert.equal(odd.lamps, 'auto');
-assert.equal(odd.sunShadows, true);
+// There is no switch to take the sun's shadows away: an old record's is dropped.
+assert.equal('sunShadows' in lightingSettings({ sunShadows: false }), false);
 assert.equal(lightingSettings(null).fill, 1);
 
 // Writing them back fills the record in and retires the old switch.
-const env = { time: 9, nightLights: false, fill: 7 };
+const env = { time: 9, nightLights: false, fill: 7, sunShadows: false };
 normalizeLighting(env);
 assert.equal(env.time, 9);
 assert.equal(env.lamps, 'off');
 assert.equal(env.fill, 3);
 assert.equal('nightLights' in env, false);
+assert.equal('sunShadows' in env, false);
 // With the defaults already merged over the saved record, the saved switch still decides.
 const saved = { nightLights: false };
 const merged = normalizeLighting({ ...LIGHTING_DEFAULTS, ...saved }, saved);
@@ -42,8 +44,8 @@ assert.equal(matchingPreset(room), 'natural');
 applyPreset(room, 'bright');
 assert.equal(room.time, 20); assert.equal(room.azimuth, 120);
 assert.equal(matchingPreset(room), 'bright');
-assert.equal(room.sunShadows, false);
 assert.ok(room.fill > LIGHTING_DEFAULTS.fill && room.cameraLight > 0 && room.lamps === 'on');
+assert.equal(room.sunStrength, LIGHTING_DEFAULTS.sunStrength, 'the work light does not weaken or unshadow the sun');
 room.fill = 2.3;
 assert.equal(matchingPreset(room), null);
 applyPreset(room, 'overcast');
@@ -53,14 +55,12 @@ assert.throws(() => applyPreset(room, 'disco'), /Unknown lighting preset/);
 // Every preset is inside the ranges the panel offers.
 for (const preset of Object.values(LIGHTING_PRESETS)) assert.deepEqual(lightingSettings(preset), { ...preset });
 
-// Room lights: off is dark, on is full, and auto is the old behaviour (dusk, plus a daytime
-// level while the camera stands in a traced room).
-assert.equal(lampLevel('off', 1, true), 0);
-assert.equal(lampLevel('on', 0, false), 1);
-assert.equal(lampLevel('auto', 0, false), 0);
-assert.equal(lampLevel('auto', 0, true), DAYTIME_LAMP_LEVEL);
-assert.equal(lampLevel('auto', 1, true), 1);
-assert.equal(lampLevel('auto', 0.6, false), 0.6);
+// Fixtures: off is dark, on is full, and after dark follows the dusk.
+assert.equal(lampLevel('off', 1), 0);
+assert.equal(lampLevel('on', 0), 1);
+assert.equal(lampLevel('auto', 0), 0);
+assert.equal(lampLevel('auto', 1), 1);
+assert.equal(lampLevel('auto', 0.6), 0.6);
 
 // Colour temperature: warm light is red-heavy with little blue, daylight is near white, and
 // every channel stays in 0..1 with red at full below 6600 K.

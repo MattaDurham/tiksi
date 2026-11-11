@@ -10,17 +10,18 @@
 //                   and the inside of a closed model.
 //   shading         CORNER SHADING: how much the corners and contact lines are darkened, 0 (off)
 //                   to 1.
-//   sunShadows      Whether the sun casts shadows. Off, it lights every surface turned to it,
-//                   inside a closed model too.
-//   lamps           ROOM LIGHTS: 'auto' (after dark, and dimly while the camera is in a traced
-//                   room by day), 'on' (always) or 'off'.
-//   lampBrightness  How bright the room lights are, times their natural level.
-//   lampKelvin      Their colour temperature, in kelvin (2200 candle-warm to 5000 daylight).
-//   cameraLight     CAMERA LIGHT: a light that moves with the camera, 0 (off) to 2, for models
-//                   with no traced rooms to hang room lights in.
+//   lamps           ROOM LIGHTS, the light fixtures placed in the model (fixture-lights.js):
+//                   'auto' (on after dark), 'on' (always) or 'off'.
+//   lampBrightness  A dimmer on every fixture at once, times its estimated output.
+//   lampKelvin      The colour temperature, in kelvin, of fixtures whose name does not give
+//                   one (2200 candle-warm to 5000 daylight).
+//   cameraLight     CAMERA LIGHT: a light that moves with the camera, 0 (off) to 2.
+//
+// The sun always casts shadows: it reaches an interior only through its windows and doors.
+// Inside, light is the sky's soft fill and the fixtures.
 
 export const LIGHTING_DEFAULTS = Object.freeze({
-  exposure: 1, sunStrength: 1, fill: 1, shading: 0.85, sunShadows: true,
+  exposure: 1, sunStrength: 1, fill: 1, shading: 0.85,
   lamps: 'auto', lampBrightness: 1, lampKelvin: 3000, cameraLight: 0,
 });
 
@@ -34,12 +35,13 @@ export const LAMP_MODES = Object.freeze(['auto', 'on', 'off']);
 // place alone; the panel shows a preset as chosen while every value still matches it.
 //   natural  the defaults: sun, sky and corner shading as a camera would see them.
 //   overcast a soft day: weak sun, strong even fill, lighter corners.
-//   bright   a work light for arranging things: even and bright everywhere, inside a closed
-//            model too (no sun shadows, high fill, the camera light on, room lights on).
+//   bright   a work light for arranging things: bright and even inside, from strong fill,
+//            every fixture on and the camera light; the sun still only comes in through the
+//            windows and doors.
 export const LIGHTING_PRESETS = Object.freeze({
   natural: Object.freeze({ ...LIGHTING_DEFAULTS }),
   overcast: Object.freeze({ ...LIGHTING_DEFAULTS, exposure: 1.1, sunStrength: 0.3, fill: 1.8, shading: 0.6 }),
-  bright: Object.freeze({ ...LIGHTING_DEFAULTS, exposure: 1.2, sunStrength: 0.8, fill: 2.2, shading: 0.35, sunShadows: false, lamps: 'on', cameraLight: 0.8 }),
+  bright: Object.freeze({ ...LIGHTING_DEFAULTS, exposure: 1.2, fill: 2.6, shading: 0.35, lamps: 'on', cameraLight: 0.8 }),
 });
 export const PRESET_LABELS = Object.freeze({ natural: 'Natural', overcast: 'Overcast', bright: 'Bright work light' });
 
@@ -54,7 +56,6 @@ export function lightingSettings(env = {}) {
     const n = Number(e[key]);
     out[key] = Number.isFinite(n) && e[key] !== null && e[key] !== '' ? clamp(n, range) : LIGHTING_DEFAULTS[key];
   }
-  out.sunShadows = typeof e.sunShadows === 'boolean' ? e.sunShadows : LIGHTING_DEFAULTS.sunShadows;
   out.lamps = LAMP_MODES.includes(e.lamps) ? e.lamps : (e.nightLights === false ? 'off' : LIGHTING_DEFAULTS.lamps);
   return out;
 }
@@ -65,7 +66,7 @@ export function lightingSettings(env = {}) {
 // is read from there, before a default room-light mode can hide it.
 export function normalizeLighting(env, saved = env) {
   Object.assign(env, lightingSettings(saved));
-  delete env.nightLights;
+  delete env.nightLights; delete env.sunShadows;
   return env;
 }
 
@@ -83,18 +84,16 @@ export function applyPreset(env, name) {
   const preset = LIGHTING_PRESETS[name];
   if (!preset) throw new Error('Unknown lighting preset ' + name);
   Object.assign(env, preset);
-  delete env.nightLights;
+  delete env.nightLights; delete env.sunShadows;
   return env;
 }
 
-// How strongly room lights shine, 0 to 1, for a mode: `night` is 0 by day and 1 after dusk;
-// `inside` is whether the camera stands in a traced room. 'auto' keeps the old behaviour: the
-// lights come up through dusk, and a room the camera is in gets a gentle daytime level.
-export const DAYTIME_LAMP_LEVEL = 5 / 14;
-export function lampLevel(mode, night, inside) {
+// How strongly the fixtures shine, 0 to 1, for a mode: `night` is 0 by day and 1 after dusk.
+// 'auto' brings them up through dusk; by day an interior has the sky's light.
+export function lampLevel(mode, night) {
   if (mode === 'off') return 0;
   if (mode === 'on') return 1;
-  return inside ? Math.max(DAYTIME_LAMP_LEVEL, night) : night;
+  return Math.min(1, Math.max(0, Number(night) || 0));
 }
 
 // The colour of a light of this temperature, as 0..1 red, green and blue with the brightest

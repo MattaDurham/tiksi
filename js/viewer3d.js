@@ -7,6 +7,7 @@
 import { environmentSun, dayOfYear, dateForDay, daysInYear, validTimeZone } from './solar.js';
 import { setModelXray } from './model-xray.js';
 import { lightingSettings, normalizeLighting, lampLevel, kelvinToRgb, matchingPreset, applyPreset, LIGHTING_PRESETS, PRESET_LABELS, LIGHTING_RANGES } from './lighting.js';
+import { classifyFixture, groupFixtures, polygonArea, roomLumens, candela, fixtureSummary, FIXTURE_LABELS, DOWNLIGHT_HALF_ANGLE } from './fixture-lights.js';
 import * as THREE from 'three';
 import { modelPanelHtml, bindModelPanel, partComponentName } from './model-panel.js';
 import { beginGeometryEdit, restoreGeometryEdit, revertGeometryEdit } from './edit-history.js';
@@ -575,55 +576,149 @@ function rebuildGround() {
   requestRender(2);
 }
 
-// One fixture per room, hung just under that room's own ceiling (its level's top); rooms on a
-// hidden level get none, so switching a storey off does not leave its lamps glowing in mid-air.
-function rebuildNightLights() {
-  while (lightRoot.children.length) { const c = lightRoot.children.pop(); disposeBuilt(c); }
+// ---------- light fixtures ----------
+// Indoors the light comes from the sky's fill and from the light fixtures (fixture-lights.js):
+// each fixture found in a shown imported model, at the output a fixture of its kind puts out,
+// and one estimated ceiling light in each traced room that has no fixture drawn in it (rooms on
+// a hidden level get none). One scale turns lumens into the viewer's light units for every
+// fixture, so fixtures keep their true proportions to each other; the balance against the sun is
+// that of a camera exposed for the interior, since a screen cannot show both at their real ratio.
+const LUMEN_SCALE = 0.1;
+// Lights are worked out for every pixel of every lit surface, so their number is capped: a
+// computer lights this many of each kind, a touch device its own limit (render-quality.js
+// deviceLimits). Over the cap, the fixtures in the camera's room come first, then the nearest.
+// The number of lights does not change while the camera moves, so no shader is rebuilt for it.
+const LAMP_CAP = { point: 24, cone: 32 };
+let lampSources = [], lampPools = { point: [], cone: [] }, lampKey = null, lampsDirty = false;
+const scanFixtures = {};   // scan id -> fixtures in the model's own space (found once per load)
+
+// Find the light fixtures in a loaded model, in the model's own space (its placement taken off).
+function findScanFixtures(scan, obj) {
+  const keep = { p: obj.position.clone(), q: obj.quaternion.clone(), s: obj.scale.clone() };
+  obj.position.set(0, 0, 0); obj.quaternion.identity(); obj.scale.set(1, 1, 1);
+  obj.updateMatrixWorld(true);
+  const parts = [], box = new THREE.Box3();
+  try {
+    for (const part of modelParts(obj)) {
+      const name = partName(part);
+      if (!classifyFixture(name)) continue;
+      box.setFromObject(part.object);
+      if (!box.isEmpty()) parts.push({ name, min: box.min.toArray(), max: box.max.toArray() });
+    }
+  } finally {
+    obj.position.copy(keep.p); obj.quaternion.copy(keep.q); obj.scale.copy(keep.s);
+    obj.updateMatrixWorld(true);
+  }
+  scanFixtures[scan.id] = groupFixtures(parts);
+}
+
+// Every light source in the view, in world space.
+function collectLampSources() {
+  const out = [];
+  for (const scan of prop.scans) {
+    const obj = scanObjs[scan.id], list = scanFixtures[scan.id];
+    if (!obj || !list || scan.visible === false || !obj.visible) continue;
+    obj.updateMatrixWorld(true);
+    list.forEach((f, i) => out.push({ ...f, id: scan.id + ':' + i, pos: new THREE.Vector3(...f.at).applyMatrix4(obj.matrixWorld) }));
+  }
   const hidden = hiddenLevels();
+  for (const r of roomCentres(prop)) {
+    if (hidden.has(r.level)) continue;
+    const room = (prop.rooms || []).find(x => x.id === r.id);
+    const holds = s => s.pos.y >= r.y - 0.05 && s.pos.y <= r.top + 0.3 && pointInPolygon(s.pos.x, s.pos.z, room.pts);
+    if (out.some(s => s.kind !== 'room' && holds(s))) continue;
+    out.push({ kind: 'room', label: FIXTURE_LABELS.room, lumens: roomLumens(polygonArea(room.pts)), kelvin: null, cone: false, id: r.id, room: r.id, pos: new THREE.Vector3(r.x, r.top - 0.12, r.z), disc: new THREE.Vector3(r.x, r.top - 0.035, r.z) });
+  }
+  return out;
+}
+
+function rebuildNightLights() {
+  lampsDirty = false;
+  while (lightRoot.children.length) { const c = lightRoot.children.pop(); disposeBuilt(c); }
+  lampSources = collectLampSources();
+  // A traced room's estimated light shows as a glowing disc under its ceiling; a fixture in a
+  // model is its own drawing.
   const discGeo = new THREE.CircleGeometry(0.11, 24);
   discGeo.rotateX(Math.PI / 2);
   const discMat = new THREE.MeshStandardMaterial({ color: 0xfff1dc, emissive: new THREE.Color(0xffd9a8), emissiveIntensity: 5, roughness: 0.6 });
   discMat.userData.disposable = true;
-  // Every room keeps its glowing fixture. How many of them also cast light is a device limit
-  // (render-quality.js deviceLimits): every light is worked out for every pixel of every lit
-  // surface. A computer lights every room, as it always has. A touch device lights a few: the
-  // room the camera is in and the ones nearest it, moved as the camera moves (placeRoomLights).
-  // Their number does not change while the camera moves, so no shader is rebuilt for it.
-  lampRooms = roomCentres(prop).filter(r => !hidden.has(r.level));
-  lampLights = [];
-  const limit = memoryLimits().roomLights;
-  const count = limit ? Math.min(lampRooms.length, limit) : lampRooms.length;
-  for (let i = 0; i < count; i++) {
-    const light = new THREE.PointLight(0xffc48a, 14, 0, 2);
-    lampLights.push(light);
-    lightRoot.add(light);
-  }
-  for (const r of lampRooms) {
+  for (const s of lampSources) {
+    if (!s.disc) continue;
     const disc = new THREE.Mesh(discGeo, discMat);
-    disc.position.set(r.x, r.top - 0.035, r.z);
-    disc.userData = { kind: 'ceiling', id: r.id };
+    disc.position.copy(s.disc);
+    disc.userData = { kind: 'ceiling', id: s.id };
     lightRoot.add(disc);
+  }
+  const limit = memoryLimits().roomLights;
+  const angle = THREE.MathUtils.degToRad(DOWNLIGHT_HALF_ANGLE);
+  lampPools = { point: [], cone: [] };
+  for (const kind of ['point', 'cone']) {
+    const n = lampSources.filter(s => (s.cone ? 'cone' : 'point') === kind).length;
+    const count = Math.min(n, limit || LAMP_CAP[kind]);
+    for (let i = 0; i < count; i++) {
+      const light = kind === 'cone' ? new THREE.SpotLight(0xffffff, 0, 0, angle, 0.5, 2) : new THREE.PointLight(0xffffff, 0, 0, 2);
+      if (light.isSpotLight) lightRoot.add(light.target);
+      light.userData.source = null;
+      lampPools[kind].push(light);
+      lightRoot.add(light);
+    }
   }
   lampKey = null;
   placeRoomLights();
+  if (programsWarm) warmPrograms();
 }
-// Put the lights over the rooms that get one: all of them where there is a light per room, else
-// the room the camera stands in first, then the nearest. Called before every drawn frame; it
-// does nothing unless the rooms chosen have changed.
-let lampRooms = [], lampLights = [], lampKey = null;
+
+// Put the lights at the sources that get one. Called before every drawn frame; it does nothing
+// unless the sources chosen have changed.
 function placeRoomLights() {
-  let chosen = lampRooms;
-  if (lampLights.length < lampRooms.length) {
-    const c = camera.position;
-    const inside = r => { const room = (prop.rooms || []).find(x => x.id === r.id); return !!room && c.y >= r.y - 0.05 && c.y < r.top - 0.05 && pointInPolygon(c.x, c.z, room.pts); };
-    const far = r => (inside(r) ? 0 : 1e6) + (r.x - c.x) ** 2 + (r.top - c.y) ** 2 + (r.z - c.z) ** 2;
-    chosen = lampRooms.map(r => [far(r), r]).sort((a, b) => a[0] - b[0]).slice(0, lampLights.length).map(x => x[1]);
-    chosen.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);   // a steady order: a room keeps its light
+  const c = camera.position;
+  const here = cameraRoom();
+  const inHere = s => !!here && s.pos.y >= here.y - 0.05 && s.pos.y <= here.top + 0.3 && pointInPolygon(s.pos.x, s.pos.z, here.pts);
+  const parts = [];
+  for (const kind of ['point', 'cone']) {
+    const pool = lampPools[kind];
+    let chosen = lampSources.filter(s => (s.cone ? 'cone' : 'point') === kind);
+    if (pool.length < chosen.length) {
+      const far = s => (inHere(s) ? 0 : 1e6) + s.pos.distanceToSquared(c);
+      chosen = chosen.map(s => [far(s), s]).sort((a, b) => a[0] - b[0]).slice(0, pool.length).map(x => x[1]);
+      chosen.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);   // a steady order: a source keeps its light
+    }
+    parts.push(chosen);
   }
-  const key = chosen.map(r => r.id).join('|');
+  const key = parts.map(list => list.map(s => s.id).join('|')).join('/');
   if (key === lampKey) return;
   lampKey = key;
-  chosen.forEach((r, i) => lampLights[i].position.set(r.x, r.top - 0.12, r.z));
+  ['point', 'cone'].forEach((kind, k) => lampPools[kind].forEach((light, i) => {
+    const s = parts[k][i];
+    light.userData.source = s;
+    light.position.copy(s.pos);
+    if (light.isSpotLight) { light.target.position.copy(s.pos).y -= 1; light.target.updateMatrixWorld(); }
+  }));
+  lightLamps();
+}
+// The traced room the camera stands in, with its floor and ceiling heights, or null.
+function cameraRoom() {
+  const c = camera.position;
+  for (const r of prop.rooms || []) {
+    if (!r.pts || r.pts.length < 3) continue;
+    const lvl = levelOfRoom(prop, r), top = lvl.elevation + levelHeight(prop, lvl.id);
+    if (c.y >= lvl.elevation - 0.05 && c.y < top - 0.05 && pointInPolygon(c.x, c.z, r.pts)) return { pts: r.pts, y: lvl.elevation, top };
+  }
+  return null;
+}
+// Each light's strength and colour from its source: lumens, the dimmer and the time of day.
+let lampLevelNow = 0;
+function lightLamps() {
+  const lit = lightingSettings(prop.env);
+  const dim = lampLevelNow * lit.lampBrightness * LUMEN_SCALE;
+  const fallback = kelvinToRgb(lit.lampKelvin);
+  for (const kind of ['point', 'cone']) for (const light of lampPools[kind]) {
+    const s = light.userData.source;
+    if (!s) { light.intensity = 0; continue; }
+    light.intensity = dim * candela(s.lumens, light.isSpotLight ? DOWNLIGHT_HALF_ANGLE : null);
+    const [r, g, b] = s.kelvin ? kelvinToRgb(s.kelvin) : fallback;
+    light.color.setRGB(r, g, b);
+  }
 }
 
 function fitShadow() {
@@ -645,6 +740,7 @@ function fitShadow() {
   c.updateProjectionMatrix();
   sun.userData.radius = R;
   sunDirty = true;
+  lampsDirty = true;   // what is shown or where it stands changed: so may the light fixtures
   invalidateShadows();
 }
 
@@ -725,8 +821,6 @@ function applyEnvironment() {
   // FILL LIGHT scales the sky and ground light together; the sun is SUN's.
   hemi.intensity *= lit.fill;
   scene.environmentIntensity *= lit.fill;
-  // SUN SHADOWS: switching them changes the shaders, so only on a real change.
-  if (sun.castShadow !== lit.sunShadows) { sun.castShadow = lit.sunShadows; invalidateShadows(); }
   // CORNER SHADING: how dark corners and contact lines get; 0 skips the pass altogether.
   passes.gtao.blendIntensity = lit.shading;
   cameraLight.intensity = CAMERA_LIGHT_CD * lit.cameraLight;
@@ -740,18 +834,15 @@ function applyEnvironment() {
   if (usePano) scene.fog = null;
   else scene.fog = new THREE.Fog(fogColor, Math.max(span * 12, 150), Math.max(span * 40, 600));
 
-  // ROOM LIGHTS: one per traced room. 'auto' comes up through dusk (and gently while the camera
-  // is in a room by day), 'on' is always lit, 'off' never; brightness and colour are their own.
-  const lampMix = lampLevel(lit.lamps, nightMix, interiorFill);
-  const lightsOn = lampMix > 0 && lit.lampBrightness > 0;
-  lightRoot.visible = lightsOn;
-  const lampI = 14 * lampMix * lit.lampBrightness;
+  // ROOM LIGHTS: the fixtures (rebuildNightLights). 'auto' comes up through dusk, 'on' is always
+  // lit, 'off' never; LAMP LEVEL dims them all and LAMP COLOR colours those with no stated colour.
+  const lampMix = lampLevel(lit.lamps, nightMix);
+  lampLevelNow = lampMix;
+  lightRoot.visible = lampMix > 0 && lit.lampBrightness > 0;
+  lightLamps();
   const discI = 5 * lampMix * Math.min(lit.lampBrightness, 1.5);
   const [lr, lg, lb] = kelvinToRgb(lit.lampKelvin);
-  lightRoot.traverse(o => {
-    if (o.isPointLight) { o.intensity = lampI; o.color.setRGB(lr, lg, lb); }
-    if (o.isMesh) { o.material.emissiveIntensity = discI; o.material.emissive.setRGB(lr, lg, lb); }
-  });
+  lightRoot.traverse(o => { if (o.isMesh) { o.material.emissiveIntensity = discI; o.material.emissive.setRGB(lr, lg, lb); } });
   if (modelGroup && modelGroup.userData.glass) {
     const g = modelGroup.userData.glass;
     g.emissive.setHex(0xffcf9a);
@@ -1021,7 +1112,8 @@ function applySection() {
     const mats = Array.isArray(o.material) ? o.material : (o.material ? [o.material] : []);
     for (const m of mats) {
       if (m.userData && m.userData.noClip) continue;
-      m.clippingPlanes = planes; m.clipShadows = true;
+      // The cut opens the view, not the building: the part cut away still keeps the sun out.
+      m.clippingPlanes = planes; m.clipShadows = false;
     }
   };
   if (modelGroup) modelGroup.traverse(visit);
@@ -1327,9 +1419,11 @@ function renderFrame(still = false) {
   const levels = modelGroup && modelGroup.userData.levels;
   if (levels) for (const l of levels) {
     const shown = prop.env.showCeilings !== false && (mode === 'walk' || camera.position.y < l.top - 0.05);
-    if (l.ceilings.visible !== shown) { l.ceilings.visible = shown; invalidateShadows(); }
+    // No new shadow map: hidden ceilings still keep the sun out (sunThroughOpenings).
+    if (l.ceilings.visible !== shown) l.ceilings.visible = shown;
   }
-  if (lampLights.length < lampRooms.length) placeRoomLights();
+  if (lampsDirty) rebuildNightLights();
+  if (lampPools.point.length + lampPools.cone.length < lampSources.length) placeRoomLights();
   updatePins();
   updateNotes();
   updateMatchMarkers();
@@ -1346,8 +1440,61 @@ function renderFrame(still = false) {
   frameCounts[fast ? 'fastFrames' : 'fullFrames']++;
   if (batches.beginFrame(scanObjs)) invalidateShadows();
   if (renderer.shadowMap.needsUpdate) frameCounts.shadowRefreshes++;
+  if (renderer.shadowMap.needsUpdate) sunThroughOpenings();
   try { composer.render(); }
   finally { batches.endFrame(); }
+}
+
+// The sun reaches inside only through windows and doors. What is hidden just to see in (the
+// ceilings over the dollhouse view or switched off, a hidden storey, the walls, floors, ceilings
+// and roof on a hidden tag) is still there between the sun and the rooms, so the shadow map is
+// drawn with it in place. The view itself never shows it: the map is drawn on its own, with a
+// camera that sees nothing, and then everything is put back as it was. Called inside a
+// beginFrame/endFrame pair, when the shadow map is due; it leaves the map drawn.
+const STRUCTURE_TAGS = ['walls', 'floor', 'ceiling', 'roof'].map(k => CANON[k].id);
+let sunOnlyCamera = null, sunOnlyTarget = null;
+function sunThroughOpenings() {
+  const revealed = [];
+  const levels = modelGroup && modelGroup.userData.levels;
+  if (levels) for (const l of levels) for (const g of [l.group, l.ceilings]) if (!g.visible) { g.visible = true; revealed.push(g); }
+  const overrides = {};
+  for (const id of STRUCTURE_TAGS) if (!tagShown(prop, id)) overrides[id] = true;
+  const tagsHidden = Object.keys(overrides).length > 0;
+  if (!revealed.length && !tagsHidden) return;   // nothing hidden: the view's own frame draws it
+  if (!sunOnlyCamera) {
+    sunOnlyCamera = new THREE.OrthographicCamera(0, 1e-4, 1e-4, 0, 1, 2);
+    sunOnlyCamera.position.set(0, -1e6, 0); sunOnlyCamera.lookAt(0, -2e6, 0); sunOnlyCamera.updateMatrixWorld();
+    sunOnlyTarget = new THREE.WebGLRenderTarget(1, 1);
+  }
+  const showTags = () => {
+    if (modelGroup) applyPlanTagVisibility(prop, modelGroup, overrides);
+    for (const scan of prop.scans) if (scanObjs[scan.id]) applyModelTagVisibility(prop, scan, scanObjs[scan.id], overrides);
+  };
+  const viewTags = () => {
+    if (modelGroup) applyPlanTagVisibility(prop, modelGroup);
+    for (const scan of prop.scans) if (scanObjs[scan.id]) applyModelTagVisibility(prop, scan, scanObjs[scan.id]);
+  };
+  const splats = hideSplats();
+  const helpers = [gizmo, secMove, secTurn].map(g => g && g.getHelper()).filter(h => h && h.visible);
+  helpers.forEach(h => { h.visible = false; });
+  const prevTarget = renderer.getRenderTarget();
+  batches.endFrame();
+  if (tagsHidden) showTags();
+  try {
+    batches.beginFrame(scanObjs);
+    try { renderer.setRenderTarget(sunOnlyTarget); renderer.render(scene, sunOnlyCamera); }
+    finally { batches.endFrame(); }
+  } finally {
+    renderer.setRenderTarget(prevTarget);
+    revealed.forEach(g => { g.visible = false; });
+    if (tagsHidden) viewTags();
+    splats.forEach(o => { o.visible = true; });
+    helpers.forEach(h => { h.visible = true; });
+    // Back to what the view shows. The map is drawn: what this pass reports changed is only
+    // what was put back.
+    batches.beginFrame(scanObjs);
+    renderer.shadowMap.needsUpdate = false;
+  }
 }
 
 function resize() {
@@ -3281,6 +3428,7 @@ async function addScanToScene(scan) {
   // A model's parts get their tags the first time it loads (tags-scene.js); they are stored.
   const tagged = detectModelTags(prop, scan, obj);
   applyModelTagVisibility(prop, scan, obj);
+  findScanFixtures(scan, obj);
   scanRoot.add(obj);
   // Large meshes and point clouds are tested through a tree of boxes (pick-index.js), built in
   // a background helper. Its files are fetched the first time a scan is large enough to need
@@ -3625,7 +3773,11 @@ function lightRow(label, key, value, title) {
 }
 function lightingHtml(env) {
   const lit = lightingSettings(env), chosen = matchingPreset(env);
-  const rooms = (prop.rooms || []).length;
+  const sources = fixtureSummary(lampSources);
+  const total = lampSources.reduce((n, s) => n + s.lumens, 0);
+  const lights = sources.length
+    ? `<details class="v-light-list"><summary>${lampSources.length} light fixture${lampSources.length === 1 ? '' : 's'} &middot; ${total.toLocaleString()} lm estimated</summary><ul>${sources.map(e => `<li><span>${e.count} &times; ${escapeHtml(e.label)}</span><em>${e.lumens.toLocaleString()} lm${e.count > 1 ? ' each' : ''}</em></li>`).join('')}</ul><p>Output estimated from each fixture's kind (a name that states lumens or a colour keeps it). Traced rooms with no fixture drawn get one ceiling light at 150 lm per m&sup2;.</p></details>`
+    : '<p class="v-env-help">No light fixtures found: name fixtures in the model (downlight, pendant, sconce, ceiling light, lamp, LED strip) or trace rooms. Until then use CAMERA LIGHT or FILL LIGHT inside.</p>';
   return `
       <div class="v-light-presets" role="group" aria-label="Lighting presets">${Object.keys(LIGHTING_PRESETS).map(k => `<button type="button" class="v-pill ${chosen === k ? 'active' : ''}" data-light-preset="${k}" aria-pressed="${chosen === k}">${escapeHtml(PRESET_LABELS[k].toUpperCase())}</button>`).join('')}</div>
       ${lightRow('BRIGHTNESS', 'exposure', lit.exposure, 'Brightness of the whole picture (camera exposure)')}
@@ -3634,11 +3786,10 @@ function lightingHtml(env) {
       ${lightRow('CORNERS', 'shading', lit.shading, 'How dark corners and contact lines get (0 turns corner shading off)')}
       ${lightRow('CAMERA LIGHT', 'cameraLight', lit.cameraLight, 'A light that moves with the camera, for dark interiors')}
       <div class="v-row v-row-sel"><span>ROOM LIGHTS</span>
-        <select data-env="lamps" aria-label="Room lights"><option value="auto" ${lit.lamps === 'auto' ? 'selected' : ''}>After dark</option><option value="on" ${lit.lamps === 'on' ? 'selected' : ''}>Always on</option><option value="off" ${lit.lamps === 'off' ? 'selected' : ''}>Off</option></select>
+        <select data-env="lamps" aria-label="Room lights"><option value="auto" ${lit.lamps === 'auto' ? 'selected' : ''}>On after dark</option><option value="on" ${lit.lamps === 'on' ? 'selected' : ''}>Always on</option><option value="off" ${lit.lamps === 'off' ? 'selected' : ''}>Off</option></select>
       </div>
-      ${lit.lamps !== 'off' ? lightRow('LAMP LEVEL', 'lampBrightness', lit.lampBrightness, 'How bright the room lights are') + lightRow('LAMP COLOR', 'lampKelvin', lit.lampKelvin, 'Room light colour temperature: low is warm, high is daylight') : ''}
-      ${rooms ? '' : '<p class="v-env-help">Room lights hang one per traced room, and this property has none. Use CAMERA LIGHT or FILL LIGHT to light the inside of a model.</p>'}
-      <div class="v-checks"><label><input type="checkbox" data-env="sunShadows" ${lit.sunShadows ? 'checked' : ''}> SUN SHADOWS</label></div>
+      ${lit.lamps !== 'off' ? lightRow('LAMP LEVEL', 'lampBrightness', lit.lampBrightness, 'Dimmer on every light fixture: 100% is each one\'s estimated output') + lightRow('LAMP COLOR', 'lampKelvin', lit.lampKelvin, 'Colour temperature of fixtures whose name gives none: low is warm, high is daylight') : ''}
+      ${lights}
       <div class="v-env-rule" aria-hidden="true"></div>`;
 }
 // Light up the preset the values match now (none once a value is changed by hand).
@@ -4908,7 +5059,8 @@ export function qualityState() {
   return {
     quality: quality(), touch: ownQuality(), phoneLayout: fieldLayout(), shared: prop.env.quality, shadowMap: sun.shadow.mapSize.x, smoothingSamples: composer.renderTarget1.samples,
     shading: aoWanted, glow: passes.bloom.enabled, pixelRatio: renderer.getPixelRatio(), limits: memoryLimits(),
-    roomLights: lampLights.length, litRooms: lampKey ? lampKey.split('|').filter(Boolean) : [],
+    roomLights: lampPools.point.length + lampPools.cone.length, litRooms: lampKey ? lampKey.split(/[|/]/).filter(Boolean) : [],
+    lightSources: lampSources.map(s => ({ id: s.id, kind: s.kind, lumens: s.lumens, kelvin: s.kelvin, at: s.pos.toArray() })),
     // Pick trees made so far, by the background helper and by the page itself (null: the picking files are not loaded).
     pickTrees: pickIndex ? pickIndex.pickTreeCounts() : null,
   };
