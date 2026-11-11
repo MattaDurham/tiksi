@@ -20,11 +20,12 @@ import { tmpdir } from 'node:os';
 import net from 'node:net';
 import { chromium, devices, webkit } from 'playwright';
 
-// Measured on 2026-11-10 on the combined audit branch (codex/audit-fixes-4 at eab73c8), three
-// runs alike on Chromium: 159 files and 1,191,021 bytes downloaded (4,062,859 uncompressed).
-// WebKit also fetches the 363-byte app manifest. The limits leave about 5 percent for growth.
+// Measured on 2026-11-10 on the combined audit branch (codex/audit-fixes-4, all five last pieces,
+// with MODEL's picking files fetched only when a large scan is shown), Chromium: 157 files and
+// 1,201,147 bytes downloaded (4,095,617 uncompressed). WebKit also fetches the 363-byte app
+// manifest. The limits leave about 5 percent for growth.
 // Lower them when the download shrinks; raise them only with a reason in the commit.
-export const LIMITS = { requests: 167, bytes: 1_250_000 };
+export const LIMITS = { requests: 165, bytes: 1_250_000 };
 const ENGINE = process.env.E2E_BROWSER === 'webkit' ? 'webkit' : 'chromium';
 
 const state = await mkdtemp(tmpdir() + '/tiksi-load-budget-test-');

@@ -17,9 +17,10 @@ import { chromium } from 'playwright';
 const state = await mkdtemp(tmpdir() + '/tiksi-two-devices-');
 const socket = net.createServer(); await new Promise(r => socket.listen(0, '127.0.0.1', r));
 const port = socket.address().port; await new Promise(r => socket.close(r));
-const child = spawn('python3', ['tools/serve.py', '--port', String(port), '--state-dir', state, '--projects-dir', state + '/projects'], { stdio: ['ignore', 'pipe', 'pipe'] });
+const child = spawn('python3', ['tools/serve.py', '--port', String(port), '--state-dir', state, '--projects-dir', state + '/projects'], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, TIKSI_LOG_READS: '1' } });
 // Read the server's output: an unread pipe fills and then every server thread stops at its next log line.
-// How many times the Mac was asked for each stored original, counted from its request log.
+// How many times the Mac was asked for each stored original, counted from its request log
+// (the server logs successful reads only when asked to, with TIKSI_LOG_READS).
 const asked = new Map();
 let serverLog = ''; child.stdout.resume(); child.stderr.on('data', d => {
   serverLog = (serverLog + d).slice(-8000);

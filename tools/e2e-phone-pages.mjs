@@ -123,7 +123,7 @@ async function run(label, engine, profile) {
     check(await page.evaluate(() => document.documentElement.classList.contains('touch') && document.documentElement.classList.contains('phone')), label + ': a touch phone is marked touch and gets the phone layout');
 
     // ---------- messages with no property yet ----------
-    for (const v of ['photos', 'measure']) await part(label, v + ' with no property', async () => {
+    for (const v of ['photos', 'measure', 'model', 'plan', 'reconstruct']) await part(label, v + ' with no property', async () => {
       await go(page, url, v);
       const text = await page.locator('#view').innerText();
       check(!/top bar/i.test(text) && /NEW PROPERTY under FILE/.test(text), label + ': ' + v.toUpperCase() + ' with no property points at FILE, not the hidden top bar (' + text.replace(/\s+/g, ' ').slice(0, 80) + ')');

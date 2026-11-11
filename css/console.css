@@ -534,7 +534,7 @@ table.grid .row-del {
   display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 4px;
   transition: opacity var(--dur) var(--ease), color var(--dur) var(--ease), background var(--dur) var(--ease);
 }
-table.grid tr:hover .row-del { opacity: 1; }
+table.grid tr:hover .row-del, table.grid .row-del:focus-visible { opacity: 1; }   /* reached by Tab, it must be seen */
 table.grid .row-del:hover { color: var(--red); background: rgba(224, 82, 82, 0.12); }
 tr.total-row td { border-top: 1px solid var(--line-2); border-bottom: none; font-weight: 600; font-family: var(--mono); }
 table.grid tbody tr.total-row:hover td, table.grid tbody tr.total-row td { background: transparent; }

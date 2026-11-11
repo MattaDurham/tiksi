@@ -22,6 +22,7 @@ import threading
 from urllib.parse import parse_qs, unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
+LOG_READS = os.environ.get('TIKSI_LOG_READS') == '1'
 # The service packages live at the repository root, whatever folder this file is started from.
 if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
 from server.peers import refusal, this_mac_tailscale_address, trusted_peer
@@ -135,7 +136,8 @@ class AppHandler(SimpleHTTPRequestHandler):
     def log_request(self, code='-', size='-'):
         # Every open page asks for the revision every few seconds; a successful read is not news.
         # Writes, refusals and failures are still logged.
-        if self.command in ('GET', 'HEAD') and isinstance(code, int) and code < 400: return
+        # TIKSI_LOG_READS=1 logs them too, for a check that counts what a page asked the Mac for.
+        if not LOG_READS and self.command in ('GET', 'HEAD') and isinstance(code, int) and code < 400: return
         super().log_request(code, size)
 
     def log_error(self, format, *args):

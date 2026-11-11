@@ -501,27 +501,31 @@ class WorkspaceService:
         not any copy that stays, not an unavailable project, and not one sent or asked about in the
         last BLOB_GRACE. Every project file holds its own originals, so the store is a cache of them."""
         now = time.time() if now is None else now
+        # Copies are never thinned on their own, so there can be thousands: each is read alone and
+        # only its property ids and the hashes of its originals are kept, never the copy itself.
+        def hashes(assets):
+            return {a['hash'] for a in (assets.values() if isinstance(assets, dict) else ()) if isinstance(a, dict) and isinstance(a.get('hash'), str)}
+        def properties(value):
+            data = value.get('data') if isinstance(value, dict) else None
+            return {p.get('id') for p in (data or {}).get('properties', []) if isinstance(p, dict)}
         copies, read = [], {}
         for path in (self.root / 'history').glob('*.json'):
-            try: read[path.name] = json.loads(path.read_text(encoding='utf-8'))
-            except (OSError, ValueError): read[path.name] = None
+            try: value = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, ValueError): value = None
+            read[path.name] = (properties(value), hashes(value.get('assets'))) if isinstance(value, dict) else None
+            del value
             match = REVISION_COPY.match(path.name)
             if match:
                 try: copies.append((int(match[1]), path.stat().st_mtime, path.name))
                 except OSError: continue
-        def properties(value):
-            data = value.get('data') if isinstance(value, dict) else None
-            return {p.get('id') for p in (data or {}).get('properties', []) if isinstance(p, dict)}
         newest = {}
         for revision, _, name in sorted(copies):
-            for identifier in properties(read.get(name)): newest[identifier] = name
+            for identifier in (read.get(name) or (set(),))[0]: newest[identifier] = name
         thin = [name for name in thinned_copies(copies, now) if name not in set(newest.values())]
         wanted = set()
-        def take(assets):
-            for asset in (assets or {}).values() if isinstance(assets, dict) else ():
-                if isinstance(asset, dict) and isinstance(asset.get('hash'), str): wanted.add(asset['hash'])
+        def take(assets): wanted.update(hashes(assets))
         for name, value in read.items():
-            if name not in thin and isinstance(value, dict): take(value.get('assets'))
+            if name not in thin and value: wanted.update(value[1])
         with self.lock:
             take(self.state.get('assets'))
             for assets in self.part_assets.values(): take(assets)
