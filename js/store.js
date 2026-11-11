@@ -23,6 +23,12 @@ const listeners = new Set();
 export function onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 const replaceListeners = new Set();
 export function onWorkspaceReplace(fn) { replaceListeners.add(fn); return () => replaceListeners.delete(fn); }
+// Told just before another device's change is merged into the open records, with the ids of
+// the properties it changes: the moment for a page to put back anything half done (a drag in
+// progress), while the open records are still exactly its own.
+const arrivingListeners = new Set();
+export function onSharedArriving(fn) { arrivingListeners.add(fn); return () => arrivingListeners.delete(fn); }
+export function sharedArriving(propertyIds) { for (const fn of arrivingListeners) { try { fn(propertyIds); } catch (e) { console.error(e); } } }
 
 let saveTimer = null;
 let diskPersistence = null;
@@ -212,10 +218,14 @@ function adoptValue(held, fresh) {
   if (held === fresh) return held;
   if (plainObject(held) && plainObject(fresh)) return adoptRecord(held, fresh);
   if (Array.isArray(held) && Array.isArray(fresh)) {
-    let next = fresh;
+    let next;
     if (recordList(held) && recordList(fresh)) {
       const here = new Map(held.map(rec => [rec.id, rec]));
       next = fresh.map(rec => here.has(rec.id) ? adoptRecord(here.get(rec.id), rec) : rec);
+    } else {
+      // No ids to match by: an item that is equal to the one in its place stays as it is.
+      const was = held.slice();
+      next = fresh.map((item, i) => i < was.length && sameJson(was[i], item) ? was[i] : item);
     }
     held.length = 0;
     for (const item of next) held.push(item);

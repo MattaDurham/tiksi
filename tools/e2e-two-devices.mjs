@@ -774,6 +774,49 @@ async function recordsThatEqualAnEarlierSaveAreStillSent() {
   await untilOnTheMac(c => prop(c, first).notes === 'First', 'An undo made out of reach, whose records equal an earlier save\'s');
   assert.deepEqual(askedAbout.filter(id => sentIds.has(id)), [], 'the kept copy named no save that the Mac had already confirmed');
   await context.close();
+  // The same when neither reply ever arrived: both saves reached the Mac, the page heard of
+  // neither, and the second is undone out of reach. The kept copy must not be dropped as
+  // "the Mac has it" on the strength of the first save: the Mac holds the second.
+  const lost = await browser.newContext({ viewport: { width: 390, height: 800 } });
+  const committed = new Set();
+  let text = null;
+  await lost.route(url + '/api/workspace', async route => {
+    if (route.request().method() !== 'PUT') return route.continue();
+    const body = route.request().postData();
+    // The first save carrying each note is committed by the Mac; the page never hears, of that one or any other.
+    if (text && body.includes(text)) { text = null; committed.add(JSON.parse(body).saveId); await route.fetch(); }
+    return committed.size ? route.abort() : route.continue();
+  });
+  page = await device({ context: lost });
+  await look(page, first);
+  await saveNow(page); await page.waitForFunction(SAVED);
+  text = 'Third, reply lost'; await edit(page, first, { notes: text });
+  await untilOnTheMac(c => prop(c, first).notes === 'Third, reply lost', 'The save whose reply was lost');
+  text = 'Fourth, reply lost'; await edit(page, first, { notes: text });
+  // (The page never heard that its first save arrived, so to it the Mac's copy now differs
+  // from its own in that note: it asks, and the person keeps this window's value.)
+  await page.locator('dialog[data-copies-differ]').getByRole('button', { name: /^USE THIS WINDOW/ }).click({ timeout: 30000 });
+  await untilOnTheMac(c => prop(c, first).notes === 'Fourth, reply lost', 'The second save whose reply was lost');
+  assert.equal(committed.size, 2);
+  await lost.setOffline(true);
+  await edit(page, first, { notes: 'Third, reply lost' });   // the second, undone
+  await page.waitForFunction(() => /kept on this device/.test(document.querySelector('#save-status').title), null, { timeout: 20000 });
+  await page.waitForTimeout(400);
+  await page.close();
+  await lost.unroute(url + '/api/workspace');
+  await lost.setOffline(false);
+  await lost.route('**/api/workspace/head?saveId=*', async route => {
+    const id = new URL(route.request().url()).searchParams.get('saveId');
+    const answer = await route.fetch({ url: url + '/api/workspace/head' }), body = await answer.json();
+    return route.fulfill({ response: answer, json: { ...body, save: { saveId: id, committed: committed.has(id), revision: committed.has(id) ? body.revision : null } } });
+  });
+  page = await device({ context: lost, ready: null });
+  // Not dropped: the page that never heard of its saves puts the difference to the person.
+  const question = page.locator('dialog[data-copies-differ]');
+  await question.waitFor({ timeout: 30000 });
+  await question.getByRole('button', { name: /^USE THIS WINDOW/ }).click();
+  await untilOnTheMac(c => prop(c, first).notes === 'Third, reply lost', 'The undo made out of reach after two lost replies');
+  await lost.close();
 }
 
 // The Mac serves newer code than an open page was loaded with (a stand-in adds the code
@@ -860,11 +903,127 @@ async function undoAfterAnInterruptedDragKeepsTheOtherDevicesChange() {
   assert.deepEqual((await wall(two, 'w-n')).filter((v, i) => i % 2), [4, 4], 'UNDO on device two leaves the other device\'s wall where it was put');
   const saved = prop(await mac(), first).walls.find(w => w.id === 'w-n');
   assert.deepEqual([saved.ay, saved.by], [4, 4], 'and it is still so on the Mac');
+  // The same with another edit still unsaved on device two when the drag starts: its save is
+  // held on the way, the east wall is dragged, the other device saves. The half-dragged wall
+  // must not be saved where it happened to be.
+  const east = await wall(two, 'w-e');
+  let release; const go = new Promise(r => { release = r; });
+  let held = false;
+  await two.route(url + '/api/workspace', async route => {
+    if (route.request().method() !== 'PUT' || held) return route.continue();
+    held = true; await go; return route.continue();
+  });
+  await two.evaluate(() => Promise.all(document.getAnimations().filter(a => a.animationName === 'view-in').map(a => a.finished)));
+  await two.keyboard.press('f');
+  await two.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const box2 = await canvas.boundingBox(), b = { minX: 0, minY: 0, maxX: Math.max(5, east[0]), maxY: 4 };
+  const bw = b.maxX - b.minX, bh = b.maxY - b.minY, zoom2 = Math.min(w / (bw * 1.22), h / (bh * 1.22), 250);
+  const panX2 = b.minX - (w / zoom2 - bw) / 2 - RULER / zoom2, panY2 = b.minY - (h / zoom2 - bh) / 2 - RULER / zoom2;
+  const at2 = (x, y) => [box2.x + (x - panX2) * zoom2, box2.y + (y - panY2) * zoom2];
+  await edit(two, first, { notes: 'An edit still on its way when the drag began' });
+  for (const end = Date.now() + 10000; !held && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
+  assert.equal(held, true);
+  await two.mouse.move(...at2(east[0], 2)); await two.mouse.down();
+  await two.mouse.move(...at2(east[0] + 0.7, 2), { steps: 8 });
+  assert.ok((await wall(two, 'w-e'))[0] > east[0] + 0.3, 'the east wall is being dragged again');
+  await one.evaluate(async id => { const s = await import('/js/store.js'); const w = s.ws.data.properties.find(p => p.id === id).walls.find(w => w.id === 'w-w'); w.ax = -1; w.bx = -1; s.touch(); }, first);
+  await saveNow(one);
+  release();
+  const after = await untilOnTheMac(c => prop(c, first).notes === 'An edit still on its way when the drag began' && prop(c, first).walls.find(w => w.id === 'w-w').ax === -1, 'Both devices\' changes around the interrupted drag');
+  await two.mouse.up();
+  await saveNow(two); await two.waitForFunction(SAVED);
+  const eastSaved = prop(await mac(), first).walls.find(w => w.id === 'w-e');
+  assert.deepEqual([eastSaved.ax, eastSaved.bx], [east[0], east[2]], 'the half-dragged wall is back where it was, on the Mac too');
+  assert.deepEqual(await wall(two, 'w-e'), east);
+  assert.equal(prop(after, first).walls.find(w => w.id === 'w-w').bx, -1);
+  await two.unroute(url + '/api/workspace');
   await one.context().close(); await two.context().close();
 }
 
+// The Mac serves other code while someone has the cursor in a text field: the page must not
+// reload under them. What they typed is entered when they leave the field, and is kept.
+async function aCodeChangeWaitsForTheFieldInUse() {
+  step('codetyping');
+  const [first] = await makeProperties('codetyping');
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  let served = 'aaaaaaaaaaaaaaaa';
+  await context.route(url + '/api/workspace/head', async route => {
+    const answer = await route.fetch(), body = await answer.json();
+    return route.fulfill({ response: answer, json: { ...body, codeVersion: served } });
+  });
+  const page = await context.newPage();
+  page.on('pageerror', e => errors.push(e.message));
+  let loads = 0; page.on('load', () => { loads++; });
+  await page.goto(url + '/#/plan'); await page.waitForFunction(SAVED, null, { timeout: 60000 });
+  await look(page, first);
+  await saveNow(page); await page.waitForFunction(SAVED);
+  const name = page.locator('[data-prop-name]');
+  await name.click(); await name.fill('Harbour house, typed while the code changed');
+  served = 'bbbbbbbbbbbbbbbb';
+  await page.waitForTimeout(9000);   // three looks at the Mac
+  assert.equal(loads, 1, 'the page is not reloaded while a text field has the cursor');
+  assert.equal(await name.inputValue(), 'Harbour house, typed while the code changed', 'what was typed is still in the field');
+  // Leaving the field enters the name. It is an edit made on the older code: kept, not sent.
+  await name.blur();
+  await page.waitForFunction(() => /kept and is sent after the reload/.test(document.querySelector('#save-status').title), null, { timeout: 20000 });
+  assert.equal(loads, 1);
+  assert.notEqual(prop(await mac(), first).name, 'Harbour house, typed while the code changed');
+  await page.reload();
+  await untilOnTheMac(c => prop(c, first).name === 'Harbour house, typed while the code changed', 'The name typed while the code changed');
+  await context.close();
+}
+
+// On the Mac's own browser, which keeps nothing as a rule: an original is added while a save
+// is on its way, and the Mac's code changes. The save is refused; the original must be kept
+// with the records, and arrive after the reload. One that is too large to keep is named, and
+// the page still asks before it is left.
+async function anOriginalAddedBeforeARefusalIsKept() {
+  step('codeoriginal');
+  const [first] = await makeProperties('codeoriginal');
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  let served = 'aaaaaaaaaaaaaaaa';
+  await context.route(url + '/api/workspace/head', async route => {
+    const answer = await route.fetch(), body = await answer.json();
+    return route.fulfill({ response: answer, json: { ...body, codeVersion: served } });
+  });
+  let page = await context.newPage();
+  page.on('pageerror', e => errors.push(e.message));
+  await page.goto(url + '/#/plan'); await page.waitForFunction(SAVED, null, { timeout: 60000 });
+  await look(page, first);
+  await saveNow(page); await page.waitForFunction(SAVED);
+  const addOriginal = (id, size) => page.evaluate(async ([prop, id, size]) => {
+    const store = await import('/js/store.js');
+    const bytes = new Uint8Array(size); for (let i = 0; i < size; i++) bytes[i] = (i * 17 + size) & 255;
+    await store.putFile(id, bytes.buffer, { kind: 'photo', mime: 'image/jpeg', name: id + '.jpg' });
+    store.ws.data.properties.find(p => p.id === prop).photos.push({ id, name: id, thumb: '', notes: '', kind: 'photo', original: true });
+    store.touch();
+  }, [first, id, size]);
+  served = 'bbbbbbbbbbbbbbbb';
+  await addOriginal('original-kept', 50000);
+  await page.waitForFunction(() => document.querySelector('#save-status').dataset.saveState === 'refused', null, { timeout: 20000 });
+  assert.match(await page.evaluate(() => document.querySelector('#save-status').title), /What you changed here is kept and is sent after the reload/);
+  assert.equal((await mac()).assets['original-kept'], undefined);
+  await page.reload();
+  const copy = await untilOnTheMac(c => c.assets['original-kept'], 'The original added before the save was refused');
+  assert.equal(copy.assets['original-kept'].size, 50000, 'the original was kept with the records and arrives after the reload');
+  await page.waitForFunction(SAVED, null, { timeout: 30000 });
+  assert.equal(await page.locator('dialog[data-lost-originals]').count(), 0, 'nothing is reported as not kept');
+  // An original too large to keep in the browser.
+  await page.evaluate(async id => { (await import('/js/unsent.js')).keptLimits.maxFileBytes = 30000; const s = await import('/js/store.js'); s.ws.data.settings.onePagerPrompt = 'never'; s.touch(); await (await import('/js/disk-workspace.js')).diskWorkspace.sync(); }, first);
+  await page.waitForFunction(SAVED);
+  served = 'cccccccccccccccc';
+  await addOriginal('original-too-large', 60000);
+  await page.waitForFunction(() => document.querySelector('#save-status').dataset.saveState === 'refused', null, { timeout: 20000 });
+  const words = await page.evaluate(() => document.querySelector('#save-status').title);
+  assert.match(words, /original-too-large\.jpg is too large to keep in this browser: after the reload it has to be added again/, 'the status names the original that could not be kept');
+  assert.doesNotMatch(words, /What you changed here is kept and is sent after the reload/);
+  const asksToStay = await page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; });
+  assert.equal(asksToStay, true, 'leaving the page still asks first while an original is only in it');
+  await context.close();
+}
+
 const parts = { view: eachDeviceKeepsItsOwnView, typing: aSaveElsewhereLeavesThePageAlone, slow: aSlowActionWritesIntoTheLiveRecord, nested: aNestedRecordStaysTheLiveOne, drag: undoAfterAnInterruptedDragKeepsTheOtherDevicesChange, onepager: theOnePagerEditorKeepsWhatIsTyped, conflict: theCopiesDifferQuestionSaysWhatDiffers, older: anOlderTabDoesNotSaveOverANewerCopy,
-  drafts: twoDraftsAreNotAConflict, unavailable: aProjectWithAMissingFileIsShown, import: aProjectFileAsksBeforeItReplaces, error: aPageThatFailsToOpenSaysSo, saveid: aKeptCopyTheMacAlreadyHasIsNotSentAgain, undone: recordsThatEqualAnEarlierSaveAreStillSent, code: aPageOnOlderCodeReloadsOrStopsSaving,
+  drafts: twoDraftsAreNotAConflict, unavailable: aProjectWithAMissingFileIsShown, import: aProjectFileAsksBeforeItReplaces, error: aPageThatFailsToOpenSaysSo, saveid: aKeptCopyTheMacAlreadyHasIsNotSentAgain, undone: recordsThatEqualAnEarlierSaveAreStillSent, code: aPageOnOlderCodeReloadsOrStopsSaving, codetyping: aCodeChangeWaitsForTheFieldInUse, codeoriginal: anOriginalAddedBeforeARefusalIsKept,
   originals: originalsAreNotDownloadedAndHeldForEver, pictures: theFirstScreenDoesNotWaitForEveryPicture, stored: anUnreadableStoredWorkspaceIsLeftAsItIs, model: modelKeepsItsCamera };
 
 try {
