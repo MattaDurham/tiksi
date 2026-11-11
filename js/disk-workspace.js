@@ -57,6 +57,7 @@ function sendBody(url, method, headers, body) {
 }
 // A request without a body: the answer is read piece by piece, so a download that keeps
 // arriving is never cut off.
+const SMALL_ANSWER_BYTES = 256 * 1024;
 async function readBody(url, method, headers, cache) {
   const control = new AbortController();
   let timer, waited = 0;
@@ -64,9 +65,13 @@ async function readBody(url, method, headers, cache) {
   try {
     watch(transferLimits.answerMs);
     const r = await fetch(url, { method, headers, cache, signal: control.signal });
-    if (!r.body) return answer(r.status, await r.arrayBuffer());
-    // The Mac states the size of a file it sends: the bytes go straight into their final place.
+    // The Mac states the size of what it sends. A small answer (every question about the
+    // workspace) is taken whole: it either arrives within the stall limit or it has stalled.
+    // (Chromium also reports a body read piece by piece as a cancelled request now and then,
+    // though every byte arrived; small answers are most of the requests.)
     const stated = Number(r.headers.get('Content-Length'));
+    if (!r.body || Number.isInteger(stated) && stated <= SMALL_ANSWER_BYTES) { watch(transferLimits.stallMs); return answer(r.status, await r.arrayBuffer()); }
+    // A file: the bytes go straight into their final place, and the limit is on each pause.
     let bytes = new Uint8Array(Number.isInteger(stated) && stated > 0 ? stated : 65536), size = 0;
     for (const reader = r.body.getReader(); ;) {
       watch(transferLimits.stallMs);

@@ -24,6 +24,7 @@ import {
 } from './store.js';
 import { syncMirror, mirrorCapabilities, mirrorChangedOnDisk, MirrorBusy, openInSketchUp } from './sketchup-mirror.js';
 import { diskWorkspace } from './disk-workspace.js';
+import { sameJson } from './workspace-merge.js';
 
 export const FSA = typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function';
 export const FSA_DIR = typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
@@ -200,7 +201,8 @@ async function rememberedHandle(propId) {
 }
 
 // ---------- open ----------
-export async function openFromFile(file) {
+// `opts.asked`: the person was already asked whether this file should replace what is open.
+export async function openFromFile(file, opts) {
   let parsed;
   if (/\.json$/i.test(file.name)) {
     const data = JSON.parse(await file.text());
@@ -211,9 +213,12 @@ export async function openFromFile(file) {
   const before = new Set(ws.data.properties.map(p => p.id));
   // A property in the file that is already open here would be replaced by the file's, and
   // its projects that are not in the file removed. That is asked first, never done unasked.
+  // (A file that holds the very same records replaces nothing, and is not asked about.)
   const open = new Map(ws.data.properties.map(p => [p.id, p]));
-  const same = (data.properties || []).filter(p => p && open.has(p.id));
-  if (same.length && !await app.confirmReplace({ file, same: same.map(p => ({ incoming: p, current: open.get(p.id), projects: (data.projects || []).filter(pr => pr.propertyId === p.id).length })) })) {
+  const inFile = new Set((data.projects || []).map(pr => pr.id));
+  const same = (data.properties || []).filter(p => p && open.has(p.id) &&
+    (!sameJson(open.get(p.id), p) || ws.data.projects.some(pr => pr.propertyId === p.id && !inFile.has(pr.id))));
+  if (same.length && !(opts && opts.asked) && !await app.confirmReplace({ file, same: same.map(p => ({ incoming: p, current: open.get(p.id), projects: (data.projects || []).filter(pr => pr.propertyId === p.id).length })) })) {
     setSaveStatus('KEPT WHAT IS OPEN', false);
     return [];
   }
@@ -401,7 +406,7 @@ export async function linkProjectFolder(prop, opts) {
   const existing = (await listFolder(dir)).find(en => en.name === projectFileName(prop));
   if (existing) {
     const choose = opts.choose || (en => (window.confirm(dir.name + ' already holds ' + en.name + ' (saved ' + new Date(en.lastModified).toLocaleString() + '). Open it?\n\nOK opens that file and replaces this browser\'s copy of ' + prop.name + '. Cancel keeps this browser\'s copy and saves it beside the file under a new name.') ? 'open' : 'keep'));
-    if ((await choose(existing)) === 'open') { saveFolderMap(); notify(); await openFromFolder(existing, dir); return dir; }
+    if ((await choose(existing)) === 'open') { saveFolderMap(); notify(); await openFromFolder(existing, dir, { asked: true }); return dir; }
   }
   saveFolderMap();
   notify();
@@ -440,10 +445,10 @@ export async function listFolder(folder) {
 }
 
 // Open a listed file and keep that property in the folder it came from.
-export async function openFromFolder(entry, folder) {
+export async function openFromFolder(entry, folder, opts) {
   folder = folder || entry.folder || state.folder;
   const file = await entry.handle.getFile();
-  const ids = await openFromFile(file);
+  const ids = await openFromFile(file, opts);
   if (ids && ids.length === 1) {
     const id = ids[0], record = { file: entry.name, sig: signatureOf(id), mtime: file.lastModified };
     const before = state.folderMap[id];
