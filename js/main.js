@@ -503,7 +503,7 @@ function openFileMenu(initialTab = 'project', selected) {
     if(!e.target.open||!diskWorkspace||cleanupChecked)return;cleanupChecked=true;
     cleanupText=await import('./mac-cleanup.js');cleaner=await cleanupText.macCleanup();macBox.hidden=!cleaner;});
   const showPlan=(plan,lead='')=>{
-    cleanupPlan=plan;const touch=matchMedia('(pointer: coarse)').matches;
+    cleanupPlan=plan;const touch=!cleanupText.removesHere();
     macPlanText.textContent=lead+cleanupText.describePlan(plan,fmtBytes)+(plan.count&&touch?' Removing is done from Tiksi on the Mac itself.':'');
     macRemove.hidden=!plan.count||touch;};
   on('[data-mac-cleanup-list]',()=>run(async()=>{showPlan(await cleaner.list());return cleanupPlan.count?'Nothing is removed until REMOVE is pressed.':'Nothing to remove.';}));
