@@ -1880,7 +1880,10 @@ async function pinPicture(photo, wanted) {
     if (!bytes || !wanted()) return null;
     const blob = new Blob([bytes], { type: photo.mime || 'image/jpeg' });
     const landscape = photoAspect(photo) >= 1;
-    try { return await createImageBitmap(blob, landscape ? { resizeWidth: PIN_CARD, resizeQuality: 'high' } : { resizeHeight: PIN_CARD, resizeQuality: 'high' }); }
+    // 'from-image': a phone photo is stored on its side with a note to turn it. The card is
+    // shaped from the turned picture, so the decode must turn it too (never left to a default).
+    const size = landscape ? { resizeWidth: PIN_CARD } : { resizeHeight: PIN_CARD };
+    try { return await createImageBitmap(blob, { ...size, resizeQuality: 'high', imageOrientation: 'from-image' }); }
     catch (e) { /* a browser without resize options: fall through to the plain decode */ }
   }
   const url = await photoUrl(photo.id);
