@@ -139,8 +139,8 @@
   position: fixed; inset: 0; z-index: 60; background: #05070aee;
   display: grid; grid-template-columns: 64px 1fr 64px; align-items: center;
 }
-.ph-lb-fig { margin: 0; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px 0; min-width: 0; }
-.ph-lb-fig img { max-width: 100%; max-height: calc(100vh - 96px); object-fit: contain; box-shadow: 0 20px 80px #000000aa; border: 1px solid var(--line-2); }
+.ph-lb-fig { margin: 0; height: 100vh; height: 100dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px 0; min-width: 0; }
+.ph-lb-fig img { max-width: 100%; max-height: calc(100vh - 96px); max-height: calc(100dvh - 96px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); object-fit: contain; box-shadow: 0 20px 80px #000000aa; border: 1px solid var(--line-2); }
 .ph-lightbox.pano .ph-lb-fig img { width: 100%; }
 .ph-lb-cap { display: flex; flex-direction: column; align-items: center; gap: 2px; text-align: center; }
 .ph-lb-cap b { font-size: 13px; color: var(--ink); }
@@ -151,9 +151,51 @@
   font-family: var(--sans);
 }
 .ph-lb-btn:hover, .ph-lb-btn:focus-visible { color: var(--accent); border-color: var(--accent); outline: none; }
-.ph-lb-close { position: fixed; top: 14px; right: 16px; font-size: 20px; width: 40px; height: 40px; }
+.ph-lb-close { position: fixed; top: calc(14px + env(safe-area-inset-top, 0px)); right: calc(16px + env(safe-area-inset-right, 0px)); font-size: 20px; width: 44px; height: 44px; z-index: 1; }
 .ph-lb-prev { grid-column: 1; }
 .ph-lb-next { grid-column: 3; }
+
+/* The details sheet's own close button: only where the details slide over the gallery. */
+.ph-sheet-close { display: none; }
+
+/* ---------- small screens: one column, the camera first, the details as a sheet ----------
+   Same query as the phone layout (js/field.js SMALL). The gallery takes the whole width; a
+   tapped photo's details slide up over it, and CLOSE (or the photo again) puts them away. */
+@media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
+  .ph-layout { display: block; height: 100%; }
+  .ph-main { height: 100%; }
+  .ph-head { padding: 12px 12px 8px; }
+  .ph-head-actions { flex-wrap: wrap; width: 100%; }
+  .ph-head-actions .btn { flex: 1 1 auto; }
+  .ph-head-actions [data-act=camera] { order: -1; flex-basis: 100%; background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .ph-hint { display: none; }
+  .ph-filters { padding: 0 12px; flex-wrap: wrap; }
+  .ph-filters select { flex: 1 1 140px; max-width: none; }
+  .ph-filters .search-input { width: 100%; flex: 1 1 100%; }
+  /* No fanned deck under a finger: plain rows, nothing overlaps. */
+  .ph-grid { padding: 4px 12px calc(24px + env(safe-area-inset-bottom, 0px)); grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); grid-auto-rows: auto; }
+  .ph-card, .ph-card.lift { transform: none; box-shadow: none; }
+  .ph-card.pano { grid-column: 1 / -1; }
+  .ph-detail {
+    position: fixed; z-index: 45; left: 0; right: 0; bottom: 0; max-height: 82vh; max-height: 82dvh; overflow-y: auto;
+    width: auto; border-left: 0; border-top: 1px solid var(--line-2); border-radius: 14px 14px 0 0;
+    background: var(--panel); box-shadow: 0 -12px 40px #000000aa;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    transform: translateY(105%); visibility: hidden; transition: transform 240ms var(--ease), visibility 0s linear 240ms;
+  }
+  .ph-layout.sheet-open .ph-detail { transform: none; visibility: visible; transition: transform 240ms var(--ease), visibility 0s; }
+  .ph-sheet-close {
+    display: flex; align-items: center; justify-content: center; position: sticky; top: 0; z-index: 2; width: 100%; min-height: 44px;
+    background: var(--panel); border: 0; border-bottom: 1px solid var(--line); color: var(--dim);
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em;
+  }
+  .ph-send { grid-template-columns: 1fr; }
+  .ph-send .btn { font-size: 12px; }
+  .ph-send .ph-mat select { flex: 0 0 96px; max-width: 96px; }
+  .ph-note { font-size: 12px; }
+  .ph-lightbox { grid-template-columns: 48px 1fr 48px; }
+}
+@media (prefers-reduced-motion: reduce) { .ph-detail { transition: none !important; } }
 
 /* ---------- topbar export menu (bundle vs JSON; owned by the photos+data stream) ---------- */
 .tb-menu {

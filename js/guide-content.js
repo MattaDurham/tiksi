@@ -452,6 +452,25 @@ export const chapters = [
     related: ['files', 'model'],
   },
   {
+    id: 'phone', group: 'Reference', title: 'Use Tiksi on a phone', path: 'The side panel (the menu button)',
+    intro: 'On a phone Tiksi opens on the model, full screen, with one side panel behind the menu button at the top left. The panel offers capture first, then the model\'s views and switches, then every page, the GUIDE and FILE. Controls are sized for a finger on any touch screen; a narrow window on a computer keeps its mouse sizes.',
+    steps: [
+      'Tap the menu button. TAKE A PHOTO opens the camera: the photo joins this property\'s PHOTOS, and MODEL asks you to tap where it was taken. ADD A NOTE asks you to tap where the note belongs. DONE in the banner over the model stops either.',
+      'Under View, Saved views, Show, Tags and Levels, flip what the model shows; the panel stays open for the next switch. Quality on this device sets how finely this phone draws, separately from the computer.',
+      'Under Pages, open any page, the GUIDE or FILE. The bar at the top of each page keeps the menu button, the page name and the save state; tap the save state for its full wording.',
+      'DESKTOP LAYOUT at the foot of the panel shows the computer\'s layout on this phone. PHONE LAYOUT in its top bar comes back.',
+    ],
+    features: [
+      ['PHOTOS on a phone', 'One column with the camera first. A tapped photo\'s details slide up over the gallery; CLOSE, or the photo again, puts them away.'],
+      ['PROJECTS on a phone', 'Scope items stack as cards with their numbers labelled. Removing an item asks first, since PROJECTS has no undo.'],
+      ['SCHEDULE on a phone', 'Tap a bar for its dates and slack; the line above the chart shows them.'],
+      ['DOCUMENTS on a phone', 'Sheets and saved documents are for looking at: arrange sheets and save PDFs on the Mac. Product documents in the project folder open on the Mac running Tiksi.'],
+      ['PHOTO TO 3D on a phone', 'The camera takes one photo per tap. TAKE A PHOTO then reads TAKE ANOTHER PHOTO with the count so far; CLEAR SELECTION starts the count again.'],
+    ],
+    note: 'A phone keeps only what it has not sent yet; the Mac holds the project. The save state in the bar says whether everything has reached it.',
+    related: ['photos', 'model', 'settings'],
+  },
+  {
     id: 'shortcuts', group: 'Reference', title: 'Shortcuts and common questions',
     intro: 'Use the visible tooltips and inspector labels when you forget a control. These are the most useful navigation, saving and recovery patterns.',
     features: [
@@ -461,7 +480,7 @@ export const chapters = [
       ['Model navigation', 'Drag or middle-drag: orbit. Shift+drag or right-drag: pan. Wheel or pinch: zoom. F: frame. O: orbit. W: walk. T: top. C: section. X: X-ray. G: the Scan capture tag. K: the Furniture and fixtures tag. Page Up / Page Down: previous or next saved view. M: move walls. D: measure. P: pin photo. N: note. Right-click: note menu.'],
       ['Geometry undo', 'Top-bar UNDO / REDO work in PLAN, MODEL and MEASURE (applied tape readings). Cmd/Ctrl+Z: undo. Cmd/Ctrl+Shift+Z or Ctrl+Y: redo. History is per project for the current session. Escape ends an active tool action.'],
       ['Move one wall', 'Alt/Option while dragging isolates that wall from the normal connected-wall behavior; floors stay where they are.'],
-      ['Where is save/import?', 'Open FILE at the top. Project handles .tiksi files; Import handles captures and photos; 3D exchange handles editing in other applications.'],
+      ['Where is save/import?', 'Open FILE at the top (on a phone, FILE in the side panel). Project handles .tiksi files; Import handles captures and photos; 3D exchange handles editing in other applications.'],
       ['Why is my phone empty?', 'Use the same Mac and server port through Tailscale. Reload the phone web app after an upgrade, then check the connection and SAVED TO DISK status. The local server shares every saved project and its assets. The static hosted edition and branch previews are separate workspaces.'],
       ['Why is a model untextured?', 'Import the complete texture package or a self-contained GLB. An OBJ or glTF that points to missing files cannot supply those images.'],
       ['Why is reconstruction disabled?', 'Check the local engine status and the photo count. The native engine requires supported Mac hardware and at least 20 original images.'],

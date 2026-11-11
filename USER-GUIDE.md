@@ -28,6 +28,7 @@ Open **GUIDE** at the top of Tiksi for chapter search, expandable screenshots an
 - [Make a drawing set from the model](#documents)
 - [Send the client a one-pager](#one-pager)
 - [Settings, backups and storage](#settings)
+- [Use Tiksi on a phone](#phone)
 - [Shortcuts and common questions](#shortcuts)
 
 <a id="start"></a>
@@ -765,6 +766,35 @@ Settings groups display, model environment and workspace maintenance. This synth
 
 > **Good to know:** Local-server project files are authoritative. Migration preserves a recovery bundle before removing old browser data. SAVED TO DISK — CLOSE OLDER TIKSI TABS means the files are saved; close older app tabs to finish browser cleanup. Converter and reconstruction jobs are separate copies, so removing a job does not manage the saved project files.
 
+<a id="phone"></a>
+
+## Use Tiksi on a phone
+
+**Where:** The side panel (the menu button)
+
+On a phone Tiksi opens on the model, full screen, with one side panel behind the menu button at the top left. The panel offers capture first, then the model's views and switches, then every page, the GUIDE and FILE. Controls are sized for a finger on any touch screen; a narrow window on a computer keeps its mouse sizes.
+
+### Try it
+
+1. Tap the menu button. TAKE A PHOTO opens the camera: the photo joins this property's PHOTOS, and MODEL asks you to tap where it was taken. ADD A NOTE asks you to tap where the note belongs. DONE in the banner over the model stops either.
+2. Under View, Saved views, Show, Tags and Levels, flip what the model shows; the panel stays open for the next switch. Quality on this device sets how finely this phone draws, separately from the computer.
+3. Under Pages, open any page, the GUIDE or FILE. The bar at the top of each page keeps the menu button, the page name and the save state; tap the save state for its full wording.
+4. DESKTOP LAYOUT at the foot of the panel shows the computer's layout on this phone. PHONE LAYOUT in its top bar comes back.
+
+### Other features here
+
+**PHOTOS on a phone.** One column with the camera first. A tapped photo's details slide up over the gallery; CLOSE, or the photo again, puts them away.
+
+**PROJECTS on a phone.** Scope items stack as cards with their numbers labelled. Removing an item asks first, since PROJECTS has no undo.
+
+**SCHEDULE on a phone.** Tap a bar for its dates and slack; the line above the chart shows them.
+
+**DOCUMENTS on a phone.** Sheets and saved documents are for looking at: arrange sheets and save PDFs on the Mac. Product documents in the project folder open on the Mac running Tiksi.
+
+**PHOTO TO 3D on a phone.** The camera takes one photo per tap. TAKE A PHOTO then reads TAKE ANOTHER PHOTO with the count so far; CLEAR SELECTION starts the count again.
+
+> **Good to know:** A phone keeps only what it has not sent yet; the Mac holds the project. The save state in the bar says whether everything has reached it.
+
 <a id="shortcuts"></a>
 
 ## Shortcuts and common questions
@@ -785,7 +815,7 @@ Use the visible tooltips and inspector labels when you forget a control. These a
 
 **Move one wall.** Alt/Option while dragging isolates that wall from the normal connected-wall behavior; floors stay where they are.
 
-**Where is save/import?.** Open FILE at the top. Project handles .tiksi files; Import handles captures and photos; 3D exchange handles editing in other applications.
+**Where is save/import?.** Open FILE at the top (on a phone, FILE in the side panel). Project handles .tiksi files; Import handles captures and photos; 3D exchange handles editing in other applications.
 
 **Why is my phone empty?.** Use the same Mac and server port through Tailscale. Reload the phone web app after an upgrade, then check the connection and SAVED TO DISK status. The local server shares every saved project and its assets. The static hosted edition and branch previews are separate workspaces.
 

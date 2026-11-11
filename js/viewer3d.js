@@ -1961,7 +1961,8 @@ function pinHint() {
   const left = prop.photos.filter(p => !p.pin).length;
   return 'PIN: click the wall or surface to hang "' + ph.name + '" on' + (pinBatch && left > 1 ? ' (' + left + ' to place; the next one follows)' : '') + '. Esc stops.';
 }
-function startPinMode(photoId) {
+// one: place just this photo and stop (a photo just taken on a phone), not the next unpinned one.
+function startPinMode(photoId, one = false) {
   endMatch();
   showMarkers('pins');
   tool = 'pin';
@@ -1969,7 +1970,7 @@ function startPinMode(photoId) {
   pinPhotoId = photoId || (first && first.id) || pinPhotoId || (prop.photos[0] && prop.photos[0].id) || null;
   const ph = pinPhotoId && photoById(prop, pinPhotoId);
   // Placing a new photo chains on to the next unpinned one; MOVE PIN re-places just the one.
-  pinBatch = !!(ph && !ph.pin);
+  pinBatch = !one && !!(ph && !ph.pin);
   gizmo.detach();
   renderToolCol(); renderInspector();
   setHint(pinHint());
@@ -4590,7 +4591,7 @@ function openModel(root) {
   el = root;
   if (!prop) {
     root.innerHTML = `<div class="view-scroll"><div class="kicker">MODEL</div>
-      <p class="muted">No property yet. Create one from the PROPERTY selector in the top bar.</p></div>`;
+      <p class="muted">No property yet. Create one with NEW PROPERTY under FILE.</p></div>`;
     return;
   }
   ensureDefaults(prop);
@@ -4678,7 +4679,7 @@ function openModel(root) {
   // Deep link from the PHOTOS view: #/model?pin=<photoId> enters PIN PHOTO for that photo.
   const m = /[?&]pin=([^&]+)/.exec(location.hash);
   if (m) {
-    if (photoById(prop, decodeURIComponent(m[1]))) startPinMode(decodeURIComponent(m[1]));
+    if (photoById(prop, decodeURIComponent(m[1]))) startPinMode(decodeURIComponent(m[1]), /[?&]one=1\b/.test(location.hash));
     // Consume the query so a reload, Back or a bookmark returns to the plain model view
     // (replaceState does not fire hashchange, so the router is not re-entered).
     history.replaceState(null, '', '#/model');
