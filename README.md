@@ -229,7 +229,10 @@ smaller copy of a picture (`?size=256|512|1024|2048`), mark a save with a `saveI
 so a repeat is not committed twice (`GET /api/workspace/saves?id=<id>`), and take a
 project whose file is gone for good off the list
 (`POST /api/workspace/unavailable/<id>/forget`, for a project whose file is missing;
-no file is touched). Nothing the Mac cannot make again is removed on its own: every
+no file is touched). The revision answer (`/api/workspace/head`) also carries
+`codeVersion`, a fingerprint of `index.html`, `js/`, `css/` and `vendor/` by path,
+size and time modified, read again at most every 5 seconds, so an open page notices
+that the Mac now serves different code without a restart. Nothing the Mac cannot make again is removed on its own: every
 saved catalog copy and stored original stays until a clean-up is asked for.
 `GET /api/workspace/cleanup` lists what one would remove (catalog copies beyond the
 newest 50, one a day for 90 days and one a month; stored originals nothing kept refers

@@ -216,6 +216,8 @@ class WorkspaceService:
     run = staticmethod(subprocess.run)
 
     def __init__(self, root, projects_dir=None):
+        # Set by the server that serves the app (tools/serve.py): the fingerprint of its files.
+        self.code_version = None
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / 'blobs').mkdir(exist_ok=True)
@@ -1097,7 +1099,9 @@ class WorkspaceService:
                     self.refresh()
                     revision = self.state['revision']
                 asked = parse_qs(urlsplit(h.path).query).get('saveId', [None])[0]
-                self.reply(h, 200, {'revision': revision, **({'save': self.save_answer(asked)} if asked is not None else {})})
+                # What code the Mac now serves: an open page from older code reloads when idle.
+                code = {'codeVersion': self.code_version.value()} if self.code_version else {}
+                self.reply(h, 200, {'revision': revision, **code, **({'save': self.save_answer(asked)} if asked is not None else {})})
             elif path == '/api/workspace/saves' and h.command == 'GET':
                 # Did the Mac commit the save with this id? ?id=<save id>
                 asked = parse_qs(urlsplit(h.path).query).get('id', [None])[0]

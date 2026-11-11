@@ -463,6 +463,8 @@ def main():
         sys.path.insert(0, str(ROOT))
         from server.workspace import WorkspaceService
         server.workspace = WorkspaceService(args.state_dir / 'workspace', args.projects_dir)
+        from server.code_version import CodeVersion
+        server.workspace.code_version = CodeVersion(ROOT)
         server.reconstruction = None
         server.material_research = None
         if (ROOT / 'server/reconstruction.py').exists():
