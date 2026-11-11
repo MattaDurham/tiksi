@@ -27,6 +27,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve, extname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, webkit, devices } from 'playwright';
+import { writeGlb, boxGeometry } from './synthetic-model.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const server = createServer(async (req, res) => {
@@ -57,7 +58,7 @@ async function waitUntil(predicate, message, ms = 60_000) {
 const PROBE = () => {
   localStorage.setItem('tiksi.onScreen.v1', '{"all":true}');   // MODEL's tools on the screen (tiksi-menu.js)
   const P = WebGL2RenderingContext.prototype;
-  const probe = window.__probe = { draws: 0, failDraws: false, decodes: [], loading: 0, mostLoading: 0 };
+  const probe = window.__probe = { draws: 0, failDraws: false, decodes: [], shapes: [], loading: 0, mostLoading: 0 };
   for (const name of ['drawElements', 'drawArrays', 'drawElementsInstanced', 'drawArraysInstanced', 'drawRangeElements']) {
     const real = P[name]; if (!real) continue;
     P[name] = function () { probe.draws++; return real.apply(this, arguments); };
@@ -78,14 +79,14 @@ const PROBE = () => {
   window.createImageBitmap = async function (source) {
     const photo = source instanceof Blob && source.size > 20000;
     if (photo) began();
-    try { const b = await bitmap.apply(this, arguments); if (photo) probe.decodes.push(Math.max(b.width, b.height)); return b; }
+    try { const b = await bitmap.apply(this, arguments); if (photo) { probe.decodes.push(Math.max(b.width, b.height)); probe.shapes.push([b.width, b.height]); } return b; }
     finally { if (photo) probe.loading--; }
   };
 };
 
 // One house (6 x 4 m, one oak room) and what `options` adds:
 //   shell      a 30,000-triangle box scan beside the house ('scan-shell')
-//   note       a note pinned to the floor at (3, 2)
+//   note       a note pinned on the inside of the back wall
 //   photos     that many 2400 x 1800 photos pinned along the back wall
 //   rooms      that many 3 x 3 m rooms instead of the one, at night
 //   compare    a before / after pair: 'scan-shell' hidden as before, 'scan-after' shown
@@ -123,7 +124,7 @@ const seed = (page, quality, options = {}) => page.evaluate(async ([quality, opt
     await s.putFile('scan-cloud', new TextEncoder().encode(rows).buffer, { format: 'xyz' });
     scan('scan-cloud', 'Cloud.xyz', 'xyz', 'points', true, { pointSize: 0.03, pointColor: 'solid', budget: 2000000 });
   }
-  if (options.note) p.notePins.push({ id: 'note-1', text: 'Check this corner', roomId: '', elementIds: [], createdAt: '2024-06-21T12:00:00.000Z', x: 3, y: 0.02, z: 2, nx: 0, ny: 1, nz: 0 });
+  if (options.note) p.notePins.push({ id: 'note-1', text: 'Check this corner', roomId: '', elementIds: [], createdAt: '2024-06-21T12:00:00.000Z', x: 5, y: 1.9, z: 0.09, nx: 0, ny: 0, nz: 1 });
   if (options.photos) {
     const canvas = document.createElement('canvas'); canvas.width = 2400; canvas.height = 1800;
     const ctx = canvas.getContext('2d');
@@ -132,9 +133,18 @@ const seed = (page, quality, options = {}) => page.evaluate(async ([quality, opt
       const g = ctx.createLinearGradient(0, 0, 2400, 1800); g.addColorStop(0, 'hsl(' + i * 50 + ' 60% 55%)'); g.addColorStop(1, '#223');
       ctx.fillStyle = g; ctx.fillRect(0, 0, 2400, 1800);
       for (let k = 0; k < 60; k++) { ctx.fillStyle = 'hsl(' + (k * 37 + i * 11) % 360 + ' 70% 50%)'; ctx.fillRect((k * 397) % 2300, (k * 211) % 1700, 90, 70); }
-      const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.9));
+      let blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.9));
+      // The second photo is stored on its side with a note to turn it a quarter turn (Exif
+      // orientation 6), as a phone held upright stores one: shown, it is 1800 x 2400.
+      if (i === 1) {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const exif = [0xFF, 0xE1, 0x00, 0x22, 0x45, 0x78, 0x69, 0x66, 0x00, 0x00, 0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        blob = new Blob([bytes.slice(0, 2), new Uint8Array(exif), bytes.slice(2)], { type: 'image/jpeg' });
+      }
       const rec = await photos.addPhotoFromFile(p, new File([blob], 'Site ' + (i + 1) + '.jpg', { type: 'image/jpeg' }));
-      rec.pin = { x: 0.6 + i * 0.9, y: 1.5, z: 0.09, nx: 0, ny: 0, nz: 1 };
+      // Along the inside of the back wall; the last one flat on the floor just behind the front
+      // wall, face up toward the overview camera but hidden from it by that wall.
+      rec.pin = i === options.photos - 1 ? { x: 3, y: 0.06, z: 2.9, nx: 0, ny: 1, nz: 0 } : { x: 0.6 + i * 0.9, y: 1.5, z: 0.09, nx: 0, ny: 0, nz: 1 };
     }
   }
   s.ws.data.properties.push(p); s.ws.data.settings.activePropertyId = p.id;
@@ -146,7 +156,7 @@ async function openModel(page, quality, options, before) {
   await page.locator('#btn-file').waitFor({ state: 'attached' });
   await seed(page, quality, options);
   if (before) await before(page);
-  await page.evaluate(() => { window.__probe.decodes.length = 0; window.__probe.mostLoading = 0; location.hash = '#/model'; });
+  await page.evaluate(() => { window.__probe.decodes.length = 0; window.__probe.shapes.length = 0; window.__probe.mostLoading = 0; location.hash = '#/model'; });
   await page.locator('canvas.v-canvas').waitFor({ state: 'attached' });
   await settled(page, 'first open');
 }
@@ -215,31 +225,36 @@ async function phoneChecks(browser, say) {
   assert.ok(await page.evaluate(() => document.documentElement.classList.contains('phone')), 'the phone profile gets the phone layout');
 
   // Pinned photos: two at a time, decoded at the card's size, never the 2400-pixel original.
-  const pins = await page.evaluate(() => ({ decodes: window.__probe.decodes.slice(), most: window.__probe.mostLoading }));
+  const pins = await page.evaluate(() => ({ decodes: window.__probe.decodes.slice(), shapes: window.__probe.shapes.slice(), most: window.__probe.mostLoading }));
   assert.equal(pins.decodes.length, 5, 'each pinned photo gets its sharper picture (' + pins.decodes.join(', ') + ')');
   assert.ok(Math.max(...pins.decodes) <= 1024, 'no photo is decoded larger than its card on a touch device (largest ' + Math.max(...pins.decodes) + ' px)');
   assert.ok(pins.most <= 2, 'photos load two at a time (' + pins.most + ' at once)');
-  say('pinned photos load two at a time at card size (largest ' + Math.max(...pins.decodes) + ' px)');
+  // The photo stored on its side is decoded upright, as its card is shaped.
+  const upright = pins.shapes.filter(([w, h]) => h > w);
+  assert.deepEqual(upright, [[768, 1024]], 'the photo stored on its side is decoded turned upright (' + JSON.stringify(pins.shapes) + ')');
+  say('pinned photos load two at a time at card size (largest ' + Math.max(...pins.decodes) + ' px), turned as stored');
 
-  // A plain tap tests markers only: no triangle of the plan or the scan.
+  const panel = page.locator('#fd-panel'), banner = page.locator('.fd-task:not([hidden])'), bannerText = () => page.locator('.fd-task span').textContent();
+  const openPanel = async () => { await page.locator('.fd-menu').tap(); await panel.locator('.fd-body').waitFor(); };
+  const fromPanel = async selector => { await openPanel(); await panel.locator(selector).first().tap(); };
+
+  // A tap acts on the nearest thing under the finger: a photo hidden behind a wall is not
+  // opened through the wall, and a photo in plain sight is.
   await frame(page);
-  const strip = page.locator('.v-tool-strip');
-  assert.equal(await strip.count(), 0, 'no instruction strip while no tool is on');
-  const [sx, sy] = await onScreen(page, [1.2, 0, 1]);    // the floor of the room
-  await page.evaluate(async () => {
-    const THREE = await import('three');
-    window.__tests = { meshes: 0 };
-    const real = THREE.Mesh.prototype.raycast;
-    window.__countRays = on => { THREE.Mesh.prototype.raycast = on ? function () { if (!this.userData.kind || !['pin', 'note'].includes(this.userData.kind)) window.__tests.meshes++; return real.apply(this, arguments); } : real; };
-    window.__countRays(true);
-  });
-  await page.touchscreen.tap(sx, sy);
-  await delay(200);
-  assert.equal(await page.evaluate(() => window.__tests.meshes), 0, 'a tap in the phone layout tests no surface of the model or the scans');
-  await page.evaluate(() => window.__countRays(false));
+  assert.equal(await banner.count(), 0, 'no banner while no tool is on');
+  const lightbox = page.locator('.v-lightbox');
+  const [hx, hy] = await onScreen(page, [3, 0.06, 2.9]);    // the photo on the floor behind the front wall
+  await page.touchscreen.tap(hx, hy);
+  await delay(600);
+  assert.equal(await lightbox.count(), 0, 'a tap on a wall does not open the photo hung behind it');
+  const [vx, vy] = await onScreen(page, [0.6, 1.5, 0.09]);  // a photo on the back wall, in plain sight
+  await page.touchscreen.tap(vx, vy);
+  await lightbox.waitFor({ timeout: 10000 });
+  await lightbox.locator('.v-lb-close').tap();
+  await lightbox.waitFor({ state: 'detached' });
 
   // A tap on a note opens it.
-  const [nx, ny] = await onScreen(page, [3, 0.02, 2]);
+  const [nx, ny] = await onScreen(page, [5, 1.9, 0.09]);   // the note on the back wall, in plain sight
   await page.touchscreen.tap(nx, ny);
   const editor = page.locator('.v-note-edit');
   await editor.waitFor({ timeout: 5000 });
@@ -248,67 +263,82 @@ async function phoneChecks(browser, say) {
   await editor.locator('[data-save]').click();
   assert.equal(await property(page, 'return p.notePins[0].text'), 'Check this corner again', 'and it can be edited there');
 
-  // Measure by tap, from the panel's call.
-  let st = await viewer(page, 'return v.fieldState()');
-  assert.deepEqual(st.tools, [{ id: 'measure', label: 'Measure', on: false }, { id: 'note', label: 'Note', on: false }], 'the panel is told about Measure and Note');
-  await viewer(page, 'v.fieldAction("tool", "measure")');
-  await strip.waitFor({ timeout: 5000 });
-  assert.match(await strip.innerText(), /MEASURE: tap two points/, 'the view says what a tap does');
-  assert.equal(await strip.locator('[data-strip-done]').count(), 1, 'with a DONE button');
+  // Measure, from the panel's own button.
+  await fromPanel('[data-act="tool"][data-id="measure"]');
+  await banner.waitFor({ timeout: 5000 });
+  assert.match(await bannerText(), /Tap two points to measure/, 'the banner says what a tap does');
+  assert.ok(await page.locator('#fd-panel').evaluate(el => el.inert), 'and the panel has closed so the model can be tapped');
   const [ax, ay] = await onScreen(page, [1.5, 0, 3]), [bx, by] = await onScreen(page, [4.5, 0, 3]);
   await page.touchscreen.tap(ax, ay);
-  await waitUntil(async () => /second point/.test(await strip.innerText()), 'the strip asks for the second point');
+  await waitUntil(async () => /second point/.test(await bannerText()), 'the banner asks for the second point');
   await page.touchscreen.tap(bx, by);
   await waitUntil(async () => (await viewer(page, 'return v.fieldState().measures')) === 1, 'two taps make a measurement');
   assert.equal(await page.locator('.v-mlabel').count(), 1, 'its length is shown');
-  assert.equal(await strip.locator('[data-strip-clear]').count(), 1, 'CLEAR appears once there is a measurement');
-  await strip.locator('[data-strip-clear]').tap();
+  const clear = page.locator('.fd-task-clear');
+  await waitUntil(async () => !(await clear.evaluate(el => el.hidden)), 'CLEAR appears once there is a measurement');
+  await clear.tap();
   assert.equal(await viewer(page, 'return v.fieldState().measures'), 0, 'CLEAR removes it');
-  await strip.locator('[data-strip-done]').tap();
-  await strip.waitFor({ state: 'detached' });
-  assert.equal(await viewer(page, 'return v.fieldState().tool'), 'select', 'DONE leaves the tool');
+  await page.locator('.fd-task-done').tap();
+  await waitUntil(async () => (await banner.count()) === 0, 'DONE takes the banner away');
+  assert.equal(await viewer(page, 'return v.fieldState().tool'), 'select', 'and leaves the tool');
 
-  // A note by tap.
-  await viewer(page, 'v.fieldAction("tool", "note")');
-  await strip.waitFor();
-  assert.match(await strip.innerText(), /NOTE: tap a surface/);
+  // A note, from the panel's own button.
+  await fromPanel('[data-capture="note"]');
+  await banner.waitFor();
+  assert.equal(await bannerText(), 'Tap where the note belongs.');
   const [px, py] = await onScreen(page, [4.5, 0, 1]);
   await page.touchscreen.tap(px, py);
   await editor.waitFor({ timeout: 5000 });
   await editor.locator('textarea').fill('Outlet goes here');
   await editor.locator('[data-save]').click();
   await waitUntil(async () => (await property(page, 'return p.notePins.length')) === 2, 'the tap pins a note');
-  await strip.waitFor({ state: 'detached' });
-  // ... and a tap on it can delete it.
+  await waitUntil(async () => (await banner.count()) === 0, 'the banner goes when the note is pinned');
+  // A tap on it offers DELETE, which asks first: saying no keeps the note, saying yes deletes it.
   const added = await property(page, 'return p.notePins[1]');
   const [dx, dy] = await onScreen(page, [added.x, added.y, added.z]);
   await settled(page, 'after the note');
-  await page.touchscreen.tap(dx, dy);
-  await editor.waitFor({ timeout: 5000 });
-  await editor.locator('[data-delete]').tap();
-  await waitUntil(async () => (await property(page, 'return p.notePins.length')) === 1, 'a tapped note can be deleted');
+  for (const [answer, left] of [['dismiss', 2], ['accept', 1]]) {
+    await page.touchscreen.tap(dx, dy);
+    await editor.waitFor({ timeout: 5000 });
+    let asked = '';
+    page.once('dialog', d => { asked = d.message(); d[answer](); });
+    await editor.locator('[data-delete]').tap();
+    await delay(400);
+    assert.match(asked, /Delete this note/, 'deleting a note asks first');
+    assert.equal(await property(page, 'return p.notePins.length'), left, answer === 'dismiss' ? 'answering no keeps the note' : 'answering yes deletes it');
+    if (answer === 'dismiss') { await editor.locator('[data-cancel]').tap(); await editor.waitFor({ state: 'detached' }); }
+  }
 
   // Pinning a photo from PHOTOS: the instruction and a way out are on the view.
   const photoId = await property(page, 'return p.photos[0].id');
   await page.evaluate(id => { location.hash = '#/model?pin=' + id; }, photoId);
-  await strip.waitFor({ timeout: 10000 });
-  assert.match(await strip.innerText(), /PIN PHOTO: tap the wall or surface to hang "Site 1/, 'pin mode says what a tap does');
-  await strip.locator('[data-strip-done]').tap();
-  await strip.waitFor({ state: 'detached' });
+  await banner.waitFor({ timeout: 10000 });
+  assert.equal(await bannerText(), 'Tap where this photo was taken.', 'pin mode says what a tap does');
+  await page.locator('.fd-task-done').tap();
+  await waitUntil(async () => (await banner.count()) === 0, 'DONE leaves pin mode');
 
-  // Saved views: add, rename, update and delete from the panel's calls.
-  await viewer(page, 'v.fieldAction("save-view")');
-  let views = (await viewer(page, 'return v.fieldState().views'));
-  assert.equal(views.length, 1);
-  await viewer(page, 'v.fieldAction("view-rename", arg, "Kitchen corner")', views[0].id);
-  assert.equal((await viewer(page, 'return v.fieldState().views'))[0].label, 'Kitchen corner', 'a saved view can be renamed');
+  // Saved views, with the panel's own buttons: save, open, rename, update, delete.
+  await fromPanel('[data-act="save-view"]');
+  await waitUntil(async () => (await viewer(page, 'return v.fieldState().views')).length === 1, 'the view is saved');
+  const viewId = (await viewer(page, 'return v.fieldState().views'))[0].id;
+  page.once('dialog', d => d.accept('Kitchen corner'));
+  await panel.locator('[data-act="view-rename"]').tap();
+  await waitUntil(async () => (await viewer(page, 'return v.fieldState().views'))[0].label === 'Kitchen corner', 'a saved view can be renamed from the panel');
+  await panel.locator('.fd-close').tap();
   await viewer(page, 'v.fieldAction("camera", "front")'); await delay(900); await settled(page, 'front view');
   const savedBefore = await property(page, 'return JSON.stringify(p.savedViews[0].camera)');
-  await viewer(page, 'v.fieldAction("view-update", arg)', views[0].id);
-  assert.notEqual(await property(page, 'return JSON.stringify(p.savedViews[0].camera)'), savedBefore, 'updated to the camera it is looking through now');
-  await viewer(page, 'v.fieldAction("view-delete", arg)', views[0].id);
-  assert.equal((await viewer(page, 'return v.fieldState().views')).length, 0, 'and deleted');
-  say('measure, note, pin mode and saved views work by tap and from the panel\'s calls');
+  await fromPanel('[data-act="view-update"]');
+  await waitUntil(async () => (await property(page, 'return JSON.stringify(p.savedViews[0].camera)')) !== savedBefore, 'updated to the camera it is looking through now');
+  page.once('dialog', d => d.dismiss());
+  await panel.locator('[data-act="view-delete"]').tap();
+  await delay(300);
+  assert.equal((await viewer(page, 'return v.fieldState().views')).length, 1, 'deleting a view asks first');
+  page.once('dialog', d => d.accept());
+  await panel.locator('[data-act="view-delete"]').tap();
+  await waitUntil(async () => (await viewer(page, 'return v.fieldState().views')).length === 0, 'and deletes on yes');
+  assert.equal(viewId.length > 0, true);
+  await panel.locator('.fd-close').tap();
+  say('measure, note, pin mode and saved views work from the panel\'s buttons; a hidden photo is not opened through a wall');
 
   // Top view: one finger pans.
   await viewer(page, 'v.fieldAction("mode", "top")'); await delay(1400); await settled(page, 'top view');
@@ -379,7 +409,11 @@ async function touchLimitChecks(browser, say) {
   assert.match(await page.locator('.v-toast').innerText(), /Big\.glb is too large for this device/, 'on the view too');
   // Its line-up would be computed from less than a computer sees: it is refused.
   assert.equal(await viewer(page, 'return v.lineUpSource()'), null, 'a line-up is left to a device that loads every scan');
-  await viewer(page, 'v.fieldAction("load-scan", "scan-big")');
+  // The panel lists it, with why, and a button that loads it anyway.
+  const panel = page.locator('#fd-panel');
+  await page.locator('.fd-menu').tap(); await panel.locator('.fd-body').waitFor();
+  assert.match(await panel.locator('.fd-too-large').innerText(), /Big\.glb[\s\S]*too large for this device \(200 MB/, 'the panel says which scan was not loaded and why');
+  await panel.locator('[data-act="load-scan"][data-id="scan-big"]').tap();
   await waitUntil(async () => (await viewer(page, 'return v.scanStates()'))['scan-big'].state === 'ready', 'LOAD ANYWAY loads it');
   // The same decisions, straight at the loader: over the limit once the bytes are known, and fewer points.
   const loader = await page.evaluate(async () => {
@@ -402,11 +436,32 @@ async function touchLimitChecks(browser, say) {
   assert.match(loader.all, /^4,000 points/, 'and one without draws them all');
   assert.equal((await viewer(page, 'return v.qualityState()')).limits.pointBudget, 500000);
 
+  // Converting a model again stores a new file: its size is recorded, so a model that came out
+  // under the limit is no longer turned away. (The converter is this Mac's; here it is stood in for.)
+  const small = Buffer.from(writeGlb({ looks: [{ name: 'Small', color: [0.4, 0.4, 0.8, 1], roughness: 0.8 }], meshes: [{ geometry: boxGeometry(1, 1, 1), look: 0 }], nodes: [{ name: 'Small', mesh: 0, translation: [0, 0.5, 0] }] }).glb);
+  await page.route('**/api/model-conversion/capabilities', route => route.fulfill({ json: { sketchup: true, token: 'check' } }));
+  await page.route('**/api/model-conversion/convert', route => route.fulfill({ body: small, contentType: 'model/gltf-binary', headers: { 'X-Tiksi-Format': 'glb', 'X-Tiksi-Warnings': '[]', 'X-Tiksi-Job': 'job-check' } }));
+  const reconverted = await page.evaluate(async () => {
+    const s = await import('/js/store.js'), { convertAgain } = await import('/js/model-reconvert.js');
+    const p = s.activeProperty(), scan = p.scans.find(x => x.id === 'scan-big');
+    await s.putFile('source-big', new Uint8Array([1, 2, 3, 4]).buffer, { name: 'Big.skp', format: 'skp', kind: 'source' });
+    scan.originalFileId = 'source-big';
+    const before = scan.bytes;
+    await convertAgain(p, scan, null);
+    return { before, after: scan.bytes };
+  });
+  assert.equal(reconverted.before, 200 * MB);
+  assert.equal(reconverted.after, small.byteLength, 'converting again records the new file\'s size (' + reconverted.after + ' bytes)');
+  await reopenModel(page, 'after converting again');
+  assert.equal((await viewer(page, 'return v.scanStates()'))['scan-big'].state, 'ready', 'so the smaller model loads on this device without being asked');
+  assert.equal((await viewer(page, 'return v.fieldState().tooLarge')).length, 0);
+
   // Before / after from the panel's call.
   assert.deepEqual(st.compare, [{ id: 'before', label: 'Before', on: false }, { id: 'after', label: 'After', on: true }], 'the panel is told about the before / after pair');
   assert.equal(scans['scan-shell'].state, 'hidden');
-  await viewer(page, 'v.fieldAction("compare", "before")');
-  await waitUntil(async () => (await viewer(page, 'return v.scanStates()'))['scan-shell'].state === 'ready', 'BEFORE shows (and loads) the before model');
+  await page.locator('.fd-menu').tap(); await panel.locator('.fd-body').waitFor();
+  await panel.locator('[data-act="compare"][data-id="before"]').tap();
+  await waitUntil(async () => (await viewer(page, 'return v.scanStates()'))['scan-shell'].state === 'ready', 'Before, in the panel, shows (and loads) the before model');
   assert.deepEqual(await property(page, 'return [p.designComparison.view, p.scans.find(x => x.id === "scan-shell").visible, p.scans.find(x => x.id === "scan-after").visible]'), ['before', true, false]);
   say('a scan over the size limit is not loaded and says so; fewer points; before / after from the panel');
 
@@ -419,8 +474,15 @@ async function computerChecks(browser, say) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   await context.addInitScript(PROBE);
   const desk = await context.newPage();
-  const errors = []; desk.on('pageerror', e => errors.push(e.message));
+  const errors = [], requested = [];
+  desk.on('pageerror', e => errors.push(e.message));
+  desk.on('request', r => requested.push(new URL(r.url()).pathname));
+  await desk.goto(url + '/#/plan');
+  await desk.locator('#btn-file').waitFor({ state: 'attached' });
+  await delay(500);
+  assert.deepEqual(requested.filter(u => /pick-(index|tree)\.js/.test(u)), [], 'the picking files are not part of the first load');
   await openModel(desk, 'low', { shell: true, photos: 5, big: true, cloud: true });
+  assert.ok(requested.some(u => /pick-index\.js/.test(u)) && requested.some(u => /pick-tree\.js/.test(u)), 'they are fetched when a scan of 20,000 triangles is shown');
 
   // Unchanged for a computer: the original photographs, every scan whatever its size, every point.
   const pins = await desk.evaluate(() => ({ decodes: window.__probe.decodes.slice(), most: window.__probe.mostLoading }));
@@ -532,10 +594,12 @@ async function textureChecks(browser, say) {
     await context.addInitScript(PROBE);
     if (!withHelper) await context.addInitScript(() => { window.Worker = undefined; });
     const page = await context.newPage();
-    const errors = []; page.on('pageerror', e => errors.push(e.message));
+    const errors = [], requested = [];
+    page.on('pageerror', e => errors.push(e.message));
+    page.on('request', r => requested.push(new URL(r.url()).pathname));
     await openModel(page, 'high', {});
     const stats = await textures(page, 'return t.textureStats()');
-    return { context, page, stats, prints: await fingerprints(page), errors };
+    return { context, page, stats, prints: await fingerprints(page), errors, requested };
   };
   const helped = await shot(true);
   assert.ok(helped.stats.length >= 2 && helped.stats.every(s => s.status === 'ready'));
@@ -573,7 +637,19 @@ async function textureChecks(browser, say) {
   });
   assert.ok(waited.replaced && waited.textured, 'the model is shown in its library material, textures and all');
   assert.ok(waited.others >= 8, 'while ' + waited.others + ' of ' + waited.before + ' other sets were still being made');
+  // Dropping every material (a workspace replaced) tells whoever was waiting for a set at once.
+  const cancelled = await helped.page.evaluate(async () => {
+    const t = await import('/js/textures.js');
+    const record = { id: 'mat-dropped', name: 'Dropped', pattern: 'marble', color: '#d0c8c0', tile: [1, 1], roughness: 0.4, metalness: 0 };
+    const began = performance.now();
+    const told = new Promise(done => t.whenMaterialReady(record, () => done(performance.now() - began)));
+    t.disposeMaterials();
+    return Promise.race([told, new Promise(done => setTimeout(() => done(null), 5000))]);
+  });
+  assert.ok(cancelled !== null && cancelled < 1000, 'a waiter is told when its texture set is cancelled (' + (cancelled === null ? 'never told' : Math.round(cancelled) + ' ms') + ')');
   assert.deepEqual(helped.errors, []);
+  // With no large scan on the property, the picking files were never fetched.
+  assert.deepEqual(helped.requested.filter(u => /pick-(index|tree)\.js/.test(u)), [], 'a property without a large scan fetches no picking files');
 
   // No helper: the page makes the sets itself, with the same pixels.
   const alone = await shot(false);

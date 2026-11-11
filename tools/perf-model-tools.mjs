@@ -8,6 +8,8 @@
 //             what is under the pointer)
 //   lights    the time to draw one full frame at night in a house of 24 rooms, and how many
 //             room lights are lit
+//   room      walking into a room and back out five times: how often the sky lighting is baked
+//             again, and the page time that takes
 //   textures  opening a house that uses 13 library materials: the time the page itself spends
 //             making their textures, and the longest gap between frames meanwhile
 //   slider    30 steps of an opening's position slider on a plan of 40 walls: the page's own
@@ -184,6 +186,26 @@ const scenarios = {
     const result = { rooms: 24, frameMs: round(out.frameMs), worstFrameMs: round(out.worstMs), roomLights: out.state && out.state.roomLights !== undefined ? out.state.roomLights : 'not reported by this checkout (one per room: 24)' };
     await context.close();
     return result;
+  },
+
+  async room(profile) {
+    const { page, context } = await open(profile, async (s, syn, p, L, box) => { box(0, 0, 6, 4, 'room'); });
+    await page.evaluate(async () => {
+      const THREE = await import('three');
+      window.__bakes = { count: 0, ms: 0 };
+      for (const name of ['fromScene', 'fromEquirectangular']) {
+        const real = THREE.PMREMGenerator.prototype[name];
+        THREE.PMREMGenerator.prototype[name] = function () { const t = performance.now(); try { return real.apply(this, arguments); } finally { window.__bakes.count++; window.__bakes.ms += performance.now() - t; } };
+      }
+    });
+    // Walk into the room and orbit back out, five times.
+    for (let i = 0; i < 5; i++) {
+      await viewer(page, 'v.fieldAction("mode", "walk")'); await delay(500); await settled(page);
+      await viewer(page, 'v.fieldAction("mode", "orbit")'); await delay(500); await settled(page);
+    }
+    const out = await page.evaluate(() => window.__bakes);
+    await context.close();
+    return { roomEntriesAndExits: 10, skyBakes: out.count, pageMsBaking: round(out.ms) };
   },
 
   async textures(profile) {
