@@ -6,12 +6,19 @@ import {
 } from './store.js';
 import { icon } from './icons.js';
 import { programSchedule, lastWorkDay } from './program.js';
-import { smallScreen } from './screen.js';
-import { touchDevice } from './render-quality.js';
+import { SMALL, smallScreen } from './screen.js';
+import { touchDevice, TOUCH_DEVICE_QUERY } from './render-quality.js';
 
 let el = null;
-export function mount(root) { el = root; render(); }
-export function unmount() { el = null; }
+// Finger or mouse (an iPad that gains or loses a trackpad) and small or large (a phone turned)
+// can change while the page is open: redraw then, so the rows and tap targets follow.
+let watched = [];
+const redraw = () => render();
+export function mount(root) {
+  el = root; render();
+  try { watched = [TOUCH_DEVICE_QUERY, SMALL].map(q => window.matchMedia(q)); watched.forEach(m => m.addEventListener('change', redraw)); } catch (e) { watched = []; }
+}
+export function unmount() { el = null; watched.forEach(m => m.removeEventListener('change', redraw)); watched = []; }
 
 export { cpm } from './program.js';
 
@@ -98,7 +105,7 @@ function criticalPathLine(x) {
     .sort((a, b) => x.sched[a.id].es - x.sched[b.id].es)
     .map(i => escapeHtml(i.name));
   if (!names.length) return '';
-  return `<div class="mono" style="font-size:11px; margin-top:10px; color:var(--dim); line-height:1.7">
+  return `<div class="mono gantt-legend" style="margin-top:10px; color:var(--dim); line-height:1.7">
     <span style="color:var(--accent); letter-spacing:0.08em">CRITICAL / ${escapeHtml(projectLabel(x.p)).toUpperCase()}:</span>
     ${names.join(' <span style="color:var(--faint)">&rsaquo;</span> ')}
     ${x.cyclic ? ' <span style="color:var(--red)">(dependency cycle detected; some links ignored)</span>' : ''}
@@ -108,7 +115,10 @@ function criticalPathLine(x) {
 // narrow: a small screen, where the name column gives way to the chart. finger: a touch
 // device, where each item row is tall enough to tap.
 function ganttSvg(plans, startIso, programEnd, narrow = false, finger = false) {
-  const LABELW = narrow ? 128 : 236, AXISH = 46, ROWH = finger ? 44 : 26, PROJH = 30, GAP = 10, PAD = 8, NAMECH = narrow ? 15 : 30;
+  const LABELW = narrow ? 128 : 236, AXISH = 46, ROWH = finger ? 44 : 26, PROJH = 30, GAP = 10, PAD = 8;
+  // On a touch device no chart text is under 12 points; the names are cut shorter to fit.
+  const fs = n => finger ? Math.max(12, n) : n;
+  const NAMECH = finger ? (narrow ? 12 : 27) : (narrow ? 15 : 30);
   const span = programEnd + 7;
   const dayW = span <= 45 ? 18 : span <= 90 ? 11 : span <= 180 ? 6.5 : span <= 365 ? 3.4 : 1.8;
   const width = LABELW + span * dayW + 24;
@@ -146,7 +156,7 @@ function ganttSvg(plans, startIso, programEnd, narrow = false, finger = false) {
       const mi = mdt.getMonth();
       if (mi % 2 === 0) svg += `<rect x="${x0}" y="0" width="${x1 - x0}" height="${MONTHH}" fill="rgba(255,255,255,0.03)"/>`;
       const label = mdt.toLocaleDateString('en-US', { month: 'short' }) + (mi === 0 || monthStart === 0 ? ' ' + mdt.getFullYear() : '');
-      if (x1 - x0 > 30) svg += `<text x="${x0 + 6}" y="15" fill="#8f9ca8" font-size="10" font-weight="700" letter-spacing="0.1em">${label.toUpperCase()}</text>`;
+      if (x1 - x0 > (finger ? label.length * 8.5 + 8 : 30)) svg += `<text x="${x0 + 6}" y="15" fill="#8f9ca8" font-size="${fs(10)}" font-weight="700" letter-spacing="0.1em">${label.toUpperCase()}</text>`;
       svg += `<line x1="${x0}" y1="0" x2="${x0}" y2="${chartBottom}" stroke="rgba(255,255,255,0.09)" stroke-width="1"/>`;
       monthStart = day;
     }
@@ -164,7 +174,7 @@ function ganttSvg(plans, startIso, programEnd, narrow = false, finger = false) {
     const isWeek = dow === 1;
     if (dayW >= 6 ? isWeek : dt.getDate() === 1) {
       svg += `<line x1="${X(day)}" y1="${AXISH}" x2="${X(day)}" y2="${chartBottom}" stroke="rgba(255,255,255,0.05)" stroke-width="1"/>`;
-      if (dayW >= 6) svg += `<text x="${X(day) + 3}" y="${AXISH - 8}" fill="#5d6a76" font-size="9">${dt.getDate()}</text>`;
+      if (dayW >= 6) svg += `<text x="${X(day) + 3}" y="${AXISH - 8}" fill="#5d6a76" font-size="${fs(9)}">${dt.getDate()}</text>`;
     }
   }
   svg += `<line x1="0" y1="${AXISH}" x2="${width}" y2="${AXISH}" stroke="rgba(255,255,255,0.12)"/>`;
@@ -180,9 +190,9 @@ function ganttSvg(plans, startIso, programEnd, narrow = false, finger = false) {
       const { p } = r.x;
       const x0 = X(r.x.offset), x1 = X(r.x.finish);
       svg += `<g class="g-rowg"><rect class="g-row" x="0" y="${y}" width="${width}" height="${PROJH}"/>`;
-      svg += `<text x="12" y="${y + 19}" fill="#e9eef3" font-size="11.5" font-weight="700" letter-spacing="0.08em">${escapeHtml(projectLabel(p)).toUpperCase()}</text>`;
+      svg += `<text x="12" y="${y + 19}" fill="#e9eef3" font-size="${fs(11.5)}" font-weight="700" letter-spacing="0.08em">${escapeHtml(projectLabel(p)).toUpperCase()}</text>`;
       svg += `<rect x="${x0}" y="${y + 10}" width="${Math.max(x1 - x0, 2)}" height="8" rx="4" fill="url(#g-proj)" stroke="rgba(232,151,58,0.45)"/>`;
-      svg += `<text x="${x1 + 8}" y="${y + 19}" fill="#5d6a76" font-size="9.5">${fmtDate(lastWorkDay(startIso, r.x.finish))}</text></g>`;
+      svg += `<text x="${x1 + 8}" y="${y + 19}" fill="#5d6a76" font-size="${fs(9.5)}">${fmtDate(lastWorkDay(startIso, r.x.finish))}</text></g>`;
       y += PROJH;
     } else {
       const s = r.x.sched[r.it.id];
@@ -192,7 +202,7 @@ function ganttSvg(plans, startIso, programEnd, narrow = false, finger = false) {
       const name = r.it.name.length > NAMECH ? r.it.name.slice(0, NAMECH - 1) + '…' : r.it.name;
       const detail = `${r.it.name}: ${r.it.durationDays} day${Number(r.it.durationDays) === 1 ? '' : 's'}, ${fmtDate(addDays(startIso, off + s.es))} to ${fmtDate(lastWorkDay(startIso, off + s.ef))}, ${s.critical ? 'on the critical path' : 'slack ' + Math.round(s.slack * 10) / 10 + ' day' + (Math.round(s.slack * 10) / 10 === 1 ? '' : 's')}`;
       svg += `<g class="g-rowg${finger ? ' g-item" data-detail="' + escapeHtml(detail) + '" tabindex="0" role="button" aria-label="' + escapeHtml(detail) : ''}"><rect class="g-row" x="0" y="${y}" width="${width}" height="${ROWH}"/>`;
-      svg += `<text class="g-label" x="24" y="${yc + 3.5}" fill="#8f9ca8" font-size="10.5">${escapeHtml(name)}</text>`;
+      svg += `<text class="g-label" x="24" y="${yc + 3.5}" fill="#8f9ca8" font-size="${fs(10.5)}">${escapeHtml(name)}</text>`;
       // Slack whisker.
       if (s.slack > 0.001) {
         const lx1 = X(off + s.lf);
@@ -213,8 +223,8 @@ function ganttSvg(plans, startIso, programEnd, narrow = false, finger = false) {
           `<rect x="${x0 + 1}" y="${by + 1}" width="${Math.max(bw - 2, 1)}" height="${Math.max(bh / 2 - 1, 1)}" rx="3" fill="rgba(255,255,255,0.06)"/></g>`;
       }
       if (dayW >= 6) {
-        const inside = bw > 34;
-        svg += `<text x="${inside ? x0 + bw / 2 : x1 + 6}" y="${yc + 3.5}" fill="${inside ? (s.critical ? '#2a1a08' : '#dfe8ef') : '#5d6a76'}" font-size="9" font-weight="${inside ? 700 : 400}" text-anchor="${inside ? 'middle' : 'start'}">${dur}d</text>`;
+        const inside = bw > (finger ? 40 : 34);
+        svg += `<text x="${inside ? x0 + bw / 2 : x1 + 6}" y="${yc + 3.5}" fill="${inside ? (s.critical ? '#2a1a08' : '#dfe8ef') : '#5d6a76'}" font-size="${fs(9)}" font-weight="${inside ? 700 : 400}" text-anchor="${inside ? 'middle' : 'start'}">${dur}d</text>`;
       }
       svg += '</g>';
       barPos[r.it.id] = { x0, x1, yc, off, proj: r.x.p.id };
@@ -240,8 +250,9 @@ function ganttSvg(plans, startIso, programEnd, narrow = false, finger = false) {
   if (today >= 0 && today <= span) {
     const tx = X(today);
     svg += `<line x1="${tx}" y1="${MONTHH}" x2="${tx}" y2="${chartBottom}" stroke="#e05252" stroke-width="1.5" stroke-dasharray="3,3"/>`;
-    svg += `<rect x="${tx - 20}" y="${MONTHH + 4}" width="40" height="15" rx="7.5" fill="#e05252"/>`;
-    svg += `<text x="${tx}" y="${MONTHH + 15}" fill="#fff" font-size="8.5" font-weight="700" text-anchor="middle" letter-spacing="0.1em">TODAY</text>`;
+    const pw = finger ? 58 : 40, ph = finger ? 18 : 15;
+    svg += `<rect x="${tx - pw / 2}" y="${MONTHH + 3}" width="${pw}" height="${ph}" rx="${ph / 2}" fill="#e05252"/>`;
+    svg += `<text x="${tx}" y="${MONTHH + (finger ? 16.5 : 15)}" fill="#fff" font-size="${fs(8.5)}" font-weight="700" text-anchor="middle" letter-spacing="0.1em">TODAY</text>`;
   }
 
   svg += '</svg>';
