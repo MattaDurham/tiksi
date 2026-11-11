@@ -17,8 +17,6 @@ import { addPhotoFromFile } from './photos-store.js';
 import { SMALL } from './screen.js';
 
 const PREF = 'tiksi.layout';          // 'phone' | 'desktop' | absent (follow the screen)
-// What a tap on the model does while a capture is under way, said in the banner over it.
-const TASKS = { pin: 'Tap where this photo was taken.', note: 'Tap where the note belongs.' };
 const MENU_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
 const CLOSE_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
 const FRAME_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>';
@@ -144,7 +142,7 @@ function build() {
   task.className = 'fd-task';
   task.setAttribute('role', 'status');
   task.hidden = true;
-  task.innerHTML = '<span></span><button type="button" class="fd-task-done">Done</button>';
+  task.innerHTML = '<span></span><button type="button" class="fd-task-clear" hidden style="flex:none;min-width:64px;min-height:44px;border-radius:10px;border:1px solid var(--line-2);background:transparent;color:var(--ink);font-size:15px;touch-action:manipulation">Clear</button><button type="button" class="fd-task-done">Done</button>';
   // The camera for the panel's TAKE A PHOTO: one photo per tap, added to this property.
   const camera = document.createElement('input');
   camera.type = 'file'; camera.accept = 'image/*'; camera.setAttribute('capture', 'environment');
@@ -159,6 +157,7 @@ function build() {
   els = { bar, menu: bar.querySelector('.fd-menu'), title: bar.querySelector('.fd-title'), save: bar.querySelector('.fd-save'), note, frame, pad, task, scrim, panel, camera, back };
   watchSave();
   task.querySelector('.fd-task-done').onclick = () => { fieldAction('tool', 'select'); refreshChrome(); };
+  task.querySelector('.fd-task-clear').onclick = () => { fieldAction('clear-measures'); refreshChrome(); };
   camera.onchange = () => { const f = camera.files && camera.files[0]; camera.value = ''; if (f) addCapturedPhoto(f); };
 
   els.menu.onclick = () => (open ? close() : show());
@@ -251,9 +250,12 @@ function refreshChrome() {
   const st = phoneLayout() && viewName === 'model' ? fieldState() : null;
   els.frame.hidden = !st;
   els.pad.hidden = !st || st.mode !== 'walk';
-  const task = st && TASKS[st.tool];
+  // MODEL says what a tap does while a tool or PHOTO MODE is on (measuring, noting, placing a
+  // photo), and whether there are measurements to clear.
+  const task = st && st.task;
   els.task.hidden = !task;
-  if (task) els.task.querySelector('span').textContent = task;
+  if (task) els.task.querySelector('span').textContent = task.text;
+  els.task.querySelector('.fd-task-clear').hidden = !(task && task.clear);
   // MODEL ends the tool itself once the tap lands (or chains to the next photo): look again
   // shortly while a banner is up, and stop looking once it is gone.
   clearTimeout(taskTimer);
@@ -294,9 +296,14 @@ function onPanelClick(e) {
   if (t.dataset.page) { close(); return; }      // an ordinary link; the router does the rest
   const act = t.dataset.act;
   if (!act) return;
-  fieldAction(act, t.dataset.id);
-  // Moving the camera closes the panel so the view can be seen; switches stay open for more.
-  if (act === 'mode' || act === 'camera' || act === 'position' || act === 'view') close();
+  // Renaming asks for the name; deleting asks first.
+  let value;
+  if (act === 'view-rename') { value = prompt('Name of this view', t.dataset.label || ''); if (!value || !value.trim()) return; }
+  if (act === 'view-delete' && !confirm('Delete the saved view "' + (t.dataset.label || '') + '"?')) return;
+  fieldAction(act, t.dataset.id, value);
+  // Moving the camera, or starting a tool that waits for taps on the model, closes the panel
+  // so the view can be seen; switches stay open for more.
+  if (act === 'mode' || act === 'camera' || act === 'position' || act === 'view' || act === 'tool' || act === 'compare' || act === 'load-scan') close();
   else render();
   refreshChrome();
 }
@@ -325,8 +332,25 @@ function render() {
         <input type="range" data-section-height min="${st.section.min}" max="${st.section.max}" step="${st.section.step}" value="${st.section.value}" aria-label="Section cut position"></label>` : '';
     // Only switches that do something here: no scan, no furniture, no photos pinned, no notes.
     const show = st.show.filter(s => !s.disabled && s.count !== 0);
+    // Marking up: Measure by two taps (a note is under Capture). The banner over the model then
+    // says what a tap does, with DONE and CLEAR.
+    const measure = st.tools.filter(t => t.id === 'measure').map(t => `<button type="button" class="fd-chip ${t.on ? 'on' : ''}" aria-pressed="${t.on}" data-act="tool" data-id="${t.id}">${escapeHtml(t.label)}</button>`).join('')
+      + (st.measures ? `<button type="button" class="fd-chip" data-act="clear-measures">Clear ${st.measures === 1 ? 'the measurement' : st.measures + ' measurements'}</button>` : '');
+    // The saved view that is open can be renamed, set to what the view shows now, or deleted.
+    const openView = st.views.find(v => v.on);
+    const editView = openView ? `<div class="fd-chips" role="group" aria-label="The open saved view">${[['view-rename', 'Rename'], ['view-update', 'Update to this view'], ['view-delete', 'Delete']]
+      .map(([act, label]) => `<button type="button" class="fd-chip" data-act="${act}" data-id="${escapeHtml(openView.id)}" data-label="${escapeHtml(openView.label)}">${label}</button>`).join('')}</div>` : '';
+    const compare = st.compare.length ? `<div class="fd-segs" role="group" aria-label="Before or after">${st.compare.map(c =>
+      `<button type="button" class="fd-seg ${c.on ? 'on' : ''}" aria-pressed="${c.on}" data-act="compare" data-id="${c.id}">${escapeHtml(c.label)}</button>`).join('')}</div>` : '';
+    // Scans this device did not load because of their size: what and why, and a way to load one anyway.
+    const tooLarge = st.tooLarge.map(s => `<div class="fd-too-large" style="margin:0 0 12px"><div style="font-size:14.5px;color:var(--ink)">${escapeHtml(s.label)}</div>
+        <div style="font-size:13px;line-height:1.4;color:var(--dim);margin:2px 0 8px">Not loaded: ${escapeHtml(s.detail)}. Loading it could close this page.</div>
+        <button type="button" class="fd-chip" data-act="load-scan" data-id="${escapeHtml(s.id)}">Load anyway</button></div>`).join('');
     model = section('View', `<div class="fd-segs" role="group" aria-label="How to move">${modes}</div><div class="fd-chips">${cams}</div>`)
-      + section('Saved views', `<div class="fd-chips">${saved}</div>`)
+      + section('Measure', `<div class="fd-chips">${measure}</div>`)
+      + section('Before and after', compare)
+      + section('Too large for this device', tooLarge)
+      + section('Saved views', `<div class="fd-chips">${saved}</div>${editView}`)
       + section('Positions', spots && `<div class="fd-chips">${spots}</div>`)
       + section('Show', show.map(s => sw('show', s) + (s.id === 'section' ? range : '')).join(''))
       + section('Tags', st.tags.map(t => sw('tag', t)).join(''))

@@ -1326,7 +1326,6 @@ function resize() {
   camera.updateProjectionMatrix();
   if (match) applyMatchFrame();
   for (const m of measures) m.line.material.resolution.set(w * pr, h * pr);
-  renderToolStrip();   // the strip belongs to the phone layout, which a resize can enter or leave
   requestRender(2);
 }
 
@@ -3321,38 +3320,21 @@ function toast(msg, kind, ms) {
 function setHint(text) {
   if (!hud.hint) return;
   hud.hint.textContent = text || defaultHint();
-  renderToolStrip();
 }
 // The phone layout hides the hint line, the tool column and the inspector, and a phone has no
-// Esc key. While a tool or PHOTO MODE is on, a strip over the view says what a tap does and
-// has the way out: DONE (and CLEAR for measurements). Styled inline, like the notices.
-const STRIP_STYLE = 'position:absolute;left:12px;right:12px;bottom:calc(84px + env(safe-area-inset-bottom, 0px));z-index:6;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;background:rgba(9,12,15,0.92);border:1px solid var(--accent,#e8973a);color:var(--ink,#e9eef3);font:13px/1.35 var(--sans,sans-serif);';
-let toolStrip = null;
-function stripText() {
+// Esc key. While a tool or PHOTO MODE is on, this is what a tap does, in a phone's words; the
+// phone panel shows it in its banner over the view, with DONE (and CLEAR for measurements).
+function taskText() {
   if (match) return 'PHOTO MODE: the photo is laid over the model from where it was taken.';
   if (tool === 'measure') {
-    if (measureDraft) return 'MEASURE: tap the second point.';
+    if (measureDraft) return 'Tap the second point.';
     const last = measures[measures.length - 1];
-    return last ? 'MEASURE: ' + fmtLen(last.a.distanceTo(last.b)) + '. Tap two more points for another.' : 'MEASURE: tap two points on any surface.';
+    return last ? fmtLen(last.a.distanceTo(last.b)) + '. Tap two more points for another.' : 'Tap two points to measure between them.';
   }
-  if (tool === 'note') return movingNoteId && noteById(movingNoteId) ? 'MOVE NOTE: tap where the note belongs.' : 'NOTE: tap a surface to pin a note there.';
-  if (tool === 'pin') { const ph = pinPhotoId && photoById(prop, pinPhotoId); return ph ? 'PIN PHOTO: tap the wall or surface to hang "' + ph.name + '" on.' : 'PIN PHOTO: choose a photo on the PHOTOS page first.'; }
+  if (tool === 'note') return 'Tap where the note belongs.';
+  if (tool === 'pin') return pinPhotoId && photoById(prop, pinPhotoId) ? 'Tap where this photo was taken.' : 'Choose a photo on the PHOTOS page first.';
   if (tool === 'move') return 'MOVE WALLS needs the desktop layout.';
   return '';
-}
-function renderToolStrip() {
-  const text = wrapEl && fieldLayout() ? stripText() : '';
-  if (!text) { if (toolStrip) { toolStrip.remove(); toolStrip = null; } return; }
-  if (!toolStrip || toolStrip.parentElement !== wrapEl) {
-    toolStrip = document.createElement('div');
-    toolStrip.className = 'v-tool-strip'; toolStrip.setAttribute('role', 'status'); toolStrip.style.cssText = STRIP_STYLE;
-    wrapEl.appendChild(toolStrip);
-  }
-  const clear = tool === 'measure' && measures.length > 0;
-  toolStrip.innerHTML = `<span style="flex:1;min-width:0">${escapeHtml(text)}</span>${clear ? '<button type="button" class="btn small" data-strip-clear style="width:auto;padding:10px 12px">CLEAR</button>' : ''}<button type="button" class="btn small primary" data-strip-done style="width:auto;padding:10px 14px">DONE</button>`;
-  toolStrip.querySelector('[data-strip-done]').onclick = () => { if (match) endMatch(); else setTool('select'); };
-  const c = toolStrip.querySelector('[data-strip-clear]');
-  if (c) c.onclick = () => { clearMeasures(); renderToolCol(); renderToolStrip(); requestRender(2); };
 }
 function defaultHint() {
   if (mode === 'walk') return walkLocked ? 'WALK: WASD / arrows move, Shift runs, mouse looks. Esc releases the mouse.' : 'WALK: WASD / arrows move, Shift runs. Drag to look or click to capture the mouse. Esc exits.';
@@ -4631,7 +4613,7 @@ function openModel(root) {
   for (const k of Object.keys(notices)) delete notices[k];
   appliedQuality = null; renderFailed = false;
   scanQueue = Promise.resolve();   // this visit's own queue (see loadScans)
-  toolStrip = null; rebuildQueued = false;
+  rebuildQueued = false;
   pinQueue.length = 0;   // pictures the last visit was still waiting to load
   mountId++;
 
@@ -4897,6 +4879,8 @@ export function fieldState() {
     tool,
     tools: [{ id: 'measure', label: 'Measure', on: tool === 'measure' }, { id: 'note', label: 'Note', on: tool === 'note' }],
     measures: measures.length,
+    // What a tap does now, for the banner: null while no tool and no PHOTO MODE is on.
+    task: taskText() ? { text: taskText(), clear: tool === 'measure' && measures.length > 0 } : null,
     // Scans not loaded because they are over this device's size limit; 'load-scan' loads one anyway.
     tooLarge: prop.scans.filter(sc => scanState[sc.id] === 'too-large').map(sc => ({ id: sc.id, label: sc.name, detail: tooLargeText(sc) })),
     // The before / after pair, when the property has one.
@@ -4927,12 +4911,14 @@ export function fieldAction(kind, id, value) {
   // Tools by tap. Choosing the tool that is on switches it off.
   else if (kind === 'tool') {
     if (mode === 'walk') setMode('orbit');
+    // DONE ends PHOTO MODE too (choosing 'select' with no tool on).
+    if (id === 'select' && match) endMatch();
     if (id === tool || id === 'select') setTool('select');
     else if (id === 'measure') setTool('measure');
     else if (id === 'note') startNoteMode(null);
   }
   else if (kind === 'load-scan') loadScanAnyway(id);
-  else if (kind === 'clear-measures') { clearMeasures(); renderToolCol(); renderToolStrip(); requestRender(2); }
+  else if (kind === 'clear-measures') { clearMeasures(); renderToolCol(); requestRender(2); }
   else if (kind === 'compare') { if (compareDesign && prop.designComparison && (id === 'before' || id === 'after')) compareDesign(id); }
   else if (kind === 'tag') toggleTag(id || UNTAGGED);
   else if (kind === 'level') toggleLevel(id);
