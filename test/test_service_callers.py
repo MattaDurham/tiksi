@@ -147,7 +147,8 @@ class ServiceCallers(unittest.TestCase):
             def setup(self):
                 super().setup()
                 self.client_address = (test.caller, self.client_address[1])
-            def log_message(self, *args): pass
+            def log_message(self, format, *args): test.logged.append(format % args)
+        self.logged = []
         self.server = server = serve.AppServer(('127.0.0.1', 0), Handler)
         server.instance_file = None; server.allowed_hostname = '127.0.0.1'; server.allowed_hosts = []; server.remote_access = False
         server.workspace = WorkspaceService(state / 'workspace', state / 'projects')
@@ -215,6 +216,43 @@ class ServiceCallers(unittest.TestCase):
             self.caller = '127.0.0.1'
             self.assertEqual(self.call('/api/workspace/capabilities', headers=PAGE_HEADERS['workspace'])[0], 200, 'this Mac is still served')
         self.assertEqual(self.seen, ['workspace'])
+
+    def test_routine_successful_reads_are_not_logged_but_writes_and_failures_are(self):
+        token = json.loads(self.call('/api/workspace/capabilities', headers=PAGE_HEADERS['workspace'])[1])['token']
+        for _ in range(5):
+            self.assertEqual(self.call('/api/workspace/head', headers={**PAGE_HEADERS['workspace'], 'X-Tiksi-Token': token})[0], 200)
+        self.assertEqual(self.call('/index.html')[0], 200)
+        self.assertEqual(self.logged, [], 'every page polls every few seconds; those reads fill no log')
+        self.assertEqual(self.call('/js/not-there.js')[0], 404)
+        self.call('/api/workspace/recovery', 'POST', {**PAGE_HEADERS['workspace'], 'X-Tiksi-Token': token}, b'{}')
+        self.assertTrue(any('404' in line for line in self.logged), self.logged)
+        self.assertTrue(any('POST /api/workspace/recovery' in line for line in self.logged), self.logged)
+
+    def test_through_tailscale_serve_only_signed_in_tailnet_devices_get_services(self):
+        # Tailscale Serve and Funnel both pass requests on from this Mac, under the Mac's https name.
+        self.server.allowed_hosts = ['mac.example-tailnet.ts.net']
+        proxied = {'Host': 'mac.example-tailnet.ts.net'}
+        for service in SERVICES:
+            headers = {**PAGE_HEADERS.get(service, {}), **proxied}
+            status, body = self.call('/api/' + service + '/capabilities', headers={**headers, 'Tailscale-User-Login': 'owner@example.com'})
+            self.assertEqual(status, 200, ('through Serve, from a signed-in device', service))
+            status, body = self.call('/api/' + service + '/capabilities', headers=headers)
+            self.assertEqual(status, 403, ('through Funnel, from anyone', service))
+            self.assertNotIn(b'token', body)
+            self.assertIn('signed in to this tailnet', json.loads(body)['error'])
+        self.assertEqual(self.call('/api/instance', 'HEAD', proxied)[0], 403)
+        self.assertEqual(self.call('/index.html', headers=proxied)[0], 200, 'the page itself still loads')
+        # A browser on this Mac, by any of its own names, is served as before, including a local
+        # name the server was told to allow.
+        self.server.allowed_hosts = ['mac.example-tailnet.ts.net', 'studio.example']
+        for host in ('localhost:8642', '127.0.0.1:8642', 'studio.example:8642'):
+            self.assertEqual(self.call('/api/workspace/capabilities', headers={**PAGE_HEADERS['workspace'], 'Host': host})[0], 200, host)
+        # Under that local name, a request a proxy passed on still needs the tailnet user.
+        for added in ({'X-Forwarded-For': '203.0.113.9'}, {'Forwarded': 'for=203.0.113.9'}, {'Via': '1.1 proxy'}):
+            status, _ = self.call('/api/workspace/capabilities', headers={**PAGE_HEADERS['workspace'], 'Host': 'studio.example', **added})
+            self.assertEqual(status, 403, added)
+        self.assertEqual(self.call('/api/workspace/capabilities', headers={**PAGE_HEADERS['workspace'], 'Host': 'studio.example',
+                                    'X-Forwarded-For': '100.101.102.103', 'Tailscale-User-Login': 'owner@example.com'})[0], 200)
 
     def test_a_stolen_token_is_still_refused_for_every_method(self):
         tokens = {service: json.loads(self.call('/api/' + service + '/capabilities', headers=PAGE_HEADERS.get(service))[1])['token'] for service in SERVICES}

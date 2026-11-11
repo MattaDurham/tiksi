@@ -528,7 +528,10 @@ class MaterialResearchManager:
             if active >= self.max_concurrent_jobs:
                 raise ResearchError("Research queue is full; wait for a job or cancel it", 429)
             if len(self.jobs) >= self.max_records:
-                raise ResearchError("Research history is full; remove old local research records before continuing", 429)
+                # Finished research is the owner's record: nothing is removed to make room.
+                size = sum(p.stat().st_size for p in self.root.glob("*.json") if p.is_file())
+                raise ResearchError(f"Research history is full: {len(self.jobs)} records, {size / 2 ** 20:.1f} MB on this Mac. "
+                                    "Nothing was removed; old records must be removed on purpose before new research can start", 507)
             job_id, stamp = str(uuid.uuid4()), utc_now()
             roles = ["focused"] if request["mode"] == "focused" else ["specifications", "vendors", "alternatives"]
             job = {"id": job_id, "status": "queued", "createdAt": stamp, "updatedAt": stamp,
