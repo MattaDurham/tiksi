@@ -1,12 +1,17 @@
 // Phone-size load budget: the first open of the app on a phone screen, from an empty browser,
-// may use at most LIMITS requests and bytes. It fails when the download grows past them, and
+// may use at most LIMITS files and bytes. It fails when the download grows past them, and
 // prints what it measured so the limits can be lowered as the download shrinks.
 // Synthetic empty project in a temporary state directory; live 8642 is never used.
 //
-// Requests and bytes count the app's own files: every response except the /api/ calls, whose
+// Files and bytes count the app's own files: every response except the /api/ calls, whose
 // number changes from run to run with how often the empty project is saved; they are printed.
 // Bytes are uncompressed bodies, which is what the phone stores and parses (the server does
 // not compress). Time to settle is printed, not graded: it depends on the machine.
+//
+// Every request of the first load must be answered. Chromium also reports a request as
+// cancelled when the page has read its whole answer but lets go of it before the browser has
+// noted the request finished; on Chromium such a request, with every declared byte received,
+// is printed and not counted as a failure.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -43,8 +48,30 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   const responses = [];
   page.on('response', response => responses.push(response));
-  let failed = 0;
-  page.on('requestfailed', () => { failed += 1; });
+  const failures = [];
+  page.on('requestfailed', request => failures.push(request));
+  // What Chromium itself saw of each request: how many bytes it declared and received.
+  const seen = new Map();
+  if (ENGINE === 'chromium') {
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Network.enable');
+    const entry = id => seen.get(id) || seen.set(id, { received: 0 }).get(id);
+    cdp.on('Network.requestWillBeSent', e => { entry(e.requestId).url = e.request.url; });
+    cdp.on('Network.responseReceived', e => {
+      const headers = Object.fromEntries(Object.entries(e.response.headers).map(([k, v]) => [k.toLowerCase(), v]));
+      Object.assign(entry(e.requestId), { status: e.response.status, declared: Number(headers['content-length']), encoded: !!headers['content-encoding'] });
+    });
+    cdp.on('Network.dataReceived', e => { const r = entry(e.requestId); r.received += r.encoded ? e.encodedDataLength : e.dataLength; });
+    cdp.on('Network.loadingFailed', e => Object.assign(entry(e.requestId), { canceled: e.canceled }));
+  }
+  // Each failure Playwright reports is matched, in order, with the one Chromium saw fail.
+  const used = new Set();
+  const whole = request => {
+    const r = [...seen.values()].find(r => !used.has(r) && 'canceled' in r && r.url === request.url());
+    if (!r) return false;
+    used.add(r);
+    return r.canceled && r.status >= 200 && r.status < 300 && Number.isInteger(r.declared) && r.received >= r.declared;
+  };
   const started = Date.now();
   await page.goto(url);
   await page.waitForFunction(() => document.querySelector('#save-status')?.textContent === 'SAVED TO DISK', null, { timeout: 120000 });
@@ -64,7 +91,11 @@ try {
   }
   const heaviest = Object.entries(byType).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([t, n]) => `${t} ${n.toLocaleString('en-US')}`).join(', ');
   console.log(`Phone first load on ${ENGINE}: ${files.length} files (limit ${LIMITS.requests}), ${bytes.toLocaleString('en-US')} bytes (limit ${LIMITS.bytes.toLocaleString('en-US')}), ${api} calls to the server, settled in ${(settledMs / 1000).toFixed(1)} s. Largest kinds: ${heaviest}.`);
-  assert.equal(failed, 0, 'every request of the first load is answered');
+  const named = request => `${request.method()} ${new URL(request.url()).pathname} (${request.failure()?.errorText || 'failed'})`;
+  const late = [], failed = [];
+  for (const request of failures) (whole(request) ? late : failed).push(request);
+  if (late.length) console.log(`Answered in full, then reported cancelled by Chromium: ${late.map(named).join(', ')}.`);
+  assert.deepEqual(failed.map(named), [], 'every request of the first load is answered');
   assert.deepEqual(errors, [], 'no page errors on the first load');
   assert.ok(files.length <= LIMITS.requests, `the first load asks for ${files.length} files, over the limit of ${LIMITS.requests}`);
   assert.ok(bytes <= LIMITS.bytes, `the first load downloads ${bytes.toLocaleString('en-US')} bytes, over the limit of ${LIMITS.bytes.toLocaleString('en-US')}`);
