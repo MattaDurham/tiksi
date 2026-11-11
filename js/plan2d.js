@@ -2819,7 +2819,10 @@ export function unmount() {
   if (offChange) { offChange(); offChange = null; }
   drawing = null; roomDraft = null; drag = null; hover = null; hoverPt = null; facesCache = null;
   fingers.clear(); gesture = null; lastTap = null; joints = null;
-  if (prop) endGeometryHold(prop);   // a drag cut short by a remount: the next change closes its edit
+  // A drag cut short by a rebuild (another device changed this property under it): its edit
+  // is dropped, not left open. Left open, the next change would close an undo entry reaching
+  // back to before the other device's change, and UNDO would then remove that change too.
+  if (prop) cancelGeometryEdit(prop);
   el = null; canvas = null; ctx = null; wrapEl = null; inspEl = null; hintEl = null; badgeEl = null; levelEl = null; scheduleEl = null;
   scheduleCache = null;
 }

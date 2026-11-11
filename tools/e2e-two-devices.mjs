@@ -379,7 +379,7 @@ async function aProjectWithAMissingFileIsShown() {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const line = page.locator('[data-file-dialog] p[data-unavailable]');
   assert.match(await line.textContent(), /Garden flat.*project file is not at/s);
-  page.on('dialog', d => d.accept());
+  const questions = []; page.on('dialog', d => { questions.push(d.message()); return d.accept(); });
   // The Tiksi on this Mac may not offer "take off the list" yet: it says so and changes nothing.
   await line.getByRole('button', { name: 'REMOVE FROM LIST' }).click();
   const said = page.locator('[data-file-dialog] [data-file-status]');
@@ -392,7 +392,25 @@ async function aProjectWithAMissingFileIsShown() {
     await page.waitForFunction(() => /is off the list/.test(document.querySelector('[data-file-dialog] [data-file-status]').textContent), null, { timeout: 15000 });
   }
   assert.equal(await page.locator('[data-file-dialog] p[data-unavailable]').count(), 0, 'the project is off the list');
+  // The question shows where the file was, and does not promise that any file found again brings the project back.
+  assert.ok(questions[0].includes(path), 'the question shows the path of the missing file');
+  assert.match(questions[0], /drive that is not connected/); assert.match(questions[0], /kept anywhere else has to be opened again by hand/);
   await page.context().close();
+  // A file that is there but cannot be read is not offered for removal: the Mac would refuse.
+  const other = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  await other.route(url + '/api/workspace', async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    const answer = await route.fetch(), body = await answer.json();
+    body.unavailable = [{ id: 'prop-unreadable', name: 'Unreadable project', path: '/synthetic/Unreadable project.tiksi', reason: 'unreadable', message: 'Unreadable project: the project file cannot be read.' }];
+    return route.fulfill({ response: answer, json: body });
+  });
+  const second2 = await device({ context: other });
+  await second2.locator('#btn-file').click();
+  await second2.getByRole('button', { name: 'Settings', exact: true }).click();
+  const unreadable = second2.locator('[data-file-dialog] p[data-unavailable]');
+  assert.match(await unreadable.textContent(), /cannot be read/);
+  assert.equal(await unreadable.getByRole('button').count(), 0, 'an unreadable file gets no REMOVE FROM LIST button');
+  await other.close();
 }
 
 // Opening a project file whose property is already open here asks first, and adding the demo
@@ -803,7 +821,48 @@ async function aPageOnOlderCodeReloadsOrStopsSaving() {
   await context.close();
 }
 
-const parts = { view: eachDeviceKeepsItsOwnView, typing: aSaveElsewhereLeavesThePageAlone, slow: aSlowActionWritesIntoTheLiveRecord, nested: aNestedRecordStaysTheLiveOne, onepager: theOnePagerEditorKeepsWhatIsTyped, conflict: theCopiesDifferQuestionSaysWhatDiffers, older: anOlderTabDoesNotSaveOverANewerCopy,
+// A wall is being dragged in PLAN when another device's change to the same property arrives
+// and the page is rebuilt under the drag. UNDO afterwards must never take the other device's
+// change away with it.
+async function undoAfterAnInterruptedDragKeepsTheOtherDevicesChange() {
+  step('drag');
+  const [first] = await makeProperties('drag');
+  const one = await device(), two = await device();
+  await look(one, first); await look(two, first);
+  const canvas = two.locator('.plan-canvas canvas');
+  await canvas.waitFor();
+  await two.evaluate(() => Promise.all(document.getAnimations().filter(a => a.animationName === 'view-in').map(a => a.finished)));
+  await two.keyboard.press('f');
+  await two.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+  // Where a plan point is on screen, from FIT VIEW's own rule (plan2d.js fitFor): the bounds are the walls, (0,0) to (5,3.5).
+  const RULER = 22, box = await canvas.boundingBox(), wrap = await two.locator('.plan-canvas').evaluate(e => ({ w: e.clientWidth, h: e.clientHeight }));
+  const w = wrap.w - RULER, h = wrap.h - RULER, zoom = Math.min(w / (5 * 1.22), h / (3.5 * 1.22), 250);
+  const panX = -(w / zoom - 5) / 2 - RULER / zoom, panY = -(h / zoom - 3.5) / 2 - RULER / zoom;
+  const at = (x, y) => [box.x + (x - panX) * zoom, box.y + (y - panY) * zoom];
+  const wall = (page, id) => page.evaluate(async ([prop, id]) => { const w = (await import('/js/store.js')).ws.data.properties.find(p => p.id === prop).walls.find(w => w.id === id); return [w.ax, w.ay, w.bx, w.by]; }, [first, id]);
+  // Device two starts dragging the east wall and has not let go.
+  await two.mouse.move(...at(5, 1.75)); await two.mouse.down();
+  await two.mouse.move(...at(5.6, 1.75), { steps: 8 });
+  assert.ok((await wall(two, 'w-e'))[0] > 5.2, 'the east wall is being dragged');
+  // Device one moves the north wall and saves.
+  await one.evaluate(async id => { const s = await import('/js/store.js'); const w = s.ws.data.properties.find(p => p.id === id).walls.find(w => w.id === 'w-n'); w.ay = 4; w.by = 4; s.touch(); }, first);
+  await saveNow(one);
+  await has(two, first, 'p.walls.find(w => w.id === "w-n").ay === 4');
+  await two.waitForTimeout(500);
+  await two.mouse.up();
+  // The next edit on device two, then UNDO if it is offered.
+  await two.evaluate(async id => { const s = await import('/js/store.js'); s.ws.data.properties.find(p => p.id === id).walls.find(w => w.id === 'w-s').thickness = 0.2; s.touch(); }, first);
+  await two.waitForTimeout(300);
+  if (await two.locator('#btn-undo').isEnabled()) await two.locator('#btn-undo').click();
+  await saveNow(two); await two.waitForFunction(SAVED);
+  await two.waitForTimeout(500);
+  assert.deepEqual((await wall(two, 'w-n')).filter((v, i) => i % 2), [4, 4], 'UNDO on device two leaves the other device\'s wall where it was put');
+  const saved = prop(await mac(), first).walls.find(w => w.id === 'w-n');
+  assert.deepEqual([saved.ay, saved.by], [4, 4], 'and it is still so on the Mac');
+  await one.context().close(); await two.context().close();
+}
+
+const parts = { view: eachDeviceKeepsItsOwnView, typing: aSaveElsewhereLeavesThePageAlone, slow: aSlowActionWritesIntoTheLiveRecord, nested: aNestedRecordStaysTheLiveOne, drag: undoAfterAnInterruptedDragKeepsTheOtherDevicesChange, onepager: theOnePagerEditorKeepsWhatIsTyped, conflict: theCopiesDifferQuestionSaysWhatDiffers, older: anOlderTabDoesNotSaveOverANewerCopy,
   drafts: twoDraftsAreNotAConflict, unavailable: aProjectWithAMissingFileIsShown, import: aProjectFileAsksBeforeItReplaces, error: aPageThatFailsToOpenSaysSo, saveid: aKeptCopyTheMacAlreadyHasIsNotSentAgain, undone: recordsThatEqualAnEarlierSaveAreStillSent, code: aPageOnOlderCodeReloadsOrStopsSaving,
   originals: originalsAreNotDownloadedAndHeldForEver, pictures: theFirstScreenDoesNotWaitForEveryPicture, stored: anUnreadableStoredWorkspaceIsLeftAsItIs, model: modelKeepsItsCamera };
 

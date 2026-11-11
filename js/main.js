@@ -433,10 +433,14 @@ function openFileMenu(initialTab = 'project', selected) {
     dialog.querySelector('[data-mirror-on]').checked=ws.data.settings.sketchupMirror!==false;dialog.querySelector('[data-mirror-label]').textContent=prop?mirrorStatus(prop.id):'';
     const opStatus=dialog.querySelector('[data-op-file-status]');if(prop){const st=onePagerStatus(prop,projectSlice(prop.id));opStatus.textContent=st.text;opStatus.dataset.state=st.state;}else opStatus.textContent='Open a property to see its one-pager.';dialog.querySelector('[data-one-pager]').disabled=!prop;
     const goneHost = dialog.querySelector('[data-unavailable-list]'), gone = diskWorkspace ? diskWorkspace.unavailable : [];
-    goneHost.innerHTML = gone.length ? '<h3>Projects the Mac cannot read just now</h3>' + gone.map(u => `<p data-unavailable="${escapeHtml(u.id)}">${escapeHtml(u.message || u.name || u.id)} <button class="btn" data-forget="${escapeHtml(u.id)}">REMOVE FROM LIST</button></p>`).join('') : '';
+    // Only a project whose file is missing can be taken off the list (the Mac refuses the
+    // others: an unreadable file is still there). The Mac cannot tell a deleted file from one
+    // on a drive that is not connected, so the question shows where the file was.
+    goneHost.innerHTML = gone.length ? '<h3>Projects the Mac cannot read just now</h3>' + gone.map(u => `<p data-unavailable="${escapeHtml(u.id)}">${escapeHtml(u.message || u.name || u.id)}${u.reason === 'missing' ? ` <button class="btn" data-forget="${escapeHtml(u.id)}">REMOVE FROM LIST</button>` : ''}</p>`).join('') : '';
     goneHost.querySelectorAll('[data-forget]').forEach(b => b.onclick = () => run(async () => {
       const u = diskWorkspace.unavailable.find(x => x.id === b.dataset.forget);
-      if (!u || !confirm('Take ' + (u.name || 'this project') + ' off the Mac\'s list? No file is deleted. If its file turns up in the projects folder again, the project comes back.')) return 'Nothing changed.';
+      if (!u || !confirm('Take ' + (u.name || 'this project') + ' off the Mac\'s list?\n\nIts file was at:\n' + (u.path || '(the Mac did not say where)') +
+        '\n\nIf that is on a drive that is not connected, connect the drive instead: the project then comes back by itself.\n\nNo file is deleted. A file that turns up again inside the Mac\'s projects folder brings the project back; a file kept anywhere else has to be opened again by hand (FILE, OPEN / IMPORT).')) return 'Nothing changed.';
       try { await diskWorkspace.forgetUnavailable(u.id); }
       catch (e) { throw new Error(e.status === 404 ? 'The Tiksi running on this Mac cannot take a project off its list yet. Nothing changed.' : e.message); }
       refreshTopbar();
