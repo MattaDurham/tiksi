@@ -223,6 +223,55 @@ class ResearchTests(unittest.TestCase):
             finally:
                 manager.close()
 
+    def test_one_finished_record_can_be_removed_and_never_a_running_one(self):
+        class Handler:
+            def __init__(self, command, path, headers):
+                self.command, self.path, self.headers = command, path, Message()
+                for key, value in headers.items(): self.headers[key] = value
+                self.rfile, self.wfile = io.BytesIO(), io.BytesIO()
+            def send_response(self, status): self.status = status
+            def send_header(self, key, value): pass
+            def end_headers(self): pass
+            def answer(self): return json.loads(self.wfile.getvalue())
+        with tempfile.TemporaryDirectory() as state:
+            service = MaterialResearchService(state, runner=Runner(), max_concurrent_jobs=2, max_records=2)
+            manager = service.manager
+            try:
+                finished = manager.create(REQUEST)['id']
+                for _ in range(200):
+                    if manager.get(finished)['status'] not in ('queued', 'running'): break
+                    time.sleep(0.01)
+                manager.runner = SlowRunner()
+                running = manager.create(REQUEST)['id']
+                with self.assertRaises(ResearchError) as full: manager.create(REQUEST)
+                self.assertEqual(full.exception.status, 507)
+                self.assertIn('Finished records can be removed one at a time', str(full.exception))
+                capability = Handler('GET', '/api/material-research/capabilities', {})
+                service.dispatch(capability)
+                headers = {'Host': 'localhost:8642', 'Origin': 'http://localhost:8642', 'X-Tiksi-Token': capability.answer()['token']}
+                remove = lambda job, given=headers: (lambda h: (service.dispatch(h), h)[1])(Handler('DELETE', '/api/material-research/' + job, given))
+                self.assertEqual(remove(finished, {**headers, 'X-Tiksi-Token': 'wrong'}).status, 403)
+                self.assertEqual(remove(finished, {**headers, 'Origin': 'https://elsewhere.example.com'}).status, 403)
+                refused = remove(running)
+                self.assertEqual(refused.status, 409, 'a running record stays')
+                self.assertIn('running', refused.answer()['error'])
+                self.assertTrue((Path(state) / (running + '.json')).is_file())
+                removed = remove(finished)
+                self.assertEqual((removed.status, removed.answer()), (200, {'removed': finished}))
+                self.assertFalse((Path(state) / (finished + '.json')).exists(), 'its file is gone')
+                self.assertEqual(remove(finished).status, 404)
+                manager.cancel(running)
+                with self.assertRaises(ResearchError) as busy: manager.remove(running)
+                self.assertEqual(busy.exception.status, 409, 'a cancelled record whose work has not stopped yet stays too')
+            finally:
+                service.close()
+            again = MaterialResearchManager(state, runner=Runner())
+            try:
+                with self.assertRaises(ResearchError) as gone: again.get(finished)
+                self.assertEqual(gone.exception.status, 404, 'it stays removed after a restart')
+            finally:
+                again.close()
+
     def test_restart_marks_interrupted_job_failed(self):
         with tempfile.TemporaryDirectory() as state:
             p=Path(state)/'record.json'
