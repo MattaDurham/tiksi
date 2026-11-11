@@ -36,7 +36,7 @@ import { proposeFixtures, openFixtureReview, fixtureInspectorHtml, bindFixtureIn
 import { openNewPropertyDialog } from './newproperty.js';
 import { materialSelectHtml } from './materials.js';
 import { pendingTextureJobs, setTextureQuality, setTextureLimits, beginTextureBuild, setTextureUse } from './textures.js';
-import { qualityProfile, stillDimensions, effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, touchDevice, QUALITY_NAMES } from './render-quality.js';
+import { qualityProfile, stillDimensions, effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, touchDevice, scanTooLarge, megabytes, QUALITY_NAMES } from './render-quality.js';
 import { icon } from './icons.js';
 import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
 import { wallFaceLabels } from './wall-solids.js';
@@ -59,7 +59,7 @@ import { ModelBatches } from './model-batch.js';
 import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown } from './tags.js';
 import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags } from './saved-views.js';
 import { onScreen, setOnScreen, onScreenChange, setMenuProvider } from './tiksi-menu.js';
-import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility, partKeyForObject, partByKey, partName, planKeyOf } from './tags-scene.js';
+import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility, partKeyForObject, partByKey, partName, planKeyOf, modelParts, partKey } from './tags-scene.js';
 
 // ---------- persistent GPU state (one context for the life of the page) ----------
 let renderer = null, pmrem = null;
@@ -92,7 +92,7 @@ let batches = null;
 // edges); the full frame follows once it has been still this long.
 const SETTLE_MS = 150;
 let lastMotion = -Infinity, lastFrameFast = false, aoWanted = true;
-const frameCounts = { fastFrames: 0, fullFrames: 0, shadowRefreshes: 0 };
+const frameCounts = { fastFrames: 0, fullFrames: 0, shadowRefreshes: 0, skyBakes: 0, modelBuilds: 0 };
 function markMotion() { lastMotion = performance.now(); }
 const moving = () => performance.now() - lastMotion < SETTLE_MS;
 // The sun's shadow map is drawn only when something it depends on changed (the sun, the
@@ -107,7 +107,7 @@ const ORBIT_POLAR = Math.PI * 0.495, MATCH_POLAR = Math.PI - 0.01, BASE_FOV = 50
 let measureDraft = null;       // first measure point
 const measures = [];           // {a, b, line, label}
 const scanObjs = {};           // scanId -> Object3D
-const scanState = {};          // scanId -> 'loading' | 'ready' | 'missing' | 'failed' | 'hidden' (not loaded: it has not been shown yet)
+const scanState = {};          // scanId -> 'loading' | 'ready' | 'missing' | 'failed' | 'hidden' (not loaded: it has not been shown yet) | 'too-large' (not loaded: over this device's size limit)
 const pinObjs = {};            // photoId -> {group, sprite, line, dot, aspect}
 const noteObjs = {};           // noteId -> {group, sprite, aspect, place}
 const cameraObjs = {};         // photoId -> camera pyramid group
@@ -525,7 +525,13 @@ function texturesOnScreen() {
   return out;
 }
 
+// A slider sends a step for every pixel it moves: the model is rebuilt once, for the frame
+// that will show it, however many steps arrived since the last one.
+let rebuildQueued = false;
+function rebuildModelSoon() { rebuildQueued = true; requestRender(1); }
 function rebuildModel() {
+  rebuildQueued = false;
+  frameCounts.modelBuilds++;
   beginTextureBuild();   // the sets asked for from here on are this model's
   if (modelGroup) { scene.remove(modelGroup); disposeBuilt(modelGroup); }
   modelGroup = buildPropertyGroup(prop, { xray, xrayOpacity: prop.env.xrayOpacity, hiddenLevels: hiddenLevels() });
@@ -558,16 +564,46 @@ function rebuildNightLights() {
   discGeo.rotateX(Math.PI / 2);
   const discMat = new THREE.MeshStandardMaterial({ color: 0xfff1dc, emissive: new THREE.Color(0xffd9a8), emissiveIntensity: 5, roughness: 0.6 });
   discMat.userData.disposable = true;
-  for (const r of roomCentres(prop)) {
-    if (hidden.has(r.level)) continue;
+  // Every room keeps its glowing fixture. How many of them also cast light is a device limit
+  // (render-quality.js deviceLimits): every light is worked out for every pixel of every lit
+  // surface. A computer lights every room, as it always has. A touch device lights a few: the
+  // room the camera is in and the ones nearest it, moved as the camera moves (placeRoomLights).
+  // Their number does not change while the camera moves, so no shader is rebuilt for it.
+  lampRooms = roomCentres(prop).filter(r => !hidden.has(r.level));
+  lampLights = [];
+  const limit = memoryLimits().roomLights;
+  const count = limit ? Math.min(lampRooms.length, limit) : lampRooms.length;
+  for (let i = 0; i < count; i++) {
     const light = new THREE.PointLight(0xffc48a, 14, 0, 2);
-    light.position.set(r.x, r.top - 0.12, r.z);
+    lampLights.push(light);
     lightRoot.add(light);
+  }
+  for (const r of lampRooms) {
     const disc = new THREE.Mesh(discGeo, discMat);
     disc.position.set(r.x, r.top - 0.035, r.z);
     disc.userData = { kind: 'ceiling', id: r.id };
     lightRoot.add(disc);
   }
+  lampKey = null;
+  placeRoomLights();
+}
+// Put the lights over the rooms that get one: all of them where there is a light per room, else
+// the room the camera stands in first, then the nearest. Called before every drawn frame; it
+// does nothing unless the rooms chosen have changed.
+let lampRooms = [], lampLights = [], lampKey = null;
+function placeRoomLights() {
+  let chosen = lampRooms;
+  if (lampLights.length < lampRooms.length) {
+    const c = camera.position;
+    const inside = r => { const room = (prop.rooms || []).find(x => x.id === r.id); return !!room && c.y >= r.y - 0.05 && c.y < r.top - 0.05 && pointInPolygon(c.x, c.z, room.pts); };
+    const far = r => (inside(r) ? 0 : 1e6) + (r.x - c.x) ** 2 + (r.top - c.y) ** 2 + (r.z - c.z) ** 2;
+    chosen = lampRooms.map(r => [far(r), r]).sort((a, b) => a[0] - b[0]).slice(0, lampLights.length).map(x => x[1]);
+    chosen.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);   // a steady order: a room keeps its light
+  }
+  const key = chosen.map(r => r.id).join('|');
+  if (key === lampKey) return;
+  lampKey = key;
+  chosen.forEach((r, i) => lampLights[i].position.set(r.x, r.top - 0.12, r.z));
 }
 
 function fitShadow() {
@@ -687,17 +723,20 @@ function applyEnvironment() {
     g.emissive.setHex(0xffcf9a);
     g.emissiveIntensity = 0.5 * lampMix;
   }
-  // Background / IBL per sky mode.
+  // Background / IBL per sky mode. The sky lighting is baked again only when what it is baked
+  // from has changed (skyBakeKey): this runs for every slider step, and for walking in or out
+  // of a room, which changes the fill light and nothing in the sky.
+  const stale = !envRT || skyBakeKey() !== skyBaked;
   if (env.sky === 'studio') {
     scene.background = new THREE.Color(0x171d23);
-    scheduleEnvMap(0);
+    if (stale) scheduleEnvMap(0);
   } else if (env.sky === 'pano') {
     if (usePano) scene.background = panoTex;
     else { scene.background = null; loadPano(env.panoPhotoId); }
-    scheduleEnvMap(usePano ? 0 : 120);
+    if (stale) scheduleEnvMap(usePano ? 0 : 120);
   } else {
     scene.background = null;
-    scheduleEnvMap(120);
+    if (stale) scheduleEnvMap(120);
   }
   envDirty = false;
   // The shadow map depends on where the sun is, not on its colour or the exposure.
@@ -705,6 +744,15 @@ function applyEnvironment() {
   requestRender(3);
 }
 
+// What the sky lighting is baked from, as text: the studio room, a panorama, or the sky's own
+// settings (where the sun is and how hazy it is).
+let skyBaked = null;
+function skyBakeKey() {
+  if (prop.env.sky === 'studio') return 'studio';
+  if (panoReady()) return 'pano:' + panoId;
+  const u = envSky.material.uniforms, d = u.sunPosition.value;
+  return 'sky:' + [d.x, d.y, d.z, u.turbidity.value, u.rayleigh.value, u.mieCoefficient.value, u.mieDirectionalG.value].map(v => v.toFixed(5)).join(',');
+}
 // PMREM from the sky is a few ms; throttle it while a slider drags.
 function scheduleEnvMap(delay) {
   clearTimeout(pmremTimer);
@@ -726,6 +774,8 @@ function regenEnvMap() {
   }
   if (envRT) envRT.dispose();
   envRT = rt;
+  skyBaked = skyBakeKey();
+  frameCounts.skyBakes++;
   scene.environment = rt.texture;
   // Shader variants depend on the environment map being present, so the first bake is the
   // earliest moment the warm-up compiles the programs the frames will actually use.
@@ -1161,6 +1211,7 @@ function stepWalk(dt) {
 function tick(time) {
   if (!scene) return;
   if (exportingStill) return;
+  if (rebuildQueued) rebuildModel();
   const dt = Math.min(0.05, (time - (lastT || time)) / 1000);
   lastT = time;
   let active = false;
@@ -1243,6 +1294,7 @@ function renderFrame(still = false) {
     const shown = prop.env.showCeilings !== false && (mode === 'walk' || camera.position.y < l.top - 0.05);
     if (l.ceilings.visible !== shown) { l.ceilings.visible = shown; invalidateShadows(); }
   }
+  if (lampLights.length < lampRooms.length) placeRoomLights();
   updatePins();
   updateNotes();
   updateMatchMarkers();
@@ -1486,9 +1538,12 @@ function onPointerUp(e) {
   if (tool === 'pin') return placePin(e);
   if (tool === 'note') return placeNote(e);
   if (match && match.points && match.points.mode === 'model') return addMatchModelPoint(e);
+  // The phone layout has no inspector, so a tap only acts on a photo pin or a note. It is still
+  // the nearest thing under the finger that counts: a pin or note behind a wall or a scan is
+  // not opened through it. (Large scans are tested through the pick index, so this is cheap.)
   const hit = pick(e);
   if (!hit || hit.kind === 'ground') { setSelection(null); return; }
-  // The phone layout has no inspector: a tap opens a photo pin and otherwise clears the selection.
+  if (fieldLayout() && hit.kind === 'note') { setSelection(null); openNoteEditor({ note: noteById(hit.id), at: { x: e.clientX, y: e.clientY } }); return; }
   if (fieldLayout() && hit.kind !== 'pin') { setSelection(null); return; }
   if (hit.kind === 'pin') { setSelection({ kind: 'pin', id: hit.id }); const ph = photoById(prop, hit.id); if (ph && ph.kind === 'document') flyToSheet(hit.id); else openLightbox(hit.id); return; }
   if (hit.kind === 'camera') { startMatch(hit.id); return; }
@@ -1540,13 +1595,26 @@ function findGroupFor(kind, id) {
 // The scene object a tag key names: a plan element's group, or one mesh of a model.
 function objectForKey(key) {
   const m = /^node:([^#]+)#/.exec(key);
-  if (m) { const w = scanObjs[m[1]]; const part = w && partByKey(w, key); return part ? part.object : null; }
+  if (m) { const w = scanObjs[m[1]]; const part = w && partOfModel(w, key); return part ? part.object : null; }
   const k = /^(wall|room|ceiling|opening|fixture):(.+)$/.exec(key);
   if (!k || !modelGroup) return null;
   if (k[1] !== 'ceiling') return findGroupFor(k[1], k[2]);
   let found = null;
   modelGroup.traverse(o => { if (!found && o.userData && o.userData.kind === 'ceiling' && o.userData.id === k[2]) found = o; });
   return found;
+}
+// A loaded model's parts by tag key, listed once per model. partByKey lists every part of the
+// model again for each key it is asked for: with many parts selected, every hover did that
+// once per selected part.
+const partLookups = new WeakMap();   // model wrapper -> Map(key -> part)
+function partOfModel(wrapper, key) {
+  let byKey = partLookups.get(wrapper);
+  if (!byKey) {
+    byKey = new Map();
+    for (const part of modelParts(wrapper)) byKey.set(partKey(wrapper.userData.id, part), part);
+    partLookups.set(wrapper, byKey);
+  }
+  return byKey.get(key) || null;
 }
 function selectedObject() {
   if (!selection) return null;
@@ -1718,7 +1786,7 @@ function updateMeasureLabels() {
 // pointing at what the photo shows; clicking it opens the photo over the model.
 const PRINT_BORDER = 0.035;   // white border, as a share of the print's long side
 function printCanvas(img, aspect, isDoc) {
-  const long = 1024;
+  const long = PIN_CARD;
   const W = aspect >= 1 ? long : Math.round(long * aspect), H = aspect >= 1 ? Math.round(long / aspect) : long;
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
@@ -1780,8 +1848,45 @@ function buildPin(photo) {
   thumb.onload = () => swap(thumb);
   if (photo.thumb) thumb.src = photo.thumb;
   if (isDoc) documentCanvas(photo, 2048).then(swap).catch(e => console.warn('document page', e));
-  else photoUrl(photo.id).then(url => { if (!url) return; const img = new Image(); img.onload = () => swap(img); img.src = url; }).catch(() => {});
+  else queuePinPicture(() => pinPicture(photo, () => pinObjs[photo.id] === rec && token === mountId).then(picture => {
+    swap(picture);   // drawn onto the card at once
+    if (picture && typeof picture.close === 'function') picture.close();
+  }));
   buildCameraGlyph(photo);
+}
+// The sharper picture for a pin's card, a few pins at a time (every pin used to ask for its
+// camera original at once). A computer decodes the original, as before. A touch device decodes
+// it straight to the card's size (the card is PIN_CARD pixels on its long side), so no
+// full-size picture is held; the original is opened whole only in the full-screen view.
+const PIN_CARD = 1024, PIN_LOADS = 2;
+const pinQueue = [];
+let pinLoading = 0;
+function queuePinPicture(job) {
+  pinQueue.push(job);
+  nextPinPicture();
+}
+function nextPinPicture() {
+  while (pinLoading < PIN_LOADS && pinQueue.length) {
+    pinLoading++;
+    Promise.resolve().then(pinQueue.shift()).catch(() => {}).then(() => { pinLoading--; nextPinPicture(); });
+  }
+}
+async function pinPicture(photo, wanted) {
+  if (!wanted()) return null;
+  if (ownQuality() && typeof createImageBitmap === 'function') {
+    const bytes = await photoBytes(photo.id);
+    if (!bytes || !wanted()) return null;
+    const blob = new Blob([bytes], { type: photo.mime || 'image/jpeg' });
+    const landscape = photoAspect(photo) >= 1;
+    // 'from-image': a phone photo is stored on its side with a note to turn it. The card is
+    // shaped from the turned picture, so the decode must turn it too (never left to a default).
+    const size = landscape ? { resizeWidth: PIN_CARD } : { resizeHeight: PIN_CARD };
+    try { return await createImageBitmap(blob, { ...size, resizeQuality: 'high', imageOrientation: 'from-image' }); }
+    catch (e) { /* a browser without resize options: fall through to the plain decode */ }
+  }
+  const url = await photoUrl(photo.id);
+  if (!url || !wanted()) return null;
+  return new Promise(resolve => { const img = new Image(); img.onload = () => resolve(img); img.onerror = () => resolve(null); img.src = url; });
 }
 function removePin(id) {
   const rec = pinObjs[id];
@@ -2486,6 +2591,13 @@ async function lineUpModel() {
     if (token !== mountId) return null;
     setHint('');
   }
+  // A device that loads a scan reduced, or not at all, would compute (and save) a different
+  // answer from the same data: the line-up is left to a device that loads everything.
+  const reduced = prop.scans.filter(s => scanState[s.id] === 'too-large' || (scanObjs[s.id] && scanStats(scanObjs[s.id]).reducedForDevice));
+  if (reduced.length) {
+    toast('Line the sessions up on a computer. This device loads ' + reduced.map(s => s.name).join(', ') + ' reduced or not at all, and the result would differ.', 'warn', 9000);
+    return null;
+  }
   return { ...sampleModelPoints(), init: scanPlacementMatrix() };
 }
 // For the browser checks: what a line-up would be computed against right now.
@@ -2833,7 +2945,7 @@ function addNote(hit, text) {
   buildNote(note);
   if (tool === 'note') setTool('select');
   setSelection({ kind: 'note', id: note.id });
-  toast('Note pinned' + (noteWhere(note) ? ' in ' + noteWhere(note) : '') + '. Right-click it to edit, move or delete.', 'ok');
+  toast('Note pinned' + (noteWhere(note) ? ' in ' + noteWhere(note) : '') + (fieldLayout() ? '. Tap it to edit or delete it.' : '. Right-click it to edit, move or delete.'), 'ok');
   return note;
 }
 function deleteNote(id) {
@@ -2860,7 +2972,7 @@ function openNoteEditor(opts) {
   box.className = 'v-note-edit';
   box.innerHTML = `<label>${note ? 'EDIT NOTE' : 'NEW NOTE'}</label>
     <textarea rows="3" maxlength="2000" placeholder="Type the note. Enter saves; Shift+Enter adds a line."></textarea>
-    <div class="v-note-actions"><button class="btn small" data-cancel>CANCEL</button><button class="btn small primary" data-save>${note ? 'SAVE' : 'PIN NOTE'}</button></div>`;
+    <div class="v-note-actions">${note && fieldLayout() ? '<button class="btn small danger" data-delete>DELETE</button>' : ''}<button class="btn small" data-cancel>CANCEL</button><button class="btn small primary" data-save>${note ? 'SAVE' : 'PIN NOTE'}</button></div>`;
   wrapEl.appendChild(box);
   const rect = wrapEl.getBoundingClientRect();
   const x = THREE.MathUtils.clamp(opts.at.x - rect.left + 12, 8, Math.max(8, rect.width - box.offsetWidth - 8));
@@ -2887,6 +2999,10 @@ function openNoteEditor(opts) {
   };
   box.querySelector('[data-save]').onclick = save;
   box.querySelector('[data-cancel]').onclick = closeNoteEditor;
+  // The phone layout has no right-click menu and no inspector: deleting is here.
+  const del = box.querySelector('[data-delete]');
+  // One tap beside CANCEL must not lose a note: it asks first.
+  if (del) del.onclick = () => { if (!confirm('Delete this note? This cannot be undone.')) return; closeNoteEditor(); deleteNote(note.id); };
   ta.focus();
   ta.setSelectionRange(ta.value.length, ta.value.length);
 }
@@ -2997,9 +3113,58 @@ const hooks = {
   get scene() { return scene; },
   // The longest side a texture inside an imported model may have on this device.
   get textureLimit() { return memoryLimits().importedTextureSize; },
+  // The most points of a cloud this device draws, and the largest scan file it loads (0: no limit).
+  get pointBudget() { return memoryLimits().pointBudget; },
+  get scanBytes() { return memoryLimits().scanBytes; },
+  scanSize(scan, bytes) { rememberScanSize(scan.id, bytes); },
   requestRender() { requestRender(3); },
 };
 const errMsg = e => String(e && e.message || e);
+// Whether a loaded scan has a mesh or point cloud of PICK_INDEX_MIN items or more (the size from
+// which pick-index.js gives it a tree; smaller ones keep three's own test and need no file).
+const PICK_INDEX_MIN = 20000;
+let pickIndex = null, pickIndexLoading = 0;
+function needsPickIndex(obj) {
+  let large = false;
+  obj.traverse(o => {
+    const g = o.geometry, pos = g && g.getAttribute && g.getAttribute('position');
+    if (!pos || large) return;
+    if (o.isPoints) large = pos.count >= PICK_INDEX_MIN;
+    else if (o.isMesh) large = (g.index ? g.index.count : pos.count) / 3 >= PICK_INDEX_MIN;
+  });
+  return large;
+}
+// How big each scan's file is, as far as this device has seen: new scans carry their size, and
+// for older ones it is remembered here (this browser only) the first time their bytes arrive.
+// With it, a scan over this device's limit is not downloaded again on every open just to be
+// turned away.
+const SCAN_SIZES_KEY = 'tiksi.device.scanBytes';
+let scanSizes = null;
+const forcedScans = new Set();   // scans the person chose to load anyway, for this page's life
+function sizeMemo() {
+  if (!scanSizes) { try { scanSizes = JSON.parse(browserStorage().getItem(SCAN_SIZES_KEY)) || {}; } catch (e) { scanSizes = {}; } }
+  return scanSizes;
+}
+const recordedSize = scan => (Number.isFinite(scan.bytes) && scan.bytes > 0 ? scan.bytes : 0);
+function knownScanSize(scan) { return recordedSize(scan) || sizeMemo()[scan.id] || 0; }
+function rememberScanSize(id, bytes) {
+  const scan = prop && prop.scans.find(s => s.id === id);
+  const memo = sizeMemo();
+  if (!scan || recordedSize(scan) || memo[id] === bytes) return;
+  memo[id] = bytes;
+  const ids = Object.keys(memo);
+  for (const old of ids.slice(0, Math.max(0, ids.length - 300))) delete memo[old];
+  try { browserStorage().setItem(SCAN_SIZES_KEY, JSON.stringify(memo)); } catch (e) { /* this visit only */ }
+}
+function tooLargeHere(scan) { return !forcedScans.has(scan.id) && scanTooLarge(knownScanSize(scan), memoryLimits().scanBytes); }
+function tooLargeText(scan) { return 'too large for this device (' + megabytes(knownScanSize(scan)) + '; it loads scans up to ' + megabytes(memoryLimits().scanBytes) + ')'; }
+function loadScanAnyway(id) {
+  const scan = prop.scans.find(s => s.id === id);
+  if (!scan || scanState[id] !== 'too-large') return;
+  forcedScans.add(id);
+  delete scanState[id];
+  loadShownScans();
+}
 function scanSelected(id) { return selection && selection.kind === 'scan' && selection.id === id; }
 function setScanState(id, state) {
   scanState[id] = state;
@@ -3014,8 +3179,8 @@ async function addScanToScene(scan) {
   let obj = null;
   // Still wanted? Asked once the bytes are here, before the costly parse: a visit that has ended
   // (another property, a remount after a save) stops there.
-  try { obj = await loadScanObject(scan, hooks, () => token === mountId && !!scene); }
-  catch (e) { if (token === mountId) setScanState(scan.id, 'failed'); throw e; }
+  try { obj = await loadScanObject(scan, hooks, () => token === mountId && !!scene, forcedScans.has(scan.id)); }
+  catch (e) { if (token === mountId) setScanState(scan.id, e && e.tooLarge ? 'too-large' : 'failed'); throw e; }
   if (token !== mountId || !scene) { disposeScanObject(obj); return null; }
   if (!prop.scans.some(s => s.id === scan.id)) { disposeScanObject(obj); delete scanState[scan.id]; return null; }
   if (!obj) { setScanState(scan.id, 'missing'); return null; }
@@ -3026,6 +3191,18 @@ async function addScanToScene(scan) {
   const tagged = detectModelTags(prop, scan, obj);
   applyModelTagVisibility(prop, scan, obj);
   scanRoot.add(obj);
+  // Large meshes and point clouds are tested through a tree of boxes (pick-index.js), built in
+  // a background helper. Its files are fetched the first time a scan is large enough to need
+  // them, never at start-up. A computer then asks for the tree at once, ahead of the first
+  // click; a touch device when a tap or a pinch first reaches the scan, so it costs no memory
+  // until then.
+  if (needsPickIndex(obj)) {
+    pickIndexLoading++;
+    import('./pick-index.js').then(m => {
+      pickIndex = m;
+      if (scanObjs[scan.id] === obj && m.indexForPicking(obj) && !ownQuality()) m.buildPickIndexes(obj);
+    }).catch(e => console.error('pick index', e)).then(() => { pickIndexLoading--; });
+  }
   setModelXray(obj, xray ? prop.env.xrayOpacity : null);
   fitShadow();
   applyEnvironment();
@@ -3052,6 +3229,13 @@ function loadShownScans() { return loadScans(false); }
 function loadScans(every) {
   const token = mountId;
   for (const scan of prop.scans) if (scan.visible === false && !scanObjs[scan.id] && !scanState[scan.id]) scanState[scan.id] = 'hidden';
+  // A scan known to be over this device's size limit is not fetched at all: it says so, once
+  // per visit, and waits for LOAD ANYWAY.
+  for (const scan of prop.scans) {
+    if (!(every || scan.visible !== false) || scanObjs[scan.id] || (scanState[scan.id] && scanState[scan.id] !== 'hidden') || !tooLargeHere(scan)) continue;
+    setScanState(scan.id, 'too-large');
+    toast(scan.name + ' is ' + tooLargeText(scan) + '. It was not loaded.', 'warn', 7000);
+  }
   const wanted = prop.scans.filter(scan => (every || scan.visible !== false) && !scanObjs[scan.id] && (!scanState[scan.id] || scanState[scan.id] === 'hidden'));
   // Marked now, so a second call before the queue reaches them does not queue them twice.
   for (const scan of wanted) setScanState(scan.id, 'loading');
@@ -3063,7 +3247,10 @@ function loadScans(every) {
       if (!prop.scans.some(s => s.id === scan.id)) { delete scanState[scan.id]; continue; }
       if (!every && scan.visible === false) { setScanState(scan.id, 'hidden'); continue; }
       try { await addScanToScene(scan); }
-      catch (e) { console.error(e); if (token === mountId) toast('Could not load scan ' + scan.name + ': ' + errMsg(e), 'error'); }
+      catch (e) {
+        if (e && e.tooLarge) { if (token === mountId) toast(errMsg(e) + ' It was not loaded.', 'warn', 7000); continue; }
+        console.error(e); if (token === mountId) toast('Could not load scan ' + scan.name + ': ' + errMsg(e), 'error');
+      }
     }
     if (token === mountId && scene && wanted.length) renderToolCol();
   }).catch(e => console.error(e));
@@ -3153,6 +3340,21 @@ function toast(msg, kind, ms) {
 function setHint(text) {
   if (!hud.hint) return;
   hud.hint.textContent = text || defaultHint();
+}
+// The phone layout hides the hint line, the tool column and the inspector, and a phone has no
+// Esc key. While a tool or PHOTO MODE is on, this is what a tap does, in a phone's words; the
+// phone panel shows it in its banner over the view, with DONE (and CLEAR for measurements).
+function taskText() {
+  if (match) return 'PHOTO MODE: the photo is laid over the model from where it was taken.';
+  if (tool === 'measure') {
+    if (measureDraft) return 'Tap the second point.';
+    const last = measures[measures.length - 1];
+    return last ? fmtLen(last.a.distanceTo(last.b)) + '. Tap two more points for another.' : 'Tap two points to measure between them.';
+  }
+  if (tool === 'note') return 'Tap where the note belongs.';
+  if (tool === 'pin') return pinPhotoId && photoById(prop, pinPhotoId) ? 'Tap where this photo was taken.' : 'Choose a photo on the PHOTOS page first.';
+  if (tool === 'move') return 'MOVE WALLS needs the desktop layout.';
+  return '';
 }
 function defaultHint() {
   if (mode === 'walk') return walkLocked ? 'WALK: WASD / arrows move, Shift runs, mouse looks. Esc releases the mouse.' : 'WALK: WASD / arrows move, Shift runs. Drag to look or click to capture the mouse. Esc exits.';
@@ -3839,7 +4041,7 @@ function renderInspectorBody() {
       touch(); rebuildModel(); renderInspector();
     };
     let slidingOpening = false;
-    inspEl.querySelector('[data-t]').oninput = e => { if (!slidingOpening) { beginGeometryEdit(prop, 'move opening'); slidingOpening = true; } o.t = parseFloat(e.target.value); rebuildModel(); };
+    inspEl.querySelector('[data-t]').oninput = e => { if (!slidingOpening) { beginGeometryEdit(prop, 'move opening'); slidingOpening = true; } o.t = parseFloat(e.target.value); rebuildModelSoon(); };
     inspEl.querySelector('[data-t]').onchange = () => { slidingOpening = false; touch(); };
     inspEl.querySelector('[data-wall]').onclick = () => setSelection({ kind: 'wall', id: o.wallId });
     inspEl.querySelector('[data-del]').onclick = () => { beginGeometryEdit(prop, 'delete opening'); prop.openings = prop.openings.filter(x => x.id !== o.id); setSelection(null); touch(); rebuildModel(); };
@@ -3986,7 +4188,7 @@ function renderInspectorBody() {
     if (!s) { selection = null; tagPicks = []; return renderInspectorBody(); }
     const obj = scanObjs[s.id] || null;
     const state = obj ? 'ready' : (scanState[s.id] || 'loading');
-    const st = obj ? scanStats(obj) : { label: { missing: 'missing from storage - re-import it', failed: 'could not be loaded', loading: 'loading', hidden: 'not loaded while hidden' }[state] || 'loading' };
+    const st = obj ? scanStats(obj) : { label: { missing: 'missing from storage - re-import it', failed: 'could not be loaded', loading: 'loading', hidden: 'not loaded while hidden', 'too-large': tooLargeText(s) }[state] || 'loading' };
     const rot = s.rot || [0, s.rotY || 0, 0];
     const isPts = s.kind === 'points', isSplat = s.kind === 'splat';
     // Nothing to frame, drop or centre until the object exists; deleting mid-parse would race the loader.
@@ -3998,6 +4200,7 @@ function renderInspectorBody() {
       <div class="stat-line"><span>Kind</span><b>${escapeHtml(s.kind || '?')} &middot; ${escapeHtml((s.format || '').toUpperCase())}</b></div>
       <div class="stat-line"><span>${isSplat ? 'Splats' : (isPts ? 'Points' : 'Triangles')}</span><b>${escapeHtml(st.label)}</b></div>
       ${state === 'missing' ? '<div class="empty" style="margin:6px 0">The file bytes are not in this browser\'s storage (they do not travel in a .json export). Import the file again, or delete this record.</div>' : ''}
+      ${state === 'too-large' ? '<div class="empty" style="margin:6px 0">This scan was not loaded: it is over the size this device loads, and trying could close the page.</div><button class="btn" data-load-anyway>LOAD ANYWAY</button>' : ''}
       <div class="field-row">
         <div class="field"><label>X</label><input type="number" step="0.1" data-p="0" value="${finiteNum(s.pos[0], 0)}"></div>
         <div class="field"><label>Y (up)</label><input type="number" step="0.1" data-p="1" value="${finiteNum(s.pos[1], 0)}"></div>
@@ -4043,6 +4246,8 @@ function renderInspectorBody() {
     const flip = inspEl.querySelector('[data-flip]');
     if (flip) flip.onclick = () => { s.flip = !s.flip; upd(); };
     inspEl.querySelector('[data-vis]').onchange = e => { s.visible = e.target.checked; upd(); loadShownScans(); renderToolCol(); };
+    const anyway = inspEl.querySelector('[data-load-anyway]');
+    if (anyway) anyway.onclick = () => loadScanAnyway(s.id);
     inspEl.querySelector('[data-frame]').onclick = () => { if (obj) frameObject(obj); };
     inspEl.querySelector('[data-floor]').onclick = () => { if (obj) { dropScanToFloor(s, obj); upd(); renderInspector(); } };
     inspEl.querySelector('[data-center]').onclick = () => { if (obj) { centerScanOnModel(s, obj, modelBounds(prop)); upd(); renderInspector(); } };
@@ -4085,7 +4290,7 @@ function addView() {
   const v = addSavedView(prop, '', viewState());
   activeViewId = v.id;
   touch(); renderViews();
-  toast('Saved the view "' + v.name + '" with its camera and tags. Double-click its tab to rename it.', 'ok');
+  toast('Saved the view "' + v.name + '" with its camera and tags.' + (fieldLayout() ? '' : ' Double-click its tab to rename it.'), 'ok');
   return v;
 }
 function goToView(id) {
@@ -4228,7 +4433,7 @@ function renderToolCol() {
   const tb = (act, ic, label, key, active) =>
     `<button class="tool-btn ${active ? 'active' : ''}" data-act="${act}" title="${label}${key ? ' (' + key + ')' : ''}">` +
     `${icon(ic)}<span class="tb-text">${label}</span>${key ? `<kbd class="key">${key}</kbd>` : ''}</button>`;
-  const scanBadge = s => scanObjs[s.id] ? (s.kind || '').toUpperCase().slice(0, 5) : ({ missing: 'GONE', failed: 'ERR', hidden: 'OFF' }[scanState[s.id]] || '...');
+  const scanBadge = s => scanObjs[s.id] ? (s.kind || '').toUpperCase().slice(0, 5) : ({ missing: 'GONE', failed: 'ERR', hidden: 'OFF', 'too-large': 'BIG' }[scanState[s.id]] || '...');
   const scanRows = prop.scans.map(s => `<button class="tool-btn v-scan-row ${scanSelected(s.id) ? 'active' : ''}" data-scan="${escapeHtml(s.id)}" title="${escapeHtml(s.name)}${scanObjs[s.id] ? '' : ' (' + escapeHtml(scanState[s.id] || 'loading') + ')'}">${icon(s.kind === 'splat' ? 'splat' : s.kind === 'mesh' ? 'model' : 'scan')}<span class="tb-text">${escapeHtml(s.name.length > 14 ? s.name.slice(0, 12) + '..' : s.name)}</span><kbd class="key">${escapeHtml(scanBadge(s))}</kbd></button>`).join('');
   // One toggle per storey, lit while the level is shown; the key badge is its floor elevation.
   const hidden = hiddenLevels();
@@ -4301,6 +4506,7 @@ function renderToolCol() {
     rebuildModel();setSelection(chosen==='design'?null:{kind:'scan',id:chosen});renderToolCol();touch();
   };
   on('before',()=>compare('before'));on('after',()=>compare('after'));
+  compareDesign = compare;
   tc.querySelectorAll('[data-scan]').forEach(b => b.onclick = () => setSelection({ kind: 'scan', id: b.dataset.scan }));
   tc.querySelectorAll('[data-level]').forEach(b => b.onclick = () => toggleLevel(b.dataset.level));
   tc.querySelectorAll('[data-tag]').forEach(b => b.onclick = () => toggleTag(b.dataset.tag));
@@ -4427,6 +4633,8 @@ function openModel(root) {
   for (const k of Object.keys(notices)) delete notices[k];
   appliedQuality = null; renderFailed = false;
   scanQueue = Promise.resolve();   // this visit's own queue (see loadScans)
+  rebuildQueued = false;
+  pinQueue.length = 0;   // pictures the last visit was still waiting to load
   mountId++;
 
   ensureRenderer();
@@ -4543,7 +4751,7 @@ export function viewerIdleState() {
     mounted: !!(scene && renderer), programsWarm, texturesIn: !texturesPending && !(scene && pendingTextureJobs() > 0),
     modelsLoaded: !Object.values(scanState).some(s => s === 'loading') && !(scene && splatBusy()),
     firstFrame: frameCounts.fullFrames > 0, nothingToDraw: framesLeft <= 0, shadowsFresh: !(renderer && renderer.shadowMap.needsUpdate),
-    graphics: !contextLost,
+    graphics: !contextLost, pickIndex: !pickIndexLoading && (!pickIndex || pickIndex.pendingPickBuilds() === 0),
   };
 }
 // For the browser checks: the quality this device draws at and what was set from it, and where
@@ -4553,6 +4761,7 @@ export function qualityState() {
   return {
     quality: quality(), touch: ownQuality(), phoneLayout: fieldLayout(), shared: prop.env.quality, shadowMap: sun.shadow.mapSize.x, smoothingSamples: composer.renderTarget1.samples,
     shading: aoWanted, glow: passes.bloom.enabled, pixelRatio: renderer.getPixelRatio(), limits: memoryLimits(),
+    roomLights: lampLights.length, litRooms: lampKey ? lampKey.split('|').filter(Boolean) : [],
   };
 }
 export function scanStates() {
@@ -4620,6 +4829,8 @@ export function unmount() {
   if (scene) { const on = section.on; section.on = false; applySection(); section.on = on; }
   for (const g of [secMove, secTurn]) if (g) { g.detach(); g.dispose(); }
   secMove = null; secTurn = null; sheetRoot = null; sectionBoxCache = null; clipPlanes = []; capMeshes = [];
+  // The navigation's listeners sit on the canvas and the window, which outlive this visit.
+  if (nav) { nav.dispose(); nav = null; }
   if (controls) { controls.dispose(); controls = null; }
   if (modelGroup) { disposeBuilt(modelGroup); modelGroup = null; }
   interiorFill = false;
@@ -4655,6 +4866,8 @@ export function unmount() {
   selection = null; hoverTarget = null; tween = null; pressed = null; dragLook = null; rightPress = null; movingNoteId = null;
 }
 
+let compareDesign = null;   // the BEFORE / AFTER switch (set where the tool column builds it)
+
 // ---------- phone layout (field.js) ----------
 // The phone layout hides the tool column, inspector and HUD; its side panel reads the view's
 // state and drives it through these calls.
@@ -4665,8 +4878,6 @@ export function fieldState() {
   const counts = tagCounts(prop);
   return {
     mode,
-    // The tool a tap on the model uses: 'pin' (place a photo) and 'note' get a banner on a phone.
-    tool,
     cameras: [{ id: 'frame', label: 'Overview' }, { id: 'front', label: 'Front' }, { id: 'iso', label: 'Corner' }],
     views: (prop.savedViews || []).map(v => ({ id: v.id, label: v.name, on: v.id === activeViewId })),
     positions: (prop.photoPositions || []).map(p => ({ id: p.id, label: positionLabel(p) })),
@@ -4683,6 +4894,17 @@ export function fieldState() {
       return { min: sp.min, max: sp.max, step: sp.step, value: r.d, label: r.label, kinds: SECTION_KINDS.map(k => ({ id: k, label: SECTION_LABELS[k][0] + SECTION_LABELS[k].slice(1).toLowerCase(), on: s.kind === k })) };
     })(),
     levels: prop.levels.map(l => ({ id: l.id, label: l.name, on: !hidden.has(l.id) })),
+    // Marking up by tap: the tools the panel can switch on (the view shows what a tap does and
+    // a DONE button while one is on), and how many measurements are drawn.
+    tool,
+    tools: [{ id: 'measure', label: 'Measure', on: tool === 'measure' }, { id: 'note', label: 'Note', on: tool === 'note' }],
+    measures: measures.length,
+    // What a tap does now, for the banner: null while no tool and no PHOTO MODE is on.
+    task: taskText() ? { text: taskText(), clear: tool === 'measure' && measures.length > 0 } : null,
+    // Scans not loaded because they are over this device's size limit; 'load-scan' loads one anyway.
+    tooLarge: prop.scans.filter(sc => scanState[sc.id] === 'too-large').map(sc => ({ id: sc.id, label: sc.name, detail: tooLargeText(sc) })),
+    // The before / after pair, when the property has one.
+    compare: prop.designComparison ? [{ id: 'before', label: 'Before', on: prop.designComparison.view === 'before' }, { id: 'after', label: 'After', on: prop.designComparison.view !== 'before' }] : [],
     // The quality this device draws at (a touch device's own choice; otherwise the property's).
     quality: QUALITY_NAMES.map(id => ({ id, label: id[0].toUpperCase() + id.slice(1), on: quality() === id })),
     // One switch per tag that holds something; Untagged only when objects sit on no tag.
@@ -4702,7 +4924,22 @@ export function fieldAction(kind, id, value) {
   }
   else if (kind === 'view') goToView(id);
   else if (kind === 'save-view') addView();
-  else if (kind === 'tool') { if (id === 'note' || id === 'select') setTool(id); }
+  // Saved-view editing for the panel: `value` is the new name.
+  else if (kind === 'view-rename') { if (String(value || '').trim() && renameSavedView(prop, id, String(value).trim())) { touch(); renderViews(); } }
+  else if (kind === 'view-update') { if ((prop.savedViews || []).some(v => v.id === id)) { updateSavedView(prop, id, viewState()); activeViewId = id; touch(); renderViews(); toast('View updated.', 'ok'); } }
+  else if (kind === 'view-delete') { if ((prop.savedViews || []).some(v => v.id === id)) { deleteSavedView(prop, id); if (activeViewId === id) activeViewId = null; touch(); renderViews(); } }
+  // Tools by tap. Choosing the tool that is on switches it off.
+  else if (kind === 'tool') {
+    if (mode === 'walk') setMode('orbit');
+    // DONE ends PHOTO MODE too (choosing 'select' with no tool on).
+    if (id === 'select' && match) endMatch();
+    if (id === tool || id === 'select') setTool('select');
+    else if (id === 'measure') setTool('measure');
+    else if (id === 'note') startNoteMode(null);
+  }
+  else if (kind === 'load-scan') loadScanAnyway(id);
+  else if (kind === 'clear-measures') { clearMeasures(); renderToolCol(); requestRender(2); }
+  else if (kind === 'compare') { if (compareDesign && prop.designComparison && (id === 'before' || id === 'after')) compareDesign(id); }
   else if (kind === 'tag') toggleTag(id || UNTAGGED);
   else if (kind === 'level') toggleLevel(id);
   else if (kind === 'quality') {

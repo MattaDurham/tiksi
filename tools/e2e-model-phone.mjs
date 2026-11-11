@@ -435,7 +435,7 @@ async function computerChecks(browser, say) {
   assert.ok(!(await desk.evaluate(() => document.documentElement.classList.contains('phone'))), 'a desktop-sized page gets the desktop layout');
   let q = await viewer(desk, 'return v.qualityState()');
   assert.deepEqual({ touch: q.touch, quality: q.quality, shadowMap: q.shadowMap, shading: q.shading }, { touch: false, quality: 'ultra', shadowMap: 4096, shading: true }, 'the computer draws the property\'s Ultra');
-  assert.deepEqual(q.limits, { textureBytes: 256 * MB, textureSets: 56, textureQuality: 'ultra', importedTextureSize: 16384 }, 'with the limits every device had before');
+  assert.deepEqual(q.limits, { textureBytes: 256 * MB, textureSets: 56, textureQuality: 'ultra', importedTextureSize: 16384, roomLights: 0, pointBudget: 0, scanBytes: 0 }, 'with the limits every device had before (0: none)');
   assert.deepEqual(await textures(desk, 'return t.textureLimits()'), { bytes: 256 * MB, sets: 56 });
   assert.doesNotMatch((await viewer(desk, 'return v.scanStates()'))['scan-shown'].label, /reduced/, 'the computer keeps the 2304 pixel texture whole');
   assert.doesNotMatch((await settings(desk)).text, /ON THIS DEVICE/, 'its setting is the property\'s');

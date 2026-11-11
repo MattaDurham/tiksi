@@ -10,7 +10,7 @@
 // under the same name gets ' #2'. Bindings saved before used positional 'slot-N' keys (the N-th
 // distinct material object in traversal order); migrateMaterialKeys rewrites them on load.
 import { materialById, touch, ws } from './store.js';
-import { materialFor, pendingTextureJobs } from './textures.js';
+import { materialFor, whenMaterialReady } from './textures.js';
 
 export const LEGACY_KEY = /^slot-(\d+)$/;
 const TEXTURE_KEYS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap', 'bumpMap', 'alphaMap'];
@@ -164,6 +164,7 @@ export function boundRecord(scan, key) {
   return materialById(scan.materialBindings && scan.materialBindings[key]) || null;
 }
 
+const TEXTURE_WAIT_MS = 30000;
 export async function applyModelMaterials(scan, root) {
   const slots = modelMaterialSlots(root);
   if (migrateMaterialKeys(scan, root)) touch();
@@ -177,11 +178,17 @@ export async function applyModelMaterials(scan, root) {
     if (!byRecord.has(record.id)) byRecord.set(record.id, materialFor(record));
     bySlot.set(slot.material, record.id);
   }
-  const deadline = performance.now() + 30000;
-  while (byRecord.size && pendingTextureJobs()) {
-    if (performance.now() > deadline) throw new Error('Material textures are still loading');
-    await new Promise(r => setTimeout(r, 50));
-  }
+  // The copies below are made from the library's materials as they are at that moment, so wait
+  // for the texture sets of the records this model uses: those and no others (it used to wait
+  // for every set anyone had asked for, and to fail the whole model after 30 seconds). A set
+  // still not there after TEXTURE_WAIT_MS does not fail the model: that record is shown in its
+  // plain colour until MODEL is next opened.
+  const records = [...byRecord.keys()].map(materialById).filter(Boolean);
+  const ready = Promise.all(records.map(record => new Promise(done => whenMaterialReady(record, done))));
+  let timer = 0;
+  const late = records.length ? await Promise.race([ready.then(() => false), new Promise(r => { timer = setTimeout(() => r(true), TEXTURE_WAIT_MS); })]) : false;
+  clearTimeout(timer);
+  if (late) console.warn('model materials: some textures for ' + scan.name + ' were not ready in ' + TEXTURE_WAIT_MS / 1000 + ' seconds; those materials are shown plain.');
   const copies = new Map();
   for (const [id, replacement] of byRecord) {
     const copy = replacement.clone();

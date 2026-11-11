@@ -15,7 +15,7 @@ assert.equal(qualityProfile('low').samples, 0);
 console.log('Render quality and export sizing checks passed.');
 
 // ---------- this device's own quality ----------
-import { effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, shrunkSize, touchDevice, TOUCH_DEVICE_QUERY, TOUCH_DEFAULT_QUALITY, DEVICE_QUALITY_KEY } from '../js/render-quality.js';
+import { effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, shrunkSize, scanTooLarge, megabytes, touchDevice, TOUCH_DEVICE_QUERY, TOUCH_DEFAULT_QUALITY, DEVICE_QUALITY_KEY } from '../js/render-quality.js';
 
 // A stand-in for the browser's storage; `refuse` behaves like private mode.
 function storage(refuse = false) {
@@ -71,13 +71,25 @@ const MB = 1024 * 1024;
 for (const quality of ['low', 'medium', 'high', 'ultra']) {
   const desk = deviceLimits({ touch: false, quality }), phone = deviceLimits({ touch: true, quality });
   // 16384 is the most a graphics card takes: off a touch device no model texture is shrunk here.
-  assert.deepEqual(desk, { textureBytes: 256 * MB, textureSets: 56, textureQuality: quality, importedTextureSize: 16384 });
+  // 0 for a light, point or size limit means there is none: a computer has none of the three.
+  assert.deepEqual(desk, { textureBytes: 256 * MB, textureSets: 56, textureQuality: quality, importedTextureSize: 16384, roomLights: 0, pointBudget: 0, scanBytes: 0 });
   assert.ok(phone.textureBytes < desk.textureBytes && phone.textureSets < desk.textureSets && phone.importedTextureSize < desk.importedTextureSize, quality + ': every touch-device limit is lower');
+  assert.deepEqual({ lights: phone.roomLights, points: phone.pointBudget, bytes: phone.scanBytes }, { lights: 4, points: 500000, bytes: 150 * MB }, quality + ': a touch device lights four rooms, draws half a million points and loads scans up to 150 MB');
 }
 assert.equal(deviceLimits({ touch: true, quality: 'medium' }).textureQuality, 'low', 'at its default a touch device makes the small material textures');
 assert.equal(deviceLimits({ touch: true, quality: 'high' }).textureQuality, 'high', 'one that chose High gets High textures');
 assert.equal(deviceLimits({ touch: true, quality: 'low' }).importedTextureSize, 1024);
 assert.equal(deviceLimits({ touch: true, quality: 'medium' }).importedTextureSize, 2048);
+
+// A scan is too large only when its size is known and over a limit that exists.
+assert.equal(scanTooLarge(200 * MB, 150 * MB), true);
+assert.equal(scanTooLarge(150 * MB, 150 * MB), false, 'at the limit it loads');
+assert.equal(scanTooLarge(200 * MB, 0), false, 'no limit (a computer)');
+assert.equal(scanTooLarge(0, 150 * MB), false, 'a size not known yet is checked when the bytes arrive');
+assert.equal(scanTooLarge(undefined, 150 * MB), false);
+assert.equal(scanTooLarge(200 * MB, undefined), false);
+assert.equal(megabytes(200 * MB), '200 MB');
+assert.equal(megabytes(1000), '1 MB', 'never "0 MB"');
 
 // Shrinking keeps the shape and leaves a picture that fits alone.
 assert.equal(shrunkSize(2048, 1024, 2048), null);
