@@ -174,7 +174,7 @@ function tick(deadline) {
 // ---------- background helper ----------
 // Making a set is 50..400 ms of pure computing. In the page, even sliced, that is time taken
 // from frames and taps, and where the browser has no idle callback the slices run back to back.
-// So the sets are made in a background helper (texture-worker.js), one at a time, and the page
+// So the sets are made in a background helper (texture-synth.js as a worker), one at a time, and the page
 // only wraps the finished pixels in textures. Where no helper can start (a page opened from a
 // file, a browser that refuses), or the helper dies, the page makes them itself as before.
 let helper = null, helperBroken = false, helperJob = null;
@@ -182,7 +182,7 @@ const helperQueue = [];   // { snap, res, entry } waiting for the helper
 function helperReady() {
   if (helper) return true;
   if (helperBroken || typeof Worker !== 'function') return false;
-  try { helper = new Worker(new URL('./texture-worker.js', import.meta.url), { type: 'module' }); }
+  try { helper = new Worker(new URL('./texture-synth.js', import.meta.url), { type: 'module' }); }
   catch (e) { helperBroken = true; return false; }
   helper.onmessage = helperDone;
   helper.onerror = helperFailed;
@@ -608,7 +608,14 @@ export function swatchUrl(mat, size, cb) {
 export function disposeMaterials() {
   jobs.length = 0; ticking = false;
   helperQueue.length = 0;   // a set the helper is making now is dropped when it comes back (cancelled below)
-  for (const e of texCache.values()) { e.cancelled = true; if (e.maps) for (const k of Object.keys(e.maps)) e.maps[k].dispose(); }
+  for (const e of texCache.values()) {
+    e.cancelled = true;
+    if (e.maps) for (const k of Object.keys(e.maps)) e.maps[k].dispose();
+    // Whoever was waiting for this set is told now: it will never arrive. (A model waiting for
+    // its materials would otherwise sit out its full 30 seconds.)
+    const waiting = e.waiters; e.waiters = [];
+    for (const w of waiting) { try { w(e); } catch (err) { console.error(err); } }
+  }
   texCache.clear();
   for (const m of matCache.values()) m.dispose();
   matCache.clear();

@@ -1,7 +1,7 @@
 // Procedural material textures, the part that only computes: noise, the pattern samplers and
 // the driver that fills a texture set's pixels. No three.js and no page (DOM) here, so the same
-// file runs in the page and in a background helper (texture-worker.js); textures.js turns the
-// pixels into textures and materials.
+// file runs in the page and as the background helper: textures.js starts this file as a worker
+// (see the end) and turns the pixels it sends back into textures and materials.
 
 // ---------- deterministic noise ----------
 // Tiny mulberry32 PRNG (used for setup tables) and an integer hash for lattice noise.
@@ -705,7 +705,7 @@ function defaultAccent(pattern, base) {
 
 // Synthesise one texture set: the colour map, the normal map and the occlusion / roughness map
 // of `mat` (a plain snapshot of a material record) at `res` pixels square. A generator, so the
-// page can run it in slices between frames; the background helper (texture-worker.js) runs it
+// page can run it in slices between frames; the background helper (the end of this file) runs it
 // straight through. `cancelled()` is asked every row and ends the work early (returns null).
 // The pixels depend on the record and the size alone, wherever this runs.
 export function* synthesize(mat, res, cancelled) {
@@ -758,3 +758,21 @@ export function* normalsJob(hgt, N, sx, sy, nrm) {
 }
 
 function strHash(s) { let h = 7; for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619); return h >>> 0; }
+
+// ---------- as the background helper ----------
+// One set per message, run straight through, its three pixel maps handed back without a copy.
+if (typeof globalThis.WorkerGlobalScope === 'function' && globalThis instanceof globalThis.WorkerGlobalScope) {
+  globalThis.onmessage = e => {
+    const { mat, res } = e.data;
+    const began = performance.now();
+    try {
+      const run = synthesize(mat, res);
+      let step = run.next();
+      while (!step.done) step = run.next();
+      const { N, col, nrm, orm } = step.value;
+      globalThis.postMessage({ ok: true, ms: performance.now() - began, N, col, nrm, orm }, [col.buffer, nrm.buffer, orm.buffer]);
+    } catch (err) {
+      globalThis.postMessage({ ok: false, ms: performance.now() - began, error: String(err && err.message || err) });
+    }
+  };
+}

@@ -21,7 +21,7 @@ const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3
 // ---------- the trees ----------
 // A tree is kept on its geometry (geometry.userData.pickTree), stamped with the versions of the
 // vertices it was built from, and made again if they are replaced. Building one for a large
-// scan takes the better part of a second, so the background helper (pick-worker.js) does it
+// scan takes the better part of a second, so a background helper (pick-tree.js as a worker) does it
 // and the page never waits: until a tree has arrived, a ray is tested three's own way, exactly
 // as before there was an index. Where no helper can start, the page builds the tree itself the
 // first time a ray needs it.
@@ -30,7 +30,7 @@ const building = new Map();   // build id -> { geometry, stamp }
 function helperReady() {
   if (helper) return true;
   if (helperBroken || typeof Worker !== 'function') return false;
-  try { helper = new Worker(new URL('./pick-worker.js', import.meta.url), { type: 'module' }); }
+  try { helper = new Worker(new URL('./pick-tree.js', import.meta.url), { type: 'module' }); }
   catch (e) { helperBroken = true; return false; }
   helper.onmessage = e => {
     const d = e.data, job = building.get(d.id);

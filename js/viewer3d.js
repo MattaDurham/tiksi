@@ -55,7 +55,6 @@ import {
   scanStats, dropScanToFloor, centerScanOnModel, releaseSplatRenderer, splatDrawables, splatBusy,
 } from './scans.js';
 import { attachSketchupNavigation } from './sketchup-nav.js';
-import { indexForPicking, buildPickIndexes, pendingPickBuilds } from './pick-index.js';
 import { ModelBatches } from './model-batch.js';
 import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown } from './tags.js';
 import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags } from './saved-views.js';
@@ -3121,6 +3120,20 @@ const hooks = {
   requestRender() { requestRender(3); },
 };
 const errMsg = e => String(e && e.message || e);
+// Whether a loaded scan has a mesh or point cloud of PICK_INDEX_MIN items or more (the size from
+// which pick-index.js gives it a tree; smaller ones keep three's own test and need no file).
+const PICK_INDEX_MIN = 20000;
+let pickIndex = null, pickIndexLoading = 0;
+function needsPickIndex(obj) {
+  let large = false;
+  obj.traverse(o => {
+    const g = o.geometry, pos = g && g.getAttribute && g.getAttribute('position');
+    if (!pos || large) return;
+    if (o.isPoints) large = pos.count >= PICK_INDEX_MIN;
+    else if (o.isMesh) large = (g.index ? g.index.count : pos.count) / 3 >= PICK_INDEX_MIN;
+  });
+  return large;
+}
 // How big each scan's file is, as far as this device has seen: new scans carry their size, and
 // for older ones it is remembered here (this browser only) the first time their bytes arrive.
 // With it, a scan over this device's limit is not downloaded again on every open just to be
@@ -3179,10 +3192,17 @@ async function addScanToScene(scan) {
   applyModelTagVisibility(prop, scan, obj);
   scanRoot.add(obj);
   // Large meshes and point clouds are tested through a tree of boxes (pick-index.js), built in
-  // a background helper. A computer asks for it now, ahead of the first click; a touch device
-  // only if a tool or a pinch ever needs it (a plain tap there tests markers only), so it
-  // costs no memory until then.
-  if (indexForPicking(obj) && !ownQuality()) buildPickIndexes(obj);
+  // a background helper. Its files are fetched the first time a scan is large enough to need
+  // them, never at start-up. A computer then asks for the tree at once, ahead of the first
+  // click; a touch device when a tap or a pinch first reaches the scan, so it costs no memory
+  // until then.
+  if (needsPickIndex(obj)) {
+    pickIndexLoading++;
+    import('./pick-index.js').then(m => {
+      pickIndex = m;
+      if (scanObjs[scan.id] === obj && m.indexForPicking(obj) && !ownQuality()) m.buildPickIndexes(obj);
+    }).catch(e => console.error('pick index', e)).then(() => { pickIndexLoading--; });
+  }
   setModelXray(obj, xray ? prop.env.xrayOpacity : null);
   fitShadow();
   applyEnvironment();
@@ -4731,7 +4751,7 @@ export function viewerIdleState() {
     mounted: !!(scene && renderer), programsWarm, texturesIn: !texturesPending && !(scene && pendingTextureJobs() > 0),
     modelsLoaded: !Object.values(scanState).some(s => s === 'loading') && !(scene && splatBusy()),
     firstFrame: frameCounts.fullFrames > 0, nothingToDraw: framesLeft <= 0, shadowsFresh: !(renderer && renderer.shadowMap.needsUpdate),
-    graphics: !contextLost, pickIndex: pendingPickBuilds() === 0,
+    graphics: !contextLost, pickIndex: !pickIndexLoading && (!pickIndex || pickIndex.pendingPickBuilds() === 0),
   };
 }
 // For the browser checks: the quality this device draws at and what was set from it, and where

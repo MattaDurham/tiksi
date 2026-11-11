@@ -1,6 +1,7 @@
 // The tree of boxes behind MODEL's pick index (pick-index.js), the part that only computes: no
-// three.js and no page here, so the background helper (pick-worker.js) builds trees with the
-// same code the page falls back to.
+// three.js and no page here. This one file is also the background helper: pick-index.js starts
+// it as a worker (see the end), so the helper builds trees with the code the page falls back to
+// and the app has one file for both.
 
 const LEAF = 8;                     // items per leaf
 
@@ -116,4 +117,20 @@ export function pointTreeFrom(positions, count) {
   const P = positions;
   const bounds = (i, out) => { out[0] = out[3] = P[i * 3]; out[1] = out[4] = P[i * 3 + 1]; out[2] = out[5] = P[i * 3 + 2]; };
   return buildTree(count, bounds, (i, axis) => P[i * 3 + axis]);
+}
+
+// ---------- as the background helper ----------
+// One geometry per message, its vertices in, its tree out, nothing copied on the way back.
+if (typeof globalThis.WorkerGlobalScope === 'function' && globalThis instanceof globalThis.WorkerGlobalScope) {
+  globalThis.onmessage = e => {
+    const { id, kind, positions, stride, offset, index, count } = e.data;
+    try {
+      const tree = kind === 'points' ? pointTreeFrom(positions, count) : triangleTreeFrom(positions, stride, offset, index, count);
+      // The arrays are views trimmed to the tree's size: send exact copies of the used part.
+      const box = tree.box.slice(), a = tree.a.slice(), b = tree.b.slice();
+      globalThis.postMessage({ id, ok: true, box, a, b, order: tree.order, nodes: tree.nodes }, [box.buffer, a.buffer, b.buffer, tree.order.buffer]);
+    } catch (err) {
+      globalThis.postMessage({ id, ok: false, error: String(err && err.message || err) });
+    }
+  };
 }
