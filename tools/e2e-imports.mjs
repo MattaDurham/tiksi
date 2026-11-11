@@ -18,6 +18,8 @@ await new Promise(r => server.listen(0, 'localhost', r));
 const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 try {
   const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
   await page.goto('http://localhost:' + server.address().port + '/');
   const results = await page.evaluate(async () => {
     const { importScanBytes, loadMesh, inspectGltf } = await import('./js/scans.js');
@@ -151,5 +153,6 @@ try {
   });
   for (const result of results) console.log('PASS ' + result);
   assert.ok(results.length >= 30);
+  assert.deepEqual(errors, [], 'no page errors');
   console.log('ALL IMPORT INTEGRATION CHECKS PASSED (' + results.length + ')');
 } finally { await browser.close(); await new Promise(r=>server.close(r)); }

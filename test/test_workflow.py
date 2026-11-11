@@ -31,6 +31,8 @@ class WorkflowTests(unittest.TestCase):
         shutil.copy(ROOT / 'tools/serve.py', self.root / 'tools/serve.py')
         shutil.copy(ROOT / 'server/workspace.py', self.root / 'server/workspace.py')
         shutil.copy(ROOT / 'server/peers.py', self.root / 'server/peers.py')
+        shutil.copy(ROOT / 'server/ranges.py', self.root / 'server/ranges.py')
+        shutil.copy(ROOT / 'server/code_version.py', self.root / 'server/code_version.py')
         (self.root / 'server/__init__.py').write_text('', encoding='utf-8')
         (self.root / 'scripts/preflight.sh').write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
         (self.root / 'index.html').write_text('<html><body>fixture</body></html>', encoding='utf-8')
@@ -123,7 +125,10 @@ class WorkflowTests(unittest.TestCase):
 
     def test_stale_pid_and_active_jobs_never_signalled(self):
         target = self.start()
-        stale = {'pid': os.getpid(), 'port': 8642, 'instanceId': 'not-real'}
+        # A spare port nothing listens on: the check reads the port, and must never reach the live app.
+        with socket.socket() as spare:
+            spare.bind(('127.0.0.1', 0)); port = spare.getsockname()[1]
+        stale = {'pid': os.getpid(), 'port': port, 'instanceId': 'not-real'}
         branch.atomic_json(target / '.tiksi-instance.json', stale)
         with patch.object(self.workflow, 'probe', return_value=None), patch.object(branch.os, 'kill') as kill:
             with self.assertRaises(branch.WorkflowError): self.workflow.stop('feature')

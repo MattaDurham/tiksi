@@ -28,6 +28,7 @@ Open **GUIDE** at the top of Tiksi for chapter search, expandable screenshots an
 - [Make a drawing set from the model](#documents)
 - [Send the client a one-pager](#one-pager)
 - [Settings, backups and storage](#settings)
+- [Use Tiksi on a phone](#phone)
 - [Shortcuts and common questions](#shortcuts)
 
 <a id="start"></a>
@@ -104,7 +105,7 @@ Open FILE, look at Project, switch to Import, inspect 3D exchange, then open Set
 
 **Keyboard saving.** Cmd/Ctrl+S saves; Cmd/Ctrl+Shift+S saves a new copy; Cmd/Ctrl+O opens a project file.
 
-**Shared project folders.** Desktop and Tailscale clients of the same local server see the same project files and original assets. A different server or the static edition is a separate workspace.
+**Shared project folders.** Desktop and Tailscale clients of the same local server see the same project files and original assets. Each device keeps its own open property, level and tag choices; changing them on one does not move the other. A different server or the static edition is a separate workspace.
 
 **File copy vs design fork.** SAVE AS preserves the property IDs. Reopening that copy updates the same property; it does not create a second independent design in this workspace.
 
@@ -112,7 +113,7 @@ Open FILE, look at Project, switch to Import, inspect 3D exchange, then open Set
 
 **Whole-workspace backup.** FILE → Settings → Workspace backup & maintenance → SAVE WORKSPACE BACKUP includes every property.
 
-> **Good to know:** The local server saves project bundles on the Mac and keeps browser working data in memory. First connection migrates old browser data to disk with a recovery bundle. Keep the Mac reachable until SAVED TO DISK appears; closing unsaved offline work warns. The static edition retains browser autosave and portable exports.
+> **Good to know:** The local server saves project bundles on the Mac. First connection migrates old browser data to disk with a recovery bundle. On the Mac itself, wait for SAVED TO DISK before closing; closing with unsaved work warns. A phone or another computer keeps what it has not sent yet in its own browser and sends it the next time Tiksi is opened there; while an original too large to keep is unsent, the phone bar reads Keep open. The static edition retains browser autosave and portable exports.
 
 <a id="capture"></a>
 
@@ -232,6 +233,10 @@ Here every group is ON SCREEN (Tiksi menu); by default the tools live in the men
 **Levels.** Show or hide levels in the model while retaining their geometry in the property.
 
 **Imported references.** Select a scan/model to inspect placement, scale and available materials. A reference remains separate from native plan elements.
+
+**Hidden scans load when shown.** A scan or model that is hidden is not loaded when MODEL opens. It loads the first time you show it (its VISIBLE box, or BEFORE / AFTER), so that first switch takes a moment; until then its row reads OFF.
+
+**On a phone or tablet.** A phone or tablet draws at its own quality: Medium until you choose another under FILE → Settings → Model environment, where it reads QUALITY ON THIS DEVICE. The choice is kept on that device and never changes the quality saved with the property, which computers use. To keep the page alive on a small device, MODEL there also lights only the four rooms nearest the camera, draws at most 500,000 points of a point cloud, shrinks large textures inside imported models, and does not load a scan file over 150 MB: it says the scan is too large for this device. In the phone layout the side panel has Measure, BEFORE / AFTER, the open saved view's Rename, Update and Delete, and LOAD ANYWAY for a scan that was not loaded; a banner over the model says what a tap does, with DONE. A tap on a note opens it to edit or delete, and in Top view one finger pans.
 
 **Photos and documents on surfaces.** PIN (P) hangs a photo or a document flat on the wall, floor or scan surface you click, like a print put up by hand. A photo hangs at a print size (11 x 14 in unless you choose another); a PDF page or sheet image hangs at its true size, so a 24 x 36 in drawing is 24 x 36 in on the wall. A pin on a wall keeps its place on that wall and moves with it when the wall moves. Select a pinned document and choose READ IT to fly in front of it, or OPEN THE PDF. PHOTOS in the mode bar hides or shows every pin, camera and numbered position.
 
@@ -761,6 +766,35 @@ Settings groups display, model environment and workspace maintenance. This synth
 
 > **Good to know:** Local-server project files are authoritative. Migration preserves a recovery bundle before removing old browser data. SAVED TO DISK — CLOSE OLDER TIKSI TABS means the files are saved; close older app tabs to finish browser cleanup. Converter and reconstruction jobs are separate copies, so removing a job does not manage the saved project files.
 
+<a id="phone"></a>
+
+## Use Tiksi on a phone
+
+**Where:** The side panel (the menu button)
+
+On a phone Tiksi opens on the model, full screen, with one side panel behind the menu button at the top left. The panel offers capture first, then the model's views and switches, then every page, the GUIDE and FILE. Controls are sized for a finger on any touch screen; a narrow window on a computer keeps its mouse sizes.
+
+### Try it
+
+1. Tap the menu button. TAKE A PHOTO opens the camera: the photo joins this property's PHOTOS, and MODEL asks you to tap where it was taken. ADD A NOTE asks you to tap where the note belongs. DONE in the banner over the model stops either.
+2. Under View, Saved views, Show, Tags and Levels, flip what the model shows; the panel stays open for the next switch. Quality on this device sets how finely this phone draws, separately from the computer.
+3. Under Pages, open any page, the GUIDE or FILE. The bar at the top of each page keeps the menu button, the page name and the save state; tap the save state for its full wording.
+4. DESKTOP LAYOUT at the foot of the panel shows the computer's layout on this phone. PHONE LAYOUT in its top bar comes back.
+
+### Other features here
+
+**PHOTOS on a phone.** One column with the camera first. A tapped photo's details slide up over the gallery; CLOSE, or the photo again, puts them away.
+
+**PROJECTS on a phone.** Scope items stack as cards with their numbers labelled. Removing an item asks first, since PROJECTS has no undo.
+
+**SCHEDULE on a phone.** Tap a bar for its dates and slack; the line above the chart shows them.
+
+**DOCUMENTS on a phone.** Sheets and saved documents are for looking at: arrange sheets and save PDFs on the Mac. Product documents in the project folder open on the Mac running Tiksi.
+
+**PHOTO TO 3D on a phone.** The camera takes one photo per tap. TAKE A PHOTO then reads TAKE ANOTHER PHOTO with the count so far; CLEAR SELECTION starts the count again.
+
+> **Good to know:** A phone keeps only what it has not sent yet; the Mac holds the project. The save state in the bar says whether everything has reached it.
+
 <a id="shortcuts"></a>
 
 ## Shortcuts and common questions
@@ -781,7 +815,7 @@ Use the visible tooltips and inspector labels when you forget a control. These a
 
 **Move one wall.** Alt/Option while dragging isolates that wall from the normal connected-wall behavior; floors stay where they are.
 
-**Where is save/import?.** Open FILE at the top. Project handles .tiksi files; Import handles captures and photos; 3D exchange handles editing in other applications.
+**Where is save/import?.** Open FILE at the top (on a phone, FILE in the side panel). Project handles .tiksi files; Import handles captures and photos; 3D exchange handles editing in other applications.
 
 **Why is my phone empty?.** Use the same Mac and server port through Tailscale. Reload the phone web app after an upgrade, then check the connection and SAVED TO DISK status. The local server shares every saved project and its assets. The static hosted edition and branch previews are separate workspaces.
 

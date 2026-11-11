@@ -44,10 +44,10 @@ function render() {
           <div class="sl-group">${escapeHtml(proj)}</div>
           ${its.map(it => `<button class="sl-item ${current && current.kind === 'item' && current.id === it.id ? 'active' : ''}"
             data-kind="item" data-id="${escapeHtml(it.id)}">${escapeHtml(it.name)}</button>`).join('')}
-        `).join('') || '<p class="muted" style="font-size:11px; margin-top:10px">No scope items yet.</p>'}
+        `).join('') || '<p class="muted sl-empty" style="margin-top:10px">No scope items yet.</p>'}
         <div class="sl-group">PRODUCT SHEETS</div>
         ${products.map(p => `<button class="sl-item ${current && current.kind === 'product' && current.id === p.id ? 'active' : ''}"
-          data-kind="product" data-id="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button>`).join('') || '<p class="muted" style="font-size:11px">No products yet.</p>'}
+          data-kind="product" data-id="${escapeHtml(p.id)}">${escapeHtml(p.name)}</button>`).join('') || '<p class="muted sl-empty">No products yet.</p>'}
       </div>
       <div class="sheet-view" id="sheet-view"></div>
     </div>`;

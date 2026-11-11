@@ -44,6 +44,22 @@ async function openPage(context, hash = '', ready = SAVED) {
   if (ready) await page.waitForFunction(ready, null, { timeout: 60000 });
   return page;
 }
+// A device that has not opened this workspace before starts on the property the Mac's copy
+// names; which property is open is then each device's own choice. Choose it the way the
+// phone panel does, through the property list.
+async function look(page, id) {
+  for (const end = Date.now() + 30000; ;) {
+    // The list is filled, and listens, a moment after the page first reads SAVED TO DISK.
+    const open = await page.evaluate(async id => {
+      const list = document.querySelector('#property-select');
+      if (list.onchange && list.value !== id && [...list.options].some(o => o.value === id)) { list.value = id; list.dispatchEvent(new Event('change')); }
+      return (await import('/js/store.js')).activeProperty()?.id === id && list.value === id;
+    }, id);
+    if (open) return;
+    if (Date.now() > end) assert.fail('the property did not open');
+    await new Promise(r => setTimeout(r, 100));
+  }
+}
 const edit = (page, id, change) => page.evaluate(async ([id, change]) => {
   const store = await import('/js/store.js');
   Object.assign(store.ws.data.properties.find(p => p.id === id), change); store.touch();
@@ -70,6 +86,7 @@ async function run(name, type, profile) {
   // 1. The phone layout hides the topbar and its status line. The bar carries the save state.
   await phoneContext.clock.install();
   let phone = await openPage(phoneContext, '#/photos');
+  await look(phone, id);
   assert.equal(await phone.locator('#topbar').isVisible(), false, 'the phone layout has no topbar');
   assert.equal(await phone.locator('.fd-save').isVisible(), true, 'the phone bar shows the save state');
   // Opening a page ends with one more look at the Mac, so the bar settles a moment after it appears.
@@ -156,7 +173,7 @@ async function run(name, type, profile) {
   await edit(desktop, id, { notes: 'Mac, meanwhile' }); await saveNow(desktop);
   await phoneContext.setOffline(false);
   phone = await openPage(phoneContext, '#/photos', null);
-  await phone.getByRole('button', { name: 'USE MAC VALUES', exact: true }).click({ timeout: 60000 });
+  await phone.getByRole('button', { name: /^USE THE SAVED COPY/ }).click({ timeout: 60000 });
   await phone.waitForFunction(SAVED, null, { timeout: 60000 });
   mac = await onTheMac();
   assert.equal(mac.data.properties.find(p => p.id === id).notes, 'Mac, meanwhile', 'the Mac\'s value was kept, as chosen');

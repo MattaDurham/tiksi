@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import stat
 import subprocess
 import sys
@@ -14,9 +15,10 @@ import threading
 import tempfile
 import time
 import zipfile
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from server.peers import trusted_peer
+from server.ranges import Part, byte_range
 
 log = logging.getLogger('tiksi.workspace')
 MAX_JSON = 32 * 1024 * 1024
@@ -31,7 +33,7 @@ HASH = re.compile(r'^[a-f0-9]{64}$')
 PICTURE_PREFIX = 'tiksi-picture:'
 PICTURE_REF = re.compile(r'^tiksi-picture:([a-z0-9.+-]+/[a-z0-9.+-]+):pic-([a-f0-9]{64})$')
 # What this server does beyond the original protocol; clients use only what is listed.
-FEATURES = ('picture-files', 'partial-projects', 'partial-properties', 'commit-paths')
+FEATURES = ('picture-files', 'partial-projects', 'partial-properties', 'commit-paths', 'storage-cleanup')
 
 
 def picture_refs(value):
@@ -144,6 +146,67 @@ def file_state(path):
     return 'file' if stat.S_ISREG(info.st_mode) else 'missing'
 
 
+# What a clean-up asked for by the owner offers to remove (nothing is removed on its own): of the
+# saved catalog copies, all but every recent save, one a day, then one a month; and stored
+# originals nothing kept refers to and nobody has sent or been told about for BLOB_GRACE.
+KEEP_SAVES = 50
+DAILY_DAYS = 90
+BLOB_GRACE = 30 * 86400
+# Smaller copies of stored pictures, made on the Mac for a phone (longest side in pixels).
+PREVIEW_SIZES = (256, 512, 1024, 2048)
+PREVIEW_WORK = threading.BoundedSemaphore(2)
+# Save ids the Mac remembers having committed (newest kept), with the revision each commit made.
+KEEP_SAVE_IDS = 2000
+# An original sent in pieces: each piece at most this big; at most MAX_UPLOADS unfinished at once,
+# declaring at most UPLOAD_TOTAL between them; one with no piece for UPLOAD_KEEP is dropped (the
+# page can send it again); a piece is refused when it would leave less than DISK_RESERVE free.
+MAX_PIECE = 64 * 1024 * 1024
+MAX_UPLOADS = 32
+UPLOAD_TOTAL = 8 * 1024 ** 3
+UPLOAD_KEEP = 7 * 86400
+DISK_RESERVE = 1024 ** 3
+REVISION_COPY = re.compile(r'^(\d+)\.json$')
+
+
+def thinned_copies(copies, now=None):
+    """Of saved catalog copies [(revision, mtime, name)], the names a clean-up may remove: all but
+    the newest KEEP_SAVES, the newest of each day for DAILY_DAYS, and the newest of each month."""
+    now = time.time() if now is None else now
+    kept, out = set(), []
+    for index, (revision, mtime, name) in enumerate(sorted(copies, reverse=True)):
+        day = time.strftime('%Y-%m-%d', time.localtime(mtime))
+        bucket = ('day', day) if now - mtime <= DAILY_DAYS * 86400 else ('month', day[:7])
+        if index < KEEP_SAVES or bucket not in kept: kept.add(bucket)
+        else: out.append(name)
+    return out
+
+
+RECORDS = ('manifest.json', 'workspace.json')
+
+
+def clone(source, destination):
+    """Copy source to a new file destination. On the Mac's own disks (APFS) this is a clone: the
+    copy shares the original's data until one of them is written, so it costs nothing."""
+    if sys.platform == 'darwin':
+        try:
+            libc = ctypes.CDLL(None, use_errno=True)
+            libc.clonefile.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32)
+            if libc.clonefile(os.fsencode(source), os.fsencode(destination), 0) == 0: return True
+        except (OSError, AttributeError): pass
+    shutil.copyfile(source, destination)
+    return False
+
+
+def replace_in_place(records, belongs, replacement):
+    """records with those that belong replaced by replacement, at the place of the first of them."""
+    out, placed = [], False
+    for record in records:
+        if not belongs(record): out.append(record)
+        elif not placed: out.extend(replacement); placed = True
+    if not placed: out.extend(replacement)
+    return out
+
+
 def project_file_base(name):
     """A property's name as a file name: no path or reserved characters, at most 80 long."""
     return re.sub(r'[\\/:*?"<>|\x00-\x1f]', ' ', str(name)).strip(' .')[:80] or 'Project'
@@ -153,11 +216,18 @@ class WorkspaceService:
     run = staticmethod(subprocess.run)
 
     def __init__(self, root, projects_dir=None):
+        # Set by the server that serves the app (tools/serve.py): the fingerprint of its files.
+        self.code_version = None
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / 'blobs').mkdir(exist_ok=True)
         (self.root / 'history').mkdir(exist_ok=True)
+        (self.root / 'uploads').mkdir(exist_ok=True)
         self.lock = threading.RLock()
+        self.upload_locks = {}
+        # Held while an upload checks for room and takes its place, so two starting at once
+        # cannot both take the last one.
+        self.upload_room = threading.Lock()
         self.jobs = 0
         self.token = secrets.token_urlsafe(32)
         identity = self.root / 'identity'
@@ -172,8 +242,12 @@ class WorkspaceService:
         self.state = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {'revision': 0, 'data': None, 'assets': {}}
         self.paths = self.state.get('paths', {})
         # Registered projects whose file is missing or cannot be read: id -> (path, reason).
-        # Only these are left out; every other project keeps loading and saving.
-        self.unavailable = {}
+        # Only these are left out; every other project keeps loading and saving. Kept with the
+        # catalog, so a restart with the same file still missing is no change.
+        self.unavailable = {i: tuple(v) for i, v in (self.state.get('unavailable') or {}).items()}
+        # Project files as this server last wrote or read them: path -> [mtime_ns, size]. A file
+        # that still matches at start is not fingerprinted again, original by original.
+        self.known = {name: tuple(v) for name, v in (self.state.get('stamps') or {}).items()}
         # Unreadable registered files and their (mtime, size), so one is not re-read every poll.
         self.unreadable = {}
         self.has_pictures = bool(picture_refs(self.state.get('data')))
@@ -183,6 +257,7 @@ class WorkspaceService:
         # Where a property made from a picked folder will be kept, until its first save writes it.
         self.planned = {}
         self.refresh()
+        self.expire_uploads()
 
     def active_jobs(self):
         return self.jobs
@@ -292,6 +367,7 @@ class WorkspaceService:
             self.state = json.loads(self.path.read_text(encoding='utf-8'))
             self.paths = self.state['paths']
             self.stamps, self.parts, self.part_assets = {}, {}, {}
+            self.known = {name: tuple(v) for name, v in (self.state.get('stamps') or {}).items()}
         self.finish_files()
         # A registered file that is not there, or cannot be looked at, marks only its own
         # project unavailable.
@@ -310,6 +386,7 @@ class WorkspaceService:
             candidates.update(str(p) for p in directory.glob('*.tiksi'))
             candidates.update(str(p) for p in (directory / 'Tiksi').glob('*.tiksi'))
         changed = False
+        before = None
         for name in sorted(candidates):
             path = Path(name)
             if file_state(name) != 'file': continue
@@ -342,11 +419,16 @@ class WorkspaceService:
                     if len(members) > 10000: raise WorkspaceError('Project contains too many original files', 413)
                     if sum(archive.getinfo(item['path']).file_size for item in members) > 4 * 1024 ** 3: raise WorkspaceError('Project originals exceed 4 GB', 413)
                     assets = {}
+                    # This server wrote or read the file at exactly this time and size, so the
+                    # fingerprints in its manifest are the ones it checked then.
+                    trusted = self.known.get(name) == stamp
                     for item in members:
                         member = archive.getinfo(item['path'])
                         if member.file_size > MAX_BLOB: raise WorkspaceError('Project asset exceeds 600 MB', 413)
-                        with archive.open(member) as source:
-                            digest, size = self.store_blob(source)
+                        held = self.root / 'blobs' / str(item.get('hash', ''))
+                        if trusted and HASH.fullmatch(str(item.get('hash', ''))) and held.is_file() and held.stat().st_size == member.file_size:
+                            digest, size = item['hash'], member.file_size
+                        else: digest, size = self.store_member(archive, member)
                         assets[item['id']] = {k: v for k, v in item.items() if k in ('name', 'format', 'mime', 'kind')}
                         assets[item['id']].update(hash=digest, size=size)
             except (zipfile.BadZipFile, KeyError, ValueError, AttributeError, TypeError, OSError) as error:
@@ -359,12 +441,15 @@ class WorkspaceService:
                 continue
             self.unreadable.pop(name, None)
             unavailable.pop(identifier, None)
+            # Whether anything really changed is decided at the end, against the catalog as it was.
+            if before is None: before = json.dumps([self.state['data'], self.state['assets'], self.paths], sort_keys=True)
             current = self.state['data']
             if current is None:
                 current = {**data, 'properties': [], 'projects': [], 'materials': [], 'products': []}
                 self.state['data'] = current
-            current['properties'] = [p for p in current['properties'] if p['id'] != identifier] + props
-            current['projects'] = [p for p in current['projects'] if p.get('propertyId') != identifier] + data.get('projects', [])
+            # A property read again keeps its place in the list; a new one goes at the end.
+            current['properties'] = replace_in_place(current['properties'], lambda p: p['id'] == identifier, props)
+            current['projects'] = replace_in_place(current['projects'], lambda p: p.get('propertyId') == identifier, data.get('projects', []))
             for key in ('materials', 'products'):
                 records = {r['id']: r for r in current[key]}
                 records.update({r['id']: r for r in data.get(key, [])})
@@ -374,7 +459,12 @@ class WorkspaceService:
             self.parts[identifier] = data
             self.part_assets[identifier] = assets
             self.stamps[name] = stamp
+            self.known[name] = stamp
             changed = True
+        if changed and before == json.dumps([self.state['data'], self.state['assets'], self.paths], sort_keys=True):
+            # Files read again (after a restart, say) with the same contents: devices need not reload.
+            self.persist_catalog()
+            changed = False
         for identifier, (name, _) in unavailable.items():
             # Read again in full when it comes back, even with the same time and size.
             self.stamps.pop(name, None)
@@ -396,12 +486,214 @@ class WorkspaceService:
 
     def persist_catalog(self):
         self.state['paths'] = self.paths
+        self.state['unavailable'] = {i: list(v) for i, v in self.unavailable.items()}
+        live = set(self.paths.values())
+        self.state['stamps'] = {name: list(v) for name, v in self.known.items() if name in live}
         temp = self.root / 'current.tmp'
         with temp.open('w', encoding='utf-8') as out:
             json.dump(self.state, out, ensure_ascii=False)
             out.flush()
             os.fsync(out.fileno())
         os.replace(temp, self.path)
+
+    def cleanup_plan(self, now=None):
+        """What a clean-up would remove, and nothing more. Saved catalog copies beyond the thinning
+        rule, except the newest copy that holds each property (a project whose file is missing is
+        left out of later saves, so its last copies may be all that is left of its record). Stored
+        originals that nothing kept refers to: not the catalog, not a project file as last read,
+        not any copy that stays, not an unavailable project, and not one sent or asked about in the
+        last BLOB_GRACE. Every project file holds its own originals, so the store is a cache of them."""
+        now = time.time() if now is None else now
+        # Copies are never thinned on their own, so there can be thousands: each is read alone and
+        # only its property ids and the hashes of its originals are kept, never the copy itself.
+        def hashes(assets):
+            return {a['hash'] for a in (assets.values() if isinstance(assets, dict) else ()) if isinstance(a, dict) and isinstance(a.get('hash'), str)}
+        def properties(value):
+            data = value.get('data') if isinstance(value, dict) else None
+            return {p.get('id') for p in (data or {}).get('properties', []) if isinstance(p, dict)}
+        copies, read = [], {}
+        for path in (self.root / 'history').glob('*.json'):
+            try: value = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, ValueError): value = None
+            read[path.name] = (properties(value), hashes(value.get('assets'))) if isinstance(value, dict) else None
+            del value
+            match = REVISION_COPY.match(path.name)
+            if match:
+                try: copies.append((int(match[1]), path.stat().st_mtime, path.name))
+                except OSError: continue
+        newest = {}
+        for revision, _, name in sorted(copies):
+            for identifier in (read.get(name) or (set(),))[0]: newest[identifier] = name
+        thin = [name for name in thinned_copies(copies, now) if name not in set(newest.values())]
+        wanted = set()
+        def take(assets): wanted.update(hashes(assets))
+        for name, value in read.items():
+            if name not in thin and value: wanted.update(value[1])
+        with self.lock:
+            take(self.state.get('assets'))
+            for assets in self.part_assets.values(): take(assets)
+        originals = []
+        for path in (self.root / 'blobs').iterdir():
+            if not HASH.fullmatch(path.name) or path.name in wanted: continue
+            try:
+                found = path.stat()
+                if now - found.st_mtime >= BLOB_GRACE: originals.append((path.name, found.st_size))
+            except OSError: continue
+        size = lambda name: (self.root / 'history' / name).stat().st_size if (self.root / 'history' / name).exists() else 0
+        plan = {'copies': sorted(({'name': n, 'bytes': size(n)} for n in thin), key=lambda c: c['name']),
+                'originals': sorted(({'hash': h, 'bytes': b} for h, b in originals), key=lambda o: o['hash'])}
+        plan['count'] = len(plan['copies']) + len(plan['originals'])
+        plan['bytes'] = sum(c['bytes'] for c in plan['copies']) + sum(o['bytes'] for o in plan['originals'])
+        return plan
+
+    def cleanup(self, asked):
+        """Remove what cleanup_plan lists, only when asked with exactly that list (the copies'
+        names and the originals' hashes). If anything changed since it was listed, nothing is
+        removed and the new list is returned to be confirmed again."""
+        if not isinstance(asked, dict) or not isinstance(asked.get('copies'), list) or not isinstance(asked.get('originals'), list):
+            raise WorkspaceError('Send back the list to remove: {"copies": [names], "originals": [hashes]}')
+        with self.lock:
+            plan = self.cleanup_plan()
+            if sorted(map(str, asked['copies'])) != [c['name'] for c in plan['copies']] or sorted(map(str, asked['originals'])) != [o['hash'] for o in plan['originals']]:
+                error = WorkspaceError('What can be removed changed since it was listed; nothing was removed. Look at the new list.', 409)
+                error.code, error.plan = 'cleanup-changed', plan
+                raise error
+            for copy in plan['copies']: (self.root / 'history' / copy['name']).unlink(missing_ok=True)
+            for original in plan['originals']: (self.root / 'blobs' / original['hash']).unlink(missing_ok=True)
+            previews = self.root / 'previews'
+            for path in (previews.iterdir() if previews.is_dir() else ()):
+                if not (self.root / 'blobs' / path.name.split('-')[0]).is_file(): path.unlink(missing_ok=True)
+        log.info('Clean-up asked for: removed %d catalog copies and %d stored originals (%d bytes).', len(plan['copies']), len(plan['originals']), plan['bytes'])
+        return {'removed': plan['count'], 'bytes': plan['bytes'], 'copies': len(plan['copies']), 'originals': len(plan['originals'])}
+
+    def held(self, digest):
+        """True when the Mac holds this original; its time is refreshed, so a clean-up does not take
+        away something a page was just told is here."""
+        path = self.root / 'blobs' / digest
+        try: os.utime(path)
+        except OSError: return False
+        return path.is_file()
+
+    def expire_uploads(self, now=None):
+        """Drop unfinished uploads that have had no piece for UPLOAD_KEEP (note and part together)."""
+        now = time.time() if now is None else now
+        folder = self.root / 'uploads'
+        for note in folder.glob('*.json'):
+            part = note.with_suffix('.part')
+            try: newest = max(p.stat().st_mtime for p in (note, part) if p.exists())
+            except (OSError, ValueError): continue
+            if now - newest >= UPLOAD_KEEP:
+                part.unlink(missing_ok=True); note.unlink(missing_ok=True)
+        for part in folder.glob('*.part'):
+            if not part.with_suffix('.json').exists(): part.unlink(missing_ok=True)
+
+    def preview(self, digest, longest):
+        """A JPEG copy of a stored picture, at most longest pixels on its longest side, made once
+        with the Mac's own image tool (sips) and kept. Returns the copy's path, or the original's
+        when the picture is no bigger than that. Raises WorkspaceError 415 when no copy can be
+        made (not a picture, or no image tool), so the page falls back to the original."""
+        source = self.root / 'blobs' / digest
+        if not source.is_file(): raise WorkspaceError('Asset not found', 404)
+        folder = self.root / 'previews'; folder.mkdir(exist_ok=True)
+        made = folder / (digest + '-' + str(longest) + '.jpg')
+        same = folder / (digest + '-' + str(longest) + '.original')
+        if made.is_file(): return made
+        if same.is_file(): return source
+        tool = shutil.which('sips') or ('/usr/bin/sips' if Path('/usr/bin/sips').is_file() else None)
+        def refused(reason):
+            error = WorkspaceError('No smaller copy of this file: ' + reason, 415); error.code = 'no-preview'; return error
+        if not tool: raise refused('this Mac has no image tool')
+        with PREVIEW_WORK:
+            if made.is_file(): return made
+            try:
+                found = self.run([tool, '-g', 'pixelWidth', '-g', 'pixelHeight', str(source)], capture_output=True, text=True, timeout=60)
+                sizes = [int(v) for v in re.findall(r'pixel(?:Width|Height): (\d+)', found.stdout)]
+                if found.returncode or len(sizes) != 2: raise refused('it is not a picture')
+                if max(sizes) <= longest:
+                    same.touch(); return source
+                with tempfile.NamedTemporaryFile(dir=folder, prefix='.', suffix='.jpg', delete=False) as out: temp = Path(out.name)
+                try:
+                    done = self.run([tool, '-Z', str(longest), '-s', 'format', 'jpeg', '-s', 'formatOptions', '80', str(source), '--out', str(temp)], capture_output=True, text=True, timeout=120)
+                    if done.returncode or not temp.is_file() or not temp.stat().st_size: raise refused('the picture could not be read')
+                    os.replace(temp, made)
+                finally: temp.unlink(missing_ok=True)
+            except (OSError, subprocess.TimeoutExpired, ValueError): raise refused('the image tool did not answer')
+        return made
+
+    def upload_state(self, digest):
+        """How far an original sent in pieces has come: (received bytes, declared size or None)."""
+        part, note = self.root / 'uploads' / (digest + '.part'), self.root / 'uploads' / (digest + '.json')
+        try: size = json.loads(note.read_text(encoding='utf-8')).get('size')
+        except (OSError, ValueError, AttributeError): size = None
+        received = part.stat().st_size if part.is_file() and isinstance(size, int) else 0
+        return received, size if isinstance(size, int) else None
+
+    def upload_piece(self, digest, size, offset, body, length):
+        """Add one piece of an original to its upload. The piece must start where the upload has
+        got to; whatever of it arrives is kept even if the connection breaks, so the next piece
+        continues from there. Once every byte is in, the whole is checked against its hash and
+        becomes a stored original. Returns (received, size, done)."""
+        if not HASH.fullmatch(digest): raise WorkspaceError('Invalid hash', 404)
+        if not 0 < size <= MAX_BLOB: raise WorkspaceError('An original must be between 1 byte and 600 MB', 413)
+        if self.held(digest): return size, size, True
+        with self.lock: guard = self.upload_locks.setdefault(digest, threading.Lock())
+        if not guard.acquire(blocking=False): raise WorkspaceError('This original is being sent from another page; ask again in a moment', 409)
+        try:
+            part, note = self.root / 'uploads' / (digest + '.part'), self.root / 'uploads' / (digest + '.json')
+            received, declared = self.upload_state(digest)
+            if declared != size:
+                # A new upload, or one that changed its declared size: it starts again, if there is room.
+                with self.upload_room:
+                    self.expire_uploads()
+                    others = [n for n in (self.root / 'uploads').glob('*.json') if n != note]
+                    total = sum(self.upload_state(n.stem)[1] or 0 for n in others) + size
+                    if len(others) >= MAX_UPLOADS or total > UPLOAD_TOTAL:
+                        raise WorkspaceError('The Mac already has %d unfinished uploads declaring %d MB; finish or wait for those first' % (len(others), (total - size) // 2 ** 20), 429)
+                    part.unlink(missing_ok=True); received = 0
+                    write_whole(note, json.dumps({'size': size}).encode('utf-8'))
+            if offset != received:
+                error = WorkspaceError('The upload has ' + str(received) + ' bytes; send from there', 409)
+                error.code, error.received = 'upload-offset', received
+                raise error
+            if received + length > size: raise WorkspaceError('The piece goes beyond the declared size', 413)
+            if shutil.disk_usage(self.root).free < length + DISK_RESERVE:
+                raise WorkspaceError("The Mac's disk is nearly full; this piece was not accepted. Make room on the Mac and send it again", 507)
+            with part.open('ab') as out:
+                try:
+                    left = length
+                    while left:
+                        chunk = body.read(min(1024 * 1024, left))
+                        if not chunk: raise WorkspaceError('Upload was truncated; ask how far it got and send the rest')
+                        out.write(chunk); left -= len(chunk)
+                finally: out.flush(); os.fsync(out.fileno())
+            received = part.stat().st_size
+            # A slow upload stays as long as pieces keep arriving.
+            os.utime(note)
+            if received < size: return received, size, False
+            digest_found = hashlib.sha256()
+            with part.open('rb') as source:
+                while chunk := source.read(1024 * 1024): digest_found.update(chunk)
+            if digest_found.hexdigest() != digest:
+                part.unlink(missing_ok=True); note.unlink(missing_ok=True)
+                raise WorkspaceError('The upload does not match its hash; send it again from the start', 422)
+            os.replace(part, self.root / 'blobs' / digest)
+            note.unlink(missing_ok=True)
+            return size, size, True
+        finally:
+            guard.release()
+            with self.lock:
+                if not guard.locked(): self.upload_locks.pop(digest, None)
+
+    def store_member(self, archive, member):
+        """Fingerprint one original in a project file; copy it into the blob store only when the
+        store does not hold it yet."""
+        digest = hashlib.sha256()
+        with archive.open(member) as source:
+            while chunk := source.read(1024 * 1024): digest.update(chunk)
+        held = self.root / 'blobs' / digest.hexdigest()
+        if held.is_file() and held.stat().st_size == member.file_size:
+            self.held(digest.hexdigest()); return digest.hexdigest(), member.file_size
+        with archive.open(member) as source: return self.store_blob(source)
 
     def store_blob(self, source):
         digest = hashlib.sha256()
@@ -419,7 +711,8 @@ class WorkspaceService:
                 os.fsync(out.fileno())
             result = digest.hexdigest()
             dest = self.root / 'blobs' / result
-            if dest.exists(): temp.unlink()
+            if dest.exists():
+                temp.unlink(); self.held(result)
             else: os.replace(temp, dest)
             return result, size
         finally:
@@ -494,8 +787,39 @@ class WorkspaceService:
         return error
 
     def commit(self, request):
+        return self.commit_once(request)[0]
+
+    def committed(self, save_id):
+        """The revision the save with this id made, or None if the Mac never committed it."""
+        with self.lock: found = (self.state.get('saves') or {}).get(save_id)
+        return found.get('revision') if isinstance(found, dict) else found
+
+    @staticmethod
+    def save_fingerprint(request):
+        """What a save carries, reduced to one fingerprint: the same id must come with the same save."""
+        body = {k: request.get(k) for k in ('data', 'projectData', 'assets', 'unchangedProjects', 'propertyOrder')}
+        return hashlib.sha256(json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()
+
+    def commit_once(self, request):
+        """Commit a save; returns (revision, repeated). A save carrying an id the Mac has already
+        committed is not committed again: the answer is the revision that commit made."""
         if not isinstance(request, dict) or type(request.get('revision')) is not int:
             raise WorkspaceError('A base revision is required')
+        save_id = request.get('saveId')
+        if save_id is not None and (not isinstance(save_id, str) or not 0 < len(save_id) <= 200):
+            raise WorkspaceError('A save id is text of 1 to 200 characters')
+        fingerprint = self.save_fingerprint(request) if save_id is not None else None
+        with self.lock:
+            found = (self.state.get('saves') or {}).get(save_id) if save_id is not None else None
+            if found is not None:
+                if isinstance(found, dict) and found.get('body') != fingerprint:
+                    error = WorkspaceError('This save id was already used for a different save; give each save a new random id', 409)
+                    error.code = 'save-id-reused'
+                    raise error
+                return (found.get('revision') if isinstance(found, dict) else found), True
+            return self.commit_new(request, save_id, fingerprint), False
+
+    def commit_new(self, request, save_id, fingerprint=None):
         data, assets = request.get('data'), request.get('assets')
         self.check_records(data)
         order = request.get('propertyOrder')
@@ -519,6 +843,13 @@ class WorkspaceService:
             if (pictures or self.has_pictures) and request.get('pictureFiles') is not True:
                 raise WorkspaceError('This Tiksi tab is out of date; reload it to keep saving', 426)
             value = {'revision': self.state['revision'] + 1, 'data': data, 'assets': assets}
+            # Which saves were committed is the Mac's own record, kept with its catalog and
+            # never in a project file; it is written in the same step as the save itself.
+            saves = dict(self.state.get('saves') or {})
+            if save_id is not None:
+                saves[save_id] = {'revision': value['revision'], 'body': fingerprint}
+                for old in list(saves)[:max(0, len(saves) - KEEP_SAVE_IDS)]: del saves[old]
+            value['saves'] = saves
             encoded = json.dumps(value, ensure_ascii=False).encode('utf-8')
             if len(encoded) > MAX_JSON: raise WorkspaceError('Workspace metadata exceeds 32 MB', 413)
             if self.path.exists():
@@ -569,7 +900,10 @@ class WorkspaceService:
                     with tempfile.NamedTemporaryFile(dir=dest.parent, suffix='.tmp', delete=False) as out:
                         temp = Path(out.name)
                     staged.append((temp, dest, identifier))
-                    self.bundle(temp, part, relevant)
+                    # Only the records changed: the new file is the old one with new records, its
+                    # originals left where they are. Otherwise the whole file is written afresh.
+                    same_originals = {i: a.get('hash') for i, a in (self.part_assets.get(identifier) or {}).items()} == {i: a.get('hash') for i, a in relevant.items()}
+                    if not (same_originals and self.rewrite_records(dest, temp, part, relevant)): self.bundle(temp, part, relevant)
                     # History stores metadata revisions against immutable original blobs,
                     # avoiding a full copy of a large scan on every note/geometry edit.
                 # All files are complete before replacing any canonical file. A durable
@@ -591,7 +925,7 @@ class WorkspaceService:
                     if note.exists(): note.unlink()
                 for temp, dest, identifier in staged:
                     os.replace(temp, dest)
-                    self.stamps[str(dest)] = (dest.stat().st_mtime_ns, dest.stat().st_size)
+                    self.stamps[str(dest)] = self.known[str(dest)] = (dest.stat().st_mtime_ns, dest.stat().st_size)
                 self.state, self.paths = value, value['paths']
                 for i in destinations: self.planned.pop(i, None)
                 self.has_pictures = bool(pictures)
@@ -642,13 +976,61 @@ class WorkspaceService:
                     if temp.exists(): temp.unlink()
             return destination.name
 
+    @staticmethod
+    def entries(assets):
+        return [{**asset, 'id': i, 'path': 'files/' + hashlib.sha256(i.encode()).hexdigest() + '.bin'} for i, asset in assets.items()]
+
     def bundle(self, destination, data, assets, format='tiksi-project'):
-        entries = [{**asset, 'id': i, 'path': 'files/' + hashlib.sha256(i.encode()).hexdigest() + '.bin'} for i, asset in assets.items()]
+        # The originals come first and the two small records last, so a later save that changes
+        # only the records can rewrite just the end of the file (rewrite_records).
+        entries = self.entries(assets)
         with zipfile.ZipFile(destination, 'w', zipfile.ZIP_STORED) as archive:
-            archive.writestr('workspace.json', json.dumps(data, ensure_ascii=False))
-            archive.writestr('manifest.json', json.dumps({'format': format, 'version': 1, 'app': 'tiksi', 'files': entries}))
             for entry in entries: archive.write(self.root / 'blobs' / entry['hash'], entry['path'])
+            archive.writestr('manifest.json', json.dumps({'format': format, 'version': 1, 'app': 'tiksi', 'files': entries}))
+            archive.writestr('workspace.json', json.dumps(data, ensure_ascii=False))
         with Path(destination).open('rb') as saved: os.fsync(saved.fileno())
+
+    def rewrite_records(self, source, temp, data, assets, format='tiksi-project'):
+        """Make temp a copy of the project file source with new records (workspace.json and
+        manifest.json) and the same originals, writing only the end of the file. It applies when
+        source is exactly as this server last wrote or read it, holds exactly these originals,
+        and has its records after them. Returns False, with temp untouched, when it does not; the
+        caller then writes the whole file. temp is renamed into place by the caller, so the
+        project file is replaced whole or not at all either way."""
+        source, temp = Path(source), Path(temp)
+        try:
+            found = source.stat()
+            if self.stamps.get(str(source)) != (found.st_mtime_ns, found.st_size): return False
+            with zipfile.ZipFile(source) as old: infos = old.infolist()
+        except (OSError, zipfile.BadZipFile): return False
+        entries = self.entries(assets)
+        tail = [i for i in infos if i.filename in RECORDS]
+        body = [i for i in infos if i.filename not in RECORDS]
+        if len(tail) != 2 or sorted(i.filename for i in body) != sorted(e['path'] for e in entries): return False
+        start = min(i.header_offset for i in tail)
+        if any(i.header_offset > start for i in body): return False
+        try:
+            temp.unlink(missing_ok=True)
+            clone(source, temp)
+            with temp.open('r+b') as handle:
+                with zipfile.ZipFile(handle, 'a') as archive:
+                    # Forget the old records and write the new ones where they began; closing
+                    # writes the list of members after them and cuts the file there.
+                    archive.filelist = [i for i in archive.filelist if i.filename not in RECORDS]
+                    for name in RECORDS: archive.NameToInfo.pop(name, None)
+                    archive.start_dir = start
+                    archive.writestr('manifest.json', json.dumps({'format': format, 'version': 1, 'app': 'tiksi', 'files': entries}))
+                    archive.writestr('workspace.json', json.dumps(data, ensure_ascii=False))
+                handle.flush(); os.fsync(handle.fileno())
+            # The originals must be exactly where they were, and the records read back as written.
+            with zipfile.ZipFile(temp) as new:
+                kept = {i.filename: (i.header_offset, i.CRC, i.compress_size) for i in new.infolist() if i.filename not in RECORDS}
+                if kept != {i.filename: (i.header_offset, i.CRC, i.compress_size) for i in body} or json.loads(new.read('workspace.json')) != data: raise ValueError('records rewrite did not read back')
+            return True
+        except (OSError, ValueError, zipfile.BadZipFile, AttributeError, KeyError):
+            log.warning('Wrote %s in full: its records could not be rewritten on their own.', source.name, exc_info=True)
+            with temp.open('wb'): pass
+            return False
 
     @staticmethod
     def referenced(data):
@@ -664,6 +1046,34 @@ class WorkspaceService:
         # Pictures anywhere in the project's records (thumbnails, plan underlays, product images).
         ids.update(picture_refs(data))
         return ids
+
+    def forget(self, identifier):
+        """Take a project whose file is gone for good off the Mac's list. Only a project whose file
+        is missing can be taken off, and no file anywhere is deleted, moved or written: the
+        project's record stays in the server's saved catalog copies, and a clean-up always keeps
+        the newest copy that holds it (cleanup_plan). If its file turns up in the projects folder
+        later, it is found again like any other project file."""
+        with self.lock:
+            self.refresh()
+            if identifier not in self.unavailable:
+                raise WorkspaceError('Only a project whose file is missing can be taken off the list', 409)
+            if self.unavailable[identifier][1] != 'missing':
+                # The file is there but cannot be read (permissions, a failing drive, damage): it
+                # may come back, so the project stays listed.
+                raise WorkspaceError('This project file is there but cannot be read; fix that rather than taking it off the list', 409)
+            if self.path.exists(): self.keep_history(self.root / 'history' / (str(self.state['revision']) + '.json'))
+            path, _ = self.unavailable.pop(identifier)
+            self.paths.pop(identifier, None)
+            for table in (self.parts, self.part_assets): table.pop(identifier, None)
+            for table in (self.stamps, self.known, self.unreadable): table.pop(path, None)
+            data = self.state.get('data')
+            if data:
+                data['properties'] = [p for p in data.get('properties', []) if p.get('id') != identifier]
+                data['projects'] = [p for p in data.get('projects', []) if p.get('propertyId') != identifier]
+            self.state['revision'] += 1
+            self.persist_catalog()
+            log.info('Took a project off the list at the owner\'s request; its file was at %s and nothing was deleted.', path)
+            return self.state['revision']
 
     def check_available(self, identifier):
         with self.lock:
@@ -696,16 +1106,25 @@ class WorkspaceService:
                 with self.lock:
                     self.refresh()
                     revision = self.state['revision']
-                self.reply(h, 200, {'revision': revision})
+                asked = parse_qs(urlsplit(h.path).query).get('saveId', [None])[0]
+                # What code the Mac now serves: an open page from older code reloads when idle.
+                code = {'codeVersion': self.code_version.value()} if self.code_version else {}
+                self.reply(h, 200, {'revision': revision, **code, **({'save': self.save_answer(asked)} if asked is not None else {})})
+            elif path == '/api/workspace/saves' and h.command == 'GET':
+                # Did the Mac commit the save with this id? ?id=<save id>
+                asked = parse_qs(urlsplit(h.path).query).get('id', [None])[0]
+                if not asked or len(asked) > 200: raise WorkspaceError('Ask with ?id=<save id>')
+                self.reply(h, 200, self.save_answer(asked))
             elif path == '/api/workspace' and h.command == 'GET':
                 self.reply(h, 200, self.snapshot())
             elif path == '/api/workspace' and h.command == 'PUT':
                 payload = self.read(h, MAX_WORKSPACE_REQUEST)
                 try: request = json.loads(payload)
                 except (ValueError, UnicodeDecodeError): raise WorkspaceError('Workspace must be JSON')
-                revision = self.commit(request)
+                revision, repeated = self.commit_once(request)
                 with self.lock: paths, unavailable = self.visible_paths(), self.unavailable_projects()
-                self.reply(h, 200, {'revision': revision, 'paths': paths, 'unavailable': unavailable})
+                saved = {'saveId': request['saveId'], 'repeated': repeated} if isinstance(request, dict) and request.get('saveId') is not None else {}
+                self.reply(h, 200, {'revision': revision, 'paths': paths, 'unavailable': unavailable, **saved})
             elif path == '/api/workspace/recovery' and h.command == 'POST':
                 payload = self.read(h, MAX_WORKSPACE_REQUEST)
                 try: record = json.loads(payload)
@@ -756,11 +1175,16 @@ class WorkspaceService:
                     with model.open('rb') as source:
                         while chunk := source.read(1024 * 1024): h.wfile.write(chunk)
                 elif h.command == 'PUT':
-                    value = self.read(h, MAX_BLOB)
-                    with self.lock:
-                        before = str(model.stat().st_mtime_ns) if model.exists() else '0'
-                        if h.headers.get('X-File-Mtime') != before: raise WorkspaceError('SketchUp model changed; retry before overwriting', 409)
-                        write_whole(model, value)
+                    stamp = lambda: str(model.stat().st_mtime_ns) if model.exists() else '0'
+                    if h.headers.get('X-File-Mtime') != stamp(): raise WorkspaceError('SketchUp model changed; retry before overwriting', 409)
+                    # The model is received into a spare file of its own beside it, never held
+                    # whole in memory, and renamed into place only if nobody changed it meanwhile.
+                    temp = self.receive(h, MAX_BLOB, model)
+                    try:
+                        with self.lock:
+                            if h.headers.get('X-File-Mtime') != stamp(): raise WorkspaceError('SketchUp model changed; retry before overwriting', 409)
+                            os.replace(temp, model)
+                    finally: temp.unlink(missing_ok=True)
                     self.reply(h, 200, {})
                 else: raise WorkspaceError('Mirror endpoint not found', 404)
             elif path.startswith('/api/workspace/open/') and h.command == 'POST':
@@ -776,31 +1200,100 @@ class WorkspaceService:
                 target, action = open_in_folder(self.project_folder(identifier), request.get('path', ''), self.run)
                 # action is 'opened', or 'shown' when the file is not a document and was only shown in Finder.
                 self.reply(h, 200, {'path': str(target.relative_to(self.project_folder(identifier).resolve())), 'folder': self.project_folder(identifier).name, 'action': action})
-            elif path.startswith('/api/workspace/blobs/') and h.command == 'GET':
+            elif path.startswith('/api/workspace/uploads/'):
+                # An original sent in pieces (see upload_piece); a stalled upload continues where it stopped.
+                digest = path.removeprefix('/api/workspace/uploads/')
+                if not HASH.fullmatch(digest): raise WorkspaceError('Invalid hash', 404)
+                if h.command == 'GET':
+                    if self.held(digest):
+                        size = (self.root / 'blobs' / digest).stat().st_size
+                        self.reply(h, 200, {'hash': digest, 'size': size, 'received': size, 'done': True})
+                    else:
+                        received, size = self.upload_state(digest)
+                        self.reply(h, 200, {'hash': digest, 'size': size, 'received': received, 'done': False})
+                elif h.command == 'PUT':
+                    try: size, offset = int(h.headers.get('X-Upload-Size', '')), int(h.headers.get('X-Upload-Offset', ''))
+                    except ValueError: raise WorkspaceError('Send X-Upload-Size and X-Upload-Offset')
+                    length = self.length(h, MAX_PIECE)
+                    received, size, done = self.upload_piece(digest, size, offset, h.rfile, length)
+                    self.reply(h, 200, {'hash': digest, 'size': size, 'received': received, 'done': done})
+                else: raise WorkspaceError('Upload endpoint not found', 404)
+            elif path.startswith('/api/workspace/unavailable/') and path.endswith('/forget') and h.command == 'POST':
+                identifier = unquote(path.removeprefix('/api/workspace/unavailable/').removesuffix('/forget'))
+                revision = self.forget(identifier)
+                with self.lock: self.reply(h, 200, {'revision': revision, 'unavailable': self.unavailable_projects()})
+            elif path == '/api/workspace/cleanup' and h.command == 'GET':
+                # What a clean-up would remove (counts, bytes, and the list); nothing is removed.
+                self.reply(h, 200, self.cleanup_plan())
+            elif path == '/api/workspace/cleanup' and h.command == 'POST':
+                # Removes exactly the list sent back, if it is still what would be removed.
+                try: asked = json.loads(self.read(h, 16 * 1024 * 1024))
+                except (ValueError, UnicodeDecodeError): raise WorkspaceError('Send back the list to remove as JSON')
+                self.reply(h, 200, self.cleanup(asked))
+            elif path == '/api/workspace/blobs/held' and h.command == 'POST':
+                # Which of these stored originals the Mac already holds, in one question.
+                try: asked = json.loads(self.read(h, 2 * 1024 * 1024)).get('hashes')
+                except (ValueError, UnicodeDecodeError, AttributeError): raise WorkspaceError('Send {"hashes": [...]}')
+                if not isinstance(asked, list) or len(asked) > 10000 or not all(isinstance(d, str) for d in asked): raise WorkspaceError('Send at most 10000 hashes')
+                held = [d for d in dict.fromkeys(asked) if HASH.fullmatch(d) and self.held(d)]
+                self.reply(h, 200, {'held': held, 'sizes': {d: (self.root / 'blobs' / d).stat().st_size for d in held}})
+            elif path.startswith('/api/workspace/blobs/') and h.command in ('GET', 'HEAD'):
                 digest = path.removeprefix('/api/workspace/blobs/')
                 if not HASH.fullmatch(digest): raise WorkspaceError('Asset not found', 404)
                 dest = self.root / 'blobs' / digest
-                if not dest.is_file(): raise WorkspaceError('Asset not found', 404)
+                if not self.held(digest): raise WorkspaceError('Asset not found', 404)
                 # A blob is named by its content and never changes: this browser may keep it.
                 tag = '"' + digest + '"'
+                asked = parse_qs(urlsplit(h.path).query).get('size', [None])[0]
+                if asked is not None:
+                    # ?size=<longest side>: a smaller copy of a picture for a phone, made on the Mac.
+                    if asked not in [str(n) for n in PREVIEW_SIZES]: raise WorkspaceError('Ask for size ' + ', '.join(map(str, PREVIEW_SIZES)))
+                    tag = '"' + digest + '-' + asked + '"'
+                    if tag in [t.strip() for t in h.headers.get('If-None-Match', '').split(',')]:
+                        h.send_response(304); h.send_header('ETag', tag); h.send_header('Cache-Control', 'private, max-age=31536000, immutable'); h.end_headers()
+                        return True
+                    copy = self.preview(digest, int(asked))
+                    h.send_response(200)
+                    h.send_header('Content-Type', 'image/jpeg' if copy != dest else 'application/octet-stream')
+                    h.send_header('Content-Length', str(copy.stat().st_size))
+                    h.send_header('ETag', tag)
+                    h.send_header('X-Tiksi-Preview', 'smaller' if copy != dest else 'original')
+                    h.send_header('Cache-Control', 'private, max-age=31536000, immutable')
+                    h.end_headers()
+                    if h.command == 'GET':
+                        with copy.open('rb') as source: shutil.copyfileobj(source, h.wfile, 1024 * 1024)
+                    return True
                 if tag in [t.strip() for t in h.headers.get('If-None-Match', '').split(',')]:
                     h.send_response(304)
                     h.send_header('ETag', tag)
                     h.send_header('Cache-Control', 'private, max-age=31536000, immutable')
                     h.end_headers()
                     return True
-                h.send_response(200)
+                size = dest.stat().st_size
+                # One byte range when asked for: a walk-through video plays and seeks on the phone.
+                wanted = byte_range(h.headers.get('Range') if h.headers.get('If-Range', tag) == tag else None, size)
+                if wanted == 'unsatisfiable':
+                    h.send_response(416); h.send_header('Content-Range', 'bytes */%d' % size); h.send_header('Content-Length', '0'); h.end_headers()
+                    return True
+                start, end = wanted or (0, size - 1)
+                h.send_response(206 if wanted else 200)
+                if wanted: h.send_header('Content-Range', 'bytes %d-%d/%d' % (start, end, size))
                 h.send_header('Content-Type', 'application/octet-stream')
-                h.send_header('Content-Length', str(dest.stat().st_size))
+                h.send_header('Content-Length', str(end - start + 1))
+                h.send_header('Accept-Ranges', 'bytes')
                 h.send_header('ETag', tag)
                 h.send_header('Cache-Control', 'private, max-age=31536000, immutable')
                 h.end_headers()
+                if h.command == 'HEAD': return True
                 with dest.open('rb') as source:
-                    while chunk := source.read(1024 * 1024): h.wfile.write(chunk)
+                    source.seek(start); part = Part(source, end - start + 1)
+                    while chunk := part.read(1024 * 1024): h.wfile.write(chunk)
             else: raise WorkspaceError('Workspace endpoint not found', 404)
         except WorkspaceError as error:
             h.close_connection = True
-            self.reply(h, error.status, {'error': str(error), **({'code': error.code} if getattr(error, 'code', None) else {})})
+            self.reply(h, error.status, {'error': str(error), **({'code': error.code} if getattr(error, 'code', None) else {}),
+                                         **({'received': error.received} if hasattr(error, 'received') else {}),
+                                         **({'plan': error.plan} if hasattr(error, 'plan') else {})})
         except (OSError, ValueError, TypeError, KeyError):
             # The page gets a plain sentence; the server log gets the real error and where it happened.
             log.exception('Project files could not be updated (%s %s)', h.command, path)
@@ -810,6 +1303,10 @@ class WorkspaceService:
             with self.lock: self.jobs -= 1
         return True
 
+    def save_answer(self, save_id):
+        revision = self.committed(save_id)
+        return {'saveId': save_id, 'committed': revision is not None, 'revision': revision}
+
     @staticmethod
     def length(h, limit):
         try: length = int(h.headers.get('Content-Length', '0'))
@@ -817,6 +1314,24 @@ class WorkspaceService:
         if not 0 < length <= limit: raise WorkspaceError('Upload exceeds the workspace limit', 413)
         h.connection.settimeout(120)
         return length
+
+    @classmethod
+    def receive(cls, h, limit, destination):
+        """Copy a request body into a hidden spare file beside destination, in pieces, flushed to
+        disk; the caller renames it into place. Nothing is left behind if the upload breaks off."""
+        length = cls.length(h, limit)
+        destination = Path(destination)
+        with tempfile.NamedTemporaryFile(dir=destination.parent, prefix='.' + destination.name + '.', suffix='.tmp', delete=False) as out:
+            temp = Path(out.name)
+            try:
+                left = length
+                while left:
+                    chunk = h.rfile.read(min(1024 * 1024, left))
+                    if not chunk: raise WorkspaceError('Upload was truncated')
+                    out.write(chunk); left -= len(chunk)
+                out.flush(); os.fsync(out.fileno())
+            except BaseException: out.close(); temp.unlink(missing_ok=True); raise
+        return temp
 
     @classmethod
     def read(cls, h, limit):

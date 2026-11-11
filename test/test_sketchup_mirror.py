@@ -355,6 +355,42 @@ else {
         edited.write_text(json.dumps(self.read(erased)))
         self.assertEqual(node('merge', str(edited)), {'applied': ['fx-sofa'], 'added': [], 'deleted': ['fx-fridge'], 'conflicts': 0, 'sofa': [3.0, 3.0, 30], 'ids': ['fx-run', 'fx-sofa']})
 
+    @unittest.skipUnless(shutil.which('node'), 'Node not installed')
+    def test_unedited_pieces_of_random_sizes_read_back_unchanged(self):
+        """320 sofas of random sizes and places, written and read back untouched: none counts as a SketchUp edit."""
+        repo = Path(__file__).resolve().parent.parent
+        script = """
+globalThis.indexedDB = { open() { throw new Error('none'); } };
+const store = await import(process.argv[1] + '/js/store.js');
+const m = await import(process.argv[1] + '/js/sketchup-mirror.js');
+const fx = await import(process.argv[1] + '/js/fixtures.js');
+const fs = await import('node:fs');
+let seed = 20261110;
+const rand = () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+const p = store.propertyTemplate('Random sofas'); p.id = 'prop-sofas'; const L = p.levels[0].id;
+for (let i = 0; i < 320; i++) {
+  const f = Object.assign(fx.fixtureTemplate('furniture', 'sofa', { level: L, x: (i % 20) * 3 + rand(), y: Math.floor(i / 20) * 3 + rand(), rot: rand() * 360 }), { id: 'fx-' + i });
+  f.w = 1.2 + rand() * 1.4; f.d = 0.7 + rand() * 0.4; f.h = 0.7 + rand() * 0.3;
+  p.fixtures.push(f);
+}
+const [op, a] = process.argv.slice(2);
+if (op === 'spec') fs.writeFileSync(a, JSON.stringify(m.mirrorSpec(p, [])));
+else {
+  const r = m.mergeMirror(p, JSON.parse(fs.readFileSync(a, 'utf8')), m.syncedState(p));
+  console.log(JSON.stringify({ applied: r.applied, added: r.added, deleted: r.deleted, conflicts: r.conflicts.length }));
+}
+"""
+        def node(*args):
+            r = subprocess.run(['node', '--input-type=module', '-e', script, str(repo), *args], capture_output=True, text=True, timeout=120)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            return json.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else None
+        job = self.root / 'fx-random'; job.mkdir()
+        node('spec', str(job / 'mirror.json'))
+        self.run_worker('write', job)
+        unedited = self.root / 'fx-random.json'
+        unedited.write_text(json.dumps(self.read(job / 'model.skp')))
+        self.assertEqual(node('merge', str(unedited)), {'applied': [], 'added': [], 'deleted': [], 'conflicts': 0})
+
     def test_mirror_of_another_property_is_refused(self):
         skp = self.write(SPEC)
         other = dict(SPEC, property={'id': 'prop-other', 'name': 'Other'})

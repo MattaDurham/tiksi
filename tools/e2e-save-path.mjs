@@ -242,8 +242,9 @@ async function refusedAndRetriedSavesReadDifferently() {
 
   // 6. The Mac will not take a save that carries a new original. The first round fails on
   // the way; the second counts on the original it already uploaded and is refused, so the
-  // original is uploaded once more; the third is refused again and that is the answer. It
-  // must then read as refused, and stop uploading.
+  // page no longer takes its own word for it: it asks the Mac, which says it holds the
+  // original, so nothing is uploaded again; the third round is refused again and that is the
+  // answer. It must then read as refused, and stop.
   let seen = 0;
   const originals = [];
   await page.route('**/api/workspace', route => {
@@ -258,21 +259,184 @@ async function refusedAndRetriedSavesReadDifferently() {
   });
   await page.waitForFunction(() => document.querySelector('#save-status').dataset.saveState === 'refused', null, { timeout: 60000 });
   assert.match((await statusLine()).text, /^NOT SAVED: Synthetic/, 'a refusal that repeats after the originals were sent again reads as refused');
-  assert.equal(originals.length, 2, 'the original was uploaded once, and once more after the first refusal');
+  assert.equal(originals.length, 1, 'the original was uploaded once; after the first refusal the Mac said it holds it, so it was not sent again');
   const putsThen = seen;
   await page.waitForTimeout(7000);
-  assert.equal(originals.length, 2, 'a refused save does not go on uploading its originals'); assert.equal(seen, putsThen, 'and is not sent again');
+  assert.equal(originals.length, 1, 'a refused save does not go on uploading its originals'); assert.equal(seen, putsThen, 'and is not sent again');
   await page.unroute('**/api/workspace');
   await context.close();
   console.log('ok   a refused save says why, stops and stays visible; a retried one says it is retrying; "cannot be read" passes by itself; a dropped connection alone is not unsaved work');
 }
 
+// A large original goes to the Mac in pieces. After a failure the page asks how far the Mac
+// got and goes on from there; an original the Mac already holds is not sent at all; a Mac
+// that does not take pieces gets it the old way; and each refusal reaches the status line.
+async function largeOriginalsGoInPiecesAndResume() {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  // As on a phone's plain-http address: the browser offers no hashing, the page works it out.
+  await context.addInitScript(() => { try { Object.defineProperty(crypto, 'subtle', { value: undefined, configurable: true }); } catch {} });
+  const page = await openPage(context);
+  const pieces = [], whole = [], asks = [];   // pieces: { offset, bytes }
+  page.on('request', r => {
+    const path = new URL(r.url()).pathname;
+    if (r.method() === 'PUT' && path.startsWith('/api/workspace/uploads/')) pieces.push({ offset: Number(r.headers()['x-upload-offset']), bytes: r.postDataBuffer()?.length });
+    if (r.method() === 'GET' && path.startsWith('/api/workspace/uploads/')) asks.push(pieces.length);
+    if (r.method() === 'POST' && path === '/api/workspace/blobs') whole.push(r.postDataBuffer()?.length);
+  });
+  const statusLine = () => page.evaluate(() => { const el = document.querySelector('#save-status'); return { text: el.textContent, kind: el.dataset.saveState, detail: el.title }; });
+  await page.evaluate(async () => {
+    const store = await import('/js/store.js'); window.saveTestStore = store;
+    // Pieces of 100 kB, for anything over 100 kB: a made-up "large" original stays small.
+    Object.assign((await import('/js/disk-workspace.js')).uploadLimits, { piecesFrom: 100000, pieceBytes: 100000 });
+    const p = store.propertyTemplate('Large originals'); p.id = 'prop-large';
+    store.ws.data.properties.push(p); store.ws.data.settings.activePropertyId = p.id; store.touch();
+    await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
+    window.addOriginal = async (id, size, fill) => {
+      const bytes = new Uint8Array(size); for (let i = 0; i < size; i++) bytes[i] = (i * 31 + fill + (i >> 9)) & 255;
+      await store.putFile(id, bytes.buffer, { kind: 'photo', mime: 'image/jpeg', name: id + '.jpg' });
+      store.ws.data.properties.find(p => p.id === 'prop-large').photos.push({ id, name: id, thumb: '', notes: '', kind: 'photo' });
+      store.touch();
+    };
+  });
+
+  // 1. In pieces. The Mac checks the whole against the hash the page worked out.
+  await page.evaluate(() => window.addOriginal('in-pieces', 350000, 1));
+  await page.waitForFunction(SAVED, null, { timeout: 30000 });
+  assert.deepEqual(pieces, [{ offset: 0, bytes: 100000 }, { offset: 100000, bytes: 100000 }, { offset: 200000, bytes: 100000 }, { offset: 300000, bytes: 50000 }], 'a large original is sent in pieces, each from where the last ended');
+  assert.deepEqual(whole, [], 'and not in one request');
+  let mac = await onTheMac();
+  assert.equal(mac.assets['in-pieces']?.size, 350000, 'the Mac holds it, checked against its hash');
+
+  // 2. The third piece of the next one never arrives. The page asks the Mac how far it got and
+  // sends only the rest: not one byte the Mac already has.
+  pieces.length = 0; asks.length = 0;
+  let dropped = false;
+  await page.route('**/api/workspace/uploads/*', route => {
+    if (route.request().method() === 'PUT' && Number(route.request().headers()['x-upload-offset']) === 200000 && !dropped) { dropped = true; return route.abort(); }
+    return route.continue();
+  });
+  await page.evaluate(() => window.addOriginal('resumed', 500000, 2));
+  await page.waitForFunction(() => /^NOT SAVED/.test(document.querySelector('#save-status').textContent), null, { timeout: 20000 });
+  const sentBefore = pieces.length;
+  assert.deepEqual(pieces.map(p => p.offset), [0, 100000, 200000], 'two pieces arrived and the third was lost on the way');
+  await page.waitForFunction(SAVED, null, { timeout: 30000 });
+  const second = pieces.slice(sentBefore);
+  assert.ok(asks.some(n => n >= sentBefore), 'the page asked the Mac how far the upload had got');
+  assert.equal(second[0].offset, 200000, 'and went on from the Mac\'s place, not from the first byte');
+  assert.equal(second.reduce((n, p) => n + p.bytes, 0), 300000, 'sending only the 300 kB the Mac did not have');
+  mac = await onTheMac();
+  assert.equal(mac.assets.resumed?.size, 500000);
+  await page.unroute('**/api/workspace/uploads/*');
+
+  // 3. The same bytes again under another name: the Mac says it holds them, and nothing is sent.
+  pieces.length = 0; whole.length = 0;
+  await page.evaluate(() => window.addOriginal('same-bytes', 350000, 1));
+  await page.waitForFunction(SAVED, null, { timeout: 30000 });
+  mac = await onTheMac();
+  assert.equal(mac.assets['same-bytes']?.hash, mac.assets['in-pieces'].hash);
+  assert.deepEqual([pieces, whole], [[], []], 'an original the Mac already holds is not sent at all');
+
+  // 4. Refusals, in the Mac's own words (a stand-in answers for the Mac).
+  let mode = 'unfinished', fromStart = 0;
+  const words = { unfinished: [429, 'The Mac already has 32 unfinished uploads declaring 7900 MB; finish or wait for those first'], full: [507, "The Mac's disk is nearly full; this piece was not accepted. Make room on the Mac and send it again"], mismatch: [422, 'The upload does not match its hash; send it again from the start'] };
+  await page.route('**/api/workspace/uploads/*', route => {
+    if (route.request().method() !== 'PUT' || mode === 'through') return route.continue();
+    if (mode === 'mismatch' && Number(route.request().headers()['x-upload-offset']) === 0) fromStart++;
+    return route.fulfill({ status: words[mode][0], contentType: 'application/json', body: JSON.stringify({ error: words[mode][1] }) });
+  });
+  await page.evaluate(() => window.addOriginal('refused', 250000, 3));
+  await page.waitForFunction(() => /unfinished uploads/.test(document.querySelector('#save-status').textContent), null, { timeout: 30000 });
+  let line = await statusLine();
+  assert.equal(line.kind, 'waiting'); assert.match(line.detail, /32 unfinished uploads declaring 7900 MB; finish or wait for those first/, 'too many unfinished uploads: said in the Mac\'s words, and tried again');
+  mode = 'full';
+  await page.waitForFunction(() => /disk is nearly full/.test(document.querySelector('#save-status').textContent), null, { timeout: 30000 });
+  assert.match((await statusLine()).detail, /Make room on the Mac/);
+  mode = 'mismatch';
+  await page.waitForFunction(() => document.querySelector('#save-status').dataset.saveState === 'refused', null, { timeout: 60000 });
+  line = await statusLine();
+  assert.match(line.text, /^NOT SAVED: refused\.jpg did not arrive on the Mac intact, twice/, 'a damaged upload is reported by name');
+  assert.equal(fromStart, 2, 'after it was started again once');
+  await page.waitForTimeout(6000);
+  assert.equal(fromStart, 2, 'and is not sent a third time by itself');
+  mode = 'through';
+  await page.evaluate(() => { window.saveTestStore.ws.data.properties.find(p => p.id === 'prop-large').notes = 'Sent again by the person'; window.saveTestStore.touch(); });
+  await page.waitForFunction(SAVED, null, { timeout: 30000 });
+  assert.equal((await onTheMac()).assets.refused?.size, 250000);
+  await page.unroute('**/api/workspace/uploads/*');
+  await context.close();
+
+  // 5. A Mac that does not take pieces and cannot say what it holds (an older Tiksi on it):
+  // the original goes in one request, exactly as it always did.
+  const older = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const answerMissing = route => route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'Workspace endpoint not found' }) });
+  await older.route('**/api/workspace/blobs/held', answerMissing);
+  await older.route('**/api/workspace/uploads/*', answerMissing);
+  const old = await openPage(older);
+  const oldWhole = [], oldOther = [];
+  old.on('request', r => {
+    const path = new URL(r.url()).pathname;
+    if (r.method() === 'POST' && path === '/api/workspace/blobs') oldWhole.push(r.postDataBuffer()?.length);
+    if (path.startsWith('/api/workspace/uploads/')) oldOther.push(r.method());
+  });
+  await old.evaluate(async () => {
+    const store = await import('/js/store.js');
+    Object.assign((await import('/js/disk-workspace.js')).uploadLimits, { piecesFrom: 100000, pieceBytes: 100000 });
+    const bytes = new Uint8Array(300000); for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 13 + 5) & 255;
+    await store.putFile('older-mac', bytes.buffer, { kind: 'photo', mime: 'image/jpeg', name: 'older-mac.jpg' });
+    store.ws.data.properties.find(p => p.id === 'prop-large').photos.push({ id: 'older-mac', name: 'older-mac', thumb: '', notes: '', kind: 'photo' });
+    store.touch();
+  });
+  await old.waitForFunction(SAVED, null, { timeout: 30000 });
+  assert.deepEqual([oldWhole, oldOther], [[300000], []], 'a Mac without these calls gets the whole original in one request');
+  assert.equal((await onTheMac()).assets['older-mac']?.size, 300000);
+  await older.close();
+
+  // 6. The page goes away mid-upload (a reload, a closed tab). The next page knows nothing of
+  // that upload: it asks the Mac, and sends only what the Mac does not have.
+  const addLarge = async id => {
+    const store = await import('/js/store.js');
+    Object.assign((await import('/js/disk-workspace.js')).uploadLimits, { piecesFrom: 100000, pieceBytes: 100000 });
+    const bytes = new Uint8Array(500000); for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 7 + 11 + (i >> 8)) & 255;
+    await store.putFile(id, bytes.buffer, { kind: 'photo', mime: 'image/jpeg', name: id + '.jpg' });
+    store.ws.data.properties.find(p => p.id === 'prop-large').photos.push({ id, name: id, thumb: '', notes: '', kind: 'photo' });
+    store.touch();
+  };
+  const leaving = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const gone = await openPage(leaving);
+  let cut = false;
+  await gone.route('**/api/workspace/uploads/*', route => {
+    if (route.request().method() === 'PUT' && Number(route.request().headers()['x-upload-offset']) === 200000) { cut = true; return route.abort(); }
+    return route.continue();
+  });
+  await gone.evaluate(addLarge, 'after-leaving');
+  for (let i = 0; !cut && i < 400; i++) await gone.waitForTimeout(50);
+  assert.ok(cut, 'the page left while its third piece was on the way');
+  await leaving.close();
+  assert.equal((await onTheMac()).assets['after-leaving'], undefined, 'nothing of it is saved yet');
+  const next = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const back = await openPage(next);
+  const later = [];
+  back.on('request', r => {
+    const path = new URL(r.url()).pathname;
+    if (path.startsWith('/api/workspace/uploads/')) later.push(r.method() === 'PUT' ? { offset: Number(r.headers()['x-upload-offset']), bytes: r.postDataBuffer()?.length } : 'asked');
+    if (r.method() === 'POST' && path === '/api/workspace/blobs') later.push('whole');
+  });
+  await back.evaluate(addLarge, 'after-leaving');
+  for (let i = 0; i < 400 && !(await onTheMac()).assets['after-leaving']; i++) await back.waitForTimeout(50);
+  assert.deepEqual(later, ['asked', { offset: 200000, bytes: 100000 }, { offset: 300000, bytes: 100000 }, { offset: 400000, bytes: 100000 }], 'a new page asks the Mac first and sends only the 300 kB it does not hold');
+  assert.equal((await onTheMac()).assets['after-leaving']?.size, 500000);
+  await next.close();
+  console.log('ok   a large original goes in pieces and resumes from the Mac\'s place, also from a new page; one the Mac holds is not sent; each refusal is shown; an older Mac gets it whole');
+}
+
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(url)).ok) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
   browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
-  await sketchupSaveUnderAnOpenPage();
-  await transfersTakeAsLongAsTheyNeed();
-  await refusedAndRetriedSavesReadDifferently();
+  // E2E_STEP=<part>[,<part>] runs only those parts.
+  const parts = { sketchup: sketchupSaveUnderAnOpenPage, transfers: transfersTakeAsLongAsTheyNeed, refusals: refusedAndRetriedSavesReadDifferently, pieces: largeOriginalsGoInPiecesAndResume };
+  const chosen = (process.env.E2E_STEP || '').split(',').filter(Boolean);
+  for (const key of chosen) assert.ok(parts[key], 'E2E_STEP names a part that does not exist: ' + key);
+  for (const [key, part] of Object.entries(parts)) if (!chosen.length || chosen.includes(key)) await part();
   assert.deepEqual(errors, []);
 } catch (error) {
   // The failure first: a browser that will not close must not hide it.

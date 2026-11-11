@@ -42,9 +42,12 @@ function ensureRenderer() {
   return renderer;
 }
 
-// What the model looks like, cheaply: anything that changes the drawn geometry.
+// What the model looks like, cheaply: anything that changes the drawn geometry. A level's plan
+// underlay is not drawn in these views (only its extent can frame them), so its image, often
+// several megabytes of text, stands in by its length.
+const levelSignature = l => (l && l.plan && l.plan.img ? { ...l, plan: { ...l.plan, img: l.plan.img.length } } : l);
 export function geometrySignature(prop) {
-  return JSON.stringify([prop.id, prop.levels, prop.walls, prop.openings, prop.rooms, prop.fixtures, prop.wallHeight,
+  return JSON.stringify([prop.id, (prop.levels || []).map(levelSignature), prop.walls, prop.openings, prop.rooms, prop.fixtures, prop.wallHeight,
     (prop.scans || []).map(s => [s.id, s.kind, s.pos, s.rot, s.rotY, s.scale, s.visible, s.flip])]);
 }
 

@@ -3,7 +3,7 @@
 import {
   ws, load, save, touch, onChange, activeProperty, replaceWorkspace, mergeWorkspace,
   exportBundle, importBundle, listAllFileIds, orphanFiles, deleteFiles, whenHydrated,
-  setSaveStatus, fmtBytes, escapeHtml, projectSlice,
+  setSaveStatus, fmtBytes, escapeHtml, projectSlice, unreadableWorkspace, setAsideUnreadableWorkspace,
 } from './store.js';
 import { openExchangeDialog } from './exchange-dialog.js';
 import { SCAN_ACCEPT, importScanFile } from './scans.js';
@@ -67,7 +67,13 @@ let currentName = '';
 async function boot() {
   const had = load();
   await whenHydrated();
-  await connectDiskWorkspace({ hadLocal: had, onRemote: () => { if (currentView) { refreshTopbar(); afterWorkspaceReplaced(); } } });
+  try { await connectDiskWorkspace({ hadLocal: had, onRemote: sharedChange }); }
+  catch (error) { error.projectFiles = true; throw error; }
+  // This browser holds the workspace itself, and what it holds could not be read. Nothing is
+  // loaded over it and nothing is saved until the person has decided (with the Mac's project
+  // files the unreadable text was already preserved there when they were connected).
+  if (!diskWorkspace && unreadableWorkspace()) { showUnreadableWorkspace(); return; }
+  if (!diskWorkspace) askToKeepStorage();
   if (!diskWorkspace && (!had || ws.data.properties.length === 0 && ws.data.projects.length === 0)) {
     replaceWorkspace(demoWorkspace());
   }
@@ -88,7 +94,7 @@ async function boot() {
   refreshTopbar();
   onChange(refreshTopbar);
   // Projects are files: SAVE, the FILE menu, drops, Cmd+S/Cmd+O, and the linked folder.
-  initFiles({ remount: remountView, refresh: refreshTopbar, afterReplace: afterWorkspaceReplaced, opened: confirmOpened });
+  initFiles({ remount: remountView, refresh: refreshTopbar, afterReplace: afterWorkspaceReplaced, opened: confirmOpened, confirmReplace });
   bindFileIntake(importAnyFile);
   onChange(() => { scheduleFolderSync(); refreshSaveButton(); });
   onFilesChange(refreshSaveButton);
@@ -176,20 +182,60 @@ function route() {
   else guideEntry?.removeAttribute('aria-current');
   document.querySelectorAll('#rail a[data-view]').forEach(a =>
     a.classList.toggle('active', a.dataset.view === currentName));
-  const root = document.getElementById('view');
-  root.innerHTML = '';
-  view.mount(root);
-  refreshHistoryControls();
-  fieldRouted(currentName);
+  openPage();
 }
 
 function remountView() {
   unmountCurrent();
+  openPage();
+}
+
+// Open the current page. A page that fails to open says so itself, with a way to try again;
+// the rest of the app (the other pages, saving) goes on working.
+function openPage() {
   const root = document.getElementById('view');
   root.innerHTML = '';
-  currentView.mount(root);
+  try { currentView.mount(root); }
+  catch (error) {
+    console.error(currentName + ' could not open', error);
+    unmountCurrent();
+    const label = document.querySelector(`#rail a[data-view="${currentName}"]`)?.textContent.trim() || currentName.toUpperCase();
+    root.innerHTML = `<div class="view-scroll page-open-failed" role="alert"><div class="kicker">${escapeHtml(label)}</div>
+      <p>${escapeHtml(label)} could not open (${escapeHtml(String(error && error.message || error))}). The other pages still work, and nothing saved is affected.</p>
+      <p><button class="btn primary" data-reload>RELOAD</button></p></div>`;
+    root.querySelector('[data-reload]').onclick = () => location.reload();
+  }
   refreshHistoryControls();
   fieldRouted(currentName);
+}
+
+// The workspace this browser stores could not be read (the hosted copy and the copy opened
+// as a file keep everything in the browser). The stored text is left as it was found.
+function showUnreadableWorkspace() {
+  const found = unreadableWorkspace(), host = document.getElementById('view');
+  setSaveStatus('STORED WORKSPACE UNREADABLE', true);
+  host.innerHTML = `<div class="view-scroll page-open-failed" role="alert"><div class="kicker">WORKSPACE</div>
+    <p>The workspace stored in this browser could not be read (${escapeHtml(found.error)}). Nothing has been changed or saved over it.</p>
+    <p>Save the stored text as a file first; it can be repaired and opened again. Starting with an empty workspace keeps the stored text in this browser under another name.</p>
+    <p><button class="btn primary" data-keep>SAVE THE STORED TEXT AS A FILE</button> <button class="btn" data-start>START WITH AN EMPTY WORKSPACE</button></p><p role="status" data-said></p></div>`;
+  host.querySelector('[data-keep]').onclick = () => {
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([found.raw], { type: 'application/json' }));
+    link.download = 'tiksi-workspace-unreadable.json'; link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+  };
+  host.querySelector('[data-start]').onclick = () => {
+    if (setAsideUnreadableWorkspace()) location.reload();
+    else host.querySelector('[data-said]').textContent = 'The stored text could not be copied aside (this browser\'s storage is full or closed), so it was left where it is. Save it as a file first.';
+  };
+}
+
+// A browser may clear a site's storage after a week without a visit unless it has agreed to
+// keep it. Ask once, and say in FILE, Settings what it answered.
+let storageKept = null;
+function askToKeepStorage() {
+  if (typeof navigator === 'undefined' || !navigator.storage || typeof navigator.storage.persist !== 'function') return;
+  navigator.storage.persist().then(kept => { storageKept = !!kept; }, () => {});
 }
 
 // Called after the whole workspace was swapped out: drop GPU/material caches and object URLs
@@ -200,6 +246,59 @@ function afterWorkspaceReplaced() {
   ensureBuiltinMaterials();
   remountView();
 
+}
+
+// Another device saved, or a SketchUp save or this device's kept copy was merged in. The
+// records are already updated in place (store.js keepRecords); `change` says which. The open
+// page is touched only as far as the change reaches it:
+// - nothing it shows changed (another property, or only what the other device is looking
+//   at): it is left exactly as it is;
+// - a text field has the cursor, or a dialog is open: the redraw waits until that is over,
+//   so nothing being typed is lost;
+// - the page can redraw from the changed records (MODEL does, keeping camera, mode and
+//   loaded scans): it does that; any other page is rebuilt, MODEL with its camera kept.
+let heldChange = null, holdWatch = null;
+function sharedChange(change) {
+  ensureBuiltinMaterials();
+  if (!currentView) return;
+  change = change || { all: true, properties: new Set(), keys: new Map() };
+  if (heldChange) {
+    for (const id of change.properties) heldChange.properties.add(id);
+    for (const [id, keys] of change.keys) heldChange.keys.set(id, heldChange.keys.has(id) && heldChange.keys.get(id) && keys ? [...new Set([...heldChange.keys.get(id), ...keys])] : null);
+    for (const flag of ['all', 'materials', 'other']) heldChange[flag] = heldChange[flag] || change[flag];
+  } else heldChange = { all: !!change.all, materials: !!change.materials, other: !!change.other, properties: new Set(change.properties), keys: new Map(change.keys) };
+  // A page that cannot redraw is that page's fault, shown on that page: the change itself is
+  // in the records, and saving goes on.
+  try { showSharedChange(); } catch (error) { console.error('the page could not show a change from another device', error); }
+}
+function enteringText() {
+  const a = document.activeElement;
+  return !!a && (a.isContentEditable || a.matches('textarea, input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=button]):not([type=file]):not([type=color])'));
+}
+function showSharedChange() {
+  if (!heldChange) return;
+  refreshTopbar();
+  if (enteringText() || document.querySelector('dialog[open]')) {
+    // Leaving the field or closing the dialog shows it (`close` does not bubble: capture).
+    if (!holdWatch) {
+      holdWatch = () => setTimeout(showSharedChange, 0);
+      document.addEventListener('focusout', holdWatch); document.addEventListener('close', holdWatch, true);
+    }
+    return;
+  }
+  if (holdWatch) { document.removeEventListener('focusout', holdWatch); document.removeEventListener('close', holdWatch, true); holdWatch = null; }
+  const change = heldChange; heldChange = null;
+  const active = activeProperty();
+  const whole = change.all || change.other || change.materials;
+  // PROJECTS lists every property; the other pages show the open one.
+  const reaches = whole || (active && change.properties.has(active.id)) || (currentName === 'projects' && change.properties.size > 0);
+  if (!reaches) return;
+  if (change.all || change.materials) disposeMaterials();
+  const keys = active && change.keys.get(active.id);
+  if (!whole && keys && currentView.sharedChange && currentView.sharedChange(keys)) { refreshHistoryControls(); return; }
+  revokePhotoUrls();
+  if (currentName === 'model') viewer3d.keepViewOnNextMount();
+  remountView();
 }
 
 // IMPORT and DEMO leave the previous workspace's scans and photos in IndexedDB on purpose
@@ -308,10 +407,10 @@ function openFileMenu(initialTab = 'project', selected) {
       <p class="op-file-status" data-op-file-status></p><div class="file-actions"><button class="btn primary" data-one-pager>OPEN ONE-PAGER</button></div></section>
     <section data-file-panel="capture" hidden><h3>Bring your room into Tiksi</h3><p>Choose photos, a walk-through video, a scan, a 3D model or a saved project. Imported projects add or update properties here.</p><button class="btn primary" data-capture-open>CHOOSE FILES…</button><button class="btn" data-polycam>POLYCAM LINK</button><button class="btn" data-photo3d>PHOTOS → 3D</button></section>
     <section data-file-panel="exchange" hidden data-file-exchange></section>
-    <section data-file-panel="settings" hidden><h3>Display</h3><label>Units <select data-file-units><option value="imperial">Feet / square feet</option><option value="metric">Metres / square metres</option></select></label><details><summary>Model environment</summary><div data-file-env></div></details><h3>Where this project is kept</h3><p data-own-folder-label></p><div class="file-actions"><button class="btn primary" data-own-folder-link>CHOOSE FOLDER</button><button class="btn" data-folder-open>OPEN FROM FOLDER</button><button class="btn" data-own-folder-unlink>STOP KEEPING IT IN A FOLDER</button></div>
+    <section data-file-panel="settings" hidden><h3>Display</h3><label>Units <select data-file-units><option value="imperial">Feet / square feet</option><option value="metric">Metres / square metres</option></select></label><details><summary>Model environment</summary><div data-file-env></div></details><div data-unavailable-list></div><h3>Where this project is kept</h3><p data-own-folder-label></p><div class="file-actions"><button class="btn primary" data-own-folder-link>CHOOSE FOLDER</button><button class="btn" data-folder-open>OPEN FROM FOLDER</button><button class="btn" data-own-folder-unlink>STOP KEEPING IT IN A FOLDER</button></div>
       <label>Keep a SketchUp mirror (.skp) beside each project <input type="checkbox" data-mirror-on></label><p data-mirror-label></p>
       <h3>One-pager</h3><label>Ask to update the one-pager when Tiksi closes <select data-op-prompt>${PROMPT_MODES.map(([id,label])=>`<option value="${id}">${escapeHtml(label)}</option>`).join('')}</select></label><p>Closing Tiksi first shows the browser's own Leave site? question. Choose Cancel to stay and Tiksi asks whether to save the next version; choose Leave to close without it.</p>
-      <details><summary>Workspace backup & maintenance</summary><h3>Projects without their own folder</h3><p data-folder-label></p><div class="file-actions"><button class="btn" data-folder-link>KEEP THEM IN ONE FOLDER</button><button class="btn" data-folder-unlink>UNLINK</button></div><p>Project saves are usually enough. A workspace backup carries every property.</p><button class="btn" data-workspace-save>SAVE WORKSPACE BACKUP</button><button class="btn" data-demo>ADD DEMO PROJECTS</button><button class="btn" data-storage>CLEAN UNUSED STORAGE</button><p>Replace workspace is available only when you intentionally want to restore a full backup.</p><button class="btn" data-workspace-replace>REPLACE FROM BACKUP…</button></details></section>
+      <details><summary>Workspace backup & maintenance</summary><h3>Projects without their own folder</h3><p data-folder-label></p><div class="file-actions"><button class="btn" data-folder-link>KEEP THEM IN ONE FOLDER</button><button class="btn" data-folder-unlink>UNLINK</button></div><p>Project saves are usually enough. A workspace backup carries every property.</p><button class="btn" data-workspace-save>SAVE WORKSPACE BACKUP</button><button class="btn" data-demo>ADD DEMO PROJECTS</button><button class="btn" data-storage>CLEAN UNUSED STORAGE</button><div data-mac-cleanup hidden><button class="btn" data-mac-cleanup-list>CLEAN UNUSED STORAGE ON THE MAC</button><p data-mac-cleanup-plan></p><button class="btn" data-mac-cleanup-remove hidden>REMOVE</button></div><p>Replace workspace is available only when you intentionally want to restore a full backup.</p><button class="btn" data-workspace-replace>REPLACE FROM BACKUP…</button></details></section>
     <p role="status" data-file-status></p><input type="file" data-any-file hidden multiple accept=".tiksi,.json,${SCAN_ACCEPT},.c4d,.max,.ma,.mb,.rfa,.dwf,.mtl,.bin,.tga,.jpg,.jpeg,.png,.webp,.heic,.heif,.tif,.tiff,.avif,.mp4,.mov,.m4v"><input type="file" data-replace-file hidden accept=".json,.zip,.tiksi">`;
   document.body.append(dialog);dialog.showModal();dialog.addEventListener('close',()=>dialog.remove());
   const envHost=dialog.querySelector('[data-file-env]');
@@ -333,6 +432,21 @@ function openFileMenu(initialTab = 'project', selected) {
     dialog.querySelector('[data-folder-link]').disabled=!FSA_DIR;dialog.querySelector('[data-folder-open]').disabled=!st.folder&&!(own&&own.permitted);dialog.querySelector('[data-folder-unlink]').disabled=!st.folder && !st.folderNeedsPermission;
     dialog.querySelector('[data-mirror-on]').checked=ws.data.settings.sketchupMirror!==false;dialog.querySelector('[data-mirror-label]').textContent=prop?mirrorStatus(prop.id):'';
     const opStatus=dialog.querySelector('[data-op-file-status]');if(prop){const st=onePagerStatus(prop,projectSlice(prop.id));opStatus.textContent=st.text;opStatus.dataset.state=st.state;}else opStatus.textContent='Open a property to see its one-pager.';dialog.querySelector('[data-one-pager]').disabled=!prop;
+    const goneHost = dialog.querySelector('[data-unavailable-list]'), gone = diskWorkspace ? diskWorkspace.unavailable : [];
+    // Only a project whose file is missing can be taken off the list (the Mac refuses the
+    // others: an unreadable file is still there). The Mac cannot tell a deleted file from one
+    // on a drive that is not connected, so the question shows where the file was.
+    goneHost.innerHTML = gone.length ? '<h3>Projects the Mac cannot read just now</h3>' + gone.map(u => `<p data-unavailable="${escapeHtml(u.id)}">${escapeHtml(u.message || u.name || u.id)}${u.reason === 'missing' ? ` <button class="btn" data-forget="${escapeHtml(u.id)}">REMOVE FROM LIST</button>` : ''}</p>`).join('') : '';
+    goneHost.querySelectorAll('[data-forget]').forEach(b => b.onclick = () => run(async () => {
+      const u = diskWorkspace.unavailable.find(x => x.id === b.dataset.forget);
+      if (!u || !confirm('Take ' + (u.name || 'this project') + ' off the Mac\'s list?\n\nIts file was at:\n' + (u.path || '(the Mac did not say where)') +
+        '\n\nIf that is on a drive that is not connected, connect the drive instead: the project then comes back by itself.\n\nNo file is deleted. A file that turns up again inside the Mac\'s projects folder brings the project back; a file kept anywhere else has to be opened again by hand (FILE, OPEN / IMPORT).')) return 'Nothing changed.';
+      try { await diskWorkspace.forgetUnavailable(u.id); }
+      catch (e) { throw new Error(e.status === 404 ? 'The Tiksi running on this Mac cannot take a project off its list yet. Nothing changed.' : e.message); }
+      refreshTopbar();
+      return (u.name || 'The project') + ' is off the list. No file was deleted.';
+    }));
+    if (!diskWorkspace && storageKept !== null) dialog.querySelector('[data-folder-label]').textContent += storageKept ? ' This browser has agreed to keep its storage.' : ' This browser may clear its storage after a while without a visit: save a workspace backup now and then.';
     if (diskWorkspace) {
       dialog.querySelector('[data-own-folder-label]').textContent = prop ? (diskWorkspace.paths[prop.id] || 'A project folder is created on its first save.') : diskWorkspace.folder;
       dialog.querySelector('[data-folder-label]').textContent = 'All projects are files on this Mac. Desktop and Tailscale clients use the same project folders. A phone or another computer keeps only what it has not sent yet in its browser, until the Mac has it.';
@@ -380,12 +494,59 @@ function openFileMenu(initialTab = 'project', selected) {
   on('[data-own-folder-unlink]',()=>run(async()=>{await unlinkProjectFolder(prop.id);const st=filesState();
     return st.folder?'Back with the other projects in '+st.folderName+'. The files in its folder stay where they are.':'Kept in this browser only now. The files in its folder stay where they are.';}));
   on('[data-workspace-save]',()=>run(runExportBundle));on('[data-storage]',()=>run(()=>offerStorageCleanup(false)));
-  on('[data-demo]',()=>{mergeWorkspace(demoWorkspace());ensureBuiltinMaterials();refreshTopbar();remountView();dialog.close();});
+  // The Mac's own clean-up: shown only when the Mac's server offers it to this caller. A press
+  // lists what would go; REMOVE sends back exactly that list. A touch device sees the list only:
+  // removing is done from the Mac.
+  const macBox=dialog.querySelector('[data-mac-cleanup]'),macPlanText=dialog.querySelector('[data-mac-cleanup-plan]'),macRemove=dialog.querySelector('[data-mac-cleanup-remove]');
+  let cleaner=null,cleanupChecked=false,cleanupPlan=null,cleanupText=null;
+  macBox.closest('details').addEventListener('toggle',async e=>{
+    if(!e.target.open||!diskWorkspace||cleanupChecked)return;cleanupChecked=true;
+    cleanupText=await import('./mac-cleanup.js');cleaner=await cleanupText.macCleanup();macBox.hidden=!cleaner;});
+  const showPlan=(plan,lead='')=>{
+    cleanupPlan=plan;const touch=matchMedia('(pointer: coarse)').matches;
+    macPlanText.textContent=lead+cleanupText.describePlan(plan,fmtBytes)+(plan.count&&touch?' Removing is done from Tiksi on the Mac itself.':'');
+    macRemove.hidden=!plan.count||touch;};
+  on('[data-mac-cleanup-list]',()=>run(async()=>{showPlan(await cleaner.list());return cleanupPlan.count?'Nothing is removed until REMOVE is pressed.':'Nothing to remove.';}));
+  on('[data-mac-cleanup-remove]',()=>run(async()=>{
+    try{const done=await cleaner.remove(cleanupPlan);cleanupPlan=null;macRemove.hidden=true;macPlanText.textContent=cleanupText.describeResult(done,fmtBytes);return macPlanText.textContent;}
+    catch(error){if(error.code!=='cleanup-changed'||!error.plan)throw error;
+      showPlan(error.plan,'What can be removed changed since it was listed, so nothing was removed. The new list: ');return 'Look at the new list before removing.';}}));
+  on('[data-demo]',()=>{mergeWorkspace(freshDemo());ensureBuiltinMaterials();refreshTopbar();remountView();dialog.close();});
   const replace=dialog.querySelector('[data-replace-file]');on('[data-workspace-replace]',()=>replace.click());
   replace.onchange=()=>run(async()=>{const file=replace.files[0];replace.value='';if(!file)return;
     if(!confirm('Replace the workspace with '+file.name+'? This is the explicit backup-restore action.'))return;
     if(/\.json$/i.test(file.name))replaceWorkspace(JSON.parse(await file.text()));else if(!await importBundle(file,{confirm:false}))return;
     afterWorkspaceReplaced();refreshTopbar();dialog.close();});
+}
+
+// The demo projects, as records of their own. The demo's property and projects have fixed
+// ids; added a second time they would replace whatever was built on the first, so a demo
+// whose ids are already here gets new ones.
+function freshDemo() {
+  const demo = demoWorkspace();
+  const here = new Set([...ws.data.properties, ...ws.data.projects].map(r => r.id));
+  const tail = '-' + Date.now().toString(36);
+  let text = JSON.stringify(demo);
+  for (const id of [...demo.properties, ...demo.projects].map(r => r.id)) if (here.has(id)) text = text.split(JSON.stringify(id)).join(JSON.stringify(id + tail));
+  return JSON.parse(text);
+}
+
+// A project file that holds something already open here and different: say what would be
+// replaced by what, and ask. The open copy carries no date of its own, so the file's date and
+// what each holds are shown.
+function confirmReplace({ file, same, others }) {
+  const count = (n, one) => n + ' ' + one + (n === 1 ? '' : 's');
+  const holds = (p, projects) => [count((p.walls || []).length, 'wall'), count((p.rooms || []).length, 'room'), count((p.photos || []).length, 'photo'), count((p.scans || []).length, 'model'), count(projects, 'project')].join(', ');
+  const named = file ? file.name : 'the file';
+  const when = file && file.lastModified ? ' (saved ' + new Date(file.lastModified).toLocaleString() + ')' : '';
+  const lines = same.map(({ incoming, current, projects }) =>
+    '“' + (current.name || incoming.name) + '” is already open here.\n  Open here: ' + holds(current, ws.data.projects.filter(pr => pr.propertyId === current.id).length) +
+    '\n  In ' + named + when + ': ' + holds(incoming, projects));
+  // Projects, products and custom materials with the same id and different content.
+  const list = (records, one) => records.length ? [count(records.length, one) + ' open here ' + (records.length === 1 ? 'differs' : 'differ') + ' from ' + named + when + ': ' +
+    records.slice(0, 6).map(r => '“' + (r.name || r.id) + '”').join(', ') + (records.length > 6 ? ' and ' + (records.length - 6) + ' more' : '') + '.'] : [];
+  if (others) lines.push(...list(others.projects, 'project'), ...list(others.products, 'product'), ...list(others.materials, 'material'));
+  return confirm(lines.join('\n\n') + '\n\nReplace what is open here with the file\'s? ' + (same.length ? 'A replaced property\'s projects that are not in the file are removed, and undo is cleared. ' : '') + 'Cancel keeps what is open.');
 }
 
 // EDIT IN SKETCHUP (PLAN and MODEL tool columns): open this project's .skp in SketchUp. Without a
@@ -463,6 +624,7 @@ async function runExportBundle() {
   btn.disabled = true;
   setSaveStatus('BUNDLING', true);
   try {
+    if (diskWorkspace) await diskWorkspace.whenPictures();
     const r = await exportBundle();
     setSaveStatus('EXPORTED ' + r.fileCount + ' FILE' + (r.fileCount === 1 ? '' : 'S'), false);
   } catch (e) {
@@ -507,9 +669,14 @@ function refreshTopbar() {
   const sel = document.getElementById('property-select');
   const d = ws.data;
   const active = activeProperty();
-  sel.innerHTML = d.properties.map(p =>
+  // A project the Mac lists but cannot read just now stays in the list, greyed, with the
+  // reason: it has not vanished, and it comes back by itself when its file does.
+  const gone = diskWorkspace ? diskWorkspace.unavailable : [];
+  sel.innerHTML = (d.properties.map(p =>
     `<option value="${escapeHtml(p.id)}" ${active && p.id === active.id ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')
-    || '<option value="">(no property)</option>';
+    || '<option value="">(no property)</option>')
+    + gone.map(u => `<option value="" disabled data-unavailable="${escapeHtml(u.id)}" title="${escapeHtml(u.message || '')}">${escapeHtml(u.name || 'A project')} (${u.reason === 'missing' ? 'file missing' : 'file cannot be read'})</option>`).join('');
+  sel.title = gone.length ? gone.map(u => u.message).join('\n') : '';
   document.querySelectorAll('#units-seg .seg-btn').forEach(b =>
     b.classList.toggle('active', b.dataset.units === d.settings.units));
   refreshSaveButton();
@@ -517,8 +684,18 @@ function refreshTopbar() {
 }
 
 boot().catch(error => {
-  setSaveStatus('PROJECT FILES UNAVAILABLE', true);
-  const host = document.getElementById('view');
-  host.textContent = 'Could not open the Mac’s project files. Reconnect to the Mac and reload. Existing files and browser migration data have been preserved. ' + error.message;
   console.error(error);
+  const host = document.getElementById('view');
+  // Only a failure to reach or read the Mac's project files is reported as that. Anything
+  // else that stops the app starting is said as what it is.
+  if (error && error.projectFiles) {
+    setSaveStatus('PROJECT FILES UNAVAILABLE', true);
+    host.textContent = 'Could not open the Mac’s project files. Reconnect to the Mac and reload. Existing files and browser migration data have been preserved. ' + error.message;
+    return;
+  }
+  setSaveStatus('TIKSI COULD NOT START', true);
+  host.innerHTML = `<div class="view-scroll page-open-failed" role="alert"><div class="kicker">TIKSI</div>
+    <p>Tiksi could not start (${escapeHtml(String(error && error.message || error))}). This is not a problem with the Mac’s project files, and nothing saved is affected.</p>
+    <p><button class="btn primary" data-reload>RELOAD</button></p></div>`;
+  host.querySelector('[data-reload]').onclick = () => location.reload();
 });

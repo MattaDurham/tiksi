@@ -323,6 +323,25 @@ async function frameUrl(id) {
   return assetUrls.get(id);
 }
 
+// A small picture of a reading's crop for the ASK THE OWNER rows: each row used to decode and
+// scale a full-size video frame, and the rows are drawn again on every redraw. One per frame
+// and crop, kept with the frame URLs (and freed with them).
+const THUMB_W = 240;
+function cropThumbUrl(m) {
+  const crop = m.crop || [0, 0, 1, 1], key = 'thumb:' + m.frameAssetId + ':' + crop.join(',');
+  if (!assetUrls.has(key)) assetUrls.set(key, frameUrl(m.frameAssetId).then(async url => {
+    if (!url) return null;
+    const img = new Image(); img.src = url; await img.decode();
+    const [x, y, w, h] = crop, sw = Math.max(1, w * img.naturalWidth), sh = Math.max(1, h * img.naturalHeight);
+    const k = Math.min(1, THUMB_W / sw), c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(sw * k)); c.height = Math.max(1, Math.round(sh * k));
+    c.getContext('2d').drawImage(img, x * img.naturalWidth, y * img.naturalHeight, sw, sh, 0, 0, c.width, c.height);
+    const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+    return blob ? URL.createObjectURL(blob) : null;
+  }).catch(() => null));
+  return assetUrls.get(key);
+}
+
 // ---------- render ----------
 function render() {
   if (!el) return;
@@ -550,12 +569,12 @@ function renderLists() {
     host.querySelectorAll('[data-apply]').forEach(b => b.onclick = e => { e.stopPropagation(); apply(b.dataset.apply); });
   }
   askHost.querySelectorAll('[data-frame]').forEach(async holder => {
-    const m = measurementById(prop, holder.dataset.frame), url = await frameUrl(m?.frameAssetId);
-    if (!url || !holder.isConnected) { holder.classList.add('none'); holder.textContent = 'NO FRAME'; return; }
-    const [x, y, w, h] = m.crop || [0, 0, 1, 1], img = new Image();
-    img.alt = 'Frame at ' + fmtTime(m.seconds); img.src = url;
-    // The crop fills the thumbnail: scale the whole frame so the crop spans it.
-    Object.assign(img.style, { width: 100 / w + '%', height: 100 / h + '%', left: -x / w * 100 + '%', top: -y / h * 100 + '%' });
+    const m = measurementById(prop, holder.dataset.frame), url = m && m.frameAssetId ? await cropThumbUrl(m) : null;
+    if (!holder.isConnected) return;
+    if (!url) { holder.classList.add('none'); holder.textContent = 'NO FRAME'; return; }
+    const img = new Image();
+    img.alt = 'Frame at ' + fmtTime(m.seconds); img.src = url; img.dataset.cropThumb = '';
+    Object.assign(img.style, { width: '100%', height: '100%', left: '0', top: '0', objectFit: 'cover' });
     holder.append(img);
   });
 }
@@ -608,7 +627,7 @@ export function redo() { if (prop && restoreGeometryEdit(prop, 'redo')) { say('R
 let dropRoot = null;
 export function mount(root) {
   prop = activeProperty(); el = root;
-  if (!prop) { root.innerHTML = '<div class="view-scroll"><div class="kicker">MEASURE</div><p class="muted">No property yet. Create one from the PROPERTY selector in the top bar.</p></div>'; el = null; return; }
+  if (!prop) { root.innerHTML = '<div class="view-scroll"><div class="kicker">MEASURE</div><p class="muted">No property yet. Create one with NEW PROPERTY under FILE.</p></div>'; el = null; return; }
   const wanted = new URLSearchParams(location.hash.split('?')[1] || '').get('video');
   if (wanted && videos().some(v => v.id === wanted)) view.videoId = wanted;
   if (!videos().some(v => v.id === view.videoId)) { view.videoId = videos()[0]?.id || null; view.t = 0; view.editingId = null; dropFrame(); }

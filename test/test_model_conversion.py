@@ -83,12 +83,60 @@ class ConversionTests(unittest.TestCase):
         for ext,target,body in [('../evil','glb',b'abc'),('.rvt','sh',b'abc'),('.rvt','glb',b'')]:
             with self.assertRaises(ConversionError):self.service.convert(body,ext,target)
         self.assertFalse(any(self.root.glob('*/report.json')))
+    def test_a_full_conversion_store_makes_room_by_removing_the_oldest(self):
+        made=[]
+        for _ in range(23):
+            with self.assertRaises(ConversionError) as caught:self.service.convert(b'synthetic native content','.rvt')
+            made.append(caught.exception.job_id)
+        kept=sorted(p.name for p in self.root.iterdir() if p.is_dir() and len(p.name)==32)
+        self.assertEqual(len(kept),20,'conversions keep going; the store stays bounded')
+        self.assertIn(made[-1],kept);self.assertNotIn(made[0],kept,'the oldest went first')
+        self.service.KEEP_BYTES=60
+        with self.assertRaises(ConversionError) as caught:self.service.convert(b'x'*40,'.rvt')
+        self.assertNotEqual(caught.exception.status,409,'a full store by size makes room too')
+        self.assertTrue((self.root/caught.exception.job_id/'source.rvt').is_file())
     def test_busy_converter_does_not_store_second_upload(self):
         self.service.lock.acquire()
         try:
             with self.assertRaises(ConversionError) as caught:self.service.convert(b'abc','.rvt')
             self.assertEqual(caught.exception.status,409)
         finally:self.service.lock.release()
+    def handler(self,path,command='POST',body=b'',headers=None):
+        test=self
+        class Pieces(io.BytesIO):
+            # The body as a socket gives it; asking for much more than a piece at once fails.
+            asked=0
+            def read(self,amount=-1):
+                test.assertTrue(0<amount<=4*1024*1024,'the upload is read in pieces, not whole: '+str(amount))
+                Pieces.asked+=amount;return super().read(amount)
+        class Out(io.BytesIO):
+            largest=0
+            def write(self,data):Out.largest=max(Out.largest,len(data));return super().write(data)
+        class Handler:
+            client_address=('127.0.0.1',1);connection=type('C',(),{'settimeout':lambda self,t:None})()
+            def send_response(self,status):self.status=status
+            def send_header(self,*args):pass
+            def end_headers(self):pass
+        h=Handler();h.path=path;h.command=command;h.rfile=Pieces(body);h.wfile=Out()
+        h.headers={'Host':'localhost:8888','X-Tiksi-Token':self.service.token,'Content-Length':str(len(body)),**(headers or {})}
+        return h
+    def test_a_busy_converter_refuses_before_reading_the_upload(self):
+        body=b'synthetic native content'*1000
+        self.service.lock.acquire()
+        try:
+            h=self.handler('/api/model-conversion/convert',body=body,headers={'X-Model-Extension':'.rvt'});self.service.dispatch(h)
+            self.assertEqual(h.status,409);self.assertEqual(h.rfile.asked,0,'nothing of the upload was read')
+        finally:self.service.lock.release()
+    def test_a_large_upload_and_its_handoff_never_pass_through_memory_whole(self):
+        body=bytes(range(256))*(6*4096)  # 6 MB
+        h=self.handler('/api/model-conversion/convert',body=body,headers={'X-Model-Extension':'.rvt'});self.service.dispatch(h)
+        self.assertEqual(h.status,422);job=json.loads(h.wfile.getvalue())['jobId']
+        self.assertEqual((self.root/job/'source.rvt').read_bytes(),body)
+        h=self.handler('/api/model-conversion/jobs/'+job,'GET');self.service.dispatch(h)
+        self.assertEqual(h.status,200)
+        with zipfile.ZipFile(io.BytesIO(h.wfile.getvalue())) as z:self.assertEqual(z.read('source.rvt'),body)
+        self.assertLessEqual(h.wfile.largest,1024*1024,'the handoff is sent from a file in pieces')
+        self.assertEqual(list(self.root.glob('.handoff-*')),[],'the packed handoff is removed after sending')
     def test_http_requires_same_origin_and_token(self):
         class Handler:
             path='/api/model-conversion/convert';command='POST'

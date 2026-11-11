@@ -19,11 +19,12 @@
 // project and the two stay connected both ways (sketchup-mirror.js).
 
 import {
-  ws, activeProperty, projectSlice, projectFileName, exportProjectBlob, importProject, readBundle, importBundle,
-  putFile, getFile, deleteFile, handleKey, setSaveStatus, mergeWorkspace, replaceWorkspace, touch,
+  ws, activeProperty, projectSlice, projectFileName, exportProjectBlob, importProject, readBundle,
+  putFile, getFile, deleteFile, handleKey, setSaveStatus, mergeWorkspace, touch,
 } from './store.js';
 import { syncMirror, mirrorCapabilities, mirrorChangedOnDisk, MirrorBusy, openInSketchUp } from './sketchup-mirror.js';
 import { diskWorkspace } from './disk-workspace.js';
+import { sameJson } from './workspace-merge.js';
 
 export const FSA = typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function';
 export const FSA_DIR = typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
@@ -32,7 +33,7 @@ const OPEN_PICKER_TYPES = [{ description: 'tiksi project or workspace', accept: 
 const FOLDER_MAP_KEY = 'tiksi.folder.v1';
 const SYNC_DELAY_MS = 4000;
 
-let app = { remount() {}, refresh() {}, afterReplace() {}, opened() {} };
+let app = { remount() {}, refresh() {}, afterReplace() {}, opened() {}, confirmReplace() { return true; } };
 export function initFiles(hooks) { app = Object.assign(app, hooks || {}); }
 
 // ---------- state ----------
@@ -138,6 +139,7 @@ export async function saveProject(prop, opts) {
   }
   let savedSig;
   const pack = async () => {
+    if (diskWorkspace) await diskWorkspace.whenPictures();
     savedSig = signatureOf(prop.id);
     setSaveStatus('PACKING', true);
     try { return await exportProjectBlob(prop.id); }
@@ -200,7 +202,8 @@ async function rememberedHandle(propId) {
 }
 
 // ---------- open ----------
-export async function openFromFile(file) {
+// `opts.asked`: the person was already asked whether this file should replace what is open.
+export async function openFromFile(file, opts) {
   let parsed;
   if (/\.json$/i.test(file.name)) {
     const data = JSON.parse(await file.text());
@@ -209,6 +212,21 @@ export async function openFromFile(file) {
   } else parsed = await readBundle(file);
   const { data, manifest } = parsed;
   const before = new Set(ws.data.properties.map(p => p.id));
+  // Whatever in the file has the id of something open here replaces it: a property (and its
+  // projects that are not in the file are removed), a project, a product, a custom
+  // material. Where the two differ that is asked first, never done unasked. (A file that
+  // holds the very same records replaces nothing, and is not asked about.)
+  const open = new Map(ws.data.properties.map(p => [p.id, p]));
+  const inFile = new Set((data.projects || []).map(pr => pr.id));
+  const same = (data.properties || []).filter(p => p && open.has(p.id) &&
+    (!sameJson(open.get(p.id), p) || ws.data.projects.some(pr => pr.propertyId === p.id && !inFile.has(pr.id))));
+  const differing = (incoming, here) => { const held = new Map((here || []).map(r => [r.id, r])); return (incoming || []).filter(r => r && held.has(r.id) && !sameJson(held.get(r.id), r)).map(r => held.get(r.id)); };
+  const others = { projects: differing(data.projects, ws.data.projects), products: differing(data.products, ws.data.products), materials: differing((data.materials || []).filter(m => m && m.custom), ws.data.materials) };
+  const replaces = same.length + others.projects.length + others.products.length + others.materials.length;
+  if (replaces && !(opts && opts.asked) && !await app.confirmReplace({ file, others, same: same.map(p => ({ incoming: p, current: open.get(p.id), projects: (data.projects || []).filter(pr => pr.propertyId === p.id).length })) })) {
+    setSaveStatus('KEPT WHAT IS OPEN', false);
+    return [];
+  }
   // Opening always adds/updates imported properties. Replacement is a separate explicit action.
   const ids = /\.json$/i.test(file.name) ? mergeWorkspace(data, { fromFile: true }) : await importProject(file);
   for (const id of ids) state.savedSig.set(id, signatureOf(id));
@@ -393,7 +411,7 @@ export async function linkProjectFolder(prop, opts) {
   const existing = (await listFolder(dir)).find(en => en.name === projectFileName(prop));
   if (existing) {
     const choose = opts.choose || (en => (window.confirm(dir.name + ' already holds ' + en.name + ' (saved ' + new Date(en.lastModified).toLocaleString() + '). Open it?\n\nOK opens that file and replaces this browser\'s copy of ' + prop.name + '. Cancel keeps this browser\'s copy and saves it beside the file under a new name.') ? 'open' : 'keep'));
-    if ((await choose(existing)) === 'open') { saveFolderMap(); notify(); await openFromFolder(existing, dir); return dir; }
+    if ((await choose(existing)) === 'open') { saveFolderMap(); notify(); await openFromFolder(existing, dir, { asked: true }); return dir; }
   }
   saveFolderMap();
   notify();
@@ -432,10 +450,10 @@ export async function listFolder(folder) {
 }
 
 // Open a listed file and keep that property in the folder it came from.
-export async function openFromFolder(entry, folder) {
+export async function openFromFolder(entry, folder, opts) {
   folder = folder || entry.folder || state.folder;
   const file = await entry.handle.getFile();
-  const ids = await openFromFile(file);
+  const ids = await openFromFile(file, opts);
   if (ids && ids.length === 1) {
     const id = ids[0], record = { file: entry.name, sig: signatureOf(id), mtime: file.lastModified };
     const before = state.folderMap[id];

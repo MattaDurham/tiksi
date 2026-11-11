@@ -9,6 +9,9 @@ import {
   projectSlice,
 } from './store.js';
 import { icon } from './icons.js';
+import { touchDevice } from './render-quality.js';
+import { openedWords } from './open-words.js';
+export { openedWords };
 import { diskWorkspace } from './disk-workspace.js';
 import {
   PAPERS, SCALES, STYLES, KINDS, SCHEDULE_SOURCES, ELEVATION_SIDES, paperOf, drawingArea, fitScale, nextScale, scaleLabel,
@@ -28,10 +31,18 @@ import { onePagerStatus, latestVersion } from './one-pager.js';
 const PT = 72;
 const EXPORT_DPI = 150;            // model renders and pictures inside views
 const SHEET_DPI = 300;             // the sheet itself: 6.5-point dimensions and schedules stay sharp
-const SHEET_MAX_PX = 16e6;         // iPhone and iPad Safari refuse a canvas over about 16.7 million pixels
-// The sheet's resolution: 300 dpi, or less on larger paper so the page stays under SHEET_MAX_PX
-// (letter 300 dpi, tabloid 292, ARCH C 192, ARCH D 136).
-export function sheetDpi(paper) { return Math.min(SHEET_DPI, Math.floor(Math.sqrt(SHEET_MAX_PX / (paper.w * paper.h)))); }
+const TOUCH_MAX_PX = 16e6;         // iPhone and iPad Safari refuse a canvas over about 16.7 million pixels
+const DESKTOP_MAX_SIDE = 16384;    // the longest canvas side desktop Chrome and Safari draw
+const DESKTOP_MAX_PX = 268e6;      // and the most pixels desktop Chrome allows in one canvas
+// The sheet's resolution. On a touch device (touchDevice() in render-quality.js) 300 dpi, or less
+// on larger paper so the page stays under TOUCH_MAX_PX (letter 300 dpi, tabloid 292, ARCH C 192,
+// ARCH D 136). On a computer 300 dpi up to the desktop browser's limits, which every paper here
+// fits, and never under the 150 dpi sheets were drawn at before.
+export function sheetDpi(paper, touch = touchDevice()) {
+  const area = paper.w * paper.h;
+  if (touch) return Math.min(SHEET_DPI, Math.floor(Math.sqrt(TOUCH_MAX_PX / area)));
+  return Math.max(EXPORT_DPI, Math.min(SHEET_DPI, Math.floor(DESKTOP_MAX_SIDE / Math.max(paper.w, paper.h)), Math.floor(Math.sqrt(DESKTOP_MAX_PX / area))));
+}
 
 let el = null, prop = null;
 let setId = '', sheetId = '', selectedId = '', adjustId = '';
@@ -144,13 +155,13 @@ function renderLists() {
   el.querySelector('[data-saved]').innerHTML = (docs.length ? docs.map(d => `<button class="dc-row dc-doc ${viewing && viewing.id === d.id ? 'active' : ''}" data-doc="${esc(d.id)}">
         ${d.thumb ? `<img src="${esc(d.thumb)}" alt="">` : `<span class="dc-doc-ic">${icon('file')}</span>`}
         <span><b>${esc(d.name)}</b><span>${d.pageCount > 1 ? d.pageCount + ' pages · ' : ''}${esc(String(d.createdAt || '').slice(0, 10))}</span></span></button>`).join('') : '<p class="dc-empty">No saved documents. Saved drawing sets, uploaded PDFs and drawings appear here.</p>')
-    + (productDocs.length ? `<div class="dc-subh">PRODUCT DOCUMENTS (PROJECT FOLDER)</div>` + productDocs.map(({ p, d, i }) => `<button class="dc-row dc-pdoc" data-pdoc="${esc(p.id)}:${i}" ${ready ? '' : 'disabled title="Link this property\'s project folder to open its files"'}>
+    + (productDocs.length ? `<div class="dc-subh">PRODUCT DOCUMENTS (PROJECT FOLDER)</div>${touchDevice() ? '<p class="dc-empty">These open on the Mac running Tiksi, not on this device.</p>' : ''}` + productDocs.map(({ p, d, i }) => `<button class="dc-row dc-pdoc" data-pdoc="${esc(p.id)}:${i}" ${ready ? '' : 'disabled title="Link this property\'s project folder to open its files"'}>
         <b>${esc(d.title || d.path)}</b><span>${esc(p.name)} · ${esc(d.kind || 'file')}</span></button>`).join('') : '');
   el.querySelectorAll('[data-doc]').forEach(b => b.onclick = () => { viewing = { kind: 'doc', id: b.dataset.doc, page: 1 }; selectedId = ''; adjustId = ''; render(); });
   el.querySelectorAll('[data-pdoc]').forEach(b => b.onclick = async () => {
     const [pid, i] = b.dataset.pdoc.split(':');
     const p = ws.data.products.find(x => x.id === pid);
-    try { const r = await diskWorkspace.openProjectPath(prop, p.documents[+i].path); setStatus('Opened ' + (r.path || p.documents[+i].path) + ' on this Mac.'); }
+    try { const r = await diskWorkspace.openProjectPath(prop, p.documents[+i].path); setStatus(openedWords(r, p.documents[+i].path)); }
     catch (e) { setStatus(e.message || 'Could not open the file.'); }
   });
 }
@@ -179,6 +190,14 @@ function renderToolbar() {
     return;
   }
   if (!set) { bar.innerHTML = '<span class="dc-hint">Start a drawing set with NEW SET, or open a saved document.</span>'; return; }
+  // Laying out a sheet takes a mouse (drag, double-click, the wheel, keys): on a touch device the
+  // sheets are for looking at, and PDFs are made on the Mac.
+  if (touchDevice()) {
+    bar.innerHTML = `<span class="dc-hint" data-touch-viewer>Arrange sheets and save PDFs on the Mac. Here you can look at the sheets and open saved documents.</span><span class="dc-sp"></span>
+      <button class="btn small" data-zoom="-1" aria-label="Zoom out">−</button><button class="btn small" data-zoom="0">FIT</button><button class="btn small" data-zoom="1" aria-label="Zoom in">+</button>`;
+    bar.querySelectorAll('[data-zoom]').forEach(b => b.onclick = () => { const d = +b.dataset.zoom; zoom = d === 0 ? 0 : (zoom || fitZoom()) * (d > 0 ? 1.25 : 0.8); drawSheet(true); });
+    return;
+  }
   const add = Object.entries({ plan: 'PLAN', section: 'SECTION', elevation: 'ELEVATION', view3d: '3D VIEW', image: 'PHOTO OR PAGE', schedule: 'SCHEDULE', text: 'TEXT' })
     .map(([k, l]) => `<button class="btn small" data-add="${k}" title="Add a ${esc(KINDS[k].toLowerCase())} to this sheet">${l}</button>`).join('');
   bar.innerHTML = `<span class="dc-add-label">ADD</span>${add}<span class="dc-sp"></span>
@@ -279,15 +298,16 @@ function fitZoom() {
   return Math.max(0.2, Math.min((stage.clientWidth - 48) / (p.w * PT), (stage.clientHeight - 48) / (p.h * PT)));
 }
 
-// Model renders this sheet needs, in screen pixels, keyed by what they depend on.
-function renderKey(v, px, py) {
+// Model renders this sheet needs, in screen pixels, keyed by what they depend on. `geo` is the
+// model's fingerprint (geometryKey), worked out once per redraw rather than once per view.
+function geometryKey() { const geo = geometrySignature(prop); return geo.length + ':' + hash(geo); }
+function renderKey(v, px, py, geo = geometryKey()) {
   const base = { kind: v.kind, w: v.w, h: v.h, style: v.style, px, py };
   if (v.kind === 'image') return JSON.stringify({ ...base, photoId: v.photoId, page: v.page });
-  const geo = geometrySignature(prop);
   const params = v.kind === 'plan' ? { levelId: v.levelId, cut: v.cut, center: v.center, scale: v.scale, model: v.layers.model }
     : v.kind === 'view3d' ? { camera: v.camera } : { line: v.line, flip: v.flip, center: v.center, scale: v.scale, clip: v.clip, depth: v.depth };
   const tags = tagSignature(prop, v);
-  return geo.length + ':' + hash(geo) + ':' + hash(tags) + JSON.stringify({ ...base, ...params });
+  return geo + ':' + hash(tags) + JSON.stringify({ ...base, ...params });
 }
 function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); }
 
@@ -299,10 +319,11 @@ function drawSheet(refit) {
   const z = zoom || fitZoom();
   const p = paperOf(set);
   const dpr = window.devicePixelRatio || 1;
+  const geo = geometryKey();
   for (const v of sheet.viewports) {
     if (v.kind === 'schedule' || v.kind === 'text') continue;
     const px = Math.min(2400, Math.round(v.w * PT * z * dpr)), py = Math.min(2400, Math.round(v.h * PT * z * dpr));
-    const key = renderKey(v, px, py);
+    const key = renderKey(v, px, py, geo);
     const hit = cache.get(key);
     if (hit) images.set(v.id, { ...hit, key });
     else enqueue(v, key, px, py);
@@ -368,6 +389,8 @@ async function imageHref(v, px, py, type = 'image/png') {
 // ---------- pointer: select, move, resize, adjust ----------
 
 function bindSheet(svg) {
+  // On a touch device the sheet is a viewer (renderToolbar): nothing on it moves under a finger.
+  if (touchDevice()) return;
   // The sheet is redrawn while dragging (selecting a view redraws it too), so always measure
   // against the drawing that is on screen now.
   const toPaper = e => {
@@ -400,12 +423,14 @@ function bindSheet(svg) {
       if (mode === 'move') { v.x = snap(orig.x + dx); v.y = snap(orig.y + dy); }
       else if (mode === 'resize') { v.w = Math.max(0.5, snap(orig.w + dx)); v.h = Math.max(0.5, snap(orig.h + dy)); }
       else adjustDrag(v, orig, dx, dy, ev.shiftKey);
-      drawSheet();
+      // Moving or resizing only places the drawing on screen until the drag ends; a view being
+      // adjusted shows new content, so it is redrawn, at most once a frame.
+      if (mode === 'adjust') scheduleRedraw(); else placeDragged(v);
     };
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
-      if (moved) { touch(); renderInspector(); }
+      if (moved) { if (mode !== 'adjust') drawSheet(); touch(); renderInspector(); }
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -429,6 +454,23 @@ function bindSheet(svg) {
     } else v.scale = nextScale(v.scale, e.deltaY > 0 ? 1 : -1);
     drawSheet(); touchSoon(); renderInspector();
   }, { passive: false });
+}
+
+// A view being moved or resized, shown where it now is without rebuilding the sheet: its group
+// and the selection frame over it are translated and, for a resize, stretched from the size they
+// were drawn at (a finished render can redraw the sheet mid-drag).
+function placeDragged(v) {
+  const live = el?.querySelector('.dc-paper svg');
+  if (!live) return;
+  const place = (node, drawn) => {
+    const w = parseFloat(drawn?.getAttribute('width')) || v.w * PT, h = parseFloat(drawn?.getAttribute('height')) || v.h * PT;
+    const stretch = Math.abs(w - v.w * PT) > 1e-6 || Math.abs(h - v.h * PT) > 1e-6;
+    node.setAttribute('transform', `translate(${v.x * PT} ${v.y * PT})` + (stretch ? ` scale(${v.w * PT / w} ${v.h * PT / h})` : ''));
+  };
+  const group = [...live.querySelectorAll('[data-vp-group]')].find(g => g.dataset.vpGroup === v.id);
+  if (group) place(group, group.querySelector('clipPath rect'));
+  const hit = [...live.querySelectorAll('[data-vp]')].find(r => r.dataset.vp === v.id);
+  if (hit && hit.parentNode !== group) place(hit.parentNode, hit);
 }
 
 let touchTimer = null;

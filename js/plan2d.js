@@ -6,7 +6,7 @@ import { floorReviewText } from './scan-surfaces.js';
 // swings, glazing lines, dimension strings with ticks, rulers, a north arrow and a scale bar.
 
 import {
-  ws, activeProperty, uid, touch, onChange, fmtLen, readLength, fmtArea, polyArea, roomsFloorArea, countsAsFloor,
+  ws, activeProperty, uid, touch, onChange, onSharedArriving, fmtLen, readLength, fmtArea, polyArea, roomsFloorArea, countsAsFloor,
   escapeHtml, itemById, getFile, projectLabel, propertyProjects,
   ensureLevels, activeLevel, setActiveLevel, sortLevels, wallsOn, roomsOn, openingsOn,
   addLevel, deleteLevel, levelHeight, wallHeightOf, levelOfWall, fmtDate, isoToday,
@@ -155,7 +155,7 @@ const textWidthCache = new Map();      // font|text -> measured width
 // The canvas repaints only when something changed; every input handler, store change and
 // resize marks it dirty, and the rAF loop idles otherwise (no CPU/battery cost while looking).
 let dirty = true;
-let resizeObs = null, offChange = null;
+let resizeObs = null, offChange = null, offArriving = null;
 function invalidate() { dirty = true; }
 
 function dpr() { return exportScale || window.devicePixelRatio || 1; }
@@ -2702,7 +2702,7 @@ export function mount(root) {
   if (!prop) {
     root.innerHTML = `<div class="view-scroll"><div class="kicker">PLAN</div>
       <div class="empty-state"><span class="empty-ic">${icon('plan')}</span><b>No property yet</b>
-      Create one from the PROPERTY selector in the top bar.</div></div>`;
+      Create one with NEW PROPERTY under FILE.</div></div>`;
     return;
   }
   ensureLevels(prop);
@@ -2755,6 +2755,14 @@ export function mount(root) {
   // Inspector edits and other views' changes reach the canvas through the store; layout
   // changes (panel resize, browser zoom) through the observer. Everything else is an input.
   offChange = onChange(() => { invalidate(); refreshSchedule(); });
+  // Another device's change to this property is about to be merged in. A drag in progress is
+  // put back first, while the records are still exactly as the drag found and left them:
+  // merged in half way, the dragged wall would be saved where it happened to be, with no undo.
+  offArriving = onSharedArriving(ids => {
+    if (!prop || !ids.has(prop.id) || !drag || !drag.moved || drag.kind === 'underlay' || drag.kind === 'pan') return;
+    // (Marked as a change: a save made during the drag may already hold the wall half way.)
+    revertGeometryEdit(prop); drag = null; touch(); renderInspector();
+  });
   if (typeof ResizeObserver !== 'undefined') { resizeObs = new ResizeObserver(invalidate); resizeObs.observe(wrapEl); }
   else window.addEventListener('resize', invalidate);
 
@@ -2817,9 +2825,13 @@ export function unmount() {
   window.removeEventListener('resize', invalidate);
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
   if (offChange) { offChange(); offChange = null; }
+  if (offArriving) { offArriving(); offArriving = null; }
   drawing = null; roomDraft = null; drag = null; hover = null; hoverPt = null; facesCache = null;
   fingers.clear(); gesture = null; lastTap = null; joints = null;
-  if (prop) endGeometryHold(prop);   // a drag cut short by a remount: the next change closes its edit
+  // A drag cut short by a rebuild (another device changed this property under it): its edit
+  // is dropped, not left open. Left open, the next change would close an undo entry reaching
+  // back to before the other device's change, and UNDO would then remove that change too.
+  if (prop) cancelGeometryEdit(prop);
   el = null; canvas = null; ctx = null; wrapEl = null; inspEl = null; hintEl = null; badgeEl = null; levelEl = null; scheduleEl = null;
   scheduleCache = null;
 }

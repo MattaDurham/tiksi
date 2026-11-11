@@ -528,7 +528,11 @@ class MaterialResearchManager:
             if active >= self.max_concurrent_jobs:
                 raise ResearchError("Research queue is full; wait for a job or cancel it", 429)
             if len(self.jobs) >= self.max_records:
-                raise ResearchError("Research history is full; remove old local research records before continuing", 429)
+                # Finished research is the owner's record: nothing is removed to make room.
+                size = sum(p.stat().st_size for p in self.root.glob("*.json") if p.is_file())
+                raise ResearchError(f"Research history is full: {len(self.jobs)} records, {size / 2 ** 20:.1f} MB on this Mac. "
+                                    "Nothing was removed. Finished records can be removed one at a time, which the page cannot do yet; "
+                                    "new research can start once there is room", 507)
             job_id, stamp = str(uuid.uuid4()), utc_now()
             roles = ["focused"] if request["mode"] == "focused" else ["specifications", "vendors", "alternatives"]
             job = {"id": job_id, "status": "queued", "createdAt": stamp, "updatedAt": stamp,
@@ -552,6 +556,17 @@ class MaterialResearchManager:
                 self.cancel_events[job_id].set()
                 self._update(job_id, status="cancelled", error=None)
             return self.get(job_id)
+
+    def remove(self, job_id):
+        """Remove one finished research record, on the owner's request. A record whose work is
+        queued, running or still stopping stays."""
+        with self.lock:
+            job = self.get(job_id)
+            if job["status"] in ("queued", "running") or job_id in self.cancel_events:
+                raise ResearchError("This research is still running; cancel it and wait for it to stop before removing it", 409)
+            (self.root / (job_id + ".json")).unlink(missing_ok=True)
+            del self.jobs[job_id]
+            return {"removed": job_id}
 
     def _agent_update(self, job_id, role, **changes):
         with self.lock:
@@ -637,7 +652,7 @@ class MaterialResearchHTTPMixin:
                 return True
             if not self.research_token or not secrets.compare_digest(self.headers.get("X-Tiksi-Token", ""), self.research_token):
                 raise ResearchError("Refresh research capabilities before accessing a research job", 403)
-            if method == "POST":
+            if method in ("POST", "DELETE"):
                 origin = self.headers.get("Origin")
                 if origin and (urlsplit(origin).scheme not in ("http", "https") or urlsplit(origin).netloc != self.headers.get("Host")):
                     raise ResearchError("Research requests must come from this Tiksi instance", 403)
@@ -659,6 +674,9 @@ class MaterialResearchHTTPMixin:
                 job_id = suffix[:-7] if cancel else suffix
                 if not re.fullmatch(r"[a-f0-9-]{36}", job_id):
                     raise ResearchError("Research route not found", 404)
+                if method == "DELETE" and not cancel:
+                    self._research_response(200, self.research_manager.remove(job_id))
+                    return True
                 if method == "GET" and not cancel:
                     job = self.research_manager.get(job_id)
                 elif method == "POST" and cancel:

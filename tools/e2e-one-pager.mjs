@@ -35,7 +35,9 @@ const check = (ok, label) => { assert.ok(ok, label); console.log('  ok   ' + lab
 const prop = fn => page.evaluate(async src => { const s = await import('/js/store.js'); const AsyncFunction = (async () => {}).constructor; return new AsyncFunction('s', 'p', src)(s, s.activeProperty()); }, fn);
 const state = () => prop("const op = await import('/js/one-pager.js'); return op.onePagerState(p, s.projectSlice(p.id));");
 const fireClose = () => page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; });
-const promptShown = async () => { await page.waitForTimeout(500); return (await page.locator('.op-prompt').count()) > 0; };
+// A prompt is open, or one is on its way: Tiksi opens it shortly after a close it held back, and
+// only when closing would ask (so there is no fixed wait for one that may come late).
+const promptShown = () => page.evaluate(async () => { const d = await import('/js/one-pager-dialog.js'); return d.promptOpen() || d.closeWouldAsk() || !!document.querySelector('.op-prompt'); });
 const versions = () => prop('return p.onePager.versions.map(v => v.n)');
 const until = async (fn, label, ms = 90000) => { const end = Date.now() + ms; while (!(await fn())) { if (Date.now() > end) throw new Error('Timed out waiting for ' + label); await page.waitForTimeout(250); } };
 const docs = () => prop("return p.photos.filter(x => x.kind === 'document').map(d => ({ name: d.name, mime: d.mime, pages: d.pageCount, bytes: d.byteLength }))");
@@ -250,7 +252,7 @@ try {
   check((await versions()).join() === '1,2,3' && (await state()) === 'current', 'version 3 brings it up to date');
   await page.reload();
   await page.waitForSelector('#btn-file');
-  await page.waitForTimeout(1500);
+  await until(async () => { try { return (await versions()).length > 0; } catch { return false; } }, 'the project after a reload');
   v = await versions();
   const kept = await prop("return { headline: p.onePager.headline, customized: p.onePager.customized, docs: p.photos.filter(x => x.kind === 'document').length }");
   check(v.join() === '1,2,3' && (await state()) === 'current' && kept.headline === 'A brighter kitchen' && kept.customized === true && kept.docs === 3, 'after a reload the versions, the current state, the PDFs and the hand-written text are still there');

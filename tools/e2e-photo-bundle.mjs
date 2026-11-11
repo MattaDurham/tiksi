@@ -14,7 +14,7 @@ const server=createServer(async(req,res)=>{
 });
 await new Promise(r=>server.listen(0,'localhost',r));const browser=await chromium.launch();
 try{
- const page=await browser.newPage();await page.goto(`http://localhost:${server.address().port}/`);
+ const page=await browser.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(`http://localhost:${server.address().port}/`);
  const results=await page.evaluate(async()=>{
   const s=await import('/js/store.js'),zip=await import('three/addons/libs/fflate.module.js');const d=s.emptyWorkspace(),p=s.propertyTemplate('Archive photo fixture');d.properties.push(p);s.replaceWorkspace(d);await s.whenHydrated();
   const expected=[];
@@ -36,6 +36,7 @@ try{
   return{jsonWrites,zipWrites,savedFormat:savedProject.manifest.format,expected,paths:read.manifest.files.map(f=>f.path),files:read.files.map(f=>({id:f.id,mime:f.meta.mime,kind:f.meta.kind,bytes:Array.from(new Uint8Array(f.buffer))})),legacy:legacy.files.map(f=>({id:f.id,mime:f.meta.mime,kind:f.meta.kind})),restored:await Promise.all(expected.map(async f=>{const rec=await s.getFile(f.id);return{id:f.id,mime:rec.mime,bytes:Array.from(new Uint8Array(rec.buffer))};}))};
  });
  for(const fixture of results.expected){assert.ok(results.paths.includes(`files/${fixture.id}.${fixture.ext}`));assert.deepEqual(results.files.find(f=>f.id===fixture.id),{id:fixture.id,mime:fixture.mime,kind:'photo',bytes:fixture.bytes});assert.deepEqual(results.legacy.find(f=>f.id===fixture.id),{id:fixture.id,mime:fixture.mime,kind:'photo'});assert.deepEqual(results.restored.find(f=>f.id===fixture.id),{id:fixture.id,mime:fixture.mime,bytes:fixture.bytes});}
+ assert.deepEqual(errors,[],'no page errors');
  assert.equal(results.jsonWrites,0,'opening JSON metadata never adopts it as a ZIP save target');assert.equal(results.zipWrites,1);assert.equal(results.savedFormat,'tiksi-project');
  console.log('Photo archive transport passed: HEIC/HEIF/TIFF/AVIF/BMP extensions, MIME metadata, legacy classification and exact original bytes; JSON open then SAVE keeps metadata intact and writes a separate project archive. Decoders were not exercised.');
 }finally{await browser.close();await new Promise(r=>server.close(r));}

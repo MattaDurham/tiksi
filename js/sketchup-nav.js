@@ -9,7 +9,13 @@
 // with the target left at an old pivot the steps shrank to nothing near that point while the
 // thing under the cursor was still far off. Each zoom gesture re-aims at the surface under the
 // cursor, so the steps follow the distance to what you are zooming toward.
+//
+// Fingers: one finger orbits, or pans where orbiting is off (Top view), so a finger always moves
+// the view. A pinch re-aims the same way a wheel gesture does, once, when the second finger
+// lands, at the surface between the two fingers: without that a pinch closed in on an old pivot
+// and stalled there however far the thing under the fingers still was.
 const ROTATE = 0, PAN = 2;                // OrbitControls' internal drag states
+const TOUCH_ROTATE = 0, TOUCH_PAN = 1;    // three's TOUCH.ROTATE and TOUCH.PAN
 
 // The orbit pivot for a point under the cursor: the point at the same depth on the view
 // axis, so the camera turns about that depth without the view jumping sideways.
@@ -70,11 +76,28 @@ export function attachSketchupNavigation(controls, { pickPoint, canOrbit = () =>
     controls.mouseButtons.LEFT = a;
     controls.mouseButtons.MIDDLE = a;
     controls.mouseButtons.RIGHT = PAN;
+    if (controls.touches) controls.touches.ONE = canOrbit() ? TOUCH_ROTATE : TOUCH_PAN;
   }
   setButtons();
 
+  // Where each finger on the view is, so a pinch can aim at the point between two of them.
+  const fingers = new Map();
+  function onFingerDown(e) {
+    setButtons();
+    fingers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (fingers.size !== 2 || !controls.enabled || !controls.enableZoom) return;
+    const [p, q] = [...fingers.values()];
+    const cam = controls.object.position;
+    const hit = pickPoint({ clientX: (p.x + q.x) / 2, clientY: (p.y + q.y) / 2 });
+    const next = zoomTarget(cam, controls.target, hit, true, controls.minDistance);
+    if (next) { controls.target.copy(next); controls.object.lookAt(next); }
+  }
+  function onFingerMove(e) { const f = fingers.get(e.pointerId); if (f) { f.x = e.clientX; f.y = e.clientY; } }
+  function onFingerUp(e) { fingers.delete(e.pointerId); }
+
   // Capture phase: runs before OrbitControls reads the press, so the buttons are current.
   function onDown(e) {
+    if (e.pointerType === 'touch') { onFingerDown(e); return; }
     if (!controls.enabled || e.pointerType !== 'mouse' && e.pointerType !== 'pen') return;
     setButtons();
     const base = e.button === 0 ? controls.mouseButtons.LEFT : e.button === 1 ? controls.mouseButtons.MIDDLE : e.button === 2 ? controls.mouseButtons.RIGHT : -1;
@@ -84,6 +107,7 @@ export function attachSketchupNavigation(controls, { pickPoint, canOrbit = () =>
     if (e.button === 1) e.preventDefault();          // no autoscroll on middle press
   }
   function onMove(e) {
+    if (e.pointerType === 'touch') { onFingerMove(e); return; }
     if (!drag) return;
     drag.x = e.clientX; drag.y = e.clientY;
     const from = drag.pivotFrom;
@@ -153,6 +177,8 @@ export function attachSketchupNavigation(controls, { pickPoint, canOrbit = () =>
   window.addEventListener('pointermove', onPivotMove);
   el.addEventListener('wheel', onWheel, { capture: true, passive: true });
   window.addEventListener('pointerup', onUp);
+  window.addEventListener('pointerup', onFingerUp);
+  window.addEventListener('pointercancel', onFingerUp);
   window.addEventListener('keydown', onShift);
   window.addEventListener('keyup', onShift);
   return {
@@ -163,7 +189,10 @@ export function attachSketchupNavigation(controls, { pickPoint, canOrbit = () =>
       window.removeEventListener('pointermove', onPivotMove);
       el.removeEventListener('wheel', onWheel, { capture: true });
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointerup', onFingerUp);
+      window.removeEventListener('pointercancel', onFingerUp);
       window.removeEventListener('keydown', onShift);
+      fingers.clear();
       window.removeEventListener('keyup', onShift);
     },
   };
