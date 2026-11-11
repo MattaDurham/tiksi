@@ -410,7 +410,7 @@ function openFileMenu(initialTab = 'project', selected) {
     <section data-file-panel="settings" hidden><h3>Display</h3><label>Units <select data-file-units><option value="imperial">Feet / square feet</option><option value="metric">Metres / square metres</option></select></label><details><summary>Model environment</summary><div data-file-env></div></details><div data-unavailable-list></div><h3>Where this project is kept</h3><p data-own-folder-label></p><div class="file-actions"><button class="btn primary" data-own-folder-link>CHOOSE FOLDER</button><button class="btn" data-folder-open>OPEN FROM FOLDER</button><button class="btn" data-own-folder-unlink>STOP KEEPING IT IN A FOLDER</button></div>
       <label>Keep a SketchUp mirror (.skp) beside each project <input type="checkbox" data-mirror-on></label><p data-mirror-label></p>
       <h3>One-pager</h3><label>Ask to update the one-pager when Tiksi closes <select data-op-prompt>${PROMPT_MODES.map(([id,label])=>`<option value="${id}">${escapeHtml(label)}</option>`).join('')}</select></label><p>Closing Tiksi first shows the browser's own Leave site? question. Choose Cancel to stay and Tiksi asks whether to save the next version; choose Leave to close without it.</p>
-      <details><summary>Workspace backup & maintenance</summary><h3>Projects without their own folder</h3><p data-folder-label></p><div class="file-actions"><button class="btn" data-folder-link>KEEP THEM IN ONE FOLDER</button><button class="btn" data-folder-unlink>UNLINK</button></div><p>Project saves are usually enough. A workspace backup carries every property.</p><button class="btn" data-workspace-save>SAVE WORKSPACE BACKUP</button><button class="btn" data-demo>ADD DEMO PROJECTS</button><button class="btn" data-storage>CLEAN UNUSED STORAGE</button><p>Replace workspace is available only when you intentionally want to restore a full backup.</p><button class="btn" data-workspace-replace>REPLACE FROM BACKUP…</button></details></section>
+      <details><summary>Workspace backup & maintenance</summary><h3>Projects without their own folder</h3><p data-folder-label></p><div class="file-actions"><button class="btn" data-folder-link>KEEP THEM IN ONE FOLDER</button><button class="btn" data-folder-unlink>UNLINK</button></div><p>Project saves are usually enough. A workspace backup carries every property.</p><button class="btn" data-workspace-save>SAVE WORKSPACE BACKUP</button><button class="btn" data-demo>ADD DEMO PROJECTS</button><button class="btn" data-storage>CLEAN UNUSED STORAGE</button><div data-mac-cleanup hidden><button class="btn" data-mac-cleanup-list>CLEAN UNUSED STORAGE</button><p data-mac-cleanup-plan></p><button class="btn" data-mac-cleanup-remove hidden>REMOVE</button></div><p>Replace workspace is available only when you intentionally want to restore a full backup.</p><button class="btn" data-workspace-replace>REPLACE FROM BACKUP…</button></details></section>
     <p role="status" data-file-status></p><input type="file" data-any-file hidden multiple accept=".tiksi,.json,${SCAN_ACCEPT},.c4d,.max,.ma,.mb,.rfa,.dwf,.mtl,.bin,.tga,.jpg,.jpeg,.png,.webp,.heic,.heif,.tif,.tiff,.avif,.mp4,.mov,.m4v"><input type="file" data-replace-file hidden accept=".json,.zip,.tiksi">`;
   document.body.append(dialog);dialog.showModal();dialog.addEventListener('close',()=>dialog.remove());
   const envHost=dialog.querySelector('[data-file-env]');
@@ -494,6 +494,23 @@ function openFileMenu(initialTab = 'project', selected) {
   on('[data-own-folder-unlink]',()=>run(async()=>{await unlinkProjectFolder(prop.id);const st=filesState();
     return st.folder?'Back with the other projects in '+st.folderName+'. The files in its folder stay where they are.':'Kept in this browser only now. The files in its folder stay where they are.';}));
   on('[data-workspace-save]',()=>run(runExportBundle));on('[data-storage]',()=>run(()=>offerStorageCleanup(false)));
+  // The Mac's own clean-up: shown only when the Mac's server offers it to this caller. A press
+  // lists what would go; REMOVE sends back exactly that list. A touch device sees the list only:
+  // removing is done from the Mac.
+  const macBox=dialog.querySelector('[data-mac-cleanup]'),macPlanText=dialog.querySelector('[data-mac-cleanup-plan]'),macRemove=dialog.querySelector('[data-mac-cleanup-remove]');
+  let cleaner=null,cleanupChecked=false,cleanupPlan=null,cleanupText=null;
+  macBox.closest('details').addEventListener('toggle',async e=>{
+    if(!e.target.open||!diskWorkspace||cleanupChecked)return;cleanupChecked=true;
+    cleanupText=await import('./mac-cleanup.js');cleaner=await cleanupText.macCleanup();macBox.hidden=!cleaner;});
+  const showPlan=(plan,lead='')=>{
+    cleanupPlan=plan;const touch=matchMedia('(pointer: coarse)').matches;
+    macPlanText.textContent=lead+cleanupText.describePlan(plan,fmtBytes)+(plan.count&&touch?' Removing is done from Tiksi on the Mac itself.':'');
+    macRemove.hidden=!plan.count||touch;};
+  on('[data-mac-cleanup-list]',()=>run(async()=>{showPlan(await cleaner.list());return cleanupPlan.count?'Nothing is removed until REMOVE is pressed.':'Nothing to remove.';}));
+  on('[data-mac-cleanup-remove]',()=>run(async()=>{
+    try{const done=await cleaner.remove(cleanupPlan);cleanupPlan=null;macRemove.hidden=true;macPlanText.textContent=cleanupText.describeResult(done,fmtBytes);return macPlanText.textContent;}
+    catch(error){if(error.code!=='cleanup-changed'||!error.plan)throw error;
+      showPlan(error.plan,'What can be removed changed since it was listed, so nothing was removed. The new list: ');return 'Look at the new list before removing.';}}));
   on('[data-demo]',()=>{mergeWorkspace(freshDemo());ensureBuiltinMaterials();refreshTopbar();remountView();dialog.close();});
   const replace=dialog.querySelector('[data-replace-file]');on('[data-workspace-replace]',()=>replace.click());
   replace.onchange=()=>run(async()=>{const file=replace.files[0];replace.value='';if(!file)return;

@@ -33,7 +33,7 @@ HASH = re.compile(r'^[a-f0-9]{64}$')
 PICTURE_PREFIX = 'tiksi-picture:'
 PICTURE_REF = re.compile(r'^tiksi-picture:([a-z0-9.+-]+/[a-z0-9.+-]+):pic-([a-f0-9]{64})$')
 # What this server does beyond the original protocol; clients use only what is listed.
-FEATURES = ('picture-files', 'partial-projects', 'partial-properties', 'commit-paths')
+FEATURES = ('picture-files', 'partial-projects', 'partial-properties', 'commit-paths', 'storage-cleanup')
 
 
 def picture_refs(value):
