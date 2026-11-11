@@ -249,10 +249,12 @@ newest 50, one a day for 90 days and one a month; stored originals nothing kept 
 to and nobody sent or asked about for 30 days), with counts and bytes, and
 `POST /api/workspace/cleanup` with exactly that list removes it. The newest copy that
 holds each property, and every original an unavailable project or a kept copy refers
-to, always stay. Model conversion keeps its newest 20 jobs within 2 GB, removing the
+to, always stay. In the app, FILE → Settings → Workspace backup & maintenance →
+CLEAN UNUSED STORAGE shows that list and removes it on REMOVE (on the Mac; a phone
+sees the list only). Model conversion keeps its newest 20 jobs within 2 GB, removing the
 oldest to make room, since their sources came from the page and their results can be
 made again. Material research keeps every record; when its 100 are full it says so
-with their size. Unfinished uploads in pieces are limited to 32 and 8 GB between
+with their size, and `DELETE /api/material-research/<id>` removes one finished record. Unfinished uploads in pieces are limited to 32 and 8 GB between
 them, and go after a week with no piece. Successful reads are not logged.
 
 ### Live material and fixture sourcing

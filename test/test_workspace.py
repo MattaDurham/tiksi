@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import Mock, patch
@@ -182,6 +183,28 @@ class WorkspaceTests(unittest.TestCase):
             self.service.upload_piece('%064x' % 1, 10, 1, io.BytesIO(b'p'), 1)
         self.assertEqual(full.exception.status, 507)
         self.assertEqual(self.service.upload_state('%064x' % 1)[0], 1, 'nothing of the refused piece was written')
+
+    def test_two_uploads_starting_at_once_cannot_both_take_the_last_place(self):
+        from server.workspace import MAX_UPLOADS
+        small = lambda n: self.service.upload_piece(('%064x' % n), 10, 0, io.BytesIO(b'p'), 1)
+        for n in range(1, MAX_UPLOADS): small(n)
+        # Both new uploads reach the room check together when nothing keeps them apart; each
+        # waits up to a second for the other there.
+        meet, expire = threading.Barrier(2, timeout=1), self.service.expire_uploads
+        def together(*args):
+            try: meet.wait()
+            except threading.BrokenBarrierError: pass
+            return expire(*args)
+        answers = []
+        def start(n):
+            try: small(n); answers.append(200)
+            except WorkspaceError as error: answers.append(error.status)
+        with patch.object(self.service, 'expire_uploads', together):
+            threads = [threading.Thread(target=start, args=(n,)) for n in (1001, 1002)]
+            for thread in threads: thread.start()
+            for thread in threads: thread.join(timeout=10)
+        self.assertEqual(sorted(answers), [200, 429], 'one takes the last place, the other is refused')
+        self.assertEqual(len(list((self.root / 'runtime' / 'uploads').glob('*.json'))), MAX_UPLOADS)
 
     def test_a_slow_upload_keeps_its_progress_while_pieces_keep_coming(self):
         digest = '%064x' % 7; uploads = self.root / 'runtime' / 'uploads'
