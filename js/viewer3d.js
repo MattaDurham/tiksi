@@ -54,6 +54,7 @@ import {
   scanStats, dropScanToFloor, centerScanOnModel, releaseSplatRenderer, splatDrawables, splatBusy,
 } from './scans.js';
 import { attachSketchupNavigation } from './sketchup-nav.js';
+import { diskWorkspace } from './disk-workspace.js';
 import { ModelBatches } from './model-batch.js';
 import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown } from './tags.js';
 import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags } from './saved-views.js';
@@ -1884,19 +1885,38 @@ function nextPinPicture() {
 async function pinPicture(photo, wanted) {
   if (!wanted()) return null;
   if (ownQuality() && typeof createImageBitmap === 'function') {
-    const bytes = await photoBytes(photo.id);
-    if (!bytes || !wanted()) return null;
-    const blob = new Blob([bytes], { type: photo.mime || 'image/jpeg' });
     const landscape = photoAspect(photo) >= 1;
     // 'from-image': a phone photo is stored on its side with a note to turn it. The card is
     // shaped from the turned picture, so the decode must turn it too (never left to a default).
     const size = landscape ? { resizeWidth: PIN_CARD } : { resizeHeight: PIN_CARD };
-    try { return await createImageBitmap(blob, { ...size, resizeQuality: 'high', imageOrientation: 'from-image' }); }
+    const decode = (bytes, mime) => createImageBitmap(new Blob([bytes], { type: mime || 'image/jpeg' }), { ...size, resizeQuality: 'high', imageOrientation: 'from-image' });
+    // First the Mac's own reduced copy of the picture (about a fifth of a camera original to
+    // download), when the project files can supply one. Anything that goes wrong there, an
+    // older Mac, a file that is not a picture, a copy that will not decode, falls back to the
+    // original, as before: a card is never left broken for want of the smaller copy.
+    const reduced = await reducedPicture(photo.id, PIN_CARD);
+    if (!wanted()) return null;
+    if (reduced) { try { return await decode(reduced.buffer, reduced.mime); } catch (e) { /* the original, below */ } }
+    const bytes = await photoBytes(photo.id);
+    if (!bytes || !wanted()) return null;
+    try { return await decode(bytes, photo.mime); }
     catch (e) { /* a browser without resize options: fall through to the plain decode */ }
   }
   const url = await photoUrl(photo.id);
   if (!url || !wanted()) return null;
   return new Promise(resolve => { const img = new Image(); img.onload = () => resolve(img); img.onerror = () => resolve(null); img.src = url; });
+}
+// The Mac's reduced copy of a stored picture, at most `longest` pixels on its longest side:
+// { buffer, mime }, or null when there is none to be had. Asked of the project files
+// (disk-workspace.js), which hold the address, the token and the cache rules; a page whose
+// project files cannot supply one (not connected to a Mac, or a version without it) gets null.
+async function reducedPicture(id, longest) {
+  const files = diskWorkspace;
+  if (!files || typeof files.smallerPicture !== 'function') return null;
+  try {
+    const got = await files.smallerPicture(id, longest);
+    return got && got.buffer && got.buffer.byteLength ? got : null;
+  } catch (e) { return null; }
 }
 function removePin(id) {
   const rec = pinObjs[id];
