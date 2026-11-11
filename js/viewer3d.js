@@ -3003,7 +3003,8 @@ function openNoteEditor(opts) {
   box.querySelector('[data-cancel]').onclick = closeNoteEditor;
   // The phone layout has no right-click menu and no inspector: deleting is here.
   const del = box.querySelector('[data-delete]');
-  if (del) del.onclick = () => { closeNoteEditor(); deleteNote(note.id); };
+  // One tap beside CANCEL must not lose a note: it asks first.
+  if (del) del.onclick = () => { if (!confirm('Delete this note? This cannot be undone.')) return; closeNoteEditor(); deleteNote(note.id); };
   ta.focus();
   ta.setSelectionRange(ta.value.length, ta.value.length);
 }
