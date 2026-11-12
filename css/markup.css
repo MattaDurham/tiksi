@@ -23,7 +23,7 @@
 html.touch .mk-note::before { content: ""; position: absolute; left: -9px; top: -9px; width: 44px; height: 44px; }
 
 .mk-on { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-.mk-on[data-mk-tool=pen] > canvas, .mk-on[data-mk-tool=marker] > canvas { cursor: crosshair !important; }
+.mk-on[data-mk-tool=pen] > canvas, .mk-on[data-mk-tool=marker] > canvas, .mk-on[data-mk-tool=line] > canvas { cursor: crosshair !important; }
 .mk-on[data-mk-tool=eraser] > canvas { cursor: cell !important; }
 .mk-on[data-mk-tool=note] > canvas { cursor: copy !important; }
 .mk-on[data-mk-tool=move] > canvas, .mk-on.mk-space > canvas { cursor: grab !important; }
