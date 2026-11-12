@@ -252,6 +252,19 @@ else {
         door, = [o for o in south['openings'] if o['id'] == 'o-door']
         self.assertEqual(door['now'], door['base'], 'the glass door reads back where and as large as it was written')
 
+    def test_a_doorway_with_no_door_gets_a_see_through_pane_that_still_reads_back(self):
+        spec = finished()
+        door = spec['walls'][0]['holes'][0]
+        door['material'] = {'id': None, 'name': 'Opening, no door', 'color': '#ffffff', 'opacity': 0.06}
+        skp = self.write(spec)
+        pane, = [f for f in painted_faces(skp) if f['id'] == 'o-door']
+        self.assertEqual((pane['front'][0], pane['back'][0]), ('Tiksi: Opening, no door',) * 2)
+        self.assertAlmostEqual(material_opacity(skp, 'Tiksi: Opening, no door'), 0.06, places=3, msg='the pane is see-through')
+        self.assertAlmostEqual(material_opacity(skp, 'Tiksi: Sage paint'), 1.0, places=3, msg='other finishes stay solid')
+        south, = [w for w in self.read(skp)['walls'] if w['id'] == 'w-s']
+        read, = [o for o in south['openings'] if o['id'] == 'o-door']
+        self.assertEqual(read['now'], read['base'], 'the opening still reads back where and as large as it was written')
+
     def test_rewrite_repaints_by_name_and_keeps_sketchup_work(self):
         skp = self.write(finished())
         edited = self.root / 'painted.skp'
@@ -680,6 +693,21 @@ def material_type(source, name):
         api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
         kind = C.c_int(); api.call('SUMaterialGetType', find_material(api, model, name), C.byref(kind))
         return kind.value
+    finally:
+        if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
+
+
+def material_opacity(source, name):
+    """The opacity SketchUp draws a material with: its alpha when it uses one, else 1."""
+    from server.sketchup_convert import API, Ref
+    api = API(); model = Ref()
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
+        mat = find_material(api, model, name)
+        used = C.c_bool(); api.call('SUMaterialGetUseOpacity', mat, C.byref(used))
+        alpha = C.c_double(1.0); api.call('SUMaterialGetOpacity', mat, C.byref(alpha), optional=True)
+        return alpha.value if used.value else 1.0
     finally:
         if model.ptr: api.call('SUModelRelease', C.byref(model))
         api.lib.SUTerminate()

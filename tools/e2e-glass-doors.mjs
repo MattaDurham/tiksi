@@ -119,8 +119,23 @@ try {
   assert.deepEqual([cased.solid, cased.panes], [0, 0], 'a cased opening hangs no leaf');
   assert.equal(await page.locator('.inspector [data-leaves]').inputValue(), '0', 'PLAN shows None');
   assert.equal(await page.locator('.inspector [data-glass]').count(), 0, 'and offers no leaf material');
+  // LEAVES: None (plain opening) takes the frame away too, and Single brings a door back.
+  const frame = () => page.evaluate(async () => {
+    const g = await import('/js/geometry.js'), p = window.testStore.activeProperty();
+    const group = g.buildWallGroup(p.walls.find(w => w.id === 'front'), p.openings, { walls: p.walls, rooms: p.rooms, wallHeight: 2.44 }, {});
+    let meshes = 0; group.traverse(o => { if (o.isMesh && o.userData && o.userData.id === 'french') meshes++; });
+    return meshes;
+  });
+  assert.ok(await frame() > 0, 'a cased opening keeps its jambs, head and casing');
+  await page.locator('.inspector [data-leaves]').selectOption('plain');
+  await waitUntil(async () => page.evaluate(() => window.testStore.activeProperty().openings.find(o => o.id === 'french').plain === true), 'the plain opening is saved on the door');
+  assert.equal(await frame(), 0, 'a plain opening builds no frame and no leaf');
+  assert.equal(await page.locator('.inspector [data-leaves]').inputValue(), 'plain', 'PLAN shows the plain opening');
+  await page.locator('.inspector [data-leaves]').selectOption('1');
+  await waitUntil(async () => page.evaluate(() => { const o = window.testStore.activeProperty().openings.find(o => o.id === 'french'); return o.leaves === 1 && !('plain' in o); }), 'Single hangs a door again');
+  assert.equal((await built()).solid, 1, 'one solid leaf');
   assert.deepEqual(errors, [], 'no page errors');
-  console.log('ok   a door can be glass or half glass, from MODEL and from PLAN, or a cased opening with no leaf');
+  console.log('ok   a door can be glass or half glass, from MODEL and from PLAN, a cased opening, or a plain opening with no frame');
 } finally {
   if (browser) await browser.close();
   child.kill('SIGTERM');

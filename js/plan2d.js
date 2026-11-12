@@ -12,7 +12,7 @@ import {
   addLevel, deleteLevel, levelHeight, wallHeightOf, levelOfWall, fmtDate, isoToday,
 } from './store.js';
 import { openingSchedule, connectsLabel, resizeOpening, MIN_SIZE } from './opening-schedule.js';
-import { doorSwings, wallFaceLabels, doorGlass } from './wall-solids.js';
+import { doorSwings, wallFaceLabels, doorGlass, plainOpening } from './wall-solids.js';
 import { materialSelectHtml } from './materials.js';
 import { safeUrl } from './material-identity.js';
 import { printSheet } from './print-sheet.js';
@@ -2659,10 +2659,11 @@ function renderInspector() {
       </div>
       ${o.type === 'window' ? lenField('Sill height', o.sill || 0, 's') : ''}
       ${o.type === 'door' ? `<div class="field"><label>Leaves</label>
-        <select data-leaves><option value="1" ${o.leaves === 2 || o.leaves === 0 ? '' : 'selected'}>Single</option>
-        <option value="2" ${o.leaves === 2 ? 'selected' : ''}>Pair</option>
-        <option value="0" ${o.leaves === 0 ? 'selected' : ''}>None (cased opening)</option></select></div>
-      ${o.leaves === 0 ? '' : `<div class="field"><label>Leaf</label>
+        <select data-leaves><option value="1" ${o.leaves === 2 || o.leaves === 0 || plainOpening(o) ? '' : 'selected'}>Single</option>
+        <option value="2" ${o.leaves === 2 && !plainOpening(o) ? 'selected' : ''}>Pair</option>
+        <option value="0" ${o.leaves === 0 && !plainOpening(o) ? 'selected' : ''}>None (cased opening)</option>
+        <option value="plain" ${plainOpening(o) ? 'selected' : ''}>None (plain opening, no frame)</option></select></div>
+      ${o.leaves === 0 || plainOpening(o) ? '' : `<div class="field"><label>Leaf</label>
         <select data-glass><option value="" ${doorGlass(o) ? '' : 'selected'}>Solid panel</option>
         <option value="full" ${doorGlass(o) === 'full' ? 'selected' : ''}>Glass</option>
         <option value="half" ${doorGlass(o) === 'half' ? 'selected' : ''}>Half glass</option></select></div>`}` : ''}
@@ -2696,7 +2697,11 @@ function renderInspector() {
       resizeOpening(prop, o, { height: o.height }, wallH);
     }, 0);
     const leavesSel = insp.querySelector('[data-leaves]');
-    if (leavesSel) leavesSel.onchange = e => { pushUndo('change door leaves'); o.leaves = Number(e.target.value); touch(); renderInspector(); };
+    if (leavesSel) leavesSel.onchange = e => {
+      pushUndo('change door leaves');
+      if (e.target.value === 'plain') { o.leaves = 0; o.plain = true; } else { o.leaves = Number(e.target.value); delete o.plain; }
+      touch(); renderInspector();
+    };
     const glassSel = insp.querySelector('[data-glass]');
     if (glassSel) glassSel.onchange = e => { pushUndo('change door leaf'); if (e.target.value) o.glass = e.target.value; else delete o.glass; touch(); renderInspector(); };
     let slidingOpening = false;

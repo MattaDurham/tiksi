@@ -73,4 +73,23 @@ test('the plan draws a pair as two half-width swings meeting in the middle', () 
   assert.deepEqual(doorSwings({ width: 0.813 }), [{ s: -0.4065, r: 0.813, dir: 1 }], 'one full-width swing otherwise');
   assert.equal(doorSwings({ width: 1.5 }).length, 1, 'a wide door without leaves keeps its single plan swing');
   assert.deepEqual(doorSwings({ width: 0.67, leaves: 0 }), [], 'an opening set to no leaf draws no swing in plan');
+  assert.deepEqual(doorSwings({ width: 2.0, plain: true }), [], 'nor does a plain opening');
+});
+
+test('a plain opening has no frame at all: no jambs, casing or leaf, only the wall cut around it', () => {
+  const build = door => {
+    const o = Object.assign({ id: 'd1', wallId: 'w1', t: 0.5, type: 'door', height: 2.1 }, door);
+    const group = buildWallGroup(WALL, [o], { walls: [WALL], rooms: [NORTH, SOUTH], wallHeight: 2.44 }, { matOpts: { transparent: true, opacity: 0.5 } });
+    const doorGroup = group.children.find(c => c.isGroup && c.userData.kind === 'opening');
+    const wallBox = new THREE.Box3();
+    for (const m of group.children) if (m.isMesh && m.userData.kind === 'wall') { m.geometry.computeBoundingBox(); wallBox.union(m.geometry.boundingBox); }
+    return { parts: doorGroup.children.length, id: doorGroup.userData.id, wallTop: wallBox.max.y };
+  };
+  const plain = build({ width: 2.0, plain: true }), cased = build({ width: 2.0, leaves: 0 });
+  assert.equal(plain.parts, 0, 'nothing is built in a plain opening');
+  assert.equal(plain.id, 'd1', 'its (empty) group still names the opening');
+  assert.ok(cased.parts > 0, 'a cased opening keeps its jambs, head and casing');
+  assert.ok(Math.abs(plain.wallTop - 2.44) < 0.01, 'the wall still runs to the ceiling over it: the header');
+  assert.equal(doorLeaves({ plain: true, leaves: 2 }, 0.9, true), 0, 'plain wins over a leaf count');
+  assert.equal(doorLeaves({ type: 'window', plain: true }, 0.9, true), 1, 'a window is never a plain opening');
 });

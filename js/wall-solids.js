@@ -113,12 +113,19 @@ export function wallFaceLabels(wall, rooms) {
   return { pos: dir(1) + ' face (' + what(sides.pos) + ')', neg: dir(-1) + ' face (' + what(sides.neg) + ')' };
 }
 
+// ---------- plain openings ----------
+// An opening cut through a wall and finished like the wall: no jambs, casing or door, only the
+// wall's own returns under the header left above it (a drop header over a passage, the bays
+// under a soffit). o.plain is the owner's call; a window is never one.
+export function plainOpening(o) { return !!o && o.type !== 'window' && o.plain === true; }
+
 // ---------- door leaves ----------
 // How a door hangs: 0 (a cased opening: jambs, head and casing, no door), 1 or 2 leaves.
 // o.leaves is the owner's call, 0 included (a doorway of any width that never had a door);
 // without it a door wider than 1.25 m is a pair to the outside (French doors) and a cased
 // opening inside.
 export function doorLeaves(o, width, interior) {
+  if (plainOpening(o)) return 0;
   if (o.leaves === 0 || o.leaves === 1 || o.leaves === 2) return o.leaves;
   return width > 1.25 ? (interior ? 0 : 2) : 1;
 }
@@ -160,6 +167,6 @@ export function doorGlassBand(o, v0, v1) {
 // opening set to no leaf (leaves: 0) draws none.
 export function doorSwings(o) {
   const half = o.width / 2;
-  if (o.leaves === 0) return [];
+  if (o.leaves === 0 || plainOpening(o)) return [];
   return o.leaves === 2 ? [{ s: -half, r: half, dir: 1 }, { s: half, r: half, dir: -1 }] : [{ s: -half, r: o.width, dir: 1 }];
 }

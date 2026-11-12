@@ -17,7 +17,7 @@
 // run under Node for tests; the rest talks to /api/model-conversion/mirror.
 
 import { wallHeightOf, levelOfWall, levelOfRoom, levelHeight, roomsOn, uid } from './store.js';
-import { openingSpans, wallFaceMaterialIds, doorGlassBand } from './wall-solids.js';
+import { openingSpans, wallFaceMaterialIds, doorGlassBand, plainOpening } from './wall-solids.js';
 import { tagIdOf, tagById } from './tags.js';
 import { fixtureShape, fixtureMirrorParams, fixtureLocalFrame, fixtureParts, fixtureLabel, fixturesOn, normaliseFixture, FIXTURE_FALLBACK } from './fixtures.js';
 
@@ -157,7 +157,11 @@ export function mirrorSpec(prop, materials, legacy = false) {
         material: finish(OPENING_MATERIAL[role], role, 'opening ' + o.id), tag: tag('opening:' + o.id) };
       // A glass door (o.glass): the heights between which its pane is glass, and that finish.
       // Only glass doors carry the key, so every other mirror keeps the signature it has.
-      const band = doorGlassBand(o, p.v0, p.v1);
+      // A doorway its owner set to no door (leaves: 0, or a plain opening): its pane, which stays
+      // as the handle SketchUp moves and Tiksi reads back, is see-through instead of a white panel.
+      const open = role === 'door' && (o.leaves === 0 || plainOpening(o));
+      if (open) hole.material = { id: null, name: 'Opening, no door', color: '#ffffff', opacity: 0.06 };
+      const band = open ? null : doorGlassBand(o, p.v0, p.v1);
       if (band) hole.glass = { v0: band[0], v1: band[1], material: finish(OPENING_MATERIAL.window, 'window', 'opening ' + o.id) };
       return hole;
     });
