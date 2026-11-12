@@ -4561,7 +4561,7 @@ function addView() {
   const v = addSavedView(prop, '', viewState());
   activeViewId = v.id;
   touch(); renderViews();
-  toast('Saved the view "' + v.name + '" with its camera and tags.' + (fieldLayout() ? '' : ' Double-click its tab to rename it.'), 'ok');
+  toast('Saved the view "' + v.name + '" with its camera and tags.' + (fieldLayout() ? '' : ' Double-click its tab, or use the pencil beside it, to rename it.'), 'ok');
   return v;
 }
 function goToView(id) {
@@ -4602,36 +4602,85 @@ function stepView(by) {
   const i = list.findIndex(v => v.id === activeViewId);
   goToView(list[i < 0 ? (by > 0 ? 0 : list.length - 1) : (i + by + list.length) % list.length].id);
 }
+// A view is renamed in its own tab: the tab becomes a text box, Enter or clicking away keeps
+// the name, Esc leaves the old one.
+let namingViewId = null;
 function renameView(id) {
-  const v = (prop.savedViews || []).find(x => x.id === id);
-  if (!v) return;
-  const name = prompt('Name of this view', v.name);
-  if (name && renameSavedView(prop, id, name)) { touch(); renderViews(); }
+  if (!(prop.savedViews || []).some(x => x.id === id)) return;
+  namingViewId = id;
+  renderViews();
+}
+function viewMenu(id, at) {
+  const list = prop.savedViews || [], i = list.findIndex(v => v.id === id);
+  if (i < 0) return;
+  popupMenu(at, [
+    ['view-rename', 'RENAME', () => renameView(id)],
+    ['view-update', 'UPDATE TO THIS CAMERA AND TAGS', () => { updateSavedView(prop, id, viewState()); activeViewId = id; touch(); renderViews(); toast('View updated.', 'ok'); }],
+    i > 0 ? ['view-left', 'MOVE LEFT', () => { moveSavedView(prop, id, -1); touch(); renderViews(); }] : null,
+    i < list.length - 1 ? ['view-right', 'MOVE RIGHT', () => { moveSavedView(prop, id, 1); touch(); renderViews(); }] : null,
+    null,
+    ['view-delete', 'DELETE VIEW', () => { if (!confirm('Delete the saved view "' + list[i].name + '"?')) return; deleteSavedView(prop, id); if (activeViewId === id) activeViewId = null; touch(); renderViews(); }],
+  ].filter((it, k, all) => it !== null || (k > 0 && all[k - 1] !== null)));
+}
+// The pencil beside the current tab opens its menu (rename, update, move, delete), on a touch
+// screen as with a mouse.
+function placeViewEdit(strip) {
+  const edit = strip.querySelector('[data-view-edit]'), tab = activeViewId && strip.querySelector(`[data-view-tab="${CSS.escape(activeViewId)}"]`);
+  if (!edit) return;
+  edit.hidden = !tab;
+  if (tab && tab.nextElementSibling !== edit) tab.after(edit);
 }
 function renderViews() {
   const strip = hud.views;
   if (!strip) return;
   const list = prop.savedViews || [];
-  strip.innerHTML = list.map(v => `<button class="v-view-tab ${v.id === activeViewId ? 'active' : ''}" role="tab" aria-selected="${v.id === activeViewId}" data-view-tab="${escapeHtml(v.id)}" title="${escapeHtml(v.name)}: click to go there (Page Up / Page Down step through views). Double-click to rename; right-click to update, move or delete.">${escapeHtml(v.name)}</button>`).join('') +
+  if (namingViewId && !list.some(v => v.id === namingViewId)) namingViewId = null;
+  // The same tabs as drawn: mark the current one and leave every tab in place, so choosing a
+  // tab does not replace the tab under the pointer (the pencil moves beside the new one).
+  const drawn = [...strip.querySelectorAll('[data-view-tab]')];
+  if (!namingViewId && strip.querySelector('[data-view-add]') && !strip.querySelector('[data-view-name]') && drawn.length === list.length && drawn.every((b, i) => b.dataset.viewTab === list[i].id && b.textContent === list[i].name)) {
+    for (const b of drawn) { const on = b.dataset.viewTab === activeViewId; b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on)); }
+    placeViewEdit(strip);
+    return;
+  }
+  const width = name => `width:${Math.max(10, Math.min(44, name.length + 5))}ch`;
+  strip.innerHTML = list.map(v => v.id === namingViewId
+    ? `<input class="v-view-name" data-view-name="${escapeHtml(v.id)}" value="${escapeHtml(v.name)}" maxlength="60" aria-label="Name of this view" spellcheck="false" autocomplete="off" style="${width(v.name)}">`
+    : `<button class="v-view-tab ${v.id === activeViewId ? 'active' : ''}" role="tab" aria-selected="${v.id === activeViewId}" data-view-tab="${escapeHtml(v.id)}" title="${escapeHtml(v.name)}: click to go there (Page Up / Page Down step through views). Double-click to rename; right-click or the pencil to rename, update, move or delete.">${escapeHtml(v.name)}</button>`).join('') +
+    `<button class="v-view-edit" data-view-edit hidden title="Rename, update, move or delete this view" aria-label="Rename, update, move or delete this view">${icon('edit')}</button>` +
     `<button class="v-view-add" data-view-add title="Save this camera, with the tags shown now, as a view" aria-label="Add a saved view">${icon('plus')}${list.length ? '' : '<span>SAVE VIEW</span>'}</button>`;
   strip.querySelector('[data-view-add]').onclick = addView;
+  strip.querySelector('[data-view-edit]').onclick = e => {
+    const r = e.currentTarget.getBoundingClientRect();
+    if (activeViewId) viewMenu(activeViewId, { x: r.left, y: r.bottom + 4 });
+  };
+  placeViewEdit(strip);
   strip.querySelectorAll('[data-view-tab]').forEach(b => {
     const id = b.dataset.viewTab;
     b.onclick = () => goToView(id);
     b.ondblclick = () => renameView(id);
-    b.oncontextmenu = e => {
-      e.preventDefault();
-      const i = list.findIndex(v => v.id === id);
-      popupMenu({ x: e.clientX, y: e.clientY }, [
-        ['view-update', 'UPDATE TO THIS CAMERA AND TAGS', () => { updateSavedView(prop, id, viewState()); activeViewId = id; touch(); renderViews(); toast('View updated.', 'ok'); }],
-        ['view-rename', 'RENAME', () => renameView(id)],
-        i > 0 ? ['view-left', 'MOVE LEFT', () => { moveSavedView(prop, id, -1); touch(); renderViews(); }] : null,
-        i < list.length - 1 ? ['view-right', 'MOVE RIGHT', () => { moveSavedView(prop, id, 1); touch(); renderViews(); }] : null,
-        null,
-        ['view-delete', 'DELETE VIEW', () => { if (!confirm('Delete the saved view "' + list[i].name + '"?')) return; deleteSavedView(prop, id); if (activeViewId === id) activeViewId = null; touch(); renderViews(); }],
-      ].filter((it, k, all) => it !== null || (k > 0 && all[k - 1] !== null)));
-    };
+    b.oncontextmenu = e => { e.preventDefault(); viewMenu(id, { x: e.clientX, y: e.clientY }); };
   });
+  const box = strip.querySelector('[data-view-name]');
+  if (box) {
+    const id = box.dataset.viewName;
+    let finished = false;
+    const finish = keep => {
+      if (finished) return;
+      finished = true; namingViewId = null;
+      const v = (prop.savedViews || []).find(x => x.id === id), name = box.value.trim();
+      if (keep && v && name && name !== v.name && renameSavedView(prop, id, name)) touch();
+      renderViews();
+    };
+    box.oninput = () => { box.style.cssText = width(box.value); };
+    box.onkeydown = e => {
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); }
+    };
+    box.onblur = () => finish(true);
+    box.focus({ preventScroll: true });
+    box.select();
+  }
 }
 
 // ---------- what is on the screen, and the Tiksi menu ----------
