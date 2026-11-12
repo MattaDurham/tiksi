@@ -127,6 +127,7 @@ try {
   const c = await page.locator('canvas.v-canvas').boundingBox();
   await page.mouse.click(c.x + c.width / 2, c.y + c.height / 2);
   await page.locator('[data-tag-pick]').waitFor();
+  assert.equal(await page.locator('.inspector .op-name').innerText(), 'Mesh 1', 'the click picks the chair alone, and the panel is about it');
   assert.equal(await page.locator('[data-tag-pick]').inputValue(), 'tag-furniture', 'the clicked part shows its tag');
   await page.locator('[data-tag-pick]').selectOption('tag-builtins');
   const moved = await prop(page, `return p.tagOf[${JSON.stringify(chairKey)}]`);

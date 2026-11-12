@@ -60,7 +60,10 @@ function buildTree(wrapper) {
   };
   // A group whose children are all bare meshes is one thing drawn in several materials (a glTF
   // mesh with several primitives loads that way): its meshes are its own, not objects inside it.
-  const onlyMeshes = n => n.children.length > 0 && n.children.every(c => c.isMesh && !isInstanceNode(c) && !c.children.length);
+  // The loader names those meshes after the one mesh they came from (Sofa_1, Sofa_2), which is
+  // what tells them from a holder of separate things (a file's top node over Box 1, Box 2).
+  const stem = c => nodeName(c).replace(/_\d+$/, '');
+  const onlyMeshes = n => n.children.length > 1 && n.children.every(c => c.isMesh && !isInstanceNode(c) && !c.children.length && stem(c) === stem(n.children[0]));
   const walk = (node, path, parent, list, ownName) => {
     const loose = new Map();   // name -> the part object gathering this level's meshes of that name
     node.children.forEach((c, i) => {

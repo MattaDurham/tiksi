@@ -3366,11 +3366,10 @@ function openContextMenu(e) {
     items.push(['photo', 'OPEN PHOTO', () => { setSelection({ kind: 'pin', id: hit.id }); openLightbox(hit.id); }]);
   } else if (hit) {
     const thing = hit.kind !== 'ground' && !fieldLayout() ? thingForHit(hit, false) : null;
-    if (thing && (thing.keys.length || thing.whole)) {
-      items.push(['select', 'SELECT ' + (thing.name ? thing.name.toUpperCase().slice(0, 40) : 'THIS OBJECT'), () => pickThing(thing, false)]);
-      items.push(['hide', 'HIDE IT', () => hideThings([thing], true)]);
-    }
+    // The note stays the first entry (it is what Enter runs); hiding the object under the
+    // pointer comes after it.
     items.push(['add-note', 'ADD NOTE HERE', () => openNoteEditor({ hit, at })]);
+    if (thing && (thing.keys.length || thing.whole)) items.push(['hide', 'HIDE ' + (thing.name ? thing.name.toUpperCase().slice(0, 40) : 'THIS OBJECT'), () => hideThings([thing], true)]);
   } else {
     items.push(['none', 'Right-click a surface to pin a note', null]);
   }
@@ -4282,8 +4281,18 @@ function frameThings(things) {
 }
 // The component list over the left of the view (object-list.js).
 let listReveal = false;
+// The list is on the screen when the Tiksi menu has it there, except while the whole view
+// takes clicks for something else: PHOTO MODE lays a photo over it, and PIN hangs a photo
+// where the next click lands.
+function placeObjectList() {
+  if (!hud.objects) return;
+  hud.objects.hidden = !onScreen('model.objects', true) || !!match || tool === 'pin' || fieldLayout();
+  // The bars in the middle of the view move over to make room for the list (viewer.css).
+  wrapEl && wrapEl.classList.toggle('v-list-on', !hud.objects.hidden);
+}
 function renderObjects() {
-  if (!hud.objects || hud.objects.hidden || fieldLayout() || !prop) return;
+  placeObjectList();
+  if (!hud.objects || hud.objects.hidden || !prop) return;
   const ctx = () => ({
     prop, models: prop.scans.map(s => ({ scan: s, tree: scanObjs[s.id] ? modelObjectTree(scanObjs[s.id]) : null, state: scanState[s.id] })),
     selected: new Set(picked.map(t => t.key)), wholeModel: selection && selection.kind === 'scan' && !selectedModelObject() && picked.length < 2 ? selection.id : null,
@@ -4934,9 +4943,7 @@ function applyScreen() {
   hud.modes.hidden = !onScreen('model.modes', false);
   if (hud.compassBox) hud.compassBox.hidden = !onScreen('model.compass', true);
   if (hud.views) hud.views.hidden = !onScreen('model.views', true);
-  if (hud.objects) hud.objects.hidden = !onScreen('model.objects', true);
-  // The bars in the middle of the view move over to make room for the list (viewer.css).
-  wrapEl && wrapEl.classList.toggle('v-list-on', !!hud.objects && !hud.objects.hidden && !fieldLayout());
+  placeObjectList();
   wrapEl && wrapEl.classList.toggle('v-views-on', !hud.views.hidden);
 }
 function menuGroups() {

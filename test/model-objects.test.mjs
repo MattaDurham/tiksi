@@ -82,6 +82,16 @@ test('one solid, a scan mesh or a point cloud is a single object', () => {
   const lamp = box('Lamp', [2, 0, 0]);
   const t2 = O.modelObjectTree(wrap('scan-c', multi, lamp));
   assert.deepEqual(t2.roots.map(o => [o.kind, o.name, o.children.length, o.meshes.length]), [['group', 'Sofa', 0, 2], ['part', 'Lamp', 0, 1]]);
+  // A plain file: separately named meshes straight under the file's named top node are
+  // separate objects, not one.
+  const top = new THREE.Group(); top.userData.name = 'AuxScene';
+  top.add(box('Box 0 0', [0, 0, 0]), box('Box 0 1', [1, 0, 0]), box('Box 0 2', [2, 0, 0]));
+  const flat = new THREE.Group(), flatInner = new THREE.Group();
+  flatInner.add(top); flat.add(flatInner); flat.name = 'scan:flat'; flat.userData = { kind: 'scan', id: 'scan-d', scanKind: 'mesh', inner: flatInner };
+  const t3 = O.modelObjectTree(flat);
+  assert.equal(t3.whole, false);
+  assert.deepEqual(t3.roots.map(o => [o.kind, o.name]), [['part', 'Box 0 0'], ['part', 'Box 0 1'], ['part', 'Box 0 2']]);
+  assert.equal(O.objectForClick(t3, top.children[1], null), t3.roots[1], 'a click picks the one box');
 });
 
 test('hiding one object leaves its tag and the other objects alone', () => {

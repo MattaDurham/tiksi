@@ -155,6 +155,7 @@ try {
     const part = scene.modelParts(wrapper).find(x => x.object === ceiling);
     tags.assignTag(p, [scene.partKey(p.scans[0].id, part)], tags.CANON.ceiling.id);
   });
+  await page.locator('.v-objects [data-ol-tab="tags"]').click();   // the tag list is the second tab of the component list
   await page.locator('[data-tag-eye="tag-ceiling"]').click();
   assert.equal(await page.evaluate(() => window.testScene.getObjectByName('Ceiling').visible), false, 'the ceiling is hidden from view');
   const open = await floor();
