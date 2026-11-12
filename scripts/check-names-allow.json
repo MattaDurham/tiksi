@@ -20,12 +20,6 @@
       "why": "app code, found 2026-11-10; left for the session that owns js/"
     },
     {
-      "file": "js/viewer3d.js",
-      "kind": "unused-import",
-      "name": "setOnScreen",
-      "why": "app code, found 2026-11-10; left for the session that owns js/"
-    },
-    {
       "file": "js/picture-assets.js",
       "kind": "undefined",
       "name": "Buffer",

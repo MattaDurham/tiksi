@@ -307,3 +307,58 @@ html.touch .v-light-list summary { display: flex; align-items: center; min-heigh
 .editor-layout.v-no-tools > .tool-col { display: none; }
 @media (max-width: 760px) { .editor-layout.v-no-tools { grid-template: minmax(300px, 55vh) auto / minmax(0, 1fr); } }
 .v-modes[hidden], .v-compass[hidden], .v-views[hidden] { display: none; }
+
+/* ---------- component list: a panel floating over the left of the model (js/object-list.js) ---------- */
+.v-objects {
+  position: absolute; top: 12px; left: 12px; width: 286px; max-width: calc(100% - 24px); max-height: calc(100% - 96px); z-index: 6;
+  display: flex; flex-direction: column; border-radius: 8px; overflow: hidden; font-size: 12px;
+  background: rgba(12, 16, 19, 0.82);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2); backdrop-filter: blur(14px) saturate(1.2);
+  border: 1px solid rgba(139, 154, 167, 0.22);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.v-objects[hidden] { display: none; }
+.v-wrap.v-views-on .v-objects { top: 52px; max-height: calc(100% - 136px); }
+.ol-tabs { display: flex; align-items: stretch; border-bottom: 1px solid rgba(139, 154, 167, 0.18); flex: none; }
+.ol-tabs [role=tab] { flex: 1; padding: 9px 8px; background: transparent; border: 0; border-bottom: 2px solid transparent; cursor: pointer; color: var(--dim); font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; }
+.ol-tabs [role=tab].active { color: var(--accent); border-bottom-color: var(--accent); }
+.ol-close { flex: none; width: 34px; display: grid; place-items: center; background: transparent; border: 0; color: var(--faint); cursor: pointer; }
+.ol-close:hover { color: var(--ink); }
+.ol-close svg { width: 14px; height: 14px; }
+.ol-tools { padding: 8px 10px 4px; flex: none; }
+.ol-tools .search-input { width: 100%; }
+.ol-hidden { display: flex; align-items: center; gap: 8px; padding: 4px 10px 6px; flex: none; font-family: var(--mono); font-size: 10px; color: var(--dim); }
+.ol-hidden .link-btn { flex: none; margin-left: auto; color: var(--accent); letter-spacing: 0.08em; }
+.ol-body { overflow-y: auto; padding: 2px 6px 6px; min-height: 0; flex: 1 1 auto; }
+.ol-body.v-tags { padding: 4px 12px 10px; }
+.ol-body.v-tags h3 { display: none; }
+.ol-head, .ol-row { display: grid; align-items: center; gap: 4px; min-height: 26px; border-radius: 5px; }
+.ol-head { grid-template-columns: 24px minmax(0, 1fr); margin-top: 6px; }
+.ol-head .ol-name span { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.08em; color: var(--accent); text-transform: uppercase; }
+.ol-row { grid-template-columns: 24px 16px minmax(0, 1fr) 10px; padding-left: calc(var(--d, 0) * 14px); }
+.ol-row:hover, .ol-head:hover { background: rgba(139, 154, 167, 0.1); }
+.ol-row.active, .ol-head.active { background: rgba(232, 151, 58, 0.18); box-shadow: inset 2px 0 0 var(--accent); }
+.ol-row.off .ol-name span, .ol-head.off .ol-name span { color: var(--faint); text-decoration: line-through; }
+.ol-row.tag-off .ol-name span { color: var(--faint); }
+.ol-eye, .ol-fold { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; background: transparent; border: 0; border-radius: 4px; color: var(--faint); cursor: pointer; }
+.ol-fold { width: 16px; }
+span.ol-fold { cursor: default; }
+.ol-eye.on { color: var(--dim); }
+.ol-eye:hover, .ol-fold:hover { color: var(--accent); }
+.ol-eye svg { width: 14px; height: 14px; }
+.ol-fold svg { width: 12px; height: 12px; }
+.ol-name { display: flex; align-items: baseline; gap: 6px; min-width: 0; padding: 4px 2px; background: transparent; border: 0; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+.ol-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ol-name i { flex: none; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-style: normal; font-family: var(--mono); font-size: 9.5px; color: var(--faint); }
+.ol-tag { width: 8px; height: 8px; border-radius: 2px; border: 1px solid var(--line-2); }
+.ol-empty, .ol-foot { margin: 0; padding: 8px 10px; color: var(--faint); font-family: var(--mono); font-size: 10px; line-height: 1.6; }
+.ol-foot { flex: none; border-top: 1px solid rgba(139, 154, 167, 0.18); }
+html.phone .v-objects { display: none !important; }
+@media (pointer: coarse) { .ol-head, .ol-row { min-height: 44px; } .ol-eye { width: 24px; height: 40px; } }
+
+/* ---------- the right-hand panel for one object (js/object-panel.js) ---------- */
+.inspector .op-name { font-size: 15px; font-weight: 600; color: var(--ink); line-height: 1.3; overflow-wrap: anywhere; }
+.inspector .op-crumbs { margin: 4px 0 10px; color: var(--faint); font-size: 11px; line-height: 1.6; }
+.inspector .op-crumbs .link-btn { display: inline; flex: none; white-space: normal; color: var(--dim); }
+.inspector .btn.op-child { text-align: left; justify-content: flex-start; }
+.inspector .model-panel > h3:first-child { margin-top: 18px; }

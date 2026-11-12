@@ -9,7 +9,7 @@ import { setModelXray } from './model-xray.js';
 import { lightingSettings, normalizeLighting, lampLevel, kelvinToRgb, matchingPreset, applyPreset, LIGHTING_PRESETS, PRESET_LABELS, LIGHTING_RANGES } from './lighting.js';
 import { classifyFixture, groupFixtures, polygonArea, roomLumens, candela, fixtureSummary, FIXTURE_LABELS, DOWNLIGHT_HALF_ANGLE } from './fixture-lights.js';
 import * as THREE from 'three';
-import { modelPanelHtml, bindModelPanel, partComponentName } from './model-panel.js';
+import { componentCardHtml, modelPanelHtml, bindModelPanel, partComponentName } from './model-panel.js';
 import { beginGeometryEdit, restoreGeometryEdit, revertGeometryEdit } from './edit-history.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
@@ -58,7 +58,11 @@ import {
 import { attachSketchupNavigation } from './sketchup-nav.js';
 import { diskWorkspace } from './disk-workspace.js';
 import { ModelBatches } from './model-batch.js';
-import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown } from './tags.js';
+import { componentKeyOf } from './model-components.js';
+import { modelObjectTree, objectForClick, objectBelow, objectOffset, setObjectOffset, applyPartOffsets, objectBox } from './model-objects.js';
+import { renderObjectList, showListTab, revealInList, objectThing, hiddenState } from './object-list.js';
+import { objectPanelHtml, bindObjectPanel, multiPanelHtml, bindMultiPanel, planTagHtml, bindPlanTag } from './object-panel.js';
+import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown, setHidden, hiddenKeys, showAllHidden } from './tags.js';
 import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags } from './saved-views.js';
 import { onScreen, setOnScreen, onScreenChange, setMenuProvider } from './tiksi-menu.js';
 import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility, partKeyForObject, partByKey, partName, planKeyOf, modelParts, partKey } from './tags-scene.js';
@@ -76,6 +80,12 @@ let prop = null;
 let selection = null;          // {kind:'wall'|'room'|'opening'|'scan'|'pin'|'note', id}
 let selectionVersion = 0;      // late mount focus must not replace a newer user selection
 let tagPicks = [];             // tag keys (tags.js) of the selected objects; Shift-click adds more
+// The selected objects one by one: { key, keys (the tag keys it covers), scanId (its model, or
+// null for a plan object), name, sel (the selection that shows it) }. One click picks one whole
+// object; Shift-click adds more. Empty while a whole model, a pin or a note is selected.
+let picked = [];
+let lastClick = null;          // the last click on the model, to tell a double-click
+let movePivot = null;          // what the MOVE handle holds while it moves model objects
 let hoverTarget = null;
 let mode = 'orbit';            // orbit | walk | top
 let tool = 'select';           // select | move | measure | pin | note
@@ -374,7 +384,10 @@ function setupScene() {
     controls.enabled = !e.value && mode !== 'walk';
     if (!e.value) commitGizmoMove();
   });
-  gizmo.addEventListener('change', () => { if (gizmo.dragging) invalidateShadows(); requestRender(2); });
+  gizmo.addEventListener('change', () => { if (gizmo.dragging) { if (movePivot && gizmo.object === movePivot) dragObjects(); invalidateShadows(); } requestRender(2); });
+  movePivot = new THREE.Object3D();
+  movePivot.name = 'move handle';
+  scene.add(movePivot);
   scene.add(gizmo.getHelper());
 
   // A section plane has two sets of handles at once: an arrow that slides it along its own
@@ -564,6 +577,7 @@ function rebuildModel() {
   fitShadow();
   reattachGizmo();
   updateOutlineTargets();
+  renderObjectsSoon();
   requestRender(3);
 }
 
@@ -1229,7 +1243,10 @@ function presetView(name, immediate) {
 function frameObject(obj) {
   const box = new THREE.Box3().setFromObject(obj);
   if (obj.userData && obj.userData.bounds) box.copy(obj.userData.bounds).applyMatrix4(obj.matrixWorld);
-  if (!isFinite(box.min.x)) return;
+  frameBox(box);
+}
+function frameBox(box) {
+  if (box.isEmpty() || !isFinite(box.min.x)) return;
   const centre = new THREE.Vector3(), size = new THREE.Vector3();
   box.getCenter(centre); box.getSize(size);
   const radius = Math.max(size.length() / 2, 0.5);
@@ -1735,15 +1752,49 @@ function onPointerUp(e) {
   if (hit.kind === 'camera') { startMatch(hit.id); return; }
   if (hit.kind === 'position') { setSelection({ kind: 'position', id: hit.id }); return; }
   if (hit.kind === 'note') { setSelection({ kind: 'note', id: hit.id }); return; }
-  const key = hit.kind === 'scan' ? hit.part : planKeyOf(hit.mesh);
+  // One click picks one whole object (model-objects.js); a second click straight after goes
+  // one object further in; Shift-click adds an object to the selection or takes it out.
+  const now = performance.now();
+  const again = !!lastClick && now - lastClick.t < 450 && Math.hypot(e.clientX - lastClick.x, e.clientY - lastClick.y) < 6;
+  lastClick = { t: now, x: e.clientX, y: e.clientY };
+  pickThing(thingForHit(hit, again && !e.shiftKey), e.shiftKey);
+}
+// What a click on the model picked, as a thing (see `picked`).
+function thingForHit(hit, deeper) {
+  if (hit.kind === 'scan') {
+    const tree = modelObjectTree(hit.object);
+    const scan = prop.scans.find(s => s.id === hit.id);
+    if (tree.whole || !hit.mesh) return { key: 'model:' + hit.id, keys: hit.part ? [hit.part] : [], scanId: hit.id, name: scan ? scan.name : '', whole: true, sel: { kind: 'scan', id: hit.id, tagKey: hit.part || undefined } };
+    const last = picked.length && picked[picked.length - 1].scanId === hit.id ? picked[picked.length - 1].key : null;
+    const o = deeper ? objectBelow(tree, hit.mesh, last) : objectForClick(tree, hit.mesh, last);
+    if (o) return objectThing(hit.id, o);
+    return { key: 'model:' + hit.id, keys: [], scanId: hit.id, name: scan ? scan.name : '', whole: true, sel: { kind: 'scan', id: hit.id } };
+  }
+  const key = planKeyOf(hit.mesh);
   const sel = hit.kind === 'ceiling' ? { kind: 'room', id: hit.id } : { kind: hit.kind, id: hit.id };
   if (key) sel.tagKey = key;
-  if (e.shiftKey && key && tagPicks.length) {
-    // Shift-click adds an object to (or takes it out of) the selection, to move them to a tag at once.
-    const next = tagPicks.includes(key) ? tagPicks.filter(k => k !== key) : tagPicks.concat(key);
-    if (next.length) { setSelection(sel, next); return; }
+  return { key: key || hit.kind + ':' + hit.id, keys: key ? [key] : [], scanId: null, name: '', sel };
+}
+function pickThing(thing, add) {
+  let next = [thing];
+  if (add && picked.length) {
+    next = picked.some(t => t.key === thing.key) ? picked.filter(t => t.key !== thing.key) : picked.concat(thing);
+    if (!next.length) { setSelection(null); return; }
   }
-  setSelection(sel);
+  const last = next.includes(thing) ? thing : next[next.length - 1];
+  setSelection(last.sel, [...new Set(next.flatMap(t => t.keys))], next);
+}
+// Select these objects of one model together (every instance of a component, say).
+function pickObjects(scanId, objects) {
+  const things = objects.map(o => objectThing(scanId, o));
+  if (!things.length) return;
+  setSelection(things[0].sel, [...new Set(things.flatMap(t => t.keys))], things);
+}
+// The selected object of an imported model, when exactly that is selected.
+function selectedModelObject() {
+  if (!selection || selection.kind !== 'scan' || !selection.objectKey || picked.length !== 1) return null;
+  const w = scanObjs[selection.id];
+  return (w && modelObjectTree(w).byKey.get(selection.objectKey)) || null;
 }
 let hoverPending = false;
 function onPointerMove(e) {
@@ -1825,14 +1876,19 @@ function updateOutlineTargets() {
   passes.hover.enabled = hovMeshes.length > 0;
   for (const id of Object.keys(scanObjs)) {
     const box = scanObjs[id].userData.box;
-    if (box) box.visible = !!(selection && selection.kind === 'scan' && selection.id === id);
+    // The box around a whole model shows when the whole model is selected, not one object of it.
+    if (box) box.visible = !!(selection && selection.kind === 'scan' && selection.id === id && picked.every(t => t.whole));
   }
 }
-function setSelection(sel, picks) {
+function setSelection(sel, picks, things) {
   selectionVersion++;
   const was = selection;
   selection = sel;
   tagPicks = picks || (sel && sel.tagKey ? [sel.tagKey] : sel && ['wall', 'opening', 'fixture', 'room'].includes(sel.kind) ? [planKey(sel.kind, sel.id)] : []);
+  picked = things || (sel && sel.kind !== 'scan' && tagPicks.length ? [{ key: tagPicks[0], keys: tagPicks.slice(), scanId: null, name: '', sel }] : []);
+  const shownObject = selectedModelObject();
+  if (shownObject) revealInList(shownObject);
+  listReveal = true;
   // A selected note card is drawn with an accent border.
   for (const s of [was, sel]) if (s && s.kind === 'note') redrawNoteCard(s.id);
   // A selected numbered position is drawn in the accent colour.
@@ -1862,15 +1918,84 @@ function reattachGizmo() {
       const mv = wallMovePlan(w);
       gizmo.space = 'local';
       gizmo.showX = !(mv && mv.connected);
+      gizmo.showY = false;
       gizmo.showZ = true;
       gizmo.attach(g);
       g.userData.origin = g.position.clone();
     }
+  } else if (tool === 'move') {
+    // Objects of an imported model: the handle sits at their middle and moves them together.
+    const mv = movableSelection();
+    if (mv) {
+      const box = new THREE.Box3(), one = new THREE.Box3();
+      for (const o of mv.objects) box.union(objectBox(o, one));
+      if (!box.isEmpty()) {
+        box.getCenter(movePivot.position);
+        movePivot.updateMatrixWorld(true);
+        movePivot.userData = { ...mv, origin: movePivot.position.clone(), base: mv.objects.map(o => objectOffset(mv.scan, o)) };
+        gizmo.space = 'world';
+        gizmo.showX = gizmo.showY = gizmo.showZ = true;
+        gizmo.attach(movePivot);
+      }
+    }
   }
   requestRender(2);
 }
+// The selected objects when the MOVE tool can move them: objects of one loaded model.
+function movableSelection() {
+  if (!picked.length || !picked[0].scanId || picked.some(t => t.whole || t.scanId !== picked[0].scanId)) return null;
+  const scan = prop.scans.find(s => s.id === picked[0].scanId), wrapper = scan && scanObjs[scan.id];
+  if (!wrapper || wrapper.userData.scanKind !== 'mesh') return null;
+  const tree = modelObjectTree(wrapper);
+  const objects = picked.map(t => tree.byKey.get(t.key)).filter(Boolean);
+  // An object inside another selected object moves with it; moving both would move it twice.
+  const top = objects.filter(o => { for (let p = o.parent; p; p = p.parent) if (objects.includes(p)) return false; return true; });
+  return top.length ? { scan, wrapper, objects: top } : null;
+}
+// Put a model's moved objects where its record says, and let grouped drawing follow.
+function objectsMoved(scan, wrapper) {
+  const meshes = applyPartOffsets(scan, wrapper);
+  if (batches && meshes.length) batches.partsMoved(meshes);
+  invalidateShadows();
+  requestRender(3);
+}
+// While the handle is dragged: how far it went, in the model's own frame, added to where
+// each object stood when the drag began.
+const _toModel = new THREE.Matrix4();
+function dragObjects() {
+  const d = movePivot.userData;
+  if (!d || !d.objects) return;
+  const w = movePivot.position.clone().sub(d.origin);
+  const inner = d.wrapper.userData.inner;
+  inner.updateWorldMatrix(true, false);
+  const e = _toModel.copy(inner.matrixWorld).invert().elements;
+  const local = [e[0] * w.x + e[4] * w.y + e[8] * w.z, e[1] * w.x + e[5] * w.y + e[9] * w.z, e[2] * w.x + e[6] * w.y + e[10] * w.z];
+  d.objects.forEach((o, i) => setObjectOffset(d.scan, o, d.base[i].map((b, k) => Math.round((b + local[k]) * 1000) / 1000)));
+  objectsMoved(d.scan, d.wrapper);
+}
+function commitObjectMove() {
+  const d = movePivot.userData;
+  if (!d || !d.objects || movePivot.position.distanceTo(d.origin) < 1e-5) return;
+  dragObjects();
+  applyScanTransform(d.scan, d.wrapper);   // the model's bounds follow
+  fitShadow(); applyEnvironment();
+  touch();
+  reattachGizmo();
+  renderInspector();
+}
+// Set how far one object stands from where its file has it (the panel's fields, PUT IT BACK).
+function moveObjectTo(scan, wrapper, object, offset) {
+  setObjectOffset(scan, object, offset.map(v => Math.round(v * 1000) / 1000));
+  objectsMoved(scan, wrapper);
+  applyScanTransform(scan, wrapper);
+  fitShadow(); applyEnvironment();
+  touch();
+  reattachGizmo();
+  renderInspector();
+}
 function commitGizmoMove() {
   const obj = gizmo.object;
+  if (obj && obj === movePivot) return commitObjectMove();
   if (!obj || !selection || selection.kind !== 'wall') return;
   const o = obj.userData.origin || new THREE.Vector3();
   const dx = obj.position.x - o.x, dz = obj.position.z - o.z;
@@ -3240,12 +3365,18 @@ function openContextMenu(e) {
   } else if (hit && hit.kind === 'pin') {
     items.push(['photo', 'OPEN PHOTO', () => { setSelection({ kind: 'pin', id: hit.id }); openLightbox(hit.id); }]);
   } else if (hit) {
+    const thing = hit.kind !== 'ground' && !fieldLayout() ? thingForHit(hit, false) : null;
+    if (thing && thing.keys.length) {
+      items.push(['select', 'SELECT ' + (thing.name ? thing.name.toUpperCase().slice(0, 40) : 'THIS OBJECT'), () => pickThing(thing, false)]);
+      items.push(['hide', 'HIDE IT', () => hideThings([thing], true)]);
+    }
     items.push(['add-note', 'ADD NOTE HERE', () => openNoteEditor({ hit, at })]);
   } else {
     items.push(['none', 'Right-click a surface to pin a note', null]);
   }
   const nNotes = prop.notePins.length, nPins = prop.photos.filter(ph => ph.pin).length;
   items.push(null);
+  if (hiddenKeys(prop).length) items.push(['show-hidden', 'SHOW ALL HIDDEN OBJECTS', showHidden]);
   items.push(['toggle-notes', (markersShown('notes') ? 'HIDE NOTES' : 'SHOW NOTES') + ' (' + nNotes + ')', () => toggleMarkers('notes')]);
   items.push(['toggle-pins', (markersShown('pins') ? 'HIDE PHOTO PINS' : 'SHOW PHOTO PINS') + ' (' + nPins + ')', () => toggleMarkers('pins')]);
   popupMenu(at, items);
@@ -3444,6 +3575,7 @@ async function addScanToScene(scan) {
   setScanState(scan.id, 'ready');
   // New tags and counts show in the lists straight away.
   if (tagged) { touch(); renderToolCol(); if (!selection) renderInspector(); }
+  renderObjects();
   requestRender(scan.kind === 'splat' ? 8 : 3);
   return obj;
 }
@@ -3586,7 +3718,7 @@ function taskText() {
   }
   if (tool === 'note') return 'Tap where the note belongs.';
   if (tool === 'pin') return pinPhotoId && photoById(prop, pinPhotoId) ? 'Tap where this photo was taken.' : 'Choose a photo on the PHOTOS page first.';
-  if (tool === 'move') return 'MOVE WALLS needs the desktop layout.';
+  if (tool === 'move') return 'MOVE needs the desktop layout.';
   return '';
 }
 function defaultHint() {
@@ -3594,7 +3726,7 @@ function defaultHint() {
   if (tool === 'measure') return 'MEASURE: click two points on any surface.';
   if (tool === 'pin') return 'PIN: choose a photo or document, then click the surface to hang it on.';
   if (tool === 'note') return noteHint();
-  if (tool === 'move') return 'MOVE WALLS: select a wall, drag the gizmo arrow to slide it; connected walls follow on release.';
+  if (tool === 'move') return 'MOVE: select a wall or an object of an imported model and drag an arrow. Walls joined to a moved wall follow on release.';
   if (section.on) return fieldLayout() || !sectionSheets ? 'SECTION: slide the cut to look inside.' : 'SECTION: drag the arrow to slide the cut, a ring to turn it. SNAP holds it to ' + TURN_SNAP_DEG + '° turns and ' + (units() === 'metric' ? '5 cm' : '1"') + ' steps.';
   return 'Drag or middle-drag to orbit, hold Shift to pan, scroll or pinch to zoom. Click elements to inspect; right-click to pin a note.';
 }
@@ -3750,7 +3882,24 @@ function toggleTag(id) {
   setTagShown(prop, id, !tagShown(prop, id));
   tagsChanged();
 }
-function moveToTag(keys, tagId) {
+// Hide or show objects one by one (the eye in the component list, HIDE in the panel, H): only
+// these objects change; their tags and everything else on those tags stay as they are.
+function hideThings(things, on) {
+  const keys = [...new Set(things.flatMap(t => t.keys))];
+  if (!setHidden(prop, keys, on)) return;
+  tagsChanged();
+  if (on) toast((things.length === 1 ? (things[0].name || 'The object') + ' is' : things.length + ' objects are') + ' hidden. SHOW ALL HIDDEN in the component list (or Shift+H) brings back everything hidden this way.', 'ok', 6000);
+}
+function hideSelection() {
+  if (picked.length && picked.every(t => t.keys.length)) hideThings(picked, picked.some(t => hiddenState(prop, t.keys) !== 'hidden'));
+}
+function showHidden() {
+  const keys = showAllHidden(prop);
+  if (!keys.length) { toast('Nothing is hidden on its own. A hidden tag is switched back on in the TAGS list.', 'ok'); return; }
+  tagsChanged();
+  toast('Everything hidden on its own is shown again.', 'ok');
+}
+function moveToTag(keys, tagId, count) {
   if (!keys.length) return;
   if (tagId === '__new') {
     const name = prompt('Name of the new tag');
@@ -3759,7 +3908,8 @@ function moveToTag(keys, tagId) {
   }
   assignTag(prop, keys, tagId);
   tagsChanged();
-  toast(keys.length + (keys.length === 1 ? ' object' : ' objects') + ' moved to ' + (tagId ? tagById(prop, tagId).name : UNTAGGED_LABEL) + '.', 'ok');
+  const n = count || keys.length;
+  toast(n + (n === 1 ? ' object is' : ' objects are') + ' now on ' + (tagId ? tagById(prop, tagId).name : UNTAGGED_LABEL) + '.', 'ok');
 }
 
 // ---------- environment panel ----------
@@ -4090,15 +4240,99 @@ function renderPinPanel() {
 
 function renderInspector() {
   renderInspectorBody();
+  renderObjects();
   if (!inspEl || tool === 'pin' || match) return;
+  // One object of a model, and several objects, draw their own tag line (object-panel.js).
+  if (!selection || picked.length > 1 || selectedModelObject()) return;
   const sec = document.createElement('div');
   sec.className = 'v-tags';
-  if (!selection) { sec.innerHTML = tagManagerHtml(); bindTagManager(sec); inspEl.prepend(sec); }
-  else if (tagPicks.length || selection.kind === 'scan') {
-    sec.innerHTML = tagPickHtml(); bindTagPick(sec);
-    const h = inspEl.querySelector('h3');
-    if (h) h.after(sec); else inspEl.prepend(sec);
+  if (selection.kind === 'scan') { sec.innerHTML = tagPickHtml(); bindTagPick(sec); }
+  else if (tagPicks.length) { const ctx = thingsCtx(picked); sec.innerHTML = planTagHtml(ctx); bindPlanTag(sec, ctx); }
+  else return;
+  const h = inspEl.querySelector('h3');
+  if (h) h.after(sec); else inspEl.prepend(sec);
+}
+// What the tag line and the HIDE button of the selected objects need (object-panel.js).
+function thingsCtx(things) {
+  const keys = [...new Set(things.flatMap(t => t.keys))];
+  const ids = keys.map(k => tagIdOf(prop, k) || UNTAGGED);
+  const mixed = new Set(ids).size > 1;
+  const tag = !mixed && ids[0] ? tagById(prop, ids[0]) : null;
+  return {
+    prop, tagOptions: tagOptions(ids[0], { mixed }), hidden: hiddenState(prop, keys),
+    tagOff: !mixed && keys.length && !tagShown(prop, ids[0]) ? (tag ? tag.name : UNTAGGED_LABEL) : '',
+    setTag: value => moveToTag(keys, value, things.length), hide: on => hideThings(things, on), frame: () => frameThings(things),
+  };
+}
+function frameThings(things) {
+  const box = new THREE.Box3(), one = new THREE.Box3();
+  for (const t of things) {
+    const tree = t.scanId && scanObjs[t.scanId] ? modelObjectTree(scanObjs[t.scanId]) : null;
+    const o = tree && tree.byKey.get(t.key);
+    if (o) { box.union(objectBox(o, one)); continue; }
+    if (t.whole && scanObjs[t.scanId]) { box.union(one.setFromObject(scanObjs[t.scanId])); continue; }
+    for (const k of t.keys) { const obj = objectForKey(k); if (obj) box.union(one.setFromObject(obj)); }
   }
+  frameBox(box);
+}
+// The component list over the left of the view (object-list.js).
+let listReveal = false;
+function renderObjects() {
+  if (!hud.objects || hud.objects.hidden || fieldLayout() || !prop) return;
+  const ctx = () => ({
+    prop, models: prop.scans.map(s => ({ scan: s, tree: scanObjs[s.id] ? modelObjectTree(scanObjs[s.id]) : null, state: scanState[s.id] })),
+    selected: new Set(picked.map(t => t.key)), wholeModel: selection && selection.kind === 'scan' && !selectedModelObject() && picked.length < 2 ? selection.id : null,
+    get tagsHtml() { return tagManagerHtml(); }, bindTags: bindTagManager,   // built only when the TAGS tab shows
+    select: (thing, add) => pickThing(thing, add), selectModel: id => setSelection({ kind: 'scan', id }), frame: thing => frameThings([thing]),
+    hide: hideThings, showAll: showHidden, setModelVisible,
+    close: () => setOnScreen('model.objects', false), refresh: ctx, reveal: listReveal,
+  });
+  renderObjectList(hud.objects, ctx());
+  listReveal = false;
+}
+// After a rebuild of the plan model (a slider can ask for one per frame): once things settle.
+let listTimer = 0;
+function renderObjectsSoon() {
+  clearTimeout(listTimer);
+  const token = mountId;
+  listTimer = setTimeout(() => { if (token === mountId && scene) renderObjects(); }, 200);
+}
+function openList(tab) {
+  showListTab(tab);
+  if (!onScreen('model.objects', true)) setOnScreen('model.objects', true); else renderObjects();
+}
+function setModelVisible(id, on) {
+  const s = prop.scans.find(x => x.id === id);
+  if (!s) return;
+  s.visible = !!on;
+  applyScanTransform(s, scanObjs[id]);
+  fitShadow(); applyEnvironment(); touch(); requestRender(3);
+  loadShownScans(); renderToolCol(); renderInspector();
+}
+function modelPanelCtx(s, obj) {
+  return { prop, scan: s, obj, picks: tagPicks, models: prop.scans.map(x => ({ scan: x, root: scanObjs[x.id] && scanObjs[x.id].userData.inner })).filter(x => x.root),
+    reload: () => addScanToScene(s), rerender: renderInspector, toast,
+    select: keys => setSelection({ kind: 'scan', id: s.id, tagKey: keys[0] }, keys),
+    selectComponent: c => { const tree = obj && modelObjectTree(obj); const objects = tree ? c.instances.map(n => tree.ofNode.get(n)).filter(Boolean) : []; if (objects.length) pickObjects(s.id, objects); } };
+}
+// The panel for one object of an imported model: that object and nothing else.
+function renderObjectPanel(o) {
+  const s = prop.scans.find(x => x.id === selection.id), w = scanObjs[s.id], tree = modelObjectTree(w);
+  const things = picked;
+  const ctx = {
+    ...thingsCtx(things), scan: s, tree, object: o, offset: objectOffset(s, o), moving: tool === 'move',
+    productHtml: o.kind === 'component' ? componentCardHtml(modelPanelCtx(s, w), componentKeyOf(o.nodes[0])) : '',
+    selectObjects: objects => pickObjects(s.id, objects), selectModel: () => setSelection({ kind: 'scan', id: s.id }),
+    moveTo: offset => moveObjectTo(s, w, o, offset), startMove: () => setTool('move'),
+  };
+  inspEl.innerHTML = objectPanelHtml(ctx);
+  bindObjectPanel(inspEl, ctx);
+  bindModelPanel(inspEl, modelPanelCtx(s, w));
+}
+function renderMultiPanel() {
+  const ctx = { ...thingsCtx(picked), count: picked.length, names: picked.map(t => t.name || (t.sel && t.sel.kind) || 'object'), movable: !!movableSelection() };
+  inspEl.innerHTML = multiPanelHtml(ctx);
+  bindMultiPanel(inspEl, ctx);
 }
 function tagOptions(current, { mixed = false, extra = '' } = {}) {
   return (mixed ? '<option value="__mixed" selected>(several tags)</option>' : '') + extra +
@@ -4180,13 +4414,18 @@ function renderInspectorBody() {
   if (!inspEl) return;
   if (tool === 'pin') return renderPinPanel();
   if (match) return renderMatchPanel();
+  if (selection && picked.length > 1) return renderMultiPanel();
+  const modelObject = selectedModelObject();
+  if (modelObject) return renderObjectPanel(modelObject);
   if (!selection) {
     const hidden = hiddenLevels();
     const levelRows = prop.levels.map(l => {
       const nw = wallsOn(prop, l.id).length, nr = roomsOn(prop, l.id).length;
       return `<div class="stat-line" title="Elevation ${escapeHtml(fmtLen(l.elevation))}, height ${escapeHtml(fmtLen(levelHeight(prop, l.id)))}"><span>${escapeHtml(l.name)}${hidden.has(l.id) ? ' (hidden)' : ''}</span><b>${nw} wall${nw === 1 ? '' : 's'} &middot; ${nr} room${nr === 1 ? '' : 's'}</b></div>`;
     }).join('');
-    inspEl.innerHTML = `<h3>MODEL</h3>
+    inspEl.innerHTML = `<h3>NOTHING SELECTED</h3>
+      <div class="empty" style="margin-bottom:12px">Click an object in the model or in the component list. This panel then shows that object and nothing else: its tag, hiding it, moving it.</div>
+      <h3>MODEL</h3>
       ${levelRows}
       <div class="tool-sep"></div>
       <div class="stat-line"><span>Walls</span><b>${prop.walls.length}</b></div>
@@ -4224,14 +4463,14 @@ function renderInspectorBody() {
   }
   if (selection.kind === 'fixture') {
     const f = (prop.fixtures || []).find(x => x.id === selection.id);
-    if (!f) { selection = null; tagPicks = []; return renderInspectorBody(); }
+    if (!f) { selection = null; tagPicks = []; picked = []; return renderInspectorBody(); }
     inspEl.innerHTML = fixtureInspectorHtml(prop, f);
     bindFixtureInspector(inspEl, prop, f, { changed: () => { rebuildModel(); renderInspector(); }, deleted: () => { setSelection(null); rebuildModel(); } });
     return;
   }
   if (selection.kind === 'wall') {
     const w = prop.walls.find(w => w.id === selection.id);
-    if (!w) { selection = null; tagPicks = []; return renderInspectorBody(); }
+    if (!w) { selection = null; tagPicks = []; picked = []; return renderInspectorBody(); }
     const L = Math.hypot(w.bx - w.ax, w.by - w.ay);
     const lvl = levelOfWall(prop, w);
     const h = wallHeightOf(prop, w);
@@ -4251,7 +4490,7 @@ function renderInspectorBody() {
       ${scopeAssignHtml(w.id)}
       ${linkedProductsHtml(w.id)}
       ${photoLinksHtml(w.id)}
-      <div class="empty" style="margin:8px 0">MOVE WALLS: drag the gizmo arrow to slide this wall; the walls, rooms and openings joined to it follow when you release.</div>
+      <div class="empty" style="margin:8px 0">MOVE: drag the gizmo arrow to slide this wall; the walls, rooms and openings joined to it follow when you release.</div>
       <button class="btn" data-walk>WALK HERE</button>
       <button class="btn danger" data-del>DELETE WALL</button>`;
     inspEl.querySelector('[data-th]').onchange = e => {
@@ -4287,7 +4526,7 @@ function renderInspectorBody() {
   }
   if (selection.kind === 'opening') {
     const o = prop.openings.find(o => o.id === selection.id);
-    if (!o) { selection = null; tagPicks = []; return renderInspectorBody(); }
+    if (!o) { selection = null; tagPicks = []; picked = []; return renderInspectorBody(); }
     inspEl.innerHTML = `<h3>${o.type === 'window' ? 'WINDOW' : (o.width > 1.25 ? 'CASED OPENING' : 'DOOR')}</h3>
       <div class="field"><label>Type</label><select data-type><option value="door" ${o.type === 'door' ? 'selected' : ''}>Door</option><option value="window" ${o.type === 'window' ? 'selected' : ''}>Window</option></select></div>
       <div class="field-row">
@@ -4321,7 +4560,7 @@ function renderInspectorBody() {
   }
   if (selection.kind === 'room') {
     const r = prop.rooms.find(r => r.id === selection.id);
-    if (!r) { selection = null; tagPicks = []; return renderInspectorBody(); }
+    if (!r) { selection = null; tagPicks = []; picked = []; return renderInspectorBody(); }
     inspEl.innerHTML = `<h3>ROOM / FLOOR</h3>
       <div class="field"><label>Name</label><input type="text" data-name value="${escapeHtml(r.name || '')}"></div>
       <div class="stat-line"><span>Level</span><b>${escapeHtml(levelOfRoom(prop, r).name)}</b></div>
@@ -4343,7 +4582,7 @@ function renderInspectorBody() {
   }
   if (selection.kind === 'pin') {
     const ph = photoById(prop, selection.id);
-    if (!ph || !ph.pin) { selection = null; tagPicks = []; return renderInspectorBody(); }
+    if (!ph || !ph.pin) { selection = null; tagPicks = []; picked = []; return renderInspectorBody(); }
     const isDoc = ph.kind === 'document';
     const size = ph.pin.size;
     const printOpts = PRINT_SIZES.map(x => `<option value="${x.long}" ${Math.abs(x.long - (size || DEFAULT_PRINT)) < 1e-3 ? 'selected' : ''}>${escapeHtml(x.label)}</option>`).join('');
@@ -4395,7 +4634,7 @@ function renderInspectorBody() {
   }
   if (selection.kind === 'position') {
     const pos = (prop.photoPositions || []).find(x => x.id === selection.id);
-    if (!pos) { selection = null; tagPicks = []; return renderInspectorBody(); }
+    if (!pos) { selection = null; tagPicks = []; picked = []; return renderInspectorBody(); }
     const pics = picturesOf(prop, pos.id);
     const strip = role => pics[role].length ? `<div class="field"><label>${ROLE_LABELS[role]} (${pics[role].length})</label><div class="v-thumbs small">${pics[role].map(ph =>
       `<button class="v-thumb" data-open-photo="${escapeHtml(ph.id)}" title="${escapeHtml(ph.name)}"><img src="${escapeHtml(ph.thumb)}" alt=""></button>`).join('')}</div></div>` : '';
@@ -4434,7 +4673,7 @@ function renderInspectorBody() {
   }
   if (selection.kind === 'note') {
     const n = noteById(selection.id);
-    if (!n) { selection = null; tagPicks = []; return renderInspectorBody(); }
+    if (!n) { selection = null; tagPicks = []; picked = []; return renderInspectorBody(); }
     const where = noteWhere(n), added = new Date(n.createdAt);
     inspEl.innerHTML = `<h3>NOTE</h3>
       <div class="field"><label>Text</label><textarea data-text rows="5" maxlength="2000">${escapeHtml(n.text || '')}</textarea></div>
@@ -4456,7 +4695,7 @@ function renderInspectorBody() {
   }
   if (selection.kind === 'scan') {
     const s = prop.scans.find(s => s.id === selection.id);
-    if (!s) { selection = null; tagPicks = []; return renderInspectorBody(); }
+    if (!s) { selection = null; tagPicks = []; picked = []; return renderInspectorBody(); }
     const obj = scanObjs[s.id] || null;
     const state = obj ? 'ready' : (scanState[s.id] || 'loading');
     const st = obj ? scanStats(obj) : { label: { missing: 'missing from storage - re-import it', failed: 'could not be loaded', loading: 'loading', hidden: 'not loaded while hidden', 'too-large': tooLargeText(s) }[state] || 'loading' };
@@ -4464,8 +4703,7 @@ function renderInspectorBody() {
     const isPts = s.kind === 'points', isSplat = s.kind === 'splat';
     // Nothing to frame, drop or centre until the object exists; deleting mid-parse would race the loader.
     const dis = obj ? '' : 'disabled', disDel = state === 'loading' ? 'disabled' : '';
-    const panelCtx = { prop, scan: s, obj, picks: tagPicks, models: prop.scans.map(x => ({ scan: x, root: scanObjs[x.id] && scanObjs[x.id].userData.inner })).filter(x => x.root),
-      reload: () => addScanToScene(s), rerender: renderInspector, select: keys => setSelection({ kind: 'scan', id: s.id, tagKey: keys[0] }, keys), toast };
+    const panelCtx = modelPanelCtx(s, obj);
     inspEl.innerHTML = `<h3>${s.kind === 'mesh' ? 'MODEL' : 'SCAN'}</h3>
       <div class="stat-line"><span>File</span><b title="${escapeHtml(s.name)}">${escapeHtml(s.name.length > 22 ? s.name.slice(0, 20) + '...' : s.name)}</b></div>
       <div class="stat-line"><span>Kind</span><b>${escapeHtml(s.kind || '?')} &middot; ${escapeHtml((s.format || '').toUpperCase())}</b></div>
@@ -4642,6 +4880,7 @@ function applyScreen() {
   hud.modes.hidden = !onScreen('model.modes', false);
   if (hud.compassBox) hud.compassBox.hidden = !onScreen('model.compass', true);
   if (hud.views) hud.views.hidden = !onScreen('model.views', true);
+  if (hud.objects) hud.objects.hidden = !onScreen('model.objects', true);
   wrapEl && wrapEl.classList.toggle('v-views-on', !hud.views.hidden);
 }
 function menuGroups() {
@@ -4673,16 +4912,22 @@ function menuGroups() {
     ]),
     g('Tools', 'model.tools', false, 'The tools in the left column', [
       { label: 'Select', key: 'V', active: tool === 'select', run: () => setTool('select') },
-      { label: 'Move walls', key: 'M', active: tool === 'move', run: () => setTool(tool === 'move' ? 'select' : 'move') },
+      { label: 'Move walls and objects', key: 'M', active: tool === 'move', run: () => setTool(tool === 'move' ? 'select' : 'move') },
       { label: 'Measure', key: 'D', active: tool === 'measure', run: () => setTool(tool === 'measure' ? 'select' : 'measure') },
       ...(measures.length ? [{ label: 'Clear measures', run: () => { clearMeasures(); renderToolCol(); } }] : []),
       { label: 'Pin a photo', key: 'P', active: tool === 'pin', run: () => { if (tool === 'pin') setTool('select'); else startPinMode(null); } },
       { label: 'Note', key: 'N', active: tool === 'note', run: () => { if (tool === 'note') setTool('select'); else startNoteMode(null); } },
       { label: 'Edit in SketchUp', run: () => document.dispatchEvent(new CustomEvent('tiksi:edit-in-sketchup')) },
     ]),
+    g('Components', 'model.objects', true, 'The component list over the left of the model', [
+      { label: 'Component list: every object, with an eye to hide it', run: () => openList('list') },
+      { label: 'Tag list: rename, recolour, add or delete tags', run: () => openList('tags') },
+      { label: 'Hide the selected object', key: 'H', disabled: !picked.length, run: hideSelection },
+      { label: 'Show all hidden objects', key: 'Shift+H', disabled: !hiddenKeys(prop).length, run: showHidden },
+    ]),
     g('Tags', 'model.tags', false, 'Tag switches in the left column', [
       ...prop.tags.map(t => ({ label: (t.visible !== false ? 'Hide ' : 'Show ') + t.name + ' (' + (counts.get(t.id) || 0) + ')', active: t.visible !== false, keep: true, run: () => toggleTag(t.id) })),
-      { label: 'Rename, recolour, add or delete tags', run: () => setSelection(null) },
+      { label: 'Rename, recolour, add or delete tags', run: () => openList('tags') },
     ]),
     g('Levels', 'model.levels', false, 'Level switches in the left column',
       prop.levels.map(l => ({ label: (hiddenLevels().has(l.id) ? 'Show ' : 'Hide ') + l.name, active: !hiddenLevels().has(l.id), keep: true, run: () => toggleLevel(l.id) }))),
@@ -4723,7 +4968,7 @@ function renderToolCol() {
     ${tb('iso', 'model', 'ISO')}`,
     onScreen('model.tools', false) && `<div class="tool-head">TOOLS</div>
     ${tb('select', 'select', 'SELECT', 'V', tool === 'select')}
-    ${tb('move', 'move', 'MOVE WALLS', 'M', tool === 'move')}
+    ${tb('move', 'move', 'MOVE', 'M', tool === 'move')}
     ${tb('measure', 'measure', 'MEASURE', 'D', tool === 'measure')}
     ${measures.length ? tb('clearm', 'close', 'CLEAR MEASURES') : ''}
     ${tb('pin', 'pin', 'PIN', 'P', tool === 'pin')}
@@ -4822,6 +5067,7 @@ function onKeyDown(e) {
     case 'PageDown': case 'PageUp': stepView(e.code === 'PageDown' ? 1 : -1); break;
     case 'KeyG': toggleTag(CANON.scan.id); break;
     case 'KeyK': toggleTag(CANON.furniture.id); break;
+    case 'KeyH': if (e.shiftKey) showHidden(); else hideSelection(); break;
     case 'Escape':
       if (match) endMatch();
       else if (tool !== 'select') setTool('select');
@@ -4883,6 +5129,7 @@ function openModel(root) {
         <div class="v-sections" role="group" aria-label="Section cuts" hidden></div>
         <div class="v-compass" title="North"><div class="v-rose"><span class="n">N</span><span class="e">E</span><span class="s">S</span><span class="w">W</span><i></i></div></div>
         <div class="v-env"></div>
+        <div class="v-objects" aria-label="Component list" hidden></div>
         <div class="v-progress"><div class="v-prog-label"></div><div class="v-prog-bar"><div class="v-prog-fill"></div></div></div>
         <div class="v-toast"></div>
         <div class="v-hint"></div>
@@ -4894,10 +5141,10 @@ function openModel(root) {
   hud = {
     modes: wrapEl.querySelector('.v-modes'), sections: wrapEl.querySelector('.v-sections'), compass: wrapEl.querySelector('.v-rose'), env: wrapEl.querySelector('.v-env'),
     progress: wrapEl.querySelector('.v-progress'), toast: wrapEl.querySelector('.v-toast'), hint: wrapEl.querySelector('.v-hint'),
-    views: wrapEl.querySelector('.v-views'), compassBox: wrapEl.querySelector('.v-compass'),
+    views: wrapEl.querySelector('.v-views'), compassBox: wrapEl.querySelector('.v-compass'), objects: wrapEl.querySelector('.v-objects'),
   };
   activeViewId = null;
-  mode = 'orbit'; tool = 'select'; selection = null; hoverTarget = null; tween = null; measureDraft = null; pinPhotoId = null; match = null;
+  mode = 'orbit'; tool = 'select'; selection = null; tagPicks = []; picked = []; lastClick = null; hoverTarget = null; tween = null; measureDraft = null; pinPhotoId = null; match = null;
   movingNoteId = null; rightPress = null; ctxMenu = null; noteEditor = null;
   panoNagged = false; panoPending = null; panoMissing = null;
   for (const k of Object.keys(scanState)) delete scanState[k];
@@ -4927,7 +5174,7 @@ function openModel(root) {
   renderInspector();
   renderViews();
   applyScreen();
-  offScreen = onScreenChange(() => { applyScreen(); renderToolCol(); });
+  offScreen = onScreenChange(() => { applyScreen(); renderToolCol(); renderObjects(); });
   offMenu = setMenuProvider(menuGroups);
   setHint('');
 
@@ -5078,6 +5325,33 @@ export function partDrawn(key) {
   const grouped = batches && batches.drawsPart(part.object);
   return grouped !== null && grouped !== undefined ? grouped : isVisibleChain(part.object);
 }
+
+// For the browser checks: where a part of a loaded model stands now (the middle of its box,
+// world metres), or null when the key names no loaded part.
+export function partCentre(key) {
+  const m = /^node:([^#]+)#/.exec(key || '');
+  const w = m && scanObjs[m[1]], part = w && partByKey(w, key);
+  if (!part) return null;
+  return new THREE.Box3().setFromObject(part.object).getCenter(new THREE.Vector3()).toArray();
+}
+
+// For the browser checks: the tag keys of every object of a model with this name, in list
+// order, and how many objects the MOVE handle holds now.
+export function objectKeys(scanId, name) {
+  const w = scanObjs[scanId];
+  return w ? [...modelObjectTree(w).byKey.values()].filter(o => o.name === name).flatMap(o => o.meshKeys) : [];
+}
+// Where the MOVE handle's arrow for one axis can be grabbed, and where the handle's middle is
+// (world metres), or null while the handle holds nothing.
+export function moveHandleGrip(axis = 'X') {
+  if (!moveHandle()) return null;
+  gizmo.getHelper().updateMatrixWorld(true);
+  const arrows = gizmo._gizmo && gizmo._gizmo.picker && gizmo._gizmo.picker.translate;
+  const arrow = arrows && arrows.children.find(c => c.name === axis);
+  if (!arrow) return null;
+  return { grip: new THREE.Box3().setFromObject(arrow).getCenter(new THREE.Vector3()).toArray(), middle: movePivot.position.toArray() };
+}
+export function moveHandle() { return gizmo && movePivot && gizmo.object === movePivot && movePivot.userData.objects ? movePivot.userData.objects.length : 0; }
 
 // The camera the 3D view last showed, per property, so DOCUMENTS can place a 3D view from it.
 let lastView = null, keepView = false;

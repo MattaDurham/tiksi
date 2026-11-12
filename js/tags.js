@@ -7,6 +7,7 @@
 //   prop.tagOf             { key: tagId | '' }   explicit assignments ('' = Untagged)
 //   prop.tagDefaults       { wall, room, ceiling, opening, fixture, furniture }: tag id or ''
 //   prop.tagUntaggedVisible  whether Untagged objects show
+//   prop.hidden            { key: true }   objects hidden one at a time, whatever their tag
 //
 // A key names one taggable object:
 //   wall:<id>  room:<id> (its floor)  ceiling:<roomId>  opening:<id>  fixture:<id>
@@ -126,6 +127,17 @@ export function normalizeTags(p) {
   }
   p.tagOf = out;
   p.tagUntaggedVisible = p.tagUntaggedVisible !== false;
+  // Hidden objects, under the same rules: a key that names nothing any more is dropped.
+  const hidden = {};
+  n = 0;
+  if (isObj(p.hidden)) for (const [key, v] of Object.entries(p.hidden)) {
+    if (n >= MAX_ASSIGN) break;
+    if (v !== true) continue;
+    const k = parseKey(key);
+    if (!k || !(k.kind === 'node' ? live.scan.has(k.scanId) : live[k.kind].has(k.id))) continue;
+    hidden[key] = true; n++;
+  }
+  p.hidden = hidden;
   return p;
 }
 
@@ -164,7 +176,31 @@ export function tagShown(prop, tagId, overrides) {
   const t = tagById(prop, id);
   return t ? t.visible !== false : prop.tagUntaggedVisible !== false;
 }
-export function keyShown(prop, key, overrides) { return tagShown(prop, tagIdOf(prop, key), overrides); }
+// An object shows when it is not hidden itself and its tag shows.
+export function keyShown(prop, key, overrides) { return !isHidden(prop, key) && tagShown(prop, tagIdOf(prop, key), overrides); }
+
+// ---------- hiding one object ----------
+// Hiding is the object's own switch, as SketchUp's Hide is: it does not touch the tag, and the
+// other objects on that tag stay as they are.
+export function isHidden(prop, key) { return !!(prop.hidden && prop.hidden[key] === true); }
+// Hide (`on` true) or show these objects. Returns how many changed.
+export function setHidden(prop, keys, on) {
+  prop.hidden = prop.hidden || {};
+  let changed = 0;
+  for (const key of keys) {
+    if (!parseKey(key) || isHidden(prop, key) === !!on) continue;
+    if (on) prop.hidden[key] = true; else delete prop.hidden[key];
+    changed++;
+  }
+  return changed;
+}
+export function hiddenKeys(prop) { return Object.keys(prop.hidden || {}); }
+// Show every hidden object. Returns the keys that were hidden.
+export function showAllHidden(prop) {
+  const keys = hiddenKeys(prop);
+  prop.hidden = {};
+  return keys;
+}
 
 export function assignTag(prop, keys, tagId) {
   if (tagId && !tagById(prop, tagId)) throw new Error('No such tag');
@@ -245,6 +281,7 @@ export function scanHasTags(prop, scanId) {
 export function forgetScanTags(prop, scanId) {
   const pre = 'node:' + scanId + '#';
   for (const k of Object.keys(prop.tagOf || {})) if (k.startsWith(pre)) delete prop.tagOf[k];
+  for (const k of Object.keys(prop.hidden || {})) if (k.startsWith(pre)) delete prop.hidden[k];
 }
 
 // ---------- detection ----------
