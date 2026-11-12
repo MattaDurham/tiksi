@@ -109,3 +109,13 @@ test('the SketchUp mirror is told which part of a glass door is glass, and nothi
   assert.equal(full.material.id, 'mat-trim', 'the rest of the door keeps the door finish');
   assert.notEqual(specSignature(mirrorSpec(room({ glass: 'full' }), store.ws.data.materials)), specSignature(mirrorSpec(room({}), store.ws.data.materials)), 'turning a door to glass rewrites the SketchUp file');
 });
+
+test('the SketchUp pane of a doorway set to no door is see-through; a hung or unset door keeps the door finish', () => {
+  for (const door of [{ leaves: 0 }, { plain: true }, { plain: true, glass: 'full' }]) {
+    const h = hole(door);
+    assert.deepEqual(h.material, { id: null, name: 'Opening, no door', color: '#ffffff', opacity: 0.06 }, JSON.stringify(door));
+    assert.equal('glass' in h, false, 'no leaf, so no glass');
+  }
+  assert.equal(hole({}).material.id, 'mat-trim', 'a door left to the width rule is written as before');
+  assert.equal(hole({ leaves: 1 }).material.id, 'mat-trim');
+});

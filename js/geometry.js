@@ -18,7 +18,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { materialById, ensureLevels, levelHeight, levelOfRoom, wallsOn, roomsOn, openingsOn } from './store.js';
 import { materialFor } from './textures.js';
-import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, wallFaceMaterialIds, pointInPoly, doorLeaves, doorGlass, leafGlazing } from './wall-solids.js';
+import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, wallFaceMaterialIds, pointInPoly, doorLeaves, doorGlass, leafGlazing, plainOpening } from './wall-solids.js';
 import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
 import { applyPlanTagVisibility } from './tags-scene.js';
 import { cutPrism } from './section-planes.js';
@@ -411,6 +411,8 @@ export { wallSolids };
 function buildDoor(o, s0, s1, top, th, sides, ctx) {
   const g = new THREE.Group();
   g.userData = { kind: 'opening', id: o.id, wallId: ctx.wall.id };
+  // A plain opening has no frame: the wall's own returns and the header above are all there is.
+  if (plainOpening(o)) return g;
   const trim = [];
   const w = s1 - s0;
   const tm = trimMat(ctx.matOpts);

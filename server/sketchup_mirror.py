@@ -250,6 +250,11 @@ class Materials:
             api.call('SUMaterialGetType', mat, C.byref(kind), optional=True)
             if kind.value == COLORED:
                 api.call('SUMaterialSetColor', mat, C.byref(Color(*rgb, 255)))
+        # A see-through finish (the pane of a doorway with no door): opacity 0..1.
+        opacity = spec.get('opacity')
+        if isinstance(opacity, (int, float)) and not isinstance(opacity, bool) and 0 <= opacity < 1:
+            api.call('SUMaterialSetUseOpacity', mat, C.c_bool(True), optional=True)
+            api.call('SUMaterialSetOpacity', mat, C.c_double(opacity), optional=True)
         return mat
 
 
