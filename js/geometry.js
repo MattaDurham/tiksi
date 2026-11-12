@@ -29,6 +29,10 @@ const FALLBACK_TRIM = '#f3f1ec';
 const FALLBACK_CEILING = '#f1efe9';
 
 const BASEBOARD_H = 0.14, BASEBOARD_D = 0.012;
+// A floor is a slab this thick whose top is the level's own height: the height walls, doors,
+// fixtures and imported models stand at. (It used to sit on top of that height, which buried
+// the foot of every piece of furniture and hid anything thinner, a rug or a hearth.)
+export const FLOOR_T = 0.06;
 const CASING_W = 0.07, CASING_D = 0.016;
 const JAMB_W = 0.05;
 const FRAME_W = 0.045, SASH_W = 0.035, MULLION_W = 0.022;
@@ -617,7 +621,7 @@ export function buildWallGroup(wall, openings, property, ctx) {
         const [i0, i1] = faceSpan(s, L, ends, sgn), [o0, o1] = faceSpan(s, L, baseEnds, sgn);
         const zi = sgn * h, zo = sgn * (h + BASEBOARD_D);
         const bfp = sgn > 0 ? [[o0, zo], [o1, zo], [i1, zi], [i0, zi]] : [[i0, zi], [i1, zi], [o1, zo], [o0, zo]];
-        baseGeos.push(metricPrism(bfp, 0.06, 0.06 + BASEBOARD_H));
+        baseGeos.push(metricPrism(bfp, 0, BASEBOARD_H));
       }
     }
   }
@@ -652,12 +656,12 @@ function roomShape(room) {
 
 export function buildRoomFloor(room, ctx) {
   if (!room.pts || room.pts.length < 3) return null;
-  const geo = new THREE.ExtrudeGeometry(roomShape(room), { depth: 0.06, bevelEnabled: false });
-  // Shape lies in XY; rotate so plan-y becomes world-z, extrusion goes down. UVs stay in meters.
+  const geo = new THREE.ExtrudeGeometry(roomShape(room), { depth: FLOOR_T, bevelEnabled: false });
+  // Shape lies in XY; rotate so plan-y becomes world-z, extrusion goes down from the level's
+  // height, where the floor's top is. UVs stay in meters.
   geo.rotateX(Math.PI / 2);
   const mat = matFor(materialById(room.material), FALLBACK_FLOOR, 0.85, ctx && ctx.matOpts);
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.y = 0.06;
   mesh.receiveShadow = true; mesh.castShadow = true;
   mesh.userData = { kind: 'room', id: room.id };
   const group = new THREE.Group();
@@ -822,6 +826,10 @@ function groundTexture() {
 }
 
 // opts: { showGrid, studio }
+// The ground lies 2 mm under the ground-level floors' tops. Drawn a little further back than it
+// is, it never shows through a floor from far away, where 2 mm is finer than the depth buffer.
+const GROUND_BEHIND = { polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 8 };
+
 export function buildGround(property, opts) {
   opts = opts || {};
   const b = modelBounds(property);
@@ -839,8 +847,8 @@ export function buildGround(property, opts) {
   const tex = groundTexture();
   // Studio mode swaps the lawn for a dark matte floor so the model sits on a stage.
   const mat = opts.studio
-    ? localMat('ground-studio', () => new THREE.MeshStandardMaterial({ color: 0x1c2229, roughness: 0.85, metalness: 0 }))
-    : localMat('ground', () => new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0 }));
+    ? localMat('ground-studio', () => new THREE.MeshStandardMaterial({ color: 0x1c2229, roughness: 0.85, metalness: 0, ...GROUND_BEHIND }))
+    : localMat('ground', () => new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0, ...GROUND_BEHIND }));
   if (mat.map) mat.map.repeat.set(1 / 3, 1 / 3);
   const disc = new THREE.Mesh(geo, mat);
   disc.position.set(cx, -0.002, cz);
@@ -850,7 +858,7 @@ export function buildGround(property, opts) {
   if (opts.showGrid) {
     const size = Math.ceil(span * 2 / 2) * 2 + 8;
     const grid = new THREE.GridHelper(size, size, 0x2e3c48, 0x2a343d);
-    grid.position.set(Math.round(cx), 0.004, Math.round(cz));
+    grid.position.set(Math.round(cx), -0.001, Math.round(cz));     // over the ground, under the floors
     grid.material.transparent = true; grid.material.opacity = 0.55;
     grid.userData = { kind: 'grid', local: true };
     group.add(grid);
