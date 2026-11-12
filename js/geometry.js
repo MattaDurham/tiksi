@@ -18,7 +18,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { materialById, ensureLevels, levelHeight, levelOfRoom, wallsOn, roomsOn, openingsOn } from './store.js';
 import { materialFor } from './textures.js';
-import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, wallFaceMaterialIds, pointInPoly, doorLeaves } from './wall-solids.js';
+import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, wallFaceMaterialIds, pointInPoly, doorLeaves, doorGlass, leafGlazing } from './wall-solids.js';
 import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
 import { applyPlanTagVisibility } from './tags-scene.js';
 import { cutPrism } from './section-planes.js';
@@ -453,11 +453,32 @@ function doorLeaf(o, leafW, leafH, px, rotY, ctx) {
   pivot.position.set(px, 0.01, 0);
   pivot.rotation.y = rotY;
   const ghost = !!(ctx.matOpts && ctx.matOpts.transparent);
-  const leaf = new THREE.Mesh(new THREE.BoxGeometry(leafW, leafH, LEAF_T), ghost ? flatMat('#f1eee7', 0.45, ctx.matOpts) : leafMaterials());
-  leaf.position.set(leafW / 2, leafH / 2, 0);
-  leaf.castShadow = true; leaf.receiveShadow = true;
-  leaf.userData = { kind: 'opening', id: o.id, wallId: ctx.wall.id, noCollide: true };
-  pivot.add(leaf);
+  const userData = { kind: 'opening', id: o.id, wallId: ctx.wall.id, noCollide: true };
+  const glazing = ghost ? null : leafGlazing(doorGlass(o), leafW, leafH);
+  if (glazing) {
+    // A glazed leaf (o.glass): painted stiles and rails around a pane the sun shines through,
+    // over a recessed solid panel when only the upper half is glass.
+    const [gx0, gx1, gy0, gy1] = glazing.glass, h = LEAF_T / 2;
+    const parts = [metricBox(0, gx0, 0, leafH, -h, h), metricBox(gx1, leafW, 0, leafH, -h, h),
+      metricBox(gx0, gx1, gy1, leafH, -h, h), metricBox(gx0, gx1, 0, glazing.panel ? glazing.panel[2] : gy0, -h, h)];
+    if (glazing.panel) {
+      parts.push(metricBox(gx0, gx1, glazing.panel[3], gy0, -h, h));
+      parts.push(metricBox(gx0, gx1, glazing.panel[2], glazing.panel[3], -h + 0.012, h - 0.012));
+    }
+    const frame = mergedMesh(parts, flatMat('#f1eee7', 0.45), userData);
+    frame.userData.leafWidth = leafW;
+    pivot.add(frame);
+    const glass = new THREE.Mesh(metricBox(gx0, gx1, gy0, gy1, -0.003, 0.003), ctx.glass || flatMat('#d2e7ee', 0.1, { transparent: true, opacity: 0.35 }));
+    glass.userData = Object.assign({ glass: true }, userData);
+    glass.castShadow = false; glass.receiveShadow = false;
+    pivot.add(glass);
+  } else {
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(leafW, leafH, LEAF_T), ghost ? flatMat('#f1eee7', 0.45, ctx.matOpts) : leafMaterials());
+    leaf.position.set(leafW / 2, leafH / 2, 0);
+    leaf.castShadow = true; leaf.receiveShadow = true;
+    leaf.userData = userData;
+    pivot.add(leaf);
+  }
   if (ghost) return pivot;
   // Lever handles, both faces, by the free edge.
   const mm = metalMat();
@@ -472,7 +493,7 @@ function doorLeaf(o, leafW, leafH, px, rotY, ctx) {
     const lever = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.007, 0.12, 16), mm);
     lever.rotation.z = Math.PI / 2;
     lever.position.set(hx - 0.055, hy, sgn * (LEAF_T / 2 + 0.05));
-    for (const p of [rose, stem, lever]) { p.castShadow = true; p.userData = leaf.userData; pivot.add(p); }
+    for (const p of [rose, stem, lever]) { p.castShadow = true; p.userData = userData; pivot.add(p); }
   }
   return pivot;
 }

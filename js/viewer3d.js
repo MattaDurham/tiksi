@@ -40,7 +40,7 @@ import { pendingTextureJobs, setTextureQuality, setTextureLimits, beginTextureBu
 import { qualityProfile, stillDimensions, effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, touchDevice, scanTooLarge, megabytes, QUALITY_NAMES } from './render-quality.js';
 import { icon } from './icons.js';
 import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
-import { wallFaceLabels } from './wall-solids.js';
+import { wallFaceLabels, wallSides, doorLeaves, doorGlass } from './wall-solids.js';
 import { SECTION_KINDS, SECTION_LABELS, MAX_SECTIONS, TURN_SNAP_DEG, moveSnapStep, snapTo, quatRotate, planeNormal, planeOf, flipped, rangeAlong, movedTo, makeSection, normalizeSections, levelHeightOf } from './section-planes.js';
 import { planWallMove, applyWallMove, normalOffset, movedWallLengths, moveLeavesShortWall } from './wallmove.js';
 import { addPhotoFromFile, photoUrl, photoById, revokePhotoUrls, photoBytes, ensureCameraFacts } from './photos-store.js';
@@ -4288,15 +4288,22 @@ function renderInspectorBody() {
   if (selection.kind === 'opening') {
     const o = prop.openings.find(o => o.id === selection.id);
     if (!o) { selection = null; tagPicks = []; return renderInspectorBody(); }
-    inspEl.innerHTML = `<h3>${o.type === 'window' ? 'WINDOW' : (o.width > 1.25 ? 'CASED OPENING' : 'DOOR')}</h3>
+    // A door that hangs no leaf (a wide opening between two rooms) is a cased opening.
+    const ow = prop.walls.find(w => w.id === o.wallId), osides = ow ? wallSides(ow, roomsOn(prop, levelOfWall(prop, ow).id)) : {};
+    const hung = o.type === 'door' && doorLeaves(o, o.width, !!(osides.pos && osides.neg)) > 0;
+    inspEl.innerHTML = `<h3>${o.type === 'window' ? 'WINDOW' : (hung ? 'DOOR' : 'CASED OPENING')}</h3>
       <div class="field"><label>Type</label><select data-type><option value="door" ${o.type === 'door' ? 'selected' : ''}>Door</option><option value="window" ${o.type === 'window' ? 'selected' : ''}>Window</option></select></div>
       <div class="field-row">
         <div class="field"><label>Width</label><input type="text" data-w value="${escapeHtml(fmtLen(o.width))}"></div>
         <div class="field"><label>Height</label><input type="text" data-hh value="${escapeHtml(fmtLen(o.height))}"></div>
       </div>
       ${o.type === 'window' ? `<div class="field"><label>Sill height</label><input type="text" data-s value="${escapeHtml(fmtLen(o.sill || 0))}"></div>` : ''}
+      ${hung ? `<div class="field"><label>Leaf</label>
+        <select data-glass><option value="" ${doorGlass(o) ? '' : 'selected'}>Solid panel</option>
+        <option value="full" ${doorGlass(o) === 'full' ? 'selected' : ''}>Glass</option>
+        <option value="half" ${doorGlass(o) === 'half' ? 'selected' : ''}>Half glass</option></select></div>` : ''}
       <div class="field"><label>Position along wall</label><input type="range" min="0.02" max="0.98" step="0.005" value="${finiteNum(o.t, 0.5)}" data-t></div>
-      <div class="empty">Doors wider than 4 ft become cased openings. Interior doors stand ajar so you can see through rooms.</div>
+      <div class="empty">Interior doors wider than 4 ft become cased openings unless PLAN sets their leaves. Interior doors stand ajar so you can see through rooms.</div>
       ${researchButtonHtml(o.id, 'fixture', o.type === 'window' ? 'RESEARCH WINDOW' : 'RESEARCH DOOR / OPENING')}
       ${linkedProductsHtml(o.id)}
       <button class="btn" data-wall>SELECT WALL</button>
@@ -4309,6 +4316,12 @@ function renderInspectorBody() {
       beginGeometryEdit(prop, 'change opening type');
       o.type = e.target.value;
       if (o.type === 'window' && o.sill == null) o.sill = 0.762;
+      touch(); rebuildModel(); renderInspector();
+    };
+    const glassSel = inspEl.querySelector('[data-glass]');
+    if (glassSel) glassSel.onchange = e => {
+      beginGeometryEdit(prop, 'change door leaf');
+      if (e.target.value) o.glass = e.target.value; else delete o.glass;
       touch(); rebuildModel(); renderInspector();
     };
     let slidingOpening = false;
