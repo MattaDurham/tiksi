@@ -416,6 +416,24 @@ export class ModelBatches {
 
   // Switch grouped drawing off (every model draws its own meshes) or back on.
   setEnabled(on) { this.enabled = !!on; }
+  // Parts of a model were moved (one object dragged somewhere else): their slots follow. A move
+  // that mirrors a part cannot stay in its group, so that model's groups are made again.
+  partsMoved(meshes) {
+    const again = new Set();
+    for (const mesh of meshes) {
+      const ref = this.members.get(mesh);
+      if (!ref || again.has(ref.entry)) continue;
+      const m = ref.member, proxy = ref.proxy;
+      const matrix = relativeMatrix(m.chain);
+      if ((matrix.determinant() < 0) !== m.mirrored) { again.add(ref.entry); continue; }
+      if (proxy.isBatchedMesh || proxy.isInstancedMesh) {
+        m.matrix = m.mirrored ? new THREE.Matrix4().multiplyMatrices(MIRROR, matrix) : matrix;
+        if (proxy.isBatchedMesh) { proxy.setMatrixAt(m.slot, m.matrix); proxy.boundingBox = null; proxy.boundingSphere = null; }
+        else { if (m.shown !== false) proxy.setMatrixAt(m.slot, m.matrix); proxy.instanceMatrix.needsUpdate = true; proxy.userData.boundsStale = true; }
+      } else { m.matrix = matrix; proxy.matrix.copy(matrix); proxy.matrixWorldNeedsUpdate = true; }
+    }
+    for (const [id, e] of [...this.entries]) if (again.has(e)) this.rebuild(id);
+  }
 
   // What is drawn how, for diagnostics and tests.
   stats() {

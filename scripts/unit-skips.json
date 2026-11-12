@@ -2,7 +2,7 @@
   "about": "How many Python tests may skip for each reason (the start of the skip message), per system. Linux is the online checks' runner, which has ffmpeg but not SketchUp or the CAD and photo-placement runtimes. Darwin is this Mac, which has all of them, so nothing may skip there. Lower a number when a tool is installed; raise one only with a reason in the commit. The merge check reads the live checkout's copy of this file.",
   "systems": {
     "Linux": {
-      "SketchUp SDK not installed": 17,
+      "SketchUp SDK not installed": 18,
       "Optional CAD runtime not installed": 1,
       "photo placement runtime not installed": 1,
       "ffmpeg/ffprobe are not installed": 0,

@@ -98,7 +98,9 @@ try {
   assert.equal(await page.locator('.tool-col').isVisible(), false, 'the tools are off the screen');
   assert.equal(await page.locator('.v-modes').isVisible(), false);
   assert.ok(await page.locator('.v-views [data-view-add]').isVisible());
-  assert.ok(await page.locator('.v-tags [data-tag-eye="tag-roof"]').isVisible(), 'the tag list is in the panel on the right');
+  // The tag list is the second tab of the component list over the left of the model.
+  await page.locator('.v-objects [data-ol-tab="tags"]').click();
+  assert.ok(await page.locator('.v-objects .v-tags [data-tag-eye="tag-roof"]').isVisible(), 'the tag list is in the TAGS tab of the component list');
   // The Tiksi menu runs the tools, and can put a group back on the screen.
   await page.locator('#tiksi-menu').click();
   const heads = await page.locator('.tk-group header > span').allInnerTexts();
@@ -125,6 +127,7 @@ try {
   const c = await page.locator('canvas.v-canvas').boundingBox();
   await page.mouse.click(c.x + c.width / 2, c.y + c.height / 2);
   await page.locator('[data-tag-pick]').waitFor();
+  assert.equal(await page.locator('.inspector .op-name').innerText(), 'Mesh 1', 'the click picks the chair alone, and the panel is about it');
   assert.equal(await page.locator('[data-tag-pick]').inputValue(), 'tag-furniture', 'the clicked part shows its tag');
   await page.locator('[data-tag-pick]').selectOption('tag-builtins');
   const moved = await prop(page, `return p.tagOf[${JSON.stringify(chairKey)}]`);

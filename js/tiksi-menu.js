@@ -21,10 +21,11 @@ function readPrefs() {
   } catch { return {}; }
 }
 // Whether an element is on the screen. { all: true } in the stored choices puts everything on
-// it (browser tests that drive the on-screen buttons use that).
+// it (browser tests that drive the on-screen buttons use that); a choice stored for one element
+// beside it still counts ({ all: true, 'model.objects': false } is everything but that one).
 export function onScreen(id, fallback) {
-  if (prefs.all === true) return true;
-  return typeof prefs[id] === 'boolean' ? prefs[id] : fallback;
+  if (typeof prefs[id] === 'boolean') return prefs[id];
+  return prefs.all === true ? true : fallback;
 }
 export function setOnScreen(id, on) {
   prefs = readPrefs();

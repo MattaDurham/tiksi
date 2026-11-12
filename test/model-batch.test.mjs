@@ -108,6 +108,38 @@ test('proxies draw every part exactly where the part is, mirrored parts included
   b.endFrame();
 });
 
+test('parts that were moved are drawn where they now are', () => {
+  const { world, wrapper, scene } = model({ parts: 12, bottles: INSTANCE_MIN, mirrored: [3] });
+  const b = new ModelBatches();
+  world.add(b.root);
+  b.beginFrame({ 'scan-a': wrapper }); b.endFrame();
+  // One board of a shared look, one mirrored board, one instanced bottle (hidden while it moves).
+  const moved = [scene.children[1], scene.children[3], scene.children[12 + 2]];
+  moved[2].visible = false;
+  b.beginFrame({ 'scan-a': wrapper }); b.endFrame();
+  for (const part of moved) { part.position.x += 1.25; part.position.y -= 0.5; part.updateMatrix(); }
+  world.updateMatrixWorld(true);
+  b.partsMoved(moved);
+  moved[2].visible = true;
+  b.beginFrame({ 'scan-a': wrapper });
+  world.updateMatrixWorld(true);
+  const m = new THREE.Matrix4();
+  for (const part of scene.children) {
+    const { proxy, member } = proxyOf(b, part);
+    if (proxy.isBatchedMesh || proxy.isInstancedMesh) proxy.getMatrixAt(member.slot, m); else m.identity();
+    const drawn = new THREE.Matrix4().multiplyMatrices(proxy.matrixWorld, m);
+    drawn.elements.forEach((v, i) => assert.ok(Math.abs(v - part.matrixWorld.elements[i]) < 1e-6, part.name + ' is drawn where it stands' + (moved.includes(part) ? ' after its move' : '')));
+  }
+  b.endFrame();
+  // A move that mirrors a part regroups the model instead of drawing it inside out.
+  scene.children[5].scale.x = -1; scene.children[5].updateMatrix(); world.updateMatrixWorld(true);
+  b.partsMoved([scene.children[5]]);
+  b.beginFrame({ 'scan-a': wrapper });
+  world.updateMatrixWorld(true);
+  assert.equal(proxyOf(b, scene.children[5]).proxy.matrixWorld.determinant() < 0, true, 'the mirrored part is drawn by a mirrored group');
+  b.endFrame();
+});
+
 test('a frame swaps the originals out and the proxies in, and back', () => {
   const { wrapper, inner } = model();
   const b = new ModelBatches();

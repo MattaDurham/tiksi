@@ -121,6 +121,38 @@ export function doorLeaves(o, width, interior) {
   return width > 1.25 ? (interior ? 0 : 2) : 1;
 }
 
+// ---------- glass doors ----------
+// What a door's leaf is made of. o.glass is the owner's call: 'full' is a pane of glass in
+// stiles and rails (a French door, a patio door), 'half' is glass over a solid lower panel (an
+// entry door with a lite); anything else is the solid panelled leaf.
+export const DOOR_GLASS = ['full', 'half'];
+export function doorGlass(o) { return o && o.type !== 'window' && DOOR_GLASS.includes(o.glass) ? o.glass : null; }
+
+const LEAF_STILE = 0.11, LEAF_TOP_RAIL = 0.11, LEAF_BOTTOM_RAIL = 0.2, LEAF_LOCK_RAIL = 0.1;
+const HALF_GLASS_FROM = 0.95;     // m above the floor where a half-glass door's glass starts
+
+// A glazed leaf leafW x leafH in its own coordinates (x from the hinge edge, y from its foot):
+// { glass: [x0, x1, y0, y1], panel: the solid lower panel of a half-glass leaf or null }.
+// Null when the leaf is too small to hold a pane, which then stays solid.
+export function leafGlazing(kind, leafW, leafH) {
+  if (!DOOR_GLASS.includes(kind)) return null;
+  const stile = Math.min(LEAF_STILE, leafW * 0.22), x0 = stile, x1 = leafW - stile, y1 = leafH - LEAF_TOP_RAIL;
+  const y0 = kind === 'half' ? HALF_GLASS_FROM : LEAF_BOTTOM_RAIL;
+  if (x1 - x0 < 0.08 || y1 - y0 < 0.2) return null;
+  const panelTop = y0 - LEAF_LOCK_RAIL;
+  return { glass: [x0, x1, y0, y1], panel: kind === 'half' && panelTop - LEAF_BOTTOM_RAIL > 0.1 ? [x0, x1, LEAF_BOTTOM_RAIL, panelTop] : null };
+}
+
+// The heights between which a door opening v0..v1 reads as glass in elevation, for drawings and
+// the SketchUp mirror, which show a door as one flat pane: all of a full-glass door, the part
+// above the lower panel of a half-glass one. Null for a solid door.
+export function doorGlassBand(o, v0, v1) {
+  const kind = doorGlass(o);
+  if (!kind) return null;
+  const from = kind === 'half' ? v0 + HALF_GLASS_FROM : v0;
+  return v1 - from > 0.2 ? [from, v1] : null;
+}
+
 // Plan swings along the wall, s from the opening centre: each hinges at s, its leaf r long,
 // closing toward s + dir * r. Only an explicit pair draws two; they meet in the middle.
 export function doorSwings(o) {

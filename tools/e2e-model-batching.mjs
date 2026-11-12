@@ -101,6 +101,7 @@ try {
 
   // Tags: hiding one hides exactly its parts, and the picture still matches.
   const tag1 = await prop(page, 'return p.tags.find(t => t.name === "Tag 1").id');
+  await page.locator('.v-objects [data-ol-tab="tags"]').click();   // the tag list is the second tab of the component list
   await page.locator(`.v-tags [data-tag-eye="${tag1}"]`).click();
   await delay(300);
   const drawn = await page.evaluate(async tag => {
@@ -117,6 +118,7 @@ try {
   await delay(300);
 
   // Picking: a click on a box selects that box (its name and tag in the inspector) and outlines it.
+  await page.locator('.v-objects [data-ol-close]').click();   // the list floats over the left of the model: off the screen for these clicks
   const boxes = [[0, 0], [2, 7], [5, 5], [9, 9], [7, 1], [4, 9]];
   const tagIds = await prop(page, 'return Object.fromEntries(p.tags.map(t => [t.name, t.id]))');
   const rect = await page.locator('canvas.v-canvas').boundingBox();
@@ -130,8 +132,7 @@ try {
       return [q.x / q.w, q.y / q.w];
     }, [r, c]);
     await page.mouse.click(rect.x + (at[0] + 1) / 2 * rect.width, rect.y + (1 - at[1]) / 2 * rect.height);
-    await page.locator('.inspector .stat-line span').first().waitFor();
-    assert.equal(await page.locator('.inspector .stat-line span').first().innerText(), 'Part: Box ' + r + ' ' + c, 'the click picks box ' + r + ' ' + c);
+    await waitUntil(async () => (await page.locator('.inspector .op-name').count()) && (await page.locator('.inspector .op-name').innerText()) === 'Box ' + r + ' ' + c, 'the click picks box ' + r + ' ' + c);
     assert.equal(await page.locator('[data-tag-pick]').inputValue(), tagIds['Tag ' + ((r + c) % 4)], 'and shows its tag');
   }
   // The outline is what changes when the part is selected.
@@ -199,6 +200,8 @@ try {
   assert.ok(cGrouped.calls * 4 < cPlain.calls, 'draw calls per frame drop from ' + cPlain.calls + ' to ' + cGrouped.calls);
   same(cPlain, cGrouped, 'component model');
   const bottles = await prop(page, 'return p.tags.find(t => t.name === "Bottles").id');
+  await page.locator('#tiksi-menu').click();
+  await page.locator('.tk-item', { hasText: 'Tag list' }).click();
   await page.locator(`.v-tags [data-tag-eye="${bottles}"]`).click();
   await delay(300);
   const cDrawn = await page.evaluate(async tag => {

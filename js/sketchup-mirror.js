@@ -17,7 +17,7 @@
 // run under Node for tests; the rest talks to /api/model-conversion/mirror.
 
 import { wallHeightOf, levelOfWall, levelOfRoom, levelHeight, roomsOn, uid } from './store.js';
-import { openingSpans, wallFaceMaterialIds } from './wall-solids.js';
+import { openingSpans, wallFaceMaterialIds, doorGlassBand } from './wall-solids.js';
 import { tagIdOf, tagById } from './tags.js';
 import { fixtureShape, fixtureMirrorParams, fixtureLocalFrame, fixtureParts, fixtureLabel, fixturesOn, normaliseFixture, FIXTURE_FALLBACK } from './fixtures.js';
 
@@ -153,8 +153,13 @@ export function mirrorSpec(prop, materials, legacy = false) {
     const holes = (prop.openings || []).filter(o => o.wallId === w.id && state.has(o.id)).map(o => {
       const p = state.get(o.id).params;
       const role = o.type === 'window' ? 'window' : 'door';
-      return { id: o.id, type: o.type, t: p.t, width: p.width, height: p.height, sill: p.sill, s0: p.s0, s1: p.s1, v0: p.v0, v1: p.v1,
+      const hole = { id: o.id, type: o.type, t: p.t, width: p.width, height: p.height, sill: p.sill, s0: p.s0, s1: p.s1, v0: p.v0, v1: p.v1,
         material: finish(OPENING_MATERIAL[role], role, 'opening ' + o.id), tag: tag('opening:' + o.id) };
+      // A glass door (o.glass): the heights between which its pane is glass, and that finish.
+      // Only glass doors carry the key, so every other mirror keeps the signature it has.
+      const band = doorGlassBand(o, p.v0, p.v1);
+      if (band) hole.glass = { v0: band[0], v1: band[1], material: finish(OPENING_MATERIAL.window, 'window', 'opening ' + o.id) };
+      return hole;
     });
     // pos: the long face on the side the plan normal (-uy, ux) of a -> b points to (in the
     // .skp, local y = -thickness/2); neg: the opposite face; other: ends, top and reveals.

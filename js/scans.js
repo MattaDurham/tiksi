@@ -18,6 +18,7 @@ import { isLAS, lasHeader, parsePLYHeader, parseAndRecentre, recentre } from './
 import { makePointCloud, updatePointCloud, decimate, fromGeometry } from './pointcloud.js';
 import { ensureSpark, loadSplat, disposeSplat, splatBounds, splatDrawables, splatBusy, releaseSplatRenderer } from './splats.js';
 import { working } from './work-in-progress.js';
+import { applyPartOffsets } from './model-objects.js';
 
 export { splatDrawables, splatBusy, releaseSplatRenderer };
 
@@ -527,6 +528,7 @@ export function applyScanTransform(scan, obj) {
   obj.scale.setScalar(scan.scale || 1);
   obj.visible = scan.visible !== false;
   applyFlip(scan, obj);
+  applyPartOffsets(scan, obj);   // objects moved one by one (model-objects.js)
   refreshBounds(scan, obj);
   if (obj.userData.points) updatePointCloud(obj.userData.points, scan);
   obj.updateMatrixWorld(true);

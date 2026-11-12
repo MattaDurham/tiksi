@@ -48,7 +48,7 @@ function ensureRenderer() {
 const levelSignature = l => (l && l.plan && l.plan.img ? { ...l, plan: { ...l.plan, img: l.plan.img.length } } : l);
 export function geometrySignature(prop) {
   return JSON.stringify([prop.id, (prop.levels || []).map(levelSignature), prop.walls, prop.openings, prop.rooms, prop.fixtures, prop.wallHeight,
-    (prop.scans || []).map(s => [s.id, s.kind, s.pos, s.rot, s.rotY, s.scale, s.visible, s.flip])]);
+    (prop.scans || []).map(s => [s.id, s.kind, s.pos, s.rot, s.rotY, s.scale, s.visible, s.flip, s.partOffsets || null])]);
 }
 
 async function scanObject(scan) {
@@ -64,7 +64,7 @@ async function scanObject(scan) {
 
 // What decides which parts a view shows: the tags, every assignment and the view's own overrides.
 export function tagSignature(prop, v) {
-  return JSON.stringify([prop.tags, prop.tagOf, prop.tagDefaults, prop.tagUntaggedVisible, (v && v.tags) || null]);
+  return JSON.stringify([prop.tags, prop.tagOf, prop.tagDefaults, prop.tagUntaggedVisible, prop.hidden || null, (v && v.tags) || null]);
 }
 // Show or hide the built model's parts for one view (the group is shared between views).
 function applyViewTags(prop, group, overrides) {

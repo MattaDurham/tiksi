@@ -62,7 +62,7 @@ async function waitUntil(predicate, message, ms = 60_000) {
 
 // What the page does that a check wants to count.
 const PROBE = () => {
-  localStorage.setItem('tiksi.onScreen.v1', '{"all":true}');   // MODEL's tools on the screen (tiksi-menu.js)
+  localStorage.setItem('tiksi.onScreen.v1', '{"all":true,"model.objects":false}');   // MODEL's tools on the screen (tiksi-menu.js); the component list off it: this suite clicks and taps the model at fixed places
   const P = WebGL2RenderingContext.prototype;
   const probe = window.__probe = { draws: 0, failDraws: false, decodes: [], shapes: [], loading: 0, mostLoading: 0 };
   for (const name of ['drawElements', 'drawArrays', 'drawElementsInstanced', 'drawArraysInstanced', 'drawRangeElements']) {

@@ -103,10 +103,11 @@ try {
     assert.match(await panel.locator('h3', { hasText: 'MATERIALS' }).innerText(), /MATERIALS · 3/, 'glass, oak and steel, each once');
     assert.match(await panel.locator('[data-mp-slot="m:Bottle glass"] label').innerText(), /300 parts/i);
   }
-  // SELECT outlines every instance's parts and the tag line moves them all.
+  // SELECT picks every instance as one object each (300 bottles, whatever they are drawn
+  // with), and the panel's tag line then changes them all.
   await bottle.locator('[data-mp-select]').click();
-  const expected = setup.sketchup ? 600 : 300;
-  await page.locator('.v-tags .stat-line', { hasText: expected + ' objects selected' }).waitFor();
+  await page.locator('.inspector h3', { hasText: '300 OBJECTS' }).waitFor();
+  assert.equal(await page.evaluate(async id => { const v = await import('/js/viewer3d.js'); return v.objectKeys(id, 'Wine bottle').length; }, setup.scanId), setup.sketchup ? 600 : 300, 'the bottles are drawn with ' + (setup.sketchup ? 'two meshes each' : 'one mesh each'));
   // A clicked part names its component.
   const partKey = await page.evaluate(async id => { const s = await import('/js/store.js'); return Object.keys(s.activeProperty().tagOf).find(k => k.startsWith('node:' + id + '#')); }, setup.scanId);
   assert.ok(partKey, 'the model\'s parts are tagged');

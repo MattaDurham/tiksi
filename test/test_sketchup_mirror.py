@@ -12,7 +12,7 @@ import unittest
 import zipfile
 
 from server.sketchup_convert import library_path
-from server.sketchup_mirror import wall_loops, extrude_wall
+from server.sketchup_mirror import wall_loops, extrude_wall, pane_bands
 from server.model_conversion import ModelConversionService, ConversionError
 
 WORKER = Path(__file__).resolve().parent.parent / 'server/sketchup_mirror.py'
@@ -232,6 +232,25 @@ else {
         self.assertEqual((window['front'], window['back']), (('Tiksi: Glass, clear', rgb(GLASS['color'])),) * 2)
         self.assertEqual(sorted(model_materials(self.root / 'write-0' / 'model.skp')),
                          sorted('Tiksi: ' + m['name'] for m in (SAGE, BRICK, DRYWALL, OAK, TRIM, GLASS)))
+
+    def test_a_glass_door_is_glass_where_its_spec_says_and_reads_back_as_the_same_door(self):
+        def doors(glass):
+            spec = finished()
+            door = spec['walls'][0]['holes'][0]
+            door['glass'] = dict(glass, material=dict(GLASS))
+            skp = self.write(spec)
+            faces = sorted((f for f in painted_faces(skp) if f['id'] == 'o-door'), key=lambda f: f['plan'][2])
+            return skp, [(round(f['plan'][2], 3), f['front'][0], f['back'][0]) for f in faces]
+        trim, glass = 'Tiksi: ' + TRIM['name'], 'Tiksi: ' + GLASS['name']
+        skp, full = doors({'v0': 0, 'v1': 2.0})
+        self.assertEqual(full, [(1.0, glass, glass)], 'a full-glass door is one glass pane')
+        _, half = doors({'v0': 0.95, 'v1': 2.0})
+        self.assertEqual(half, [(0.475, trim, trim), (1.475, glass, glass)], 'a half-glass door is door below, glass above')
+        self.assertEqual(pane_bands({'v0': 0, 'v1': 2.0, 'material': 'door', 'glass': {'v0': 5, 'v1': 6, 'material': 'glass'}}), [(0.0, 2.0, 'door')],
+                         'glass heights outside the opening leave it a plain door')
+        south, = [w for w in self.read(skp)['walls'] if w['id'] == 'w-s']
+        door, = [o for o in south['openings'] if o['id'] == 'o-door']
+        self.assertEqual(door['now'], door['base'], 'the glass door reads back where and as large as it was written')
 
     def test_rewrite_repaints_by_name_and_keeps_sketchup_work(self):
         skp = self.write(finished())
