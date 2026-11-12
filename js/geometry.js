@@ -826,9 +826,11 @@ function groundTexture() {
 }
 
 // opts: { showGrid, studio }
-// The ground lies 2 mm under the ground-level floors' tops. Drawn a little further back than it
-// is, it never shows through a floor from far away, where 2 mm is finer than the depth buffer.
-const GROUND_BEHIND = { polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 8 };
+// The ground lies 2 mm under the ground-level floors' tops. Drawn a fixed few depth steps further
+// back than it is, it never shows through a floor from far away, where 2 mm is finer than the
+// depth buffer. No slope factor: that pushes the ground back by centimetres at a shallow angle,
+// and what lies just under the ground then shows through it.
+const GROUND_BEHIND = { polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: 8 };
 
 export function buildGround(property, opts) {
   opts = opts || {};
