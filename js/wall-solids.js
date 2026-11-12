@@ -114,10 +114,12 @@ export function wallFaceLabels(wall, rooms) {
 }
 
 // ---------- door leaves ----------
-// How a door hangs: 0 (a cased archway), 1 or 2 leaves. o.leaves is the owner's call; without
-// it a door wider than 1.25 m is a pair to the outside (French doors) and an archway inside.
+// How a door hangs: 0 (a cased opening: jambs, head and casing, no door), 1 or 2 leaves.
+// o.leaves is the owner's call, 0 included (a doorway of any width that never had a door);
+// without it a door wider than 1.25 m is a pair to the outside (French doors) and a cased
+// opening inside.
 export function doorLeaves(o, width, interior) {
-  if (o.leaves === 1 || o.leaves === 2) return o.leaves;
+  if (o.leaves === 0 || o.leaves === 1 || o.leaves === 2) return o.leaves;
   return width > 1.25 ? (interior ? 0 : 2) : 1;
 }
 
@@ -154,8 +156,10 @@ export function doorGlassBand(o, v0, v1) {
 }
 
 // Plan swings along the wall, s from the opening centre: each hinges at s, its leaf r long,
-// closing toward s + dir * r. Only an explicit pair draws two; they meet in the middle.
+// closing toward s + dir * r. Only an explicit pair draws two; they meet in the middle. An
+// opening set to no leaf (leaves: 0) draws none.
 export function doorSwings(o) {
   const half = o.width / 2;
+  if (o.leaves === 0) return [];
   return o.leaves === 2 ? [{ s: -half, r: half, dir: 1 }, { s: half, r: half, dir: -1 }] : [{ s: -half, r: o.width, dir: 1 }];
 }

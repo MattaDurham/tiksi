@@ -60,6 +60,9 @@ test('without leaves a door keeps today\'s rule; an explicit count overrides it'
   assert.equal(leaves({ width: 1.5, leaves: 1 }, [NORTH]).length, 1, 'explicit single in a wide exterior opening');
   assert.equal(leaves({ width: 0.9, leaves: 2 }, [NORTH]).length, 2);
   assert.equal(doorLeaves({ leaves: 3 }, 0.9, true), 1, 'an invalid count falls back to the width rule');
+  assert.equal(leaves({ width: 0.67, leaves: 0 }, [NORTH, SOUTH]).length, 0, 'a narrow doorway set to no leaf hangs none');
+  assert.equal(leaves({ width: 0.9, leaves: 0 }, [NORTH]).length, 0, 'nor does an outside one');
+  assert.equal(leaves({ width: 1.5, leaves: 0 }, [NORTH]).length, 0, 'a wide outside opening set to no leaf is not a pair');
 });
 
 test('the plan draws a pair as two half-width swings meeting in the middle', () => {
@@ -69,4 +72,5 @@ test('the plan draws a pair as two half-width swings meeting in the middle', () 
   assert.equal(a.s + a.dir * a.r, 0); assert.equal(b.s + b.dir * b.r, 0);
   assert.deepEqual(doorSwings({ width: 0.813 }), [{ s: -0.4065, r: 0.813, dir: 1 }], 'one full-width swing otherwise');
   assert.equal(doorSwings({ width: 1.5 }).length, 1, 'a wide door without leaves keeps its single plan swing');
+  assert.deepEqual(doorSwings({ width: 0.67, leaves: 0 }), [], 'an opening set to no leaf draws no swing in plan');
 });

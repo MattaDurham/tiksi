@@ -1,4 +1,5 @@
-// A door's LEAF choice in MODEL and PLAN: Solid panel, Glass or Half glass. Choosing Glass on
+// A door's LEAF choice in MODEL and PLAN (Solid panel, Glass or Half glass) and PLAN's LEAVES
+// choice of None (a cased opening). Choosing Glass on
 // a pair of outside doors saves it on the door, draws panes the sun passes, goes back with
 // UNDO, and is offered in PLAN's door inspector too. Real clicks on the rendered views.
 // Synthetic project and temporary runtime only; never uses the owner's stores.
@@ -111,8 +112,15 @@ try {
   await planLeaf.selectOption('');
   await waitUntil(async () => !(await door()).has, 'Solid panel in PLAN removes the choice from the door');
   assert.equal((await built()).solid, 2, 'and the leaves are solid');
+  // LEAVES: None makes it a cased opening, with no leaf to hang or to choose.
+  await page.locator('.inspector [data-leaves]').selectOption('0');
+  await waitUntil(async () => (await door()).leaves === 0, 'None is saved on the door as no leaf');
+  const cased = await built();
+  assert.deepEqual([cased.solid, cased.panes], [0, 0], 'a cased opening hangs no leaf');
+  assert.equal(await page.locator('.inspector [data-leaves]').inputValue(), '0', 'PLAN shows None');
+  assert.equal(await page.locator('.inspector [data-glass]').count(), 0, 'and offers no leaf material');
   assert.deepEqual(errors, [], 'no page errors');
-  console.log('ok   a door can be glass or half glass, from MODEL and from PLAN');
+  console.log('ok   a door can be glass or half glass, from MODEL and from PLAN, or a cased opening with no leaf');
 } finally {
   if (browser) await browser.close();
   child.kill('SIGTERM');
