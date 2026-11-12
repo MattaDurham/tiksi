@@ -63,7 +63,7 @@ try {
   // Right-click the floor: the menu offers a note there and both toggles with their counts.
   await page.mouse.click(cx, cy, { button: 'right' });
   await page.locator('.v-ctx').waitFor();
-  assert.deepEqual(await menuItems(page), ['ADD NOTE HERE', 'HIDE NOTES (0)', 'HIDE PHOTO PINS (1)']);
+  assert.deepEqual(await menuItems(page), ['ADD NOTE HERE', 'HIDE THIS OBJECT', 'HIDE NOTES (0)', 'HIDE PHOTO PINS (1)']);
   await page.locator('.v-ctx [data-ctx=add-note]').click();
   await page.locator('.v-note-edit textarea').waitFor();
   assert.equal(await page.evaluate(() => document.activeElement.tagName), 'TEXTAREA', 'the note editor takes the typing');
@@ -92,7 +92,7 @@ try {
   assert.equal((await state(page)).showNotes, false);
   await page.mouse.click(cx, cy, { button: 'right' });
   await page.locator('.v-ctx').waitFor();
-  assert.deepEqual(await menuItems(page), ['ADD NOTE HERE', 'SHOW NOTES (1)', 'HIDE PHOTO PINS (1)'], 'a hidden note is not under the cursor');
+  assert.deepEqual(await menuItems(page), ['ADD NOTE HERE', 'HIDE THIS OBJECT', 'SHOW NOTES (1)', 'HIDE PHOTO PINS (1)'], 'a hidden note is not under the cursor');
   await page.locator('.v-ctx [data-ctx=toggle-notes]').click();
   assert.equal((await state(page)).showNotes, true, 'the menu shows notes again');
 

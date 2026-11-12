@@ -53,7 +53,7 @@ export function partByKey(wrapper, key) {
 
 // A node's name as the file wrote it (GLTFLoader keeps it in userData.name; `name` has its
 // spaces turned into underscores).
-const nodeName = o => (o.userData && typeof o.userData.name === 'string' && o.userData.name) || o.name || '';
+export const nodeName = o => (o.userData && typeof o.userData.name === 'string' && o.userData.name) || o.name || '';
 // A part's display name: the nearest named node, as the file named it.
 export function partName(part) {
   for (let o = part.object; o; o = o.parent) {

@@ -741,7 +741,7 @@ function furnitureFootprints() {
   const out = [];
   for (const s of layerScans(prop, 'furnishings')) {
     if (s.kind && s.kind !== 'mesh') continue;
-    const sig = JSON.stringify([s.pos, s.rot, s.rotY, s.scale, s.flip]);
+    const sig = JSON.stringify([s.pos, s.rot, s.rotY, s.scale, s.flip, s.partOffsets || null]);
     const c = footprintCache.get(s.id);
     if (c && c.sig === sig) { out.push(...c.fps); continue; }
     if (c && c.loading) continue;

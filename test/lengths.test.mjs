@@ -86,6 +86,7 @@ const BARE_UNIT_BEFORE = {
   'js/fixtures-ui.js': ['feet'],
   'js/materialsview.js': ['feet'],
   'js/measurements.js': ['inches'],
+  'js/object-panel.js': ['feet'],   // how far a moved object stands from its place (new 2026-11-12; feet like the other MODEL fields)
 };
 
 test('every length field reads a number on its own in the unit it always did', async () => {

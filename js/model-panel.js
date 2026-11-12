@@ -66,8 +66,14 @@ function componentsHtml(scan, obj, comps) {
   const schedule = new Map(componentSchedule(ws.data, scan, inner(obj)).map(r => [r.key, r]));
   let total = 0, priced = 0;
   const rows = comps.map(c => {
-    const r = schedule.get(c.key), rec = componentProductRecord(ws.data, scan, c.key);
+    const r = schedule.get(c.key);
     total += r.extended; if (r.unitPrice) priced++;
+    return componentRow(scan, c, byKey, r);
+  }).join('');
+  return componentsFoot(comps, rows, priced, total);
+}
+function componentRow(scan, c, byKey, r, card = false) {
+    const rec = componentProductRecord(ws.data, scan, c.key);
     const within = c.parents.map(k => byKey.get(k)?.name).filter(Boolean);
     const holds = Object.entries(c.contains).map(([k, n]) => n + ' × ' + (byKey.get(k)?.name || 'component'));
     return `<div class="mp-comp" data-mp-comp="${escapeHtml(c.key)}">
@@ -75,7 +81,7 @@ function componentsHtml(scan, obj, comps) {
       ${within.length || holds.length ? `<div class="mp-facts">${within.length ? `<span>inside ${escapeHtml(within.join(', '))}</span>` : ''}${holds.length ? `<span>each holds ${escapeHtml(holds.join(', '))}</span>` : ''}</div>` : ''}
       ${c.description ? `<div class="mp-facts"><span>${escapeHtml(c.description.slice(0, 200))}</span></div>` : ''}
       <div class="mp-facts">${rec ? `<span>${escapeHtml(productLine({ product: { productId: rec.id } }, ws.data.products) || rec.name || 'Product')}</span>${r.unitPrice ? `<span>${escapeHtml(fmtMoney(r.unitPrice))} each · ${escapeHtml(fmtMoney(r.extended))}</span>` : `<span class="faint">${escapeHtml(r.priceNote || 'no price yet')}</span>`}` : '<span class="faint">no product linked</span>'}</div>
-      <div class="mp-actions"><button class="btn" data-mp-select="${escapeHtml(c.key)}" title="Select and outline every instance">SELECT ${c.count}</button></div>
+      ${card ? '' : `<div class="mp-actions"><button class="btn" data-mp-select="${escapeHtml(c.key)}" title="Select and outline every instance">SELECT ${c.count}</button></div>`}
       <details class="mp-link"><summary>${rec ? 'CHANGE PRODUCT' : 'LINK PRODUCT'}</summary>
         <div class="field"><label>From the products list</label><select data-mp-product>${productOptions(rec ? rec.id : '')}</select></div>
         <div class="field-row"><div class="field"><label>Maker</label><input type="text" data-mp-brand value="${escapeHtml(rec ? rec.brand || '' : '')}" placeholder="e.g. Kohler"></div>
@@ -84,7 +90,8 @@ function componentsHtml(scan, obj, comps) {
         <button class="btn" data-mp-link="${escapeHtml(c.key)}">LINK</button>${rec ? `<button class="btn" data-mp-unlink="${escapeHtml(c.key)}">UNLINK</button>` : ''}
       </details>
     </div>`;
-  }).join('');
+}
+function componentsFoot(comps, rows, priced, total) {
   return `<h3>COMPONENTS · ${comps.length}</h3>
     <p class="empty">Each component definition once, counted through its nesting. Same definition, same thing; separately defined components stay separate even when they look alike.</p>
     ${rows}
@@ -123,6 +130,17 @@ function reconvertHtml(scan, obj) {
     <button class="btn" data-mp-reconvert>CONVERT AGAIN FROM THE ORIGINAL SKP</button></div>`;
 }
 
+// One component definition's card on its own (the object panel shows it for the selected
+// object): its count, what it holds, its product and the product link.
+export function componentCardHtml(ctx, key) {
+  const { scan, obj } = ctx;
+  if (!obj || !inner(obj)) return '';
+  const comps = modelComponents(inner(obj)), c = comps.find(x => x.key === key);
+  if (!c) return '';
+  const r = componentSchedule(ws.data, scan, inner(obj)).find(x => x.key === key);
+  return `<div class="model-panel"><h3>PRODUCT</h3>${componentRow(scan, c, new Map(comps.map(x => [x.key, x])), r, true)}</div>`;
+}
+
 export function modelPanelHtml(ctx) {
   const { scan, obj, picks } = ctx;
   if (!obj || !inner(obj)) return '';
@@ -154,6 +172,7 @@ export function bindModelPanel(root, ctx) {
   panel.querySelectorAll('[data-mp-select]').forEach(b => b.onclick = () => {
     const c = modelComponents(inner(obj)).find(x => x.key === b.dataset.mpSelect);
     if (!c) return;
+    if (ctx.selectComponent) { ctx.selectComponent(c); return; }
     const keys = keysByMesh(scan, obj), picks = [...new Set(c.parts.map(m => keys.get(m)).filter(Boolean))];
     if (picks.length) ctx.select(picks);
   });

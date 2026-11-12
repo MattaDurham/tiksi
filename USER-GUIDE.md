@@ -13,7 +13,7 @@ Open **GUIDE** at the top of Tiksi for chapter search, expandable screenshots an
 - [Bring in a scan or Polycam capture](#capture)
 - [Draw and correct a floorplan](#plan)
 - [Inspect and edit the 3D model](#model)
-- [Tags, saved views and the Tiksi menu](#tags)
+- [Components, tags, saved views and the Tiksi menu](#tags)
 - [Edit elsewhere and compare before/after](#exchange)
 - [Choose and customize finishes](#materials)
 - [Keep photos attached to the room](#photos)
@@ -216,7 +216,7 @@ Here every group is ON SCREEN (Tiksi menu); by default the tools live in the men
 
 1. Open MODEL and use FRAME if the room is outside the camera. Drag or middle-drag to orbit about the point under the cursor, hold Shift to pan (even mid-drag), scroll to zoom, or use the TOP control for a plan-like view. On a trackpad, pinch also zooms.
 2. Click a wall, floor or ceiling to inspect it. Change the offered dimensions or material in the inspector.
-3. Choose MOVE WALLS, select a native wall and drag its gizmo. Joined walls and room corners follow. Return to PLAN for exact outlines; imported mesh surfaces do not expose native wall controls.
+3. Choose MOVE, select a native wall and drag its gizmo. Joined walls and room corners follow. Return to PLAN for exact outlines; imported mesh surfaces do not expose native wall controls.
 4. Use SECTION to cut through the building and reveal interiors: the cut floats in the view as a see-through plane. Drag its arrow to slide it and a ring to turn it. Use X-RAY to inspect overlapping references.
 5. For lighting, choose LIGHT (or FILE → Settings → Model environment, which also holds render quality). For an image export, use FILE → 3D exchange → SAVE VIEW IMAGE while MODEL is open.
 
@@ -258,23 +258,26 @@ Here every group is ON SCREEN (Tiksi menu); by default the tools live in the men
 
 <a id="tags"></a>
 
-## Tags, saved views and the Tiksi menu
+## Components, tags, saved views and the Tiksi menu
 
-**Where:** MODEL → TAGS
+**Where:** MODEL → COMPONENTS
 
-Every part of the model sits on a tag, the way it does in SketchUp: walls, floors, ceilings, doors and windows, fixtures, and each part of an imported model. Hide a tag to look inside, save the view as a tab, and keep the screen clear by leaving the tools in the Tiksi menu.
+MODEL lists every object, the way SketchUp does: each chair, cabinet and other component of an imported model, and each wall, floor, ceiling, door, window and fixture of the plan. Click one object to see only that object in the panel on the right, where you change its tag, hide it or move it. Every object also sits on a tag; hide a tag to look inside, save the view as a tab, and keep the screen clear by leaving the tools in the Tiksi menu.
 
-![The Tiksi menu is open over MODEL. Roof is hidden in the tag list on the right, so the room under the roof shows. The saved views are tabs at the top left of the model.](js/guide-assets/tags.png)
+![The Tiksi menu is open over MODEL. Roof is hidden in the TAGS tab of the component list, so the room under the roof shows. The saved views are tabs at the top left of the model.](js/guide-assets/tags.png)
 
-The Tiksi menu is open over MODEL. Roof is hidden in the tag list on the right, so the room under the roof shows. The saved views are tabs at the top left of the model.
+The Tiksi menu is open over MODEL. Roof is hidden in the TAGS tab of the component list, so the room under the roof shows. The saved views are tabs at the top left of the model.
 
 ### Try it
 
-1. Open MODEL. With nothing selected, the panel on the right lists the tags with how many objects each holds. Click an eye to hide or show a tag.
-2. Click an object to see its tag in the panel and choose another. Shift-click more objects first to move them all at once; on an imported model, TAG EVERY PART OF THIS MODEL moves the whole model.
-3. Rename a tag by typing over its name, change its colour with the swatch, add one with ADD TAG, or delete one with the X: its objects move to Untagged.
-4. Choose the + at the top left of the model to save the current camera, with the tags shown now, as a view. Click a tab to go back to it; double-click to rename; right-click to update it, move it or delete it. Page Up and Page Down step through the tabs.
-5. Click the Tiksi logo for every tool and view. Tick ON SCREEN on a group to keep it beside the model; untick it to put it back in the menu.
+1. Open MODEL. The component list floats over the left of the model: each imported model with its objects, then the plan's walls, floors, ceilings, openings and fixtures. Type in its box to find an object by name.
+2. Click an object in the list or in the model. One click picks the whole object (a cabinet with its doors and handles), and the panel on the right shows that object and nothing else. Click again straight away to go one object further in (the handle); INSIDE IT in the panel does the same.
+3. In the panel, choose another tag for the object, or New tag... to make one. Only that object changes tag. Shift-click more objects first to change them together; SELECT ALL picks every copy of a component.
+4. Choose HIDE (or press H, or click the eye beside the object in the list) to hide only that object. Its tag and everything else on that tag stay as they are. SHOW ALL HIDDEN in the list (Shift+H) brings back everything hidden this way.
+5. To move an object of an imported model, type how far under MOVE, or choose MOVE IT IN THE VIEW (M) and drag an arrow. PUT IT BACK returns it to where the model file has it.
+6. Open the TAGS tab of the list for the tags themselves, with how many objects each holds. Click an eye to hide or show a whole tag. Rename a tag by typing over its name, change its colour with the swatch, add one with ADD TAG, or delete one with the X: its objects move to Untagged.
+7. Choose the + at the top left of the model to save the current camera, with the tags shown now, as a view. Click a tab to go back to it; double-click to rename; right-click to update it, move it or delete it. Page Up and Page Down step through the tabs.
+8. Click the Tiksi logo for every tool and view. Tick ON SCREEN on a group to keep it beside the model; untick it to put it back in the menu.
 
 ### Other features here
 
@@ -282,13 +285,19 @@ The Tiksi menu is open over MODEL. Roof is hidden in the tag list on the right, 
 
 **Plan elements.** Walls, floors, ceilings, doors and windows, built-in fixtures and loose furniture each start on their own tag. A new wall goes on the walls tag; one you moved stays where you put it.
 
+**What one object is.** In a SketchUp model an object is a component, with everything nested in it, or a group. In other files it is a named part. A model that is one solid piece (a scan mesh, a point cloud) is a single object: clicking it selects the whole model.
+
+**The whole model.** Click a model's name at the top of its objects in the list, or the model's name in an object's panel, for the whole model: its position, materials, component schedule and DETECT TAGS AGAIN.
+
+**Hidden and moved objects.** Both are saved with the project. Drawings in DOCUMENTS leave out hidden objects and show moved ones where they now stand. Converting a SketchUp model again, or importing a new version of it, starts both over: everything shown, everything where the file has it.
+
 **Drawings follow the tags.** DOCUMENTS draws plans, sections, elevations and 3D views with the model's tags. Each view also has its own TAGS list: leave a tag as the model has it, or show or hide it in that view only. A 3D view can start from a saved view, camera and tags together.
 
 **SketchUp.** Exports to SketchUp, and the SketchUp mirror beside a project file, put each object on a SketchUp tag with the same name and visibility.
 
 **What stays on the screen.** The ON SCREEN choices belong to this browser and apply to every project. Keyboard shortcuts work whether or not a group is on the screen.
 
-> **Good to know:** Tags only change what is shown. Hidden objects are still in the project, still counted in takeoffs, and still exported.
+> **Good to know:** Tags and HIDE only change what is shown. Hidden objects are still in the project, still counted in takeoffs, and still exported. A moved object is exported where it now stands.
 
 <a id="exchange"></a>
 

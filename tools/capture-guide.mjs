@@ -124,6 +124,7 @@ async function tagsShot() {
   await page.waitForFunction(async () => Object.keys((await import('/js/store.js')).activeProperty().tagOf).some(k => k.startsWith('node:guide-roof')), null, { timeout: 60000 });
   await page.keyboard.press('KeyF'); await settle(900);
   await page.locator('[data-view-add]').click(); await settle(200);
+  await page.locator('.v-objects [data-ol-tab="tags"]').click(); await settle(200);   // the tag list is the list's second tab
   await page.locator('.v-tags [data-tag-eye="tag-roof"]').click(); await settle(300);
   await page.evaluate(async () => { const s = await import('/js/store.js'); const p = s.activeProperty(); p.savedViews[0].name = 'Outside'; s.touch(); });
   await page.locator('[data-view-add]').click(); await settle(200);
@@ -139,6 +140,7 @@ async function tagsShot() {
     for (const t of p.tags) t.visible = true;
     s.touch();
     (await import('/js/tiksi-menu.js')).resetScreen(true);
+    (await import('/js/object-list.js')).showListTab('list');
   });
 }
 

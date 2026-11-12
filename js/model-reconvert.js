@@ -35,6 +35,10 @@ export async function convertAgain(prop, scan, oldWrapper) {
     await putFile(scan.id, converted.buffer, { name: scan.name, format: 'glb', kind: 'mesh' });
     for (const k of Object.keys(tagOf)) if (k.startsWith(prefix)) delete tagOf[k];
     prop.tagOf = Object.assign(tagOf, assigned);
+    // Hidden objects and moved objects are kept by part path, and the new file's paths are
+    // new: both start again (everything shown, everything where the file has it).
+    for (const k of Object.keys(prop.hidden || {})) if (k.startsWith(prefix)) delete prop.hidden[k];
+    delete scan.partOffsets;
     scan.format = 'glb';
     // The stored file is the new one: its size is what a device's size limit goes by.
     scan.bytes = converted.buffer.byteLength;
