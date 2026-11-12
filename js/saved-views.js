@@ -11,6 +11,7 @@
 
 import { OVERRIDE_UNTAGGED } from './tags.js';
 import { normalizeSections } from './section-planes.js';
+import { VFOV_MIN, VFOV_MAX, DEFAULT_VFOV } from './lens.js';
 
 const ID_RE = /^[\w.:-]{1,80}$/;
 const MAX_VIEWS = 100;
@@ -27,7 +28,8 @@ export function normalizeSavedView(v, taken = new Set()) {
   if (!position || !target) return null;   // a view without a camera shows nothing
   let id = typeof v.id === 'string' && ID_RE.test(v.id) && !taken.has(v.id) ? v.id : newId();
   while (taken.has(id)) id = newId();
-  const fov = Number.isFinite(num(c.fov)) ? Math.min(110, Math.max(10, num(c.fov))) : 50;
+  // The vertical angle, within the limits the FIELD OF VIEW tool keeps to (lens.js).
+  const fov = Number.isFinite(num(c.fov)) ? Math.min(VFOV_MAX, Math.max(VFOV_MIN, num(c.fov))) : DEFAULT_VFOV;
   const tags = {};
   if (v.tags && typeof v.tags === 'object' && !Array.isArray(v.tags)) {
     for (const [k, on] of Object.entries(v.tags).slice(0, 500)) if (ID_RE.test(k) && typeof on === 'boolean') tags[k] = on;

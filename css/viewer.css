@@ -253,6 +253,11 @@ html.touch .v-light-list summary { display: flex; align-items: center; min-heigh
 .v-match-frame { position: absolute; outline: 1px solid rgba(232, 151, 58, 0.85); box-shadow: 0 0 0 100vmax rgba(5, 7, 10, 0.42); }
 .v-match-frame img { width: 100%; height: 100%; object-fit: fill; display: block; }
 .v-match-pip { display: none; position: absolute; left: 12px; bottom: 40px; border: 4px solid #fff; background: #fff; box-shadow: var(--shadow-2); }
+/* FIELD OF VIEW: the phone's 4:3 picture fitted in the window, with what lies outside it dimmed. */
+.v-lens-frame { position: absolute; pointer-events: none; z-index: 2; outline: 1px dashed rgba(232, 151, 58, 0.9); box-shadow: 0 0 0 100vmax rgba(5, 7, 10, 0.28); }
+.v-lens-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.v-lens-row .btn { flex: 1 1 0; min-width: 48px; margin: 0; }
+.v-lens-row .btn.active { background: var(--accent, #e8973a); color: #111; border-color: transparent; }
 .v-match-pip img { width: 100%; height: 100%; object-fit: fill; display: block; }
 .v-match-pip span { position: absolute; left: 0; right: 0; bottom: 0; padding: 3px 6px; font: 600 10px var(--mono); color: #fff; background: rgba(0, 0, 0, 0.55); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .v-match.beside .v-match-pip { display: block; }

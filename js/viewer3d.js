@@ -49,6 +49,7 @@ import { wallAnchor, sheetPlacement, viewForSheet, PRINT_SIZES, DEFAULT_PRINT } 
 import { addDocumentFromFile, documentCanvas, setDocumentPage, isPdfDocument } from './documents.js';
 import { poseFromView, viewFromPose, lookAtPose, solvePose, lensFromHfov, hfovOfLens, project as projectPose, poseFromMatrix } from './camera-solve.js';
 import { takenAtMs } from './photo-exif.js';
+import { LENSES, lensById, vfovForLens, describeView, dragFov, lensFrameRect, DEFAULT_VFOV } from './lens.js';
 import { KF, keyframeRow, keyframeModelPose, keyframeLens, nearestKeyframe, sharpKeyframes, segmentsOf, decodePng16, depthPoints, alignSession } from './polycam-cameras.js';
 import { addPosition, removePosition, picturesOf, positionLabel, renderingName, renderSize, ROLE_LABELS } from './positions.js';
 import {
@@ -88,7 +89,9 @@ let lastClick = null;          // the last click on the model, to tell a double-
 let movePivot = null;          // what the MOVE handle holds while it moves model objects
 let hoverTarget = null;
 let mode = 'orbit';            // orbit | walk | top
-let tool = 'select';           // select | move | measure | pin | note
+let tool = 'select';           // select | move | measure | pin | note | fov
+let lensPick = null;           // the lens preset the view is set to (lens.js), fitted again when the window changes shape
+let fovDrag = null;            // { y, vfov } while the FIELD OF VIEW tool drags
 let xray = false;
 // Section cuts (section-planes.js), per property and kept across remounts:
 // { on, planes: [{ id, kind, q, pos }], active: id of the plane whose handles show }.
@@ -372,8 +375,10 @@ function setupScene() {
   nav = attachSketchupNavigation(controls, {
     pickPoint: e => { if (!scene || !modelGroup) return null; const hit = pick(e, { pins: false, notes: false, ground: true }); return hit ? hit.point : null; },
     canOrbit: () => mode !== 'top',
+    // FIELD OF VIEW takes the left drag for itself (the middle button still orbits).
+    leftFree: () => tool === 'fov',
     // While one finger draws a markup it does not also turn the view; two fingers still do.
-    oneFinger: () => !(markup && markup.fingerDraws()),
+    oneFinger: () => !(markup && markup.fingerDraws()) && tool !== 'fov',
     onChange: () => { markMotion(); requestRender(2); },
   });
 
@@ -1535,8 +1540,10 @@ function resize() {
   composer.setPixelRatio(pr);
   composer.setSize(w, h);
   camera.aspect = w / h;
+  if (lensPick && !match) camera.fov = vfovForLens(lensById(lensPick), camera.aspect);
   camera.updateProjectionMatrix();
   if (match) applyMatchFrame();
+  placeLensFrame();
   for (const m of measures) m.line.material.resolution.set(w * pr, h * pr);
   requestRender(2);
 }
@@ -1734,12 +1741,19 @@ function onPointerDown(e) {
   rightPress = (e.button === 2 || (e.button === 0 && e.ctrlKey)) && mode !== 'walk' ? { x: e.clientX, y: e.clientY } : null;
   if (e.button !== 0 || rightPress) { pressed = null; return; }
   pressed = { x: e.clientX, y: e.clientY };
+  // FIELD OF VIEW: the press starts a drag that widens or narrows the view (lens.js).
+  if (tool === 'fov' && !match && e.isPrimary !== false) {
+    fovDrag = { y: e.clientY, vfov: camera.fov };
+    try { renderer.domElement.setPointerCapture(e.pointerId); } catch (err) { /* the drag still follows the canvas */ }
+    return;
+  }
   if (mode === 'walk' && !walkLocked) dragLook = { x: e.clientX, y: e.clientY };
 }
 function onPointerUp(e) {
   const rp = rightPress; rightPress = null;
   if (rp) { if (Math.hypot(e.clientX - rp.x, e.clientY - rp.y) <= 5) openContextMenu(e); return; }
   const p = pressed; pressed = null; dragLook = null;
+  if (fovDrag) { fovDrag = null; return; }
   // A press on a section handle moved or turned a plane; it is not a click on the model.
   if (!p || e.button !== 0 || gizmo.dragging || secMove.dragging || secTurn.dragging || performance.now() - secDragAt < 80) return;
   if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > 5) return;      // it was a drag, not a click
@@ -1812,6 +1826,10 @@ function selectedModelObject() {
 }
 let hoverPending = false;
 function onPointerMove(e) {
+  if (fovDrag) {
+    setViewFov(dragFov(fovDrag.vfov, e.clientY - fovDrag.y, wrapEl ? wrapEl.clientHeight : 0), null);
+    return;
+  }
   if (mode === 'walk' && dragLook) {
     const dx = e.clientX - dragLook.x, dy = e.clientY - dragLook.y;
     dragLook = { x: e.clientX, y: e.clientY };
@@ -1829,7 +1847,8 @@ function onPointerMove(e) {
     if (!scene) return;
     const hit = pick(e, { scans: false, ground: false });
     const next = hit && ['wall', 'room', 'opening', 'ceiling'].includes(hit.kind) ? hit.object : null;
-    if (tool === 'measure' || tool === 'pin' || tool === 'note') renderer.domElement.style.cursor = hit ? 'crosshair' : 'default';
+    if (tool === 'fov') renderer.domElement.style.cursor = 'ns-resize';
+    else if (tool === 'measure' || tool === 'pin' || tool === 'note') renderer.domElement.style.cursor = hit ? 'crosshair' : 'default';
     else renderer.domElement.style.cursor = (hit && hit.kind !== 'ground') ? 'pointer' : 'default';
     if (next !== hoverTarget) { hoverTarget = next; updateOutlineTargets(); requestRender(2); }
   });
@@ -2492,7 +2511,9 @@ async function startMatch(id, resume, opts = {}) {
   box.querySelector('.v-match-pip span').textContent = ph.name || '';
   for (const img of box.querySelectorAll('img')) img.src = ph.thumb || '';
   wrapEl.appendChild(box);
-  match = { id, aspect, hfov: resume ? resume.hfov : view.fov, roll: resume ? (resume.roll || 0) : (view.roll || 0), el: box, start, points: null, positionId: opts.positionId || null };
+  // The view's own lens, given back when PHOTO MODE ends (carried across a remount by `resume`).
+  const prevFov = resume && Number.isFinite(resume.prevFov) ? resume.prevFov : camera.fov, prevLens = resume ? resume.prevLens || null : lensPick;
+  match = { prevFov, prevLens, id, aspect, hfov: resume ? resume.hfov : view.fov, roll: resume ? (resume.roll || 0) : (view.roll || 0), el: box, start, points: null, positionId: opts.positionId || null };
   photoUrl(id).then(url => { if (url && match && match.id === id && token === mountId) for (const img of box.querySelectorAll('img')) img.src = url; });
   box.querySelector('.v-match-frame').addEventListener('click', onMatchPhotoClick);
   controls.maxPolarAngle = MATCH_POLAR;
@@ -2593,8 +2614,15 @@ function updateMatchMarkers() {
 function endMatch() {
   if (!match) return;
   match.el.remove();
+  const before = match;
   match = null;
-  if (camera) { camera.fov = BASE_FOV; camera.updateProjectionMatrix(); }
+  // The view gets back the lens it had before PHOTO MODE took the photo's.
+  if (camera) {
+    lensPick = before.prevLens || null;
+    camera.fov = lensPick ? vfovForLens(lensById(lensPick), camera.aspect || 1) : Number.isFinite(before.prevFov) ? before.prevFov : BASE_FOV;
+    camera.updateProjectionMatrix();
+  }
+  placeLensFrame();
   if (controls) { controls.maxPolarAngle = mode === 'walk' ? controls.maxPolarAngle : ORBIT_POLAR; controls.update(); }
   applyMarkerVisibility();
   setHint('');
@@ -3737,11 +3765,13 @@ function taskText() {
   if (tool === 'note') return 'Tap where the note belongs.';
   if (tool === 'pin') return pinPhotoId && photoById(prop, pinPhotoId) ? 'Tap where this photo was taken.' : 'Choose a photo on the PHOTOS page first.';
   if (tool === 'move') return 'MOVE needs the desktop layout.';
+  if (tool === 'fov') return 'Drag up to narrow the view, down to widen it.';
   return '';
 }
 function defaultHint() {
   if (mode === 'walk') return walkLocked ? 'WALK: WASD / arrows move, Shift runs, mouse looks. Esc releases the mouse.' : 'WALK: WASD / arrows move, Shift runs. Drag to look or click to capture the mouse. Esc exits.';
   if (tool === 'measure') return 'MEASURE: click two points on any surface.';
+  if (tool === 'fov') return 'FIELD OF VIEW: drag up to narrow the view, down to widen it. The panel has the iPhone 0.5×, 1× and 2× lenses. Esc ends.';
   if (tool === 'pin') return 'PIN: choose a photo or document, then click the surface to hang it on.';
   if (tool === 'note') return noteHint();
   if (tool === 'move') return 'MOVE: select a wall or an object of an imported model and drag an arrow. Walls joined to a moved wall follow on release.';
@@ -4446,6 +4476,7 @@ function bindTagManager(root) {
 function renderInspectorBody() {
   if (!inspEl) return;
   if (tool === 'pin') return renderPinPanel();
+  if (tool === 'fov' && !match) return renderFovPanel();
   if (match) return renderMatchPanel();
   if (selection && picked.length > 1) return renderMultiPanel();
   const modelObject = selectedModelObject();
@@ -4878,7 +4909,7 @@ function showView(v, ms = 650) {
   rebuildNightLights();
   applyTagVisibility();
   applySection();
-  if (camera.fov !== v.camera.fov) { camera.fov = v.camera.fov; camera.updateProjectionMatrix(); }
+  adoptFov(v.camera.fov);
   flyTo(new THREE.Vector3(...v.camera.position), new THREE.Vector3(...v.camera.target), ms);
   const sel = selectedObject();
   if (sel && !isVisibleChain(sel)) setSelection(null);
@@ -4999,6 +5030,8 @@ function menuGroups() {
       { label: 'Orbit', key: 'O', active: mode === 'orbit', run: () => setMode('orbit') },
       { label: 'Walk through', key: 'W', active: mode === 'walk', run: () => setMode('walk') },
       { label: 'Top, north up', key: 'T', active: mode === 'top', run: () => setMode('top') },
+      ...LENSES.map(l => ({ label: 'Lens: iPhone ' + l.label + ' (' + Math.round(l.f35) + ' mm)', active: lensPick === l.id, run: () => applyLens(l.id) })),
+      { label: 'Lens: default (' + DEFAULT_VFOV + '° tall)', active: !lensPick && camera && Math.abs(camera.fov - DEFAULT_VFOV) < 0.05, run: () => applyLens(null) },
     ]),
     g('Display', 'model.modes', false, 'The ORBIT to NOTES bar over the model', [
       { label: 'Section cut', key: 'C', active: section.on, run: toggleSection },
@@ -5014,6 +5047,7 @@ function menuGroups() {
       { label: 'Select', key: 'V', active: tool === 'select', run: () => setTool('select') },
       { label: 'Move walls and objects', key: 'M', active: tool === 'move', run: () => setTool(tool === 'move' ? 'select' : 'move') },
       { label: 'Measure', key: 'D', active: tool === 'measure', run: () => setTool(tool === 'measure' ? 'select' : 'measure') },
+      { label: 'Field of view: drag up or down', key: 'Z', active: tool === 'fov', run: () => setTool(tool === 'fov' ? 'select' : 'fov') },
       ...(measures.length ? [{ label: 'Clear measures', run: () => { clearMeasures(); renderToolCol(); } }] : []),
       { label: 'Pin a photo', key: 'P', active: tool === 'pin', run: () => { if (tool === 'pin') setTool('select'); else startPinMode(null); } },
       { label: 'Note', key: 'N', active: tool === 'note', run: () => { if (tool === 'note') setTool('select'); else startNoteMode(null); } },
@@ -5071,6 +5105,7 @@ function renderToolCol() {
     ${tb('select', 'select', 'SELECT', 'V', tool === 'select')}
     ${tb('move', 'move', 'MOVE', 'M', tool === 'move')}
     ${tb('measure', 'measure', 'MEASURE', 'D', tool === 'measure')}
+    ${tb('fov', 'zoom-in', 'FIELD OF VIEW', 'Z', tool === 'fov')}
     ${measures.length ? tb('clearm', 'close', 'CLEAR MEASURES') : ''}
     ${tb('pin', 'pin', 'PIN', 'P', tool === 'pin')}
     ${tb('note', 'note', 'NOTE', 'N', tool === 'note')}
@@ -5099,6 +5134,7 @@ function renderToolCol() {
   on('select', () => setTool('select'));
   on('move', () => setTool(tool === 'move' ? 'select' : 'move'));
   on('measure', () => setTool(tool === 'measure' ? 'select' : 'measure'));
+  on('fov', () => setTool(tool === 'fov' ? 'select' : 'fov'));
   on('clearm', () => { clearMeasures(); renderToolCol(); });
   on('pin', () => { if (tool === 'pin') setTool('select'); else startPinMode(null); });
   on('note', () => { if (tool === 'note') setTool('select'); else startNoteMode(null); });
@@ -5131,6 +5167,78 @@ function renderToolCol() {
   tc.querySelectorAll('[data-tag]').forEach(b => b.onclick = () => toggleTag(b.dataset.tag));
   on('rebuild', () => { rebuildModel(); rebuildGround(); buildAllPins(); buildAllNotes(); });
 }
+// ---------- field of view ----------
+// SketchUp's Field of View: with the FIELD OF VIEW tool on, press and drag up to narrow the view
+// and down to widen it, from where the camera stands. Lens presets frame the view the way the
+// iPhone 17 Pro frames its 0.5x, 1x and 2x pictures and the Polycam keyframes (lens.js).
+// `pick` is the preset the angle came from (kept so a new window shape fits it again), or null.
+function setViewFov(vfov, pick) {
+  if (!camera || !Number.isFinite(vfov)) return;
+  lensPick = pick || null;
+  camera.fov = vfov; camera.updateProjectionMatrix();
+  markMotion(); requestRender(2);
+  updateFovReadout();
+}
+// A camera angle that came from somewhere else (a saved view, a restored camera): it keeps its
+// preset when it is one, so it is refitted when the window changes shape.
+function adoptFov(vfov) {
+  if (!camera || !Number.isFinite(vfov)) return;
+  const d = describeView(vfov, camera.aspect || 1);
+  lensPick = d && d.preset ? d.preset.id : null;
+  if (camera.fov !== vfov) { camera.fov = vfov; camera.updateProjectionMatrix(); }
+}
+function applyLens(id) {
+  if (!camera) return;
+  if (match) endMatch();
+  const lens = lensById(id);
+  setViewFov(lens ? vfovForLens(lens, camera.aspect || 1) : DEFAULT_VFOV, lens ? lens.id : null);
+}
+// The phone's 4:3 picture, outlined over the view while the tool is on: what a keyframe or a
+// photo from that lens holds. Outside it is what the window shows beyond the picture.
+function placeLensFrame() {
+  if (!wrapEl) return;
+  let box = wrapEl.querySelector('.v-lens-frame');
+  const show = tool === 'fov' && !match;
+  if (!show) { if (box) box.hidden = true; return; }
+  if (!box) { box = document.createElement('div'); box.className = 'v-lens-frame'; box.setAttribute('aria-hidden', 'true'); wrapEl.appendChild(box); }
+  const r = lensFrameRect(wrapEl.clientWidth, wrapEl.clientHeight);
+  box.hidden = !r;
+  if (r) Object.assign(box.style, { left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px' });
+}
+function fovFacts() {
+  const d = camera && describeView(camera.fov, camera.aspect || 1);
+  return d ? { long: Math.round(d.long) + '°', short: Math.round(d.short) + '°', f35: Math.round(d.f35) + ' mm', lens: d.preset ? 'iPhone 17 Pro ' + d.preset.label : 'Between presets', preset: d.preset ? d.preset.id : null } : null;
+}
+function updateFovReadout() {
+  if (!inspEl || tool !== 'fov') return;
+  const f = fovFacts();
+  if (!f) return;
+  for (const k of ['long', 'short', 'f35', 'lens']) { const b = inspEl.querySelector('[data-fov-' + k + ']'); if (b) b.textContent = f[k]; }
+  inspEl.querySelectorAll('[data-lens]').forEach(b => {
+    const on = b.dataset.lens === (f.preset || (Math.abs(camera.fov - DEFAULT_VFOV) < 0.05 && !lensPick ? 'default' : ''));
+    b.classList.toggle('active', on); b.setAttribute('aria-pressed', String(on));
+  });
+}
+function renderFovPanel() {
+  const f = fovFacts() || { long: '', short: '', f35: '', lens: '' };
+  inspEl.innerHTML = `<h3>FIELD OF VIEW</h3>
+    <div class="empty" style="margin-bottom:10px">Press and drag on the model: up narrows the view, down widens it. The camera stays where it is; scroll still moves it.</div>
+    <div class="stat-line"><span>Lens</span><b data-fov-lens>${escapeHtml(f.lens)}</b></div>
+    <div class="stat-line"><span>Across the picture's long side</span><b data-fov-long>${escapeHtml(f.long)}</b></div>
+    <div class="stat-line"><span>Across its short side</span><b data-fov-short>${escapeHtml(f.short)}</b></div>
+    <div class="stat-line"><span>35 mm equivalent</span><b data-fov-f35>${escapeHtml(f.f35)}</b></div>
+    <div class="field" style="margin-top:12px"><label>iPhone 17 Pro lenses</label>
+      <div class="v-lens-row" role="group" aria-label="Lens presets">
+        ${LENSES.map(l => `<button class="btn small" data-lens="${l.id}" title="${escapeHtml(l.name)}: ${Math.round(l.long)}° by ${Math.round(l.short)}°, ${Math.round(l.f35)} mm equivalent">${escapeHtml(l.label)}</button>`).join('')}
+        <button class="btn small" data-lens="default" title="Tiksi's usual view: ${DEFAULT_VFOV}° tall">DEFAULT</button>
+      </div></div>
+    <div class="empty" style="margin:8px 0 12px">The outline is the phone's 4:3 picture: at 1× it frames the model as the Polycam keyframes do. 1× is measured from those keyframes, 2× is the middle half of the same picture, and 0.5× is the 14 mm the phone writes into its ultra wide photos. A saved view keeps the lens.</div>
+    <button class="btn" data-fov-done>DONE</button>`;
+  inspEl.querySelectorAll('[data-lens]').forEach(b => b.onclick = () => applyLens(b.dataset.lens === 'default' ? null : b.dataset.lens));
+  inspEl.querySelector('[data-fov-done]').onclick = () => setTool('select');
+  updateFovReadout();
+}
+
 function setTool(next) {
   if (next !== 'select') endMatch();
   if (next !== 'select' && markup && markup.isOn()) markup.setOn(false);
@@ -5138,7 +5246,10 @@ function setTool(next) {
   tool = next;
   if (next !== 'pin') pinBatch = false;
   if (next !== 'note') movingNoteId = null;
+  fovDrag = null;
   reattachGizmo();
+  if (nav && nav.refresh) nav.refresh();
+  placeLensFrame();
   renderToolCol();
   renderInspector();
   setHint('');
@@ -5202,6 +5313,7 @@ function onKeyDown(e) {
     case 'KeyV': setTool('select'); break;
     case 'KeyM': setTool(tool === 'move' ? 'select' : 'move'); break;
     case 'KeyD': setTool(tool === 'measure' ? 'select' : 'measure'); break;
+    case 'KeyZ': if (e.metaKey || e.ctrlKey || e.altKey) return; setTool(tool === 'fov' ? 'select' : 'fov'); break;
     case 'KeyP': if (tool === 'pin') setTool('select'); else startPinMode(null); break;
     case 'KeyN': if (tool === 'note') setTool('select'); else startNoteMode(null); break;
     case 'KeyU': toggleMarkup(); break;
@@ -5343,7 +5455,7 @@ function openModel(root) {
   // A rebuild that must not move the picture (keepViewOnNextMount): the camera last shown.
   const kept = keepView && lastView && lastView.propId === prop.id ? lastView : null;
   keepView = false;
-  if (kept && controls && controls.target) { camera.position.fromArray(kept.position); controls.target.fromArray(kept.target); camera.fov = kept.fov; camera.updateProjectionMatrix(); controls.update(); }
+  if (kept && controls && controls.target) { camera.position.fromArray(kept.position); controls.target.fromArray(kept.target); adoptFov(kept.fov); camera.updateProjectionMatrix(); controls.update(); }
 
   const focus=pendingScanFocus || prop.modelSourceId,token=mountId,focusVersion=selectionVersion;pendingScanFocus=null;
   loadShownScans().then(()=>{if(token===mountId && selectionVersion===focusVersion && !match && !kept && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
@@ -5540,7 +5652,7 @@ export function unmount() {
   if (markup) { markup.dispose(); markup = null; }
   markupLoading = null;
   // Every disk save remounts the view (a saved view among them): the match carries on after it.
-  matchResume = match && camera && controls ? { at: performance.now(), id: match.id, hfov: match.hfov, roll: match.roll, position: camera.position.toArray(), target: (tween ? tween.t1 : controls.target).toArray() } : null;
+  matchResume = match && camera && controls ? { at: performance.now(), id: match.id, hfov: match.hfov, roll: match.roll, prevFov: match.prevFov, prevLens: match.prevLens, position: camera.position.toArray(), target: (tween ? tween.t1 : controls.target).toArray() } : null;
   if (tween && matchResume) matchResume.position = tween.p1.toArray();
   if (match) { match.el.remove(); match = null; }
   if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
@@ -5603,6 +5715,8 @@ export function fieldState() {
   return {
     mode,
     cameras: [{ id: 'frame', label: 'Overview' }, { id: 'front', label: 'Front' }, { id: 'iso', label: 'Corner' }],
+    // The iPhone 17 Pro lens the view is framed with (lens.js), or the default.
+    lenses: [...LENSES.map(l => ({ id: l.id, label: l.label, on: lensPick === l.id })), { id: 'default', label: 'Default', on: !lensPick && !!camera && Math.abs(camera.fov - DEFAULT_VFOV) < 0.05 }],
     views: (prop.savedViews || []).map(v => ({ id: v.id, label: v.name, on: v.id === activeViewId })),
     positions: (prop.photoPositions || []).map(p => ({ id: p.id, label: positionLabel(p) })),
     show: [
@@ -5647,6 +5761,7 @@ export function fieldAction(kind, id, value) {
     flyTo(new THREE.Vector3(...pos.view.position), new THREE.Vector3(...pos.view.target), 700);
   }
   else if (kind === 'view') goToView(id);
+  else if (kind === 'lens') applyLens(id === 'default' ? null : id);
   else if (kind === 'save-view') addView();
   // Saved-view editing for the panel: `value` is the new name.
   else if (kind === 'view-rename') { if (String(value || '').trim() && renameSavedView(prop, id, String(value).trim())) { touch(); renderViews(); } }
