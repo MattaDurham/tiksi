@@ -1,6 +1,6 @@
-// Phone-size load budget: the first open of the app on a phone screen, from an empty browser,
-// may use at most LIMITS files and bytes. It fails when the download grows past them, and
-// prints what it measured so the limits can be lowered as the download shrinks.
+// Phone-size first load: the first open of the app on a phone screen, from an empty browser,
+// must answer every request with no page errors. How many files and bytes it took is printed
+// for reference and never fails the check: the owner removed the size limits on 2026-11-12.
 // Synthetic empty project in a temporary state directory; live 8642 is never used.
 //
 // Files and bytes count the app's own files: every response except the /api/ calls, whose
@@ -20,12 +20,6 @@ import { tmpdir } from 'node:os';
 import net from 'node:net';
 import { chromium, devices, webkit } from 'playwright';
 
-// Measured on 2026-11-10 on the combined audit branch (codex/audit-fixes-4, all five last pieces,
-// with MODEL's picking files fetched only when a large scan is shown), Chromium: 157 files and
-// 1,201,147 bytes downloaded (4,095,617 uncompressed). WebKit also fetches the 363-byte app
-// manifest. The limits leave about 5 percent for growth.
-// Lower them when the download shrinks; raise them only with a reason in the commit.
-export const LIMITS = { requests: 165, bytes: 1_250_000 };
 const ENGINE = process.env.E2E_BROWSER === 'webkit' ? 'webkit' : 'chromium';
 
 const state = await mkdtemp(tmpdir() + '/tiksi-load-budget-test-');
@@ -95,16 +89,14 @@ try {
     byType[type] = (byType[type] || 0) + sent;
   }
   const heaviest = Object.entries(byType).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([t, n]) => `${t} ${n.toLocaleString('en-US')}`).join(', ');
-  console.log(`Phone first load on ${ENGINE}: ${files.length} files (limit ${LIMITS.requests}), ${bytes.toLocaleString('en-US')} bytes downloaded (limit ${LIMITS.bytes.toLocaleString('en-US')}), ${decoded.toLocaleString('en-US')} bytes uncompressed, ${api} calls to the server, settled in ${(settledMs / 1000).toFixed(1)} s. Largest kinds downloaded: ${heaviest}.`);
+  console.log(`Phone first load on ${ENGINE}: ${files.length} files, ${bytes.toLocaleString('en-US')} bytes downloaded, ${decoded.toLocaleString('en-US')} bytes uncompressed, ${api} calls to the server, settled in ${(settledMs / 1000).toFixed(1)} s. Largest kinds downloaded: ${heaviest}.`);
   const named = request => `${request.method()} ${new URL(request.url()).pathname} (${request.failure()?.errorText || 'failed'})`;
   const late = [], failed = [];
   for (const request of failures) (whole(request) ? late : failed).push(request);
   if (late.length) console.log(`Answered in full, then reported cancelled by Chromium: ${late.map(named).join(', ')}.`);
   assert.deepEqual(failed.map(named), [], 'every request of the first load is answered');
   assert.deepEqual(errors, [], 'no page errors on the first load');
-  assert.ok(files.length <= LIMITS.requests, `the first load asks for ${files.length} files, over the limit of ${LIMITS.requests}`);
-  assert.ok(bytes <= LIMITS.bytes, `the first load downloads ${bytes.toLocaleString('en-US')} bytes, over the limit of ${LIMITS.bytes.toLocaleString('en-US')}`);
-  console.log('Load budget passed.');
+  console.log('First load passed.');
 } finally {
   if (browser) await browser.close();
   child.kill();

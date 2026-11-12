@@ -65,7 +65,7 @@ export function zoomTarget(cameraPos, target, hitPoint, zoomingIn, minDistance =
 
 // Wire it up. `pickPoint(event)` returns the world point under the cursor or null; `canOrbit()`
 // says whether the current mode allows orbiting. Returns a function that removes it all.
-export function attachSketchupNavigation(controls, { pickPoint, canOrbit = () => true, onChange }) {
+export function attachSketchupNavigation(controls, { pickPoint, canOrbit = () => true, oneFinger = () => true, onChange }) {
   const el = controls.domElement;
   let drag = null;                        // { base, x, y } while a mouse button is down
   controls.zoomToCursor = true;
@@ -76,7 +76,9 @@ export function attachSketchupNavigation(controls, { pickPoint, canOrbit = () =>
     controls.mouseButtons.LEFT = a;
     controls.mouseButtons.MIDDLE = a;
     controls.mouseButtons.RIGHT = PAN;
-    if (controls.touches) controls.touches.ONE = canOrbit() ? TOUCH_ROTATE : TOUCH_PAN;
+    // `oneFinger()` false: a single finger is doing something else (drawing a markup), so it
+    // neither turns nor pans; two fingers still zoom and pan.
+    if (controls.touches) controls.touches.ONE = !oneFinger() ? -1 : canOrbit() ? TOUCH_ROTATE : TOUCH_PAN;
   }
   setButtons();
 
