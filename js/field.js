@@ -336,7 +336,7 @@ function render() {
     const show = st.show.filter(s => !s.disabled && s.count !== 0);
     // Marking up: Measure by two taps (a note is under Capture). The banner over the model then
     // says what a tap does, with DONE and CLEAR.
-    const measure = st.tools.filter(t => t.id === 'measure').map(t => `<button type="button" class="fd-chip ${t.on ? 'on' : ''}" aria-pressed="${t.on}" data-act="tool" data-id="${t.id}">${escapeHtml(t.label)}</button>`).join('')
+    const measure = st.tools.filter(t => t.id === 'measure' || t.id === 'markup').map(t => `<button type="button" class="fd-chip ${t.on ? 'on' : ''}" aria-pressed="${t.on}" data-act="tool" data-id="${t.id}">${escapeHtml(t.label)}</button>`).join('')
       + (st.measures ? `<button type="button" class="fd-chip" data-act="clear-measures">Clear ${st.measures === 1 ? 'the measurement' : st.measures + ' measurements'}</button>` : '');
     // The saved view that is open can be renamed, set to what the view shows now, or deleted.
     const openView = st.views.find(v => v.on);

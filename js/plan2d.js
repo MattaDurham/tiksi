@@ -17,6 +17,8 @@ import { materialSelectHtml } from './materials.js';
 import { safeUrl } from './material-identity.js';
 import { printSheet } from './print-sheet.js';
 import { icon } from './icons.js';
+import { attachMarkup } from './markup-layer.js';
+import { markupBounds } from './markups.js';
 import { beginGeometryEdit, cancelGeometryEdit, restoreGeometryEdit, revertGeometryEdit, endGeometryHold } from './edit-history.js';
 import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import {
@@ -122,6 +124,7 @@ let calib = null;            // {a:[x,y], b:[x,y]|null}
 let hoverPt = null;          // last cursor world pos
 let drag = null;             // active drag descriptor
 let spaceDown = false;
+let markup = null;             // markup mode over the plan (markup-layer.js): ink and numbered notes
 // Fingers on the canvas (pointerType 'touch'): pointerId -> [sx, sy]. A finger never drags
 // geometry; one finger pans, two pinch to zoom, and a tap acts like a mouse click.
 const fingers = new Map();
@@ -207,8 +210,10 @@ function bounds() {
 }
 
 // Fit inside the area right of / below the rulers (`inset`), with a margin for dimension strings.
-function fitFor(cw, ch, inset = RULER) {
+function fitFor(cw, ch, inset = RULER, also = null) {
   const b = bounds();
+  // `also` [minX, minY, maxX, maxY]: more that must be in the picture (a markup's ink).
+  if (also) { b.minX = Math.min(b.minX, also[0]); b.minY = Math.min(b.minY, also[1]); b.maxX = Math.max(b.maxX, also[2]); b.maxY = Math.max(b.maxY, also[3]); }
   const w = cw - inset, h = ch - inset;
   const bw = Math.max(b.maxX - b.minX, 1), bh = Math.max(b.maxY - b.minY, 1);
   const zoom = Math.min(w / (bw * 1.22), h / (bh * 1.22), 250);
@@ -254,8 +259,9 @@ function afterHistoryRestore() {
   resolveLevelView();
   renderToolCol(); renderInspector(); renderSchedule(); updateLevelBadge(); updateHint(); invalidate();
 }
-export function undo() { if (restoreGeometryEdit(prop, 'undo')) afterHistoryRestore(); }
-export function redo() { if (restoreGeometryEdit(prop, 'redo')) afterHistoryRestore(); }
+// While marking up, UNDO and REDO (the buttons and Cmd/Ctrl+Z) step through the marks.
+export function undo() { if (markup && markup.isOn()) markup.undo(); else if (restoreGeometryEdit(prop, 'undo')) afterHistoryRestore(); }
+export function redo() { if (markup && markup.isOn()) markup.redo(); else if (restoreGeometryEdit(prop, 'redo')) afterHistoryRestore(); }
 
 // ---------- snapping ----------
 // Returns the snapped point; snapInfo (module state) records what it snapped to so the
@@ -1195,16 +1201,18 @@ function editScheduleSize(id, key, inp) {
 
 // The active level drawn at its fitted view into a fresh canvas: what PRINT and SAVE PNG send.
 // `paper` draws it dark on white, for printing.
-function planImage(W, H, scale, paper = false) {
+function planImage(W, H, scale, paper = false, over = null, also = null) {
   const saved = { canvas, ctx, vs, selection, hover, hoverPt, drawing, roomDraft, calib };
   const c = document.createElement('canvas');
   c.width = Math.round(W * scale); c.height = Math.round(H * scale);
   try {
     canvas = c; ctx = c.getContext('2d'); exportScale = scale; hatchCache.clear();
     if (paper) C = PAPER;
-    vs = Object.assign({}, vs, fitFor(W, H, 0));
+    vs = Object.assign({}, vs, fitFor(W, H, 0, also));
     selection = hover = hoverPt = drawing = roomDraft = calib = null;
     paint(W, H, true);
+    // A markup's ink goes on while the plan still has the fitted view it was just drawn with.
+    if (over) over(ctx);
   } finally {
     ({ canvas, ctx, vs, selection, hover, hoverPt, drawing, roomDraft, calib } = saved);
     C = SCREEN; exportScale = 0; hatchCache.clear(); textWidthCache.clear(); invalidate();
@@ -1744,7 +1752,8 @@ function onPointerDown(e) {
 function press(sx, sy, e) {
   const [wx, wy] = s2w(sx, sy);
 
-  if (e.button === 1 || spaceDown) {
+  // While marking up, a press that reaches the plan (the MOVE tool, a held Space) only pans.
+  if (e.button === 1 || spaceDown || (markup && markup.takesClicks())) {
     drag = { kind: 'pan', sx, sy, panX: vs.panX, panY: vs.panY, panned: true };
     updateCursor();
     return;
@@ -1996,7 +2005,8 @@ function onFingerDown(e) {
   fingers.set(e.pointerId, pos);
   hover = null; hoverPt = null;
   if (fingers.size === 1) {
-    gesture = { kind: 'tap', id: e.pointerId, sx: pos[0], sy: pos[1], panX: vs.panX, panY: vs.panY };
+    // A finger that is drawing a markup neither taps nor pans; a second finger still pinches.
+    gesture = markup && markup.fingerDraws() ? { kind: 'ink', id: e.pointerId } : { kind: 'tap', id: e.pointerId, sx: pos[0], sy: pos[1], panX: vs.panX, panY: vs.panY };
   } else if (fingers.size === 2) {
     startPinch();
   }
@@ -2047,7 +2057,7 @@ function onFingerUp(e, cancelled = false) {
   if (g.kind === 'pinch') {
     // One finger left after a pinch carries on panning from where it is; no tap.
     const [id, rest] = [...fingers.entries()][0] || [];
-    gesture = rest ? { kind: 'pan', id, sx: rest[0], sy: rest[1], panX: vs.panX, panY: vs.panY } : null;
+    gesture = rest && !(markup && markup.fingerDraws()) ? { kind: 'pan', id, sx: rest[0], sy: rest[1], panX: vs.panX, panY: vs.panY } : null;
     return;
   }
   if (!fingers.size) gesture = null;
@@ -2057,6 +2067,8 @@ function onFingerUp(e, cancelled = false) {
 // a floor outline, as a double-click does.
 function tap(sx, sy, t) {
   const double = lastTap && t - lastTap.t < DOUBLE_TAP_MS && Math.hypot(sx - lastTap.sx, sy - lastTap.sy) < DOUBLE_TAP_PX;
+  // While marking up, a tap is the markup's (a note, a dot) or nothing; it never selects or places.
+  if (markup && markup.takesClicks()) return;
   lastTap = double ? null : { t, sx, sy };
   if (double && (tool === 'wall' || tool === 'room')) { onDblClick(); return; }
   press(sx, sy, { button: 0, altKey: false });
@@ -2125,6 +2137,8 @@ function onKeyDown(e) {
   // A dialog open over PLAN owns the keyboard, as in MEASURE.
   if (document.querySelector('dialog[open]')) return;
   invalidate();
+  if (markup && markup.key(e)) { if (e.key === ' ') spaceDown = true; return; }
+  if (e.key === 'u' && !e.metaKey && !e.ctrlKey && markup) { markup.toggle(); return; }
   if (e.key === ' ') { spaceDown = true; e.preventDefault(); updateCursor(); return; }
   if (e.key === 'Alt') { altDown = true; return; }
   const keys = { v: 'select', w: 'wall', d: 'door', n: 'window', r: 'room', c: 'calibrate' };
@@ -2152,12 +2166,68 @@ function onKeyDown(e) {
   }
 }
 function onKeyUp(e) {
+  if (markup) markup.keyUp(e);
   if (e.key === ' ') { spaceDown = false; updateCursor(); invalidate(); }
   if (e.key === 'Alt') { altDown = false; invalidate(); }
 }
 
+// ---------- markup mode ----------
+// What markup-layer.js needs from this page: plan metres to and from the screen, the level, and
+// a picture of the plan to put a markup's ink on.
+function markupHost() {
+  return {
+    kind: 'plan', wrap: wrapEl, surface: canvas,
+    prop: () => prop,
+    levelId: () => lvl().id,
+    toDoc: (x, y) => s2w(x, y),
+    toPx: (x, y) => w2s([x, y]),
+    unit: () => vs.zoom,
+    viewKey: () => lvl().id + ':' + vs.zoom + ':' + vs.panX + ':' + vs.panY,
+    // Show a markup: its level, with everything in it on the screen.
+    goTo(m) {
+      if (prop.levels.some(l => l.id === m.levelId) && m.levelId !== lvl().id) switchLevel(m.levelId);
+      const b = markupBounds(m);
+      if (!b || !wrapEl) return;
+      const w = wrapEl.clientWidth, h = wrapEl.clientHeight;
+      const bw = Math.max(b[2] - b[0], 0.5), bh = Math.max(b[3] - b[1], 0.5);
+      const shown = (b[0] - vs.panX) * vs.zoom > RULER && (b[1] - vs.panY) * vs.zoom > RULER && (b[2] - vs.panX) * vs.zoom < w && (b[3] - vs.panY) * vs.zoom < h;
+      if (shown) return;
+      vs.zoom = Math.max(4, Math.min(400, vs.zoom, (w - RULER) / (bw * 1.4), (h - RULER) / (bh * 1.4)));
+      vs.panX = (b[0] + b[2]) / 2 - (w + RULER) / 2 / vs.zoom;
+      vs.panY = (b[1] + b[3]) / 2 - (h + RULER) / 2 / vs.zoom;
+      invalidate();
+    },
+    picture: markupPicture,
+    hint: text => { if (text) setHint(text); else updateHint(); },
+    toast: text => { note = text; updateHint(); },
+    // Markup mode went on or off, or its tool changed: this page's own tools stand down.
+    changed(on) {
+      if (on && tool !== 'select') { tool = 'select'; drawing = null; roomDraft = null; calib = null; }
+      if (on) { selection = null; hover = null; }
+      renderToolCol(); renderInspector(); updateCursor(); invalidate();
+      if (!on) updateHint();
+    },
+  };
+}
+// The markup's level as a picture (the whole level, fitted, twice the screen's size at most),
+// with the markup's ink and note numbers on top when `marks` is on.
+async function markupPicture(m, marks) {
+  if (!prop.levels.some(l => l.id === m.levelId)) throw new Error('The level this markup was drawn on is gone.');
+  if (m.levelId !== lvl().id) switchLevel(m.levelId);
+  const W = Math.max(640, wrapEl.clientWidth), H = Math.max(480, wrapEl.clientHeight), scale = Math.min(2, 2400 / W);
+  // The level and everything the markup holds, so ink drawn outside the walls is in the picture
+  // (with or without the marks, so the two pictures of one markup line up).
+  return planImage(W, H, scale, false, marks ? c => markup.paint(c, m, (x, y) => w2s([x, y]), vs.zoom, n => w2s(n.at), 13) : null, markupBounds(m));
+}
+
+// Markup mode as plain data, with the plan view it is being drawn on.
+export function markupState() {
+  return markup && vs ? { ...markup.state(), level: lvl().id, view: { zoom: vs.zoom, panX: vs.panX, panY: vs.panY } } : null;
+}
+
 // ---------- tool column / hint ----------
 function setTool(t) {
+  if (t !== 'select' && markup && markup.isOn()) markup.setOn(false);
   tool = t; note = null;
   drawing = null; roomDraft = null; hover = null;
   if (t !== 'calibrate') calib = null;
@@ -2261,6 +2331,7 @@ function renderToolCol() {
   tc.innerHTML = `
     <div class="tool-head">Tools</div>
     ${tools.map(([id, name, key, ic]) => toolBtn(`data-tool="${id}"`, ic, name, key, tool === id)).join('')}
+    ${toolBtn('data-act="markup"', 'pen', 'MARK UP', 'U', !!markup && markup.isOn())}
     ${toolBtn('data-act="sketchup"', 'external', 'EDIT IN SKETCHUP', '', false)}
     <div class="tool-sep"></div>
     <div class="tool-head">Level</div>
@@ -2290,6 +2361,7 @@ function renderToolCol() {
   tc.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => setTool(b.dataset.tool));
   tc.querySelectorAll('[data-level]').forEach(b => b.onclick = () => switchLevel(b.dataset.level));
   tc.querySelector('[data-act=add-level]').onclick = addLevelUI;
+  tc.querySelector('[data-act=markup]').onclick = () => { if (markup) markup.toggle(); };
   tc.querySelectorAll('[data-preset]').forEach(b => b.onclick = () => { wallPreset = b.dataset.preset; renderToolCol(); });
   const file = tc.querySelector('input[type=file]');
   tc.querySelector('[data-act=upload]').onclick = () => file.click();
@@ -2751,6 +2823,7 @@ export function mount(root) {
   canvas.addEventListener('contextmenu', e => e.preventDefault());
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
+  markup = attachMarkup(markupHost());
 
   // Inspector edits and other views' changes reach the canvas through the store; layout
   // changes (panel resize, browser zoom) through the observer. Everything else is an input.
@@ -2786,6 +2859,8 @@ export function mount(root) {
   // one bad value never leaves the canvas dead until the page is left.
   const loop = () => {
     raf = requestAnimationFrame(loop);
+    // Markup ink follows the plan's pan, zoom and level (a few comparisons when nothing moved).
+    if (markup) { try { markup.frame(); } catch (e) { console.error('the markup layer could not draw:', e); } }
     if (!dirty) return;
     try { if (draw()) dirty = false; }
     catch (e) { dirty = false; console.error('PLAN could not draw this frame:', e); }
@@ -2816,6 +2891,7 @@ function selectFromLink(id) {
 
 export function unmount() {
   cancelAnimationFrame(raf);
+  if (markup) { markup.dispose(); markup = null; }
   // Every disk save remounts the view; typing down the schedule must survive that.
   const a = document.activeElement;
   scheduleResume = scheduleEl && a && scheduleEl.contains(a) && a.dataset.psLen

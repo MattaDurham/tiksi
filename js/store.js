@@ -8,6 +8,7 @@ import { normaliseFixtures } from './fixtures.js';
 import { normalizeDocSets } from './doc-sets.js';
 import { normalizeTags } from './tags.js';
 import { normalizeSavedViews } from './saved-views.js';
+import { normalizeMarkups } from './markups.js';
 import { isPictureRef, inlineBundlePictures } from './picture-assets.js';
 import { normalizeOnePager, emptyOnePager } from './one-pager-record.js';
 import { sameJson } from './workspace-merge.js';
@@ -479,7 +480,7 @@ export function propertyTemplate(name) {
     id: uid('prop'), name: name || 'New property', notes: '', wallHeight: 2.44,
     levels: [levelTemplate('lvl-0', 'Main level', 0, 2.44)], activeLevelId: 'lvl-0',
     walls: [], openings: [], rooms: [], fixtures: [], scans: [], photos: [], notePins: [], videos: [], measurements: [], env: defaultEnv(), source: null,
-    photoPositions: [], positionCounter: 0, cameraSets: [], docSets: [], savedViews: [], onePager: emptyOnePager(),
+    photoPositions: [], positionCounter: 0, cameraSets: [], docSets: [], savedViews: [], markups: [], onePager: emptyOnePager(),
   });
 }
 
@@ -676,7 +677,7 @@ function validateWorkspace(d) {
     if (d[key] != null && !Array.isArray(d[key])) throw new Error(key + ' must be a list');
     for (const rec of d[key] || []) if (!rec || typeof rec !== 'object' || Array.isArray(rec)) throw new Error(key + ' contains an invalid record');
   }
-  for (const p of d.properties || []) for (const key of ['levels','walls','openings','rooms','fixtures','scans','photos','notePins','videos','measurements','photoPositions','cameraSets']) {
+  for (const p of d.properties || []) for (const key of ['levels','walls','openings','rooms','fixtures','scans','photos','notePins','videos','measurements','photoPositions','cameraSets','markups']) {
     if (p[key] != null && !Array.isArray(p[key])) throw new Error('property ' + key + ' must be a list');
     for (const rec of p[key] || []) if (!rec || typeof rec !== 'object' || Array.isArray(rec)) throw new Error('property ' + key + ' contains an invalid record');
   }
@@ -783,6 +784,8 @@ function migrate(d) {
     normalizeTags(p);
     // Saved views (saved-views.js): MODEL's tabs, each a camera with its tags.
     normalizeSavedViews(p);
+    // Markups (markups.js): ink and numbered notes drawn over MODEL and PLAN.
+    normalizeMarkups(p);
     // The one-pager (one-pager.js): the client teaser's text, picture choice and saved versions.
     normalizeOnePager(p);
     // Notes pinned to a point in the model (MODEL, right-click). `notes` on the property is

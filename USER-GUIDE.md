@@ -196,6 +196,8 @@ In PLAN, use SELECT and click a wall. Edit the wall height in the inspector to e
 
 **Underlay editing.** Click the image to select it and change opacity; drag it only while selected to align it. Remove it without deleting the traced walls.
 
+**Mark up the plan.** MARK UP (U) draws over the plan with the same bar as in MODEL: pen, highlighter, eraser, numbered note and MOVE. Ink and notes are kept in real measurements on their level, so they stay on the plan through pan and zoom and show whenever that level is open. A pencil draws while fingers pan and zoom; with no pencil a finger or the mouse draws and Space-drag or two fingers move the plan. The list in the bar opens each markup and saves a picture of the level with the ink on it.
+
 **Navigation and undo.** Drag empty canvas or a floor to pan. The scroll wheel or a pinch zooms about the cursor; plan has no orbit. Space-drag or middle-drag pans anywhere; F fits the view. SHOW toggles the scan underlay (G) and furniture, cabinet and fixture footprints (K). UNDO and REDO are in the top bar in PLAN and MODEL. One wall gesture includes its joined walls, openings and floor corners.
 
 > **Good to know:** Calibrate the underlay before tracing: calibration changes the image scale, not walls you already drew. Rooms need their own ROOM floors to create floor surfaces and floor-area takeoffs. Recheck scan-generated geometry against measurements on site.
@@ -249,6 +251,8 @@ Here every group is ON SCREEN (Tiksi menu); by default the tools live in the men
 **Scan cameras.** A Polycam raw data export (turn on Developer Mode in Polycam before scanning) records the camera of every scan frame. Under SCAN CAMERAS, with nothing selected, IMPORT POLYCAM CAMERAS reads them from the export folder, and LINE UP WITH THE MODEL fits each tracking session to the model from its depth maps, reporting how many points land within 5 cm. ADD SHARP FRAMES AS PHOTOS then adds scan frames as photos with their cameras already placed. PLACE PHOTOS AUTOMATICALLY sends photos to the placement helper on the Mac running Tiksi, which matches them against the scan frames; install it once with python3 tools/install-photo-placement.py and fill in the export folder path. Check each placed photo in PHOTO MODE; UNDO AUTOMATIC PLACEMENT puts the previous cameras back.
 
 **Notes anywhere.** Right-click a wall, floor, scan or the ground and choose ADD NOTE HERE, or use NOTE (N) and click. The note links to the room and wall under it. Right-click a note to edit, move or delete it; NOTES in the mode bar hides or shows them all. Both switches are kept with the property.
+
+**Mark up the model.** MARK UP (U) turns the view into a drawing surface, with its tools in a bar at the bottom: pen, highlighter, eraser, numbered note and MOVE, six colours and three line widths. An Apple Pencil or a tablet pen draws with its pressure, and fingers still orbit and zoom; while the pencil is down a resting hand is ignored. With no pencil, a finger or the mouse draws, and two fingers, the wheel, a right-drag or a Space-drag move the view; the finger button in the bar switches between drawing and moving. Ink belongs to the camera it was drawn from: move the view and it is put away, the chip above the bar flies back to it, and the next mark from a new view starts a new markup. A numbered note is pinned to the wall, floor or scan under it and shows from any view; tap it to change its words. The list in the bar opens, renames, ticks off or deletes each markup and saves a picture of it. UNDO and REDO step through the marks while MARK UP is on. Markups are kept in the project file.
 
 **Edit in SketchUp.** EDIT IN SKETCHUP (in MODEL and PLAN) brings the project's .skp up to date and opens it in SketchUp. Save there and walls, openings and rooms come back. It needs the project kept in a folder and Tiksi running on the Mac with SketchUp.
 
@@ -785,6 +789,8 @@ On a phone Tiksi opens on the model, full screen, with one side panel behind the
 
 ### Other features here
 
+**Mark up on a phone or an iPad.** Mark up, under Measure in the side panel on a phone or MARK UP in the tool column on an iPad, opens the drawing bar over the model. For an Apple Pencil, turn Scribble off in the iPad's Settings, Apple Pencil: with it on, the iPad can swallow pencil strokes on a web page.
+
 **PHOTOS on a phone.** One column with the camera first. A tapped photo's details slide up over the gallery; CLOSE, or the photo again, puts them away.
 
 **PROJECTS on a phone.** Scope items stack as cards with their numbers labelled. Removing an item asks first, since PROJECTS has no undo.
@@ -812,6 +818,8 @@ Use the visible tooltips and inspector labels when you forget a control. These a
 **Plan drawing.** V: select. W: wall. D: door. N: window. R: room. C: calibrate. With ROOM, a click inside closed walls floors that room and Alt-click starts an outline; click the first point or double-click to close an outline.
 
 **Model navigation.** Drag or middle-drag: orbit. Shift+drag or right-drag: pan. Wheel or pinch: zoom. F: frame. O: orbit. W: walk. T: top. C: section. X: X-ray. G: the Scan capture tag. K: the Furniture and fixtures tag. Page Up / Page Down: previous or next saved view. M: move walls. D: measure. P: pin photo. N: note. Right-click: note menu.
+
+**Mark up.** U: mark up on or off, in MODEL and PLAN. While it is on, P: pen. H: highlighter. E: eraser. N: numbered note. V: move the view. 1, 2, 3: line width. Space-drag: move the view. Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z: undo and redo a mark. Esc: leave.
 
 **Geometry undo.** Top-bar UNDO / REDO work in PLAN, MODEL and MEASURE (applied tape readings). Cmd/Ctrl+Z: undo. Cmd/Ctrl+Shift+Z or Ctrl+Y: redo. History is per project for the current session. Escape ends an active tool action.
 
