@@ -18,16 +18,23 @@
 // host = { kind: 'model' | 'plan', wrap, surface (the page's canvas), prop(), changed(), hint(text),
 //   toast(text, kind), goTo(markup), picture(markup, marks) -> Promise<canvas>,
 //   model: camera() -> { position, target, fov }, viewNow() -> a saved view's state,
-//          hitAt(clientX, clientY) -> { anchor, kind, ref, p } | null, project(anchor) -> [x, y] | null
+//          hitAt(clientX, clientY) -> { anchor, kind, ref, p } | null, project(anchor) -> [x, y] | null,
+//          rayAt(clientX, clientY) -> { o, d }, surfaceAt(clientX, clientY) -> { p, n, kind, ref } | null,
+//          edgesNear(clientX, clientY, surface) -> [[a, b], ...], mPerPx(p), showSurfaces(markups)
+//
+// Over the model, ink goes onto the model's own surfaces (markup-surface.js) unless ON THE SCREEN
+// is chosen: it is then flat on the screen and belongs to the camera it was drawn from, as on a
+// photo. The LINE tool draws straight lines on a face, snapping as SketchUp does.
 //   plan:  levelId(), toDoc(x, y) -> metres, toPx(x, y) -> px, unit() -> px per metre, viewKey() }
 
 import { icon as appIcon } from './icons.js';
-import { touch, escapeHtml } from './store.js';
+import { touch, escapeHtml, fmtLen, parseLen } from './store.js';
 import {
   MARKUP_COLORS, MARKER_ALPHA, addMarkup, addStroke, removeStroke, addNote, removeNote, setNoteText, markupById, markupTitle,
   deleteMarkup, restoreMarkup, renameMarkup, setMarkupStatus, pruneEmptyMarkups, simplifyPoints, roundPoints, strokeHit, penWidth,
-  evenPressure, sameCamera, markupEmpty, normalizeMarkups,
+  evenPressure, sameCamera, markupEmpty, normalizeMarkups, onSurfaces, markupFlat,
 } from './markups.js';
+import { dropOntoSurfaces, simplify3, inferPoint, AXES, vec } from './markup-surface.js';
 
 // This layer's stylesheet and its own icons come with it, not with the app's first load.
 const ICONS = {
@@ -37,6 +44,10 @@ const ICONS = {
   hand: '<path d="M8 12.5V6a1.5 1.5 0 0 1 3 0v5m0-6.5a1.5 1.5 0 0 1 3 0V11m0-5a1.5 1.5 0 0 1 3 0v6m0-2.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1.6a6 6 0 0 1-4.6-2.2L4.6 14a1.6 1.6 0 0 1 2.4-2.1l1 1.1"/>',
   finger: '<path d="M10 13.5v-9a1.5 1.5 0 0 1 3 0V10l4.3.9a2 2 0 0 1 1.6 2.3l-.7 4.3a3 3 0 0 1-3 2.5h-3.1a3 3 0 0 1-2.4-1.2L6.3 14a1.5 1.5 0 0 1 2.3-1.9z"/>',
   list: '<path d="M8.5 6H20M8.5 12H20M8.5 18H20"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
+  line: '<path d="M6 18 18 6"/><circle cx="5" cy="19" r="1.8"/><circle cx="19" cy="5" r="1.8"/>',
+  // Ink on the model's surfaces (a box with a stroke on its face) or flat on the screen.
+  surface: '<path d="M12 3 4 7.5v9L12 21l8-4.5v-9z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/><path d="m14.5 15.5 3-1.8" stroke-width="2.2"/>',
+  screen: '<rect x="3" y="5" width="18" height="13" rx="1.5"/><path d="M9 21h6"/><path d="m7.5 13.5 3-3 2 2 4-4" stroke-width="2.2"/>',
 };
 const icon = name => ICONS[name]
   ? `<svg class="ic ic-${name}" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true">${ICONS[name]}</svg>`
@@ -64,12 +75,15 @@ const PALM_MS = 450;          // touches this soon after the pen are the hand, n
 const PALM_PX = 90;           // once a pen is in use, a contact this wide is the hand, not a fingertip
 const TAP_PX = 8;
 const UNDO_LIMIT = 100;
-const TOOLS = [['pen', 'pen', 'Pen', 'P'], ['marker', 'marker', 'Highlighter', 'H'], ['eraser', 'eraser', 'Eraser', 'E'], ['note', 'note', 'Numbered note', 'N'], ['move', 'hand', 'Move the view', 'V']];
+const LINE_PX = [1.5, 2.5, 4];   // the line tool's widths, in px at any distance
+const SAMPLE_PX = 4;             // a stroke onto the surfaces is read from the model this often along it
+const LINE_LIFT = 0.003;         // a line sits this far off its face, metres
+const TOOLS = [['pen', 'pen', 'Pen', 'P'], ['marker', 'marker', 'Highlighter', 'H'], ['line', 'line', 'Line', 'L', 'model'], ['eraser', 'eraser', 'Eraser', 'E'], ['note', 'note', 'Numbered note', 'N'], ['move', 'hand', 'Move the view', 'V']];
 
 // What survives the page being rebuilt (a save merged from another device rebuilds PLAN): whether
 // markup mode is on, the tool, colour and size, and which markup is open. The mode itself only
 // comes back when the page is rebuilt straight away; leaving for another page ends it.
-const fresh = () => ({ on: false, tool: 'pen', color: MARKUP_COLORS[0], size: 1, activeId: null, finger: null, shown: true, list: false, leftAt: -Infinity });
+const fresh = () => ({ on: false, tool: 'pen', color: MARKUP_COLORS[0], size: 1, activeId: null, finger: null, shown: true, list: false, leftAt: -Infinity, place: 'surface' });
 const REBUILD_MS = 1500;
 const kept = { model: fresh(), plan: fresh() };
 let penSeen = false;
@@ -156,6 +170,9 @@ export function attachMarkup(host) {
   const fingers = new Set(), ignored = new Set();
   let editor = null;            // the open note editor: { el, markupId, noteId }
   let confirmDelete = null, renaming = null, busyPicture = false;
+  // The line tool: the line being drawn { pts (on its face), plane }, what the pointer snaps to
+  // now, where the pointer is, the edge of reference, a held direction and a typed length.
+  let chain = null, snap = null, lineAt = null, lineRef = null, lock = null, typed = '', lineStale = false;
   const undo = [], redo = [];
   const prop = () => host.prop();
   tidy(prop());
@@ -166,8 +183,10 @@ export function attachMarkup(host) {
   const toDoc = model ? (x, y) => [(x - size.w / 2) / size.h, (y - size.h / 2) / size.h] : (x, y) => host.toDoc(x, y);
   const unit = () => model ? size.h : host.unit();
   const local = e => { const r = surface.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
-  // Is the camera where this markup was drawn? Ink over the model only shows from there.
+  // Is the camera where this markup was drawn? Ink on the screen over the model only shows from there.
   const onView = m => !model || (!!m && sameCamera(m.view.camera, host.camera()));
+  const surfaceInk = () => model && S.place === 'surface' && !!host.surfaceAt;
+  const P3 = p => host.project({ x: p[0], y: p[1], z: p[2] });
   // The markups whose ink is on the screen now.
   function shownMarkups() {
     if (!S.shown) return [];
@@ -196,6 +215,8 @@ export function attachMarkup(host) {
     ctx.clearRect(0, 0, size.w, size.h);
     const u = unit();
     for (const m of shownMarkups()) for (const s of m.strokes) drawStroke(ctx, s, toPx, u);
+    // Ink on the surfaces is drawn in the model by the page, from any camera.
+    if (model && host.showSurfaces) host.showSurfaces(S.shown ? (prop().markups || []).filter(m => m.on === 'model') : []);
   }
   function paintLive() {
     liveDirty = false;
@@ -207,7 +228,8 @@ export function attachMarkup(host) {
       // The browser's guess at the next few positions is drawn as a tail and redrawn every frame.
       drawStroke(ctx, { tool: stroke.tool, color: S.color, width: px, pts: stroke.predicted.length ? stroke.px.concat(stroke.predicted) : stroke.px }, (x, y) => [x, y], 1);
     }
-    const ring = stroke && stroke.tool === 'eraser' ? stroke.at : (S.on && hoverAt && !stroke ? hoverAt : null);
+    if (S.on && S.tool === 'line') paintLine(ctx);
+    const ring = stroke && stroke.tool === 'eraser' ? stroke.at : (S.on && hoverAt && !stroke && S.tool !== 'line' ? hoverAt : null);
     if (ring) {
       const r = stroke || S.tool === 'eraser' ? ERASER_PX : Math.max(3, (S.tool === 'marker' ? MARKER_PX : PEN_PX)[S.size] / 2);
       ctx.beginPath(); ctx.arc(ring[0], ring[1], r, 0, Math.PI * 2);
@@ -259,13 +281,19 @@ export function attachMarkup(host) {
     if (gone) return;
     fit();
     const key = model ? JSON.stringify(host.camera()) : host.viewKey();
-    if (key !== viewKey) { viewKey = key; inkDirty = true; refreshChip(); }
+    if (key !== viewKey) {
+      viewKey = key; inkDirty = true; refreshChip();
+      // The line being drawn and its snap follow the camera (the wheel zooms between clicks).
+      if (S.on && S.tool === 'line' && lineAt) { updateLine(); liveDirty = true; }
+    }
     if (inkDirty) paintInk();
     layoutNotes();
     if (editor) placeEditor();
   }
   function loop() {
     raf = requestAnimationFrame(loop);
+    // The line tool's snap is worked out once a frame, however fast the pointer reports.
+    if (lineStale) freshLine();
     if (liveDirty) paintLive();
   }
   // `outside`: the records were changed by something other than this layer (another device).
@@ -274,9 +302,10 @@ export function attachMarkup(host) {
   // ---------- which markup a mark joins ----------
   // The open markup while the view is still its own (over the model) or the level is (on the
   // plan); otherwise a new one, made at the first mark.
-  function target() {
+  // Ink on the model's surfaces shows from any camera, so it joins the open markup from anywhere.
+  function target(anyView = false) {
     let m = active();
-    if (m && (model ? onView(m) : m.levelId === host.levelId())) return { m, made: null };
+    if (m && (model ? anyView || onView(m) : m.levelId === host.levelId())) return { m, made: null };
     m = addMarkup(prop(), model ? { on: 'model', view: host.viewNow() } : { on: 'plan', levelId: host.levelId() });
     S.activeId = m.id;
     return { m, made: { markup: clone(m), index: prop().markups.indexOf(m) } };
@@ -343,6 +372,7 @@ export function attachMarkup(host) {
   function commitStroke() {
     const px = stroke.px, u = unit();
     if (!px.length || !(u > 0)) return;
+    if (surfaceInk() && commitOnSurfaces()) return;
     const doc = [];
     for (let i = 0; i + 2 < px.length; i += 3) { const [x, y] = toDoc(px[i], px[i + 1]); doc.push(x, y, px[i + 2]); }
     const width = (stroke.tool === 'marker' ? MARKER_PX : PEN_PX)[S.size] / u;
@@ -354,6 +384,48 @@ export function attachMarkup(host) {
     did({ t: 'ink+', items: [{ head: header(t.m), stroke: clone(s), index: t.m.strokes.length - 1 }] });
     saved();
     if (model) setTimeout(() => readSurfaces(t.m.id, s.id), 0);
+  }
+  // The stroke onto the model's surfaces: read from the model every few pixels along it, so it
+  // follows a wall round a corner. False when it touched nothing (it is then ink on the screen).
+  function commitOnSurfaces() {
+    const px = stroke.px, n = px.length / 3, r = surface.getBoundingClientRect();
+    const at = [];
+    for (let i = 0; i < n; i++) {
+      const x = px[i * 3], y = px[i * 3 + 1];
+      if (!at.length) { at.push([x, y]); continue; }
+      const last = at[at.length - 1], d = Math.hypot(x - last[0], y - last[1]);
+      for (let k = 1; k * SAMPLE_PX < d; k++) at.push([last[0] + (x - last[0]) * k * SAMPLE_PX / d, last[1] + (y - last[1]) * k * SAMPLE_PX / d]);
+      if (d > 0.5 || i === n - 1) at.push([x, y]);
+    }
+    const samples = at.map(([x, y]) => {
+      const ray = host.rayAt(r.left + x, r.top + y), hit = host.surfaceAt(r.left + x, r.top + y);
+      return { o: ray.o, d: ray.d, px: [x, y], hit: hit ? { p: hit.p, n: hit.n } : null, info: hit };
+    });
+    const pieces = dropOntoSurfaces(samples, { mPerPx: host.mPerPx });
+    if (!pieces.length) return false;
+    let pressure = 0;
+    for (let i = 2; i < px.length; i += 3) pressure += px[i];
+    const base = (stroke.tool === 'marker' ? MARKER_PX : PEN_PX)[S.size];
+    const widthPx = stroke.tool === 'marker' ? base : penWidth(base, pressure / n);
+    let t;
+    try { t = target(true); } catch (err) { host.toast(String(err.message || err), 'error'); return true; }
+    const items = [];
+    for (const piece of pieces) {
+      const mid = piece.w.slice(Math.floor(piece.w.length / 6) * 3, Math.floor(piece.w.length / 6) * 3 + 3);
+      const mpp = host.mPerPx(mid);
+      // What it is drawn on, for whoever reads the markup later: up to eight readings along it.
+      const hits = samples.slice(piece.first, piece.last + 1).filter(x => x.info), on = [];
+      for (let k = 0; k < Math.min(8, hits.length); k++) {
+        const h = hits[Math.round(k * (hits.length - 1) / Math.max(1, Math.min(8, hits.length) - 1))].info;
+        on.push({ k: h.kind, id: h.ref || '', p: h.p.map(v => Math.round(v * 1000) / 1000) });
+      }
+      const s = addStroke(t.m, { tool: stroke.tool, color: S.color, width: widthPx * mpp, w: simplify3(piece.w, 0.35 * mpp), on });
+      if (!s) { host.toast('This markup is full. Start a new one to keep drawing.', 'warn'); break; }
+      items.push({ head: header(t.m), stroke: clone(s), index: t.m.strokes.length - 1 });
+    }
+    if (items.length) did({ t: 'ink+', items });
+    saved();
+    return true;
   }
   // What a stroke over the model is drawn on: up to eight points along it, each dropped onto
   // whatever the model has under it. Read once the stroke is down, so drawing never waits.
@@ -383,21 +455,182 @@ export function attachMarkup(host) {
   function eraseAt(at) {
     const [x, y] = toDoc(at[0], at[1]), r = ERASER_PX / unit();
     let any = false;
-    for (const m of shownMarkups()) {
-      for (const s of m.strokes.filter(k => strokeHit(k, x, y, r))) {
-        const head = header(m), taken = removeStroke(m, s.id);
-        stroke.erased.push({ head, stroke: clone(taken.stroke), index: taken.index });
-        any = true;
+    const take = (m, s) => {
+      const head = header(m), taken = removeStroke(m, s.id);
+      stroke.erased.push({ head, stroke: clone(taken.stroke), index: taken.index });
+      any = true;
+    };
+    for (const m of shownMarkups()) for (const s of m.strokes.filter(k => !onSurfaces(k) && strokeHit(k, x, y, r))) take(m, s);
+    // Ink on the surfaces is rubbed out where it is on the screen now.
+    if (model && S.shown) {
+      for (const m of (prop().markups || []).filter(k => k.on === 'model')) {
+        for (const s of m.strokes.filter(k => onSurfaces(k) && surfaceHit(k, at, ERASER_PX))) take(m, s);
       }
     }
     if (any) { inkDirty = true; frame(); }
+  }
+  // Is the point `at` (px) within `r` px of where this stroke on the surfaces is on the screen?
+  function surfaceHit(s, at, r) {
+    const pts = [];
+    for (let i = 0; i + 2 < s.w.length; i += 3) pts.push(P3([s.w[i], s.w[i + 1], s.w[i + 2]]));
+    const reach = r + (s.tool === 'line' ? s.px / 2 : 3);
+    if (pts.length === 1) return !!pts[0] && Math.hypot(at[0] - pts[0][0], at[1] - pts[0][1]) <= reach;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = pts[i], b = pts[i + 1];
+      if (!a || !b) continue;
+      const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+      const t = l2 > 0 ? Math.min(1, Math.max(0, ((at[0] - a[0]) * dx + (at[1] - a[1]) * dy) / l2)) : 0;
+      if (Math.hypot(at[0] - a[0] - t * dx, at[1] - a[1] - t * dy) <= reach) return true;
+    }
+    return false;
+  }
+
+  // ---------- the line tool ----------
+  // The lines already drawn over the model, as edges to snap to and ends to start from.
+  function drawnLines() {
+    const edges = [], ends = [];
+    for (const m of prop().markups || []) {
+      if (m.on !== 'model') continue;
+      for (const s of m.strokes) {
+        if (s.tool !== 'line' || !onSurfaces(s)) continue;
+        const w = s.w;
+        for (let i = 0; i + 5 < w.length; i += 3) edges.push([[w[i], w[i + 1], w[i + 2]], [w[i + 3], w[i + 4], w[i + 5]]]);
+        ends.push([w[0], w[1], w[2]], [w[w.length - 3], w[w.length - 2], w[w.length - 1]]);
+      }
+    }
+    return { edges: edges.slice(-400), ends: ends.slice(-400) };
+  }
+  const lastPoint = () => chain && chain.pts[chain.pts.length - 1];
+  // A point put onto the line's own face.
+  const onPlane = p => chain && chain.plane ? vec.sub(p, vec.scale(chain.plane.n, vec.dot(vec.sub(p, chain.plane.p), chain.plane.n))) : p;
+  // What the pointer at `lineAt` (client px) snaps to now.
+  function updateLine() {
+    if (!lineAt) { snap = null; return; }
+    const [cx, cy] = lineAt, r = surface.getBoundingClientRect();
+    const ray = host.rayAt(cx, cy), hit = host.surfaceAt(cx, cy);
+    const mine = drawnLines();
+    const edges = (hit ? host.edgesNear(cx, cy, hit) : []).concat(mine.edges);
+    const prev = lastPoint();
+    const refs = [];
+    if (lineRef) refs.push(lineRef);
+    if (chain && chain.pts.length > 1) { const a = chain.pts[chain.pts.length - 2]; refs.push({ d: vec.sub(prev, a), edge: [a, prev] }); }
+    const res = inferPoint({ ray, cursor: [cx - r.left, cy - r.top], project: P3, hit, prev, plane: chain ? chain.plane : null,
+      points: (chain ? chain.pts : []).concat(mine.ends), edges, refs, lock, visible: seenFromHere });
+    // The edge last touched is the one to be parallel or perpendicular to, as in SketchUp.
+    if (res && res.edge && (res.kind === 'edge' || res.kind === 'endpoint' || res.kind === 'midpoint')) lineRef = { d: vec.sub(res.edge[1], res.edge[0]), edge: res.edge };
+    snap = res ? { ...res, hit } : null;
+  }
+  // Can the camera see this point of the model, or is a surface in front of it? A point on a
+  // surface counts as seen (2 cm of slack for the lift and the snapping).
+  function seenFromHere(p) {
+    const at = P3(p);
+    if (!at) return false;
+    const r = surface.getBoundingClientRect();
+    if (at[0] < 0 || at[1] < 0 || at[0] > r.width || at[1] > r.height) return false;
+    const ray = host.rayAt(r.left + at[0], r.top + at[1]), hit = host.surfaceAt(r.left + at[0], r.top + at[1]);
+    if (!hit) return true;
+    return vec.len(vec.sub(hit.p, ray.o)) >= vec.len(vec.sub(p, ray.o)) - 0.02;
+  }
+  function lineHover(e) { lineAt = [e.clientX, e.clientY]; lineStale = true; }
+  function freshLine() { lineStale = false; updateLine(); liveDirty = true; }
+  // The pointer was let go: the line takes the point it snapped to.
+  function placeLinePoint() {
+    if (lineStale) freshLine();
+    if (!snap) return;
+    if (!chain) {
+      const h = snap.hit;
+      // The face it starts on, facing the viewer: the line stays on its plane.
+      let plane = null;
+      if (h && h.n) {
+        const ray = host.rayAt(lineAt[0], lineAt[1]);
+        const n = vec.unit(vec.dot(h.n, ray.d) > 0 ? vec.scale(h.n, -1) : h.n);
+        plane = { p: h.p, n };
+      }
+      chain = { pts: [], plane };
+      chain.pts.push(onPlane(snap.p));
+      typed = ''; lock = null;
+      updateLine(); liveDirty = true; host.hint(hintText());
+      return;
+    }
+    addLineTo(onPlane(snap.p), snap);
+  }
+  // One straight line from the last point to `b`, saved as one stroke (one step of undo).
+  function addLineTo(b, res) {
+    const a = lastPoint();
+    if (vec.len(vec.sub(b, a)) < 0.001) { endLine(); return; }   // a second click on the same point ends the line
+    const lift = chain.plane ? vec.scale(chain.plane.n, LINE_LIFT) : [0, 0, 0];
+    let t;
+    try { t = target(true); } catch (err) { host.toast(String(err.message || err), 'error'); return; }
+    const on = [a, b].map(p => ({ k: res.hit ? res.hit.kind : '', id: res.hit ? res.hit.ref || '' : '', p: p.map(v => Math.round(v * 1000) / 1000) }));
+    const s = addStroke(t.m, { tool: 'line', color: S.color, width: 0.005, px: LINE_PX[S.size], w: [...vec.add(a, lift), ...vec.add(b, lift)], on });
+    if (!s) { host.toast('This markup is full. Start a new one to keep drawing.', 'warn'); saved(); return; }
+    did({ t: 'ink+', items: [{ head: header(t.m), stroke: clone(s), index: t.m.strokes.length - 1 }] });
+    const first = chain.pts[0];
+    chain.pts.push(b);
+    typed = ''; lock = null;
+    saved();
+    // Back at its first point: the shape is closed and the line ends.
+    if (chain.pts.length > 2 && vec.len(vec.sub(b, first)) < 0.001) { endLine(); return; }
+    updateLine(); liveDirty = true;
+  }
+  function endLine() { chain = null; lock = null; typed = ''; lineRef = null; updateLine(); liveDirty = true; if (S.on) host.hint(hintText()); }
+  // A typed length: the next point is that far along the direction the pointer shows.
+  function typedLength() {
+    const a = lastPoint();
+    if (!a || !typed.trim()) return;
+    const v = parseLen(typed, 'feet');
+    if (!(v > 0)) { host.toast('"' + typed.trim() + '" is not a length.', 'warn'); typed = ''; liveDirty = true; return; }
+    const dir = snap && snap.dir ? snap.dir : snap ? vec.unit(vec.sub(snap.p, a)) : null;
+    if (!dir || vec.len(dir) < 0.5) { host.toast('Point the line the way it should go, then type its length.', 'warn'); return; }
+    const sign = snap && vec.dot(vec.sub(snap.p, a), dir) < 0 ? -1 : 1;
+    addLineTo(onPlane(vec.add(a, vec.scale(dir, sign * v))), snap || {});
+  }
+  // The line in progress, its snap and its label, onto the live canvas.
+  function paintLine(ctx) {
+    const a = lastPoint() && P3(lastPoint());
+    const p = snap && P3(snap.p);
+    ctx.save();
+    ctx.lineCap = 'round';
+    if (snap && snap.edge && (snap.kind === 'parallel' || snap.kind === 'perpendicular')) {
+      const e0 = P3(snap.edge[0]), e1 = P3(snap.edge[1]);
+      if (e0 && e1) { ctx.setLineDash([6, 4]); ctx.lineWidth = 3; ctx.strokeStyle = snap.color; ctx.beginPath(); ctx.moveTo(...e0); ctx.lineTo(...e1); ctx.stroke(); ctx.setLineDash([]); }
+    }
+    if (a && p) {
+      const color = snap.dir ? snap.color : '#111111';
+      ctx.lineWidth = LINE_PX[S.size] + 3; ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+      ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...p); ctx.stroke();
+      ctx.lineWidth = LINE_PX[S.size]; ctx.strokeStyle = color;
+      ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...p); ctx.stroke();
+    }
+    if (chain) {
+      const f = P3(chain.pts[0]);
+      if (f) { ctx.beginPath(); ctx.arc(f[0], f[1], 3.5, 0, Math.PI * 2); ctx.fillStyle = S.color; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#ffffff'; ctx.stroke(); }
+    }
+    if (p) {
+      ctx.lineWidth = 1.5; ctx.strokeStyle = '#ffffff'; ctx.fillStyle = snap.color;
+      ctx.beginPath();
+      if (snap.kind === 'edge') ctx.rect(p[0] - 4.5, p[1] - 4.5, 9, 9);
+      else if (snap.kind === 'face') { ctx.moveTo(p[0], p[1] - 6); ctx.lineTo(p[0] + 6, p[1]); ctx.lineTo(p[0], p[1] + 6); ctx.lineTo(p[0] - 6, p[1]); ctx.closePath(); }
+      else ctx.arc(p[0], p[1], snap.kind === 'endpoint' || snap.kind === 'midpoint' ? 6 : 3, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+      const text = [snap.label + (snap.locked ? ' (held)' : ''), a ? fmtLen(vec.len(vec.sub(snap.p, lastPoint()))) : '', typed ? 'Length: ' + typed : ''].filter(Boolean).join(' · ');
+      if (text) {
+        ctx.font = '600 12px -apple-system, "Segoe UI", sans-serif';
+        const w = ctx.measureText(text).width + 12, x = Math.min(p[0] + 14, size.w - w - 4), y = Math.max(4, p[1] - 30);
+        ctx.fillStyle = 'rgba(17, 17, 17, 0.86)'; ctx.fillRect(x, y, w, 20);
+        ctx.fillStyle = '#ffffff'; ctx.textBaseline = 'middle'; ctx.fillText(text, x + 6, y + 10.5);
+      }
+    }
+    ctx.restore();
   }
 
   // ---------- notes ----------
   function placeNote(at, e) {
     const hit = model ? host.hitAt(e.clientX, e.clientY) : null;
     let t;
-    try { t = target(); } catch (err) { host.toast(String(err.message || err), 'error'); return; }
+    // A note pinned to a surface shows from any view, so it joins the open markup from anywhere
+    // (unless ink is flat on the screen, where a markup is one view).
+    try { t = target(!!hit && surfaceInk()); } catch (err) { host.toast(String(err.message || err), 'error'); return; }
     const [x, y] = toDoc(at[0], at[1]);
     const n = addNote(t.m, { at: [x, y], anchor: hit ? hit.anchor : undefined, kind: hit ? hit.kind : undefined, ref: hit ? hit.ref : undefined, text: '' });
     if (!n) { host.toast('This markup has all the notes it can hold.', 'warn'); saved(); return; }
@@ -483,6 +716,7 @@ export function attachMarkup(host) {
     if (host.hold) host.hold();
     if (tool === 'pen' || tool === 'marker') push(e);
     else if (tool === 'eraser') eraseAt(stroke.at);
+    else if (tool === 'line') lineHover(e);
     liveDirty = true;
   }
   function finish(cancelled) {
@@ -492,6 +726,9 @@ export function attachMarkup(host) {
       if (s.erased.length) { did({ t: 'ink-', items: s.erased }); stroke = null; saved(); }
     } else if (s.tool === 'note') {
       if (!cancelled && Math.hypot(s.at[0] - s.start[0], s.at[1] - s.start[1]) <= TAP_PX) { stroke = null; placeNote(s.start, s.event); }
+    } else if (s.tool === 'line') {
+      stroke = null;
+      if (!cancelled) placeLinePoint();
     } else if (!cancelled) commitStroke();
     stroke = null;
     liveDirty = true;
@@ -556,6 +793,7 @@ export function attachMarkup(host) {
       stroke.at = local(e);
       if (stroke.tool === 'pen' || stroke.tool === 'marker') extend(e);
       else if (stroke.tool === 'eraser') eraseAt(stroke.at);
+      else if (stroke.tool === 'line') lineHover(e);
       liveDirty = true;
       return;
     }
@@ -563,7 +801,8 @@ export function attachMarkup(host) {
     // pointer cursor) is not wanted while marking up, and a pen shows where it will land.
     if (type !== 'touch' && e.target === surface && e.buttons === 0 && S.tool !== 'move' && !spaceDown) {
       e.stopPropagation();
-      if (type === 'pen') { hoverAt = local(e); liveDirty = true; }
+      if (S.tool === 'line') lineHover(e);
+      else if (type === 'pen') { hoverAt = local(e); liveDirty = true; }
     }
   }
   function onUp(e) {
@@ -584,7 +823,10 @@ export function attachMarkup(host) {
   // The window lost the keyboard and the pointer: a held Space is no longer held, and a press
   // in progress is over (what it drew is kept).
   function onBlur() { if (stroke) finish(false); spaceDown = false; wrap.classList.remove('mk-space'); }
-  function onLeave(e) { if (e.pointerType === 'pen' && hoverAt) { hoverAt = null; liveDirty = true; } }
+  function onLeave(e) {
+    if (e.pointerType === 'pen' && hoverAt) { hoverAt = null; liveDirty = true; }
+    if (S.tool === 'line' && !stroke && lineAt) { lineAt = null; snap = null; liveDirty = true; }
+  }
   // Safari would start a text selection, its magnifier or a double-tap zoom under a finger or
   // a pencil that stays down.
   function onTouchStart(e) { if (S.on && e.target === surface && e.cancelable) e.preventDefault(); }
@@ -598,6 +840,7 @@ export function attachMarkup(host) {
     if (cmd && k === 'z') { e.preventDefault(); step(!e.shiftKey); return true; }
     if (cmd && k === 'y') { e.preventDefault(); step(false); return true; }
     if (cmd || e.altKey) return false;
+    if (S.tool === 'line' && lineKey(e)) return true;
     if (e.key === 'Escape') {
       e.preventDefault();
       if (stroke) { if (stroke.tool === 'eraser' && stroke.erased.length) finish(false); else { stroke = null; liveDirty = true; } }
@@ -606,21 +849,60 @@ export function attachMarkup(host) {
       return true;
     }
     if (e.key === ' ') { spaceDown = true; e.preventDefault(); wrap.classList.add('mk-space'); return true; }
-    const tool = { p: 'pen', h: 'marker', e: 'eraser', n: 'note', v: 'move' }[k];
+    const tool = { p: 'pen', h: 'marker', e: 'eraser', n: 'note', v: 'move', ...(model ? { l: 'line' } : {}) }[k];
     if (tool) { setTool(tool); return true; }
+    if (model && k === 's') { setPlace(S.place === 'surface' ? 'screen' : 'surface'); return true; }
     if (k === '1' || k === '2' || k === '3') { S.size = Number(k) - 1; renderBar(); return true; }
     return false;
   }
-  function keyUp(e) { if (e.key === ' ' && spaceDown) { spaceDown = false; wrap.classList.remove('mk-space'); } }
+  // The line tool's own keys: a length typed while a line is being drawn, Enter, Backspace,
+  // Esc to end the line, Shift to hold the direction, the arrows to hold an axis.
+  function lineKey(e) {
+    if (lineStale) freshLine();
+    if (e.key === 'Shift') { if (snap && snap.dir && !lock) { lock = { dir: snap.dir, kind: snap.kind, label: snap.label, color: snap.color, edge: snap.edge, held: 'shift' }; updateLine(); liveDirty = true; } return true; }
+    const axis = { ArrowRight: 0, ArrowLeft: 1, ArrowUp: 2 }[e.key];
+    if (axis !== undefined && chain) {
+      e.preventDefault();
+      const ax = AXES[axis];
+      if (lock && lock.kind === ax.kind) lock = null;
+      else if (chain.plane && Math.abs(vec.dot(ax.d, chain.plane.n)) > 0.03) { host.toast('The ' + ax.kind + ' axis does not run along this face.', 'warn'); return true; }
+      else lock = { dir: ax.d, kind: ax.kind, label: ax.label, color: ax.color, held: 'arrow' };
+      updateLine(); liveDirty = true;
+      return true;
+    }
+    if (!chain) return false;
+    if (e.key === 'Escape') { e.preventDefault(); if (typed) typed = ''; else endLine(); liveDirty = true; return true; }
+    if (e.key === 'Enter') { e.preventDefault(); typedLength(); return true; }
+    if (e.key === 'Backspace') { if (!typed) return false; e.preventDefault(); typed = typed.slice(0, -1); liveDirty = true; return true; }
+    // A length starts with a digit (or a point); after that its units and marks come too.
+    if (/^[0-9.]$/.test(e.key) || (typed && /^[0-9.'"\/ mcft-]$/i.test(e.key))) { e.preventDefault(); typed += e.key; liveDirty = true; return true; }
+    return false;
+  }
+  function keyUp(e) {
+    if (e.key === ' ' && spaceDown) { spaceDown = false; wrap.classList.remove('mk-space'); }
+    // Shift holds a direction while it is down; an arrow key holds its axis until pressed again.
+    if (e.key === 'Shift' && lock && lock.held === 'shift') { lock = null; updateLine(); liveDirty = true; }
+  }
 
   // ---------- the bar ----------
   function setTool(tool) {
+    if (tool === 'line' && !model) return;
+    if (S.tool === 'line' && tool !== 'line') { chain = null; snap = null; lineAt = null; lock = null; typed = ''; lineRef = null; }
     S.tool = tool; hoverAt = null; liveDirty = true;
     renderBar(); host.changed(S.on);
   }
+  // Over the model: ink onto the model's surfaces, or flat on the screen.
+  function setPlace(place) {
+    S.place = place === 'screen' ? 'screen' : 'surface';
+    renderBar(); refreshChip();
+    host.toast(S.place === 'surface' ? 'Ink goes onto the model\'s surfaces and shows from any view.' : 'Ink is flat on the screen and belongs to this view.', 'ok');
+  }
   function hintText() {
     if (S.tool === 'move') return 'MOVE: drag to move the view. Pick a pen to draw again.';
-    const what = { pen: 'draws', marker: 'highlights', eraser: 'rubs out whole strokes', note: 'pins a numbered note' }[S.tool];
+    if (S.tool === 'line') return chain
+      ? 'LINE: click the next point. Type a length and press Enter; Shift or an arrow key holds the direction; Esc ends the line.'
+      : 'LINE: click where the line starts. It stays on that face and snaps to ends, middles and edges, and to the red, green and blue axes.';
+    const what = { pen: surfaceInk() ? 'draws on the model' : 'draws', marker: surfaceInk() ? 'highlights on the model' : 'highlights', eraser: 'rubs out whole strokes', note: 'pins a numbered note' }[S.tool];
     // A screen that takes fingers says who draws; a mouse-only one says how the view still moves.
     if (!matchMedia('(any-pointer: coarse)').matches && !penSeen) return `${S.tool === 'note' ? 'Click' : 'Drag'}: the ${S.tool === 'marker' ? 'highlighter' : S.tool} ${what}. The wheel, right-drag or Space-drag moves the view.`;
     return fingerDraws() ? `A finger or the pencil ${what}. Two fingers move the view.` : `The pencil ${what}. Fingers move the view.`;
@@ -634,7 +916,8 @@ export function attachMarkup(host) {
     const touchy = matchMedia('(any-pointer: coarse)').matches;
     const b = (attrs, ic, label, on) => `<button type="button" class="mk-btn ${on ? 'active' : ''}" ${attrs} title="${label}" aria-label="${label}" ${on === undefined ? '' : `aria-pressed="${!!on}"`}>${icon(ic)}</button>`;
     bar.innerHTML =
-      TOOLS.map(([id, ic, label, k]) => b(`data-tool="${id}"`, ic, `${label} (${k})`, S.tool === id)).join('') +
+      TOOLS.filter(t => !t[4] || t[4] === host.kind).map(([id, ic, label, k]) => b(`data-tool="${id}"`, ic, `${label} (${k})`, S.tool === id)).join('') +
+      (model ? b('data-act="place"', S.place === 'surface' ? 'surface' : 'screen', S.place === 'surface' ? 'Ink goes on the model\'s surfaces. Click for ink flat on the screen (S)' : 'Ink is flat on the screen. Click for ink on the model\'s surfaces (S)') : '') +
       '<span class="mk-sep"></span>' +
       MARKUP_COLORS.map(c => `<button type="button" class="mk-dot ${S.color === c ? 'active' : ''}" data-color="${c}" style="--c:${c}" title="Colour" aria-label="Colour ${c}" aria-pressed="${S.color === c}"></button>`).join('') +
       '<span class="mk-sep"></span>' +
@@ -650,6 +933,7 @@ export function attachMarkup(host) {
     bar.querySelectorAll('[data-color]').forEach(x => x.onclick = () => { S.color = x.dataset.color; if (S.tool !== 'pen' && S.tool !== 'marker') S.tool = 'pen'; renderBar(); host.changed(S.on); });
     bar.querySelectorAll('[data-size]').forEach(x => x.onclick = () => { S.size = Number(x.dataset.size); renderBar(); });
     const act = { undo: () => step(true), redo: () => step(false), list: () => toggleList(), done: () => setOn(false),
+      place: () => setPlace(S.place === 'surface' ? 'screen' : 'surface'),
       finger: () => { S.finger = !fingerOn(); renderBar(); host.changed(S.on); },
       new: () => { S.activeId = null; refresh(); host.toast(model ? 'The next mark starts a new markup from this view.' : 'The next mark starts a new markup.', 'ok'); } };
     bar.querySelectorAll('[data-act]').forEach(x => x.onclick = act[x.dataset.act]);
@@ -667,7 +951,8 @@ export function attachMarkup(host) {
   // Over the model: the open markup's ink is out of sight because the camera has moved.
   function refreshChip() {
     const m = model && S.on ? active() : null;
-    const away = !!m && !markupEmpty(m) && !onView(m);
+    // Only what is flat on the screen needs its own view; ink on the surfaces shows from anywhere.
+    const away = !!m && !markupEmpty(m) && markupFlat(m) && !onView(m);
     chip.hidden = !away;
     if (away) chip.textContent = markupTitle(m).toUpperCase() + ': BACK TO ITS VIEW';
   }
@@ -760,6 +1045,7 @@ export function attachMarkup(host) {
     if (stroke) finish(false);    // a press in progress is kept, not dropped
     S.on = on;
     stroke = null; hoverAt = null; spaceDown = false; fingers.clear(); ignored.clear(); penDown = false;
+    chain = null; snap = null; lineAt = null; lock = null; typed = ''; lineRef = null;
     wrap.classList.remove('mk-space');
     if (!on) { closeEditor(true); listEl.hidden = true; host.hint(''); }
     else listEl.hidden = !S.list;
@@ -802,7 +1088,8 @@ export function attachMarkup(host) {
       const color = (markup.strokes[0] && markup.strokes[0].color) || MARKUP_COLORS[0];
       for (const n of markup.notes) { const at = place(n); if (at) drawNoteDisc(ctx, at[0], at[1], n.n, color, r); }
     },
-    state: () => ({ on: S.on, tool: S.tool, color: S.color, size: S.size, activeId: S.activeId, fingerDraws: fingerDraws(), penSeen, shown: S.shown, undo: undo.length, redo: redo.length }),
+    state: () => ({ on: S.on, tool: S.tool, color: S.color, size: S.size, activeId: S.activeId, fingerDraws: fingerDraws(), penSeen, shown: S.shown, undo: undo.length, redo: redo.length,
+      ...(model ? { place: S.place, line: chain ? chain.pts.map(p => p.slice()) : null, snap: snap ? { kind: snap.kind, label: snap.label, p: snap.p.slice(), locked: !!snap.locked } : null, typed } : {}) }),
     dispose() {
       if (gone) return;
       if (stroke) finish(false);    // the page is being rebuilt mid-press: what was drawn is kept

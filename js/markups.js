@@ -5,8 +5,8 @@
 // prop.markups = [{ id, number, name, on: 'model' | 'plan', status: 'open' | 'done',
 //   view: a saved view's camera, mode, section, x-ray and hidden levels   (on === 'model')
 //   levelId: the level the ink sits on                                     (on === 'plan')
-//   strokes: [{ id, tool: 'pen' | 'marker', color: '#rrggbb', width, pts: [x, y, pressure, ...],
-//               on: [{ k: kind, id, p: [x, y, z] }] }],
+//   strokes: [{ id, tool: 'pen' | 'marker' | 'line', color: '#rrggbb', width, pts: [x, y, pressure, ...],
+//               w: [x, y, z, ...], px, on: [{ k: kind, id, p: [x, y, z] }] }],
 //   notes: [{ id, n, text, at: [x, y], anchor: { x, y, z, nx, ny, nz, wall? }, kind, ref }],
 //   createdAt }]
 // Nothing here counts or stamps changes: two devices adding to one markup must merge record by
@@ -19,6 +19,11 @@
 // the model: what a line across a wall is drawn on, for whoever reads the markup later. A note
 // with an `anchor` is pinned to that point of the model and shows from any camera; without one
 // it sits at `at` in its markup's own view.
+//
+// Ink on the model's surfaces has `w` instead of `pts`: points in the model, in metres, lifted a
+// few millimetres off the surface they were drawn on, so it shows from any camera. Its `width` is
+// metres too. A line from the line tool is such a stroke with two points and `px`, its width in
+// screen pixels at any distance (a drawn edge, as in SketchUp).
 
 import { normalizeSavedView } from './saved-views.js';
 import { normalizeWallAnchor } from './pin-records.js';
@@ -154,20 +159,32 @@ function normalizeAnchor(a) {
   return out;
 }
 function normalizeStroke(s, taken) {
-  if (!s || typeof s !== 'object' || !Array.isArray(s.pts)) return null;
-  const pts = [];
-  for (let i = 0; i + 2 < s.pts.length && pts.length < MAX_POINTS * 3; i += 3) {
-    const x = num(s.pts[i]), y = num(s.pts[i + 1]), p = num(s.pts[i + 2]);
+  if (!s || typeof s !== 'object') return null;
+  const pts = [], w = [];
+  const raw = Array.isArray(s.pts) ? s.pts : [];
+  for (let i = 0; i + 2 < raw.length && pts.length < MAX_POINTS * 3; i += 3) {
+    const x = num(raw[i]), y = num(raw[i + 1]), p = num(raw[i + 2]);
     if (!Number.isFinite(x) || !Number.isFinite(y) || Math.abs(x) > 1e6 || Math.abs(y) > 1e6) continue;
     pts.push(x, y, Number.isFinite(p) ? Math.min(1, Math.max(0, p)) : 0.5);
   }
-  if (pts.length < 3) return null;
+  if (Array.isArray(s.w)) {
+    for (let i = 0; i + 2 < s.w.length && w.length < MAX_POINTS * 3; i += 3) {
+      const v = [num(s.w[i]), num(s.w[i + 1]), num(s.w[i + 2])];
+      if (v.every(x => Number.isFinite(x) && Math.abs(x) < 1e5)) w.push(...v.map(x => Math.round(x * 1e4) / 1e4));
+    }
+  }
+  const tool = s.tool === 'marker' || s.tool === 'line' ? s.tool : 'pen';
+  // Ink on the surfaces keeps its 3D points; a line exists only there.
+  const onSurface = w.length >= 3;
+  if (!onSurface && (pts.length < 3 || tool === 'line')) return null;
   const width = num(s.width);
   const out = {
-    id: takeId(s.id, taken, 'ink'), tool: s.tool === 'marker' ? 'marker' : 'pen',
+    id: takeId(s.id, taken, 'ink'), tool,
     color: typeof s.color === 'string' && COLOR_RE.test(s.color) ? s.color.toLowerCase() : MARKUP_COLORS[0],
-    width: Number.isFinite(width) && width > 0 && width < 1e3 ? width : 0.005, pts,
+    width: Number.isFinite(width) && width > 0 && width < 1e3 ? width : 0.005, pts: onSurface ? [] : pts,
   };
+  if (onSurface) out.w = w;
+  if (tool === 'line') { const px = num(s.px); out.px = Number.isFinite(px) && px >= 0.5 && px <= 20 ? px : 2.5; }
   if (Array.isArray(s.on)) {
     const on = [];
     for (const h of s.on.slice(0, MAX_ON)) {
@@ -227,6 +244,11 @@ export function normalizeMarkups(p) {
 export const markupById = (prop, id) => (prop.markups || []).find(m => m.id === id) || null;
 export const markupTitle = m => m.name || 'Markup ' + m.number;
 export const markupEmpty = m => !m.strokes.length && !m.notes.length;
+// Is this stroke on the model's surfaces (it shows from any camera)?
+export const onSurfaces = s => Array.isArray(s.w) && s.w.length >= 3;
+// Does the markup hold anything that shows only from its own camera: ink on the screen, a note
+// pinned to no surface?
+export const markupFlat = m => m.strokes.some(s => !onSurfaces(s)) || m.notes.some(n => !n.anchor);
 
 // A new, empty markup: `where` is { on: 'model', view } or { on: 'plan', levelId }.
 export function addMarkup(prop, where) {
