@@ -44,7 +44,7 @@ export function planThings(prop) {
     out.room.push(thing('room', r.id, (r.name || 'Room') + ' floor', level(r.level), { kind: 'room', id: r.id }));
     out.ceiling.push(thing('ceiling', r.id, (r.name || 'Room') + ' ceiling', level(r.level), { kind: 'room', id: r.id, tagKey: planKey('ceiling', r.id) }));
   }
-  for (const o of prop.openings || []) out.opening.push(thing('opening', o.id, (o.type === 'window' ? 'Window ' : o.width > 1.25 ? 'Cased opening ' : 'Door ') + fmtLen(o.width), '', { kind: 'opening', id: o.id }));
+  for (const o of prop.openings || []) out.opening.push(thing('opening', o.id, (o.type === 'window' ? 'Window ' : 'Door or opening ') + fmtLen(o.width), '', { kind: 'opening', id: o.id }));
   for (const f of prop.fixtures || []) out.fixture.push(thing('fixture', f.id, f.name || fixtureLabel(f) || 'Fixture', level(f.level), { kind: 'fixture', id: f.id }));
   return out;
 }

@@ -397,6 +397,24 @@ def tag_layers(api, model, tags):
     return out
 
 
+def pane_bands(hole):
+    """An opening's flat pane from its foot up, as [(z0, z1, finish)] in metres. One band in the
+    opening's own finish; a glass door (hole['glass']: the heights its glass runs between, and
+    the glass finish) is glass between those heights and the door's finish below and above."""
+    hh = hole['v1'] - hole['v0']
+    own, glass = hole.get('material'), hole.get('glass')
+    if not isinstance(glass, dict):
+        return [(0.0, hh, own)]
+    try:
+        g0 = min(max(float(glass.get('v0', hole['v0'])) - hole['v0'], 0.0), hh)
+        g1 = min(max(float(glass.get('v1', hole['v1'])) - hole['v0'], g0), hh)
+    except (TypeError, ValueError):
+        return [(0.0, hh, own)]
+    if g1 - g0 <= 0.001:
+        return [(0.0, hh, own)]
+    return [b for b in ((0.0, g0, own), (g0, g1, glass.get('material')), (g1, hh, own)) if b[1] - b[0] > 0.001]
+
+
 def write_wall(api, entities, wall, layer, materials, tags=None):
     ax, ay, bx, by = wall['ax'], wall['ay'], wall['bx'], wall['by']
     L = math.hypot(bx - ax, by - ay)
@@ -427,10 +445,14 @@ def write_wall(api, entities, wall, layer, materials, tags=None):
         og = new_group(api, inner, 'Window' if h.get('type') == 'window' else 'Door', translation(h['s0'] * IN, 0, h['v0'] * IN))
         set_layer(api, og, (tags or {}).get(h.get('tag')) or layer)
         pane = api.ref('SUGroupGetEntities', og)
-        fill(api, pane, [[0, 0, 0], [w * IN, 0, 0], [w * IN, 0, hh * IN], [0, 0, hh * IN]], [([0, 1, 2, 3], [])])
-        mat = materials.get(h.get('material'))
+        bands = pane_bands(h)
+        levels = [bands[0][0]] + [b[1] for b in bands]
+        fill(api, pane, [[x * IN, 0, z * IN] for z in levels for x in (0, w)],
+             [([2 * i, 2 * i + 1, 2 * i + 3, 2 * i + 2], []) for i in range(len(bands))])
         for face in api.collection(pane, 'Faces'):
-            paint(api, face, mat)
+            zs = [p[2] / IN for p in face_ring(api, face)]
+            mid = (min(zs) + max(zs)) / 2
+            paint(api, face, materials.get(next((b[2] for b in bands if b[0] <= mid <= b[1]), h.get('material'))))
         obase = {'wallId': wall['id'], 't': r6(h['t']), 'width': r6(h['width']), 'height': r6(h['height']), 'sill': r6(h.get('sill') or 0)}
         set_data(api, to_ref(api, 'SUGroupToEntity', og), {'kind': 'opening', 'id': h['id'], 'type': h.get('type'), 'base': obase,
                                                            'local': {'x1': r6(w * IN), 'z1': r6(hh * IN)}})
