@@ -131,6 +131,10 @@ let polycamFolder = null;      // the Polycam export folder chosen this session:
 let movingNoteId = null;       // note being re-placed by the NOTE tool (null: the tool adds one)
 let rightPress = null;         // a right-click (or Ctrl-click) in progress: opens the menu if it does not drag
 let ctxMenu = null, noteEditor = null;
+// Markup mode over the view (markup-layer.js): ink and numbered notes. The layer is fetched the
+// first time it is wanted (MARK UP is chosen, or the property already has markups over the
+// model), so a phone's first open of the app does not download it.
+let markup = null, markupLoading = null, markupUsed = false;
 const walkKeys = {};
 let walkLocked = false, dragLook = null;
 let walkFloor = 0;             // elevation of the level the walk started on (eye height sits 1.6 m above)
@@ -368,6 +372,8 @@ function setupScene() {
   nav = attachSketchupNavigation(controls, {
     pickPoint: e => { if (!scene || !modelGroup) return null; const hit = pick(e, { pins: false, notes: false, ground: true }); return hit ? hit.point : null; },
     canOrbit: () => mode !== 'top',
+    // While one finger draws a markup it does not also turn the view; two fingers still do.
+    oneFinger: () => !(markup && markup.fingerDraws()),
     onChange: () => { markMotion(); requestRender(2); },
   });
 
@@ -1084,7 +1090,8 @@ function syncSectionHandles() {
   if (!secMove || !sheetRoot) return;
   const i = section.on ? section.planes.findIndex(s => s.id === section.active) : -1;
   const g = i >= 0 ? sheetRoot.children[i] : null;
-  const show = !!g && sectionSheets && mode !== 'walk' && !fieldLayout();
+  // While marking up, the handles are put away: a drawing finger or pen would drag the cut.
+  const show = !!g && sectionSheets && mode !== 'walk' && !fieldLayout() && !(markup && markup.isOn());
   sheetRoot.visible = sectionSheets;
   for (const h of [secMove, secTurn]) {
     if (!show) h.detach();
@@ -1256,6 +1263,7 @@ function frameBox(box) {
 }
 function flyTo(pos, target, ms) {
   if (!ms) {
+    tween = null;   // going there at once ends a flight already under way
     camera.position.copy(pos); controls.target.copy(target); controls.update();
     requestRender(3); return;
   }
@@ -1275,6 +1283,7 @@ function stepTween() {
 // ---------- modes ----------
 function setMode(next) {
   if (match && next !== 'orbit') endMatch();
+  if (next === 'walk' && markup && markup.isOn()) markup.setOn(false);
   if (mode === 'walk' && next !== 'walk') {
     if (walkLocked) walk.unlock();
     walk.disconnect();
@@ -1396,6 +1405,8 @@ function tick(time) {
       }
     }
   }
+  // Markup ink and note numbers follow the camera this frame drew.
+  if (markup) markup.frame();
 }
 let renderFailed = false;
 let texturesPending = false, lastTextureRedraw = 0;
@@ -1652,6 +1663,7 @@ async function renderStillBlob(options) {
     const snapshot = document.createElement('canvas');
     snapshot.width = width; snapshot.height = height;
     snapshot.getContext('2d').drawImage(r.domElement, 0, 0);
+    if (options.asCanvas) return snapshot;   // a markup's picture gets its ink drawn on top
     const blob = await new Promise(resolve => snapshot.toBlob(resolve, 'image/png'));
     if (!blob) throw new Error('PNG encoding failed. Choose a smaller size.');
     return blob;
@@ -1731,6 +1743,8 @@ function onPointerUp(e) {
   // A press on a section handle moved or turned a plane; it is not a click on the model.
   if (!p || e.button !== 0 || gizmo.dragging || secMove.dragging || secTurn.dragging || performance.now() - secDragAt < 80) return;
   if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > 5) return;      // it was a drag, not a click
+  // While marking up, a tap or click on the view is the markup's (or nobody's), never a selection.
+  if (markup && markup.takesClicks()) return;
   if (mode === 'walk') {
     // A plain click in walk mode captures the mouse for free-look (a user gesture is required).
     if (!walkLocked && e.pointerType !== 'touch') { try { walk.lock(); } catch (err) { /* drag-look keeps working */ } }
@@ -2027,16 +2041,20 @@ function restoreHistory(direction) {
   if (!prop || !restoreGeometryEdit(prop, direction)) return;
   setSelection(null); rebuildModel(); renderInspector();
 }
-export function undo() { restoreHistory('undo'); }
-export function redo() { restoreHistory('redo'); }
+// While marking up, UNDO and REDO (the buttons and Cmd/Ctrl+Z) step through the marks.
+export function undo() { if (markup && markup.isOn()) markup.undo(); else restoreHistory('undo'); }
+export function redo() { if (markup && markup.isOn()) markup.redo(); else restoreHistory('redo'); }
 // Another device changed these fields of the open property (main.js sharedChange; the record
 // itself is the same object). The drawn building is rebuilt from them where that is all it
 // takes: the camera, the mode and the loaded scans stay. False when the page must be rebuilt.
 const REDRAWN_FIELDS = new Set(['walls', 'openings', 'rooms', 'fixtures', 'levels', 'activeLevelId']);
 const UNDRAWN_FIELDS = new Set(['name', 'address', 'notes', 'onePager', 'researchSession', 'documents', 'docSets']);
+// Markups are drawn by their own layer, which only has to be told to look again.
+const LAYER_FIELDS = new Set(['markups']);
 export function sharedChange(keys) {
-  if (!scene || !prop || keys.some(key => !REDRAWN_FIELDS.has(key) && !UNDRAWN_FIELDS.has(key))) return false;
+  if (!scene || !prop || keys.some(key => !REDRAWN_FIELDS.has(key) && !UNDRAWN_FIELDS.has(key) && !LAYER_FIELDS.has(key))) return false;
   if (keys.some(key => REDRAWN_FIELDS.has(key))) { setSelection(null); rebuildModel(); }
+  if (keys.includes('markups')) { if (markup) markup.refresh(true); else if (hasMarkups()) needMarkup(); }
   renderInspector();
   return true;
 }
@@ -2455,6 +2473,7 @@ async function startMatch(id, resume, opts = {}) {
   if (!ph || !wrapEl) return;
   if (ph.kind === 'pano') { toast('A 360 panorama has no single viewpoint to match. Use it as the sky instead.', 'warn'); return; }
   if (ph.kind === 'document') { flyToSheet(id); return; }
+  if (markup && markup.isOn()) markup.setOn(false);
   const token = mountId;
   try { if (await ensureCameraFacts(ph)) touch(); } catch (e) { /* no original bytes: the lens stays assumed */ }
   if (token !== mountId) return;
@@ -4833,6 +4852,11 @@ function goToView(id) {
   const v = (prop.savedViews || []).find(x => x.id === id);
   if (!v) return;
   activeViewId = id;
+  showView(v);
+}
+// Put the view on the screen as `v` (a saved view, or the view a markup was drawn from) has it:
+// camera, mode, tags, section cuts, x-ray and hidden levels. `ms` 0 goes there at once.
+function showView(v, ms = 650) {
   if (match) endMatch();
   if (v.mode === 'top' && mode !== 'top') setMode('top');
   else if (v.mode !== 'top' && mode !== 'orbit') setMode('orbit');
@@ -4855,7 +4879,7 @@ function goToView(id) {
   applyTagVisibility();
   applySection();
   if (camera.fov !== v.camera.fov) { camera.fov = v.camera.fov; camera.updateProjectionMatrix(); }
-  flyTo(new THREE.Vector3(...v.camera.position), new THREE.Vector3(...v.camera.target), 650);
+  flyTo(new THREE.Vector3(...v.camera.position), new THREE.Vector3(...v.camera.target), ms);
   const sel = selectedObject();
   if (sel && !isVisibleChain(sel)) setSelection(null);
   renderHud(); renderToolCol(); renderInspector(); renderViews();
@@ -4993,6 +5017,7 @@ function menuGroups() {
       ...(measures.length ? [{ label: 'Clear measures', run: () => { clearMeasures(); renderToolCol(); } }] : []),
       { label: 'Pin a photo', key: 'P', active: tool === 'pin', run: () => { if (tool === 'pin') setTool('select'); else startPinMode(null); } },
       { label: 'Note', key: 'N', active: tool === 'note', run: () => { if (tool === 'note') setTool('select'); else startNoteMode(null); } },
+      { label: 'Mark up: draw and pin numbered notes', key: 'U', active: !!markup && markup.isOn(), run: toggleMarkup },
       { label: 'Edit in SketchUp', run: () => document.dispatchEvent(new CustomEvent('tiksi:edit-in-sketchup')) },
     ]),
     g('Components', 'model.objects', true, 'The component list over the left of the model', [
@@ -5049,6 +5074,7 @@ function renderToolCol() {
     ${measures.length ? tb('clearm', 'close', 'CLEAR MEASURES') : ''}
     ${tb('pin', 'pin', 'PIN', 'P', tool === 'pin')}
     ${tb('note', 'note', 'NOTE', 'N', tool === 'note')}
+    ${tb('markup', 'edit', 'MARK UP', 'U', !!markup && markup.isOn())}
     ${tb('sketchup', 'external', 'EDIT IN SKETCHUP')}`,
     onScreen('model.tags', false) && `<div class="tool-head" title="Show or hide each tag. With nothing selected, the panel on the right renames, recolours, adds and deletes tags.">TAGS</div>
     ${tagRows}`,
@@ -5076,6 +5102,7 @@ function renderToolCol() {
   on('clearm', () => { clearMeasures(); renderToolCol(); });
   on('pin', () => { if (tool === 'pin') setTool('select'); else startPinMode(null); });
   on('note', () => { if (tool === 'note') setTool('select'); else startNoteMode(null); });
+  on('markup', toggleMarkup);
   on('sketchup', () => document.dispatchEvent(new CustomEvent('tiksi:edit-in-sketchup')));
   const su = tc.querySelector('[data-act=sketchup]');
   if (su) su.classList.add('tb-wrap');
@@ -5106,6 +5133,7 @@ function renderToolCol() {
 }
 function setTool(next) {
   if (next !== 'select') endMatch();
+  if (next !== 'select' && markup && markup.isOn()) markup.setOn(false);
   if (tool === 'measure' && next !== 'measure') { measureDraft = null; measureRoot.children.filter(c => c.userData.draft).forEach(c => { measureRoot.remove(c); c.geometry.dispose(); c.material.dispose(); }); }
   tool = next;
   if (next !== 'pin') pinBatch = false;
@@ -5117,11 +5145,49 @@ function setTool(next) {
   requestRender(2);
 }
 
+// ---------- markup mode ----------
+// markup-model.js holds this page's side of markup mode and is fetched with the layer; this is
+// what it works with.
+const hasMarkups = () => !!prop && Array.isArray(prop.markups) && prop.markups.some(m => m && m.on === 'model');
+function markupParts() {
+  const token = mountId;
+  return {
+    THREE, wrapEl, canvas: renderer.domElement, camera, controls, nav, prop: () => prop, alive: () => token === mountId && !!scene && !!modelGroup,
+    pick, anchorOf, viewState, showView, renderStillBlob, quality, toast, setHint, requestRender, setMode, setTool, endMatch, setSelection, renderToolCol, syncSectionHandles,
+    get mode() { return mode; }, get tool() { return tool; }, get match() { return match; }, get selection() { return selection; },
+    get tween() { return tween; }, set tween(v) { tween = v; }, set activeViewId(v) { activeViewId = v; },
+  };
+}
+// The layer, fetched and put over the view if it is not there yet. Null when it could not load.
+function needMarkup() {
+  if (markup) return Promise.resolve(markup);
+  if (!markupLoading) {
+    const token = mountId;
+    const loading = markupLoading = import('./markup-model.js').then(async part => {
+      await part.ready;
+      if (token !== mountId || !wrapEl || !renderer) return null;   // MODEL was left meanwhile
+      if (!markup) { markupUsed = true; markup = part.attachModelMarkup(markupParts()); renderToolCol(); }
+      return markup;
+    }, e => {
+      console.error('markup mode could not load', e);
+      if (token === mountId) toast('MARK UP could not load (' + errMsg(e) + '). Check the connection to the Mac and try again.', 'error');
+      return null;
+    }).finally(() => { if (markupLoading === loading) markupLoading = null; });
+  }
+  return markupLoading;
+}
+function toggleMarkup() { needMarkup().then(layer => { if (layer) layer.toggle(); }); }
+// Markup mode as plain data, with the camera it is being drawn from.
+export function markupState() {
+  return camera && controls ? { ...(markup ? markup.state() : { on: false, loaded: false }), camera: { position: camera.position.toArray(), target: controls.target.toArray(), fov: camera.fov } } : null;
+}
+
 // ---------- keyboard ----------
 function onKeyDown(e) {
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
   if (ctxMenu && e.code === 'Escape') { closeContextMenu(); e.preventDefault(); return; }
+  if (markup && markup.key(e)) return;
   if (mode === 'walk') {
     walkKeys[e.code] = true;
     if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) { e.preventDefault(); requestRender(2); }
@@ -5138,6 +5204,7 @@ function onKeyDown(e) {
     case 'KeyD': setTool(tool === 'measure' ? 'select' : 'measure'); break;
     case 'KeyP': if (tool === 'pin') setTool('select'); else startPinMode(null); break;
     case 'KeyN': if (tool === 'note') setTool('select'); else startNoteMode(null); break;
+    case 'KeyU': toggleMarkup(); break;
     case 'KeyC': toggleSection(); break;
     case 'KeyX': toggleXray(); break;
     case 'PageDown': case 'PageUp': stepView(e.code === 'PageDown' ? 1 : -1); break;
@@ -5159,7 +5226,7 @@ function onKeyDown(e) {
   }
   e.preventDefault();
 }
-function onKeyUp(e) { delete walkKeys[e.code]; }
+function onKeyUp(e) { delete walkKeys[e.code]; if (markup) markup.keyUp(e); }
 function onPointerLeave() { if (hoverTarget) { hoverTarget = null; updateOutlineTargets(); requestRender(2); } }
 function onContextMenu(e) { e.preventDefault(); }
 
@@ -5263,6 +5330,7 @@ function openModel(root) {
   c.addEventListener('wheel', closeContextMenu, { passive: true });
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
+  if (markupUsed || hasMarkups()) needMarkup();
   resizeObs = new ResizeObserver(resize);
   resizeObs.observe(wrapEl);
   resize();
@@ -5469,6 +5537,8 @@ export function unmount() {
   }
   closeContextMenu();
   closeNoteEditor();
+  if (markup) { markup.dispose(); markup = null; }
+  markupLoading = null;
   // Every disk save remounts the view (a saved view among them): the match carries on after it.
   matchResume = match && camera && controls ? { at: performance.now(), id: match.id, hfov: match.hfov, roll: match.roll, position: camera.position.toArray(), target: (tween ? tween.t1 : controls.target).toArray() } : null;
   if (tween && matchResume) matchResume.position = tween.p1.toArray();
@@ -5551,7 +5621,7 @@ export function fieldState() {
     // Marking up by tap: the tools the panel can switch on (the view shows what a tap does and
     // a DONE button while one is on), and how many measurements are drawn.
     tool,
-    tools: [{ id: 'measure', label: 'Measure', on: tool === 'measure' }, { id: 'note', label: 'Note', on: tool === 'note' }],
+    tools: [{ id: 'measure', label: 'Measure', on: tool === 'measure' }, { id: 'note', label: 'Note', on: tool === 'note' }, { id: 'markup', label: 'Mark up', on: !!markup && markup.isOn() }],
     measures: measures.length,
     // What a tap does now, for the banner: null while no tool and no PHOTO MODE is on.
     task: taskText() ? { text: taskText(), clear: tool === 'measure' && measures.length > 0 } : null,
@@ -5587,7 +5657,8 @@ export function fieldAction(kind, id, value) {
     if (mode === 'walk') setMode('orbit');
     // DONE ends PHOTO MODE too (choosing 'select' with no tool on).
     if (id === 'select' && match) endMatch();
-    if (id === tool || id === 'select') setTool('select');
+    if (id === 'markup') toggleMarkup();
+    else if (id === tool || id === 'select') { setTool('select'); if (markup && markup.isOn()) markup.setOn(false); }
     else if (id === 'measure') setTool('measure');
     else if (id === 'note') startNoteMode(null);
   }
