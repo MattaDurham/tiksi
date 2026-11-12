@@ -2606,12 +2606,13 @@ function renderInspector() {
       </div>
       ${o.type === 'window' ? lenField('Sill height', o.sill || 0, 's') : ''}
       ${o.type === 'door' ? `<div class="field"><label>Leaves</label>
-        <select data-leaves><option value="1" ${o.leaves === 2 ? '' : 'selected'}>Single</option>
-        <option value="2" ${o.leaves === 2 ? 'selected' : ''}>Pair</option></select></div>
-      <div class="field"><label>Leaf</label>
+        <select data-leaves><option value="1" ${o.leaves === 2 || o.leaves === 0 ? '' : 'selected'}>Single</option>
+        <option value="2" ${o.leaves === 2 ? 'selected' : ''}>Pair</option>
+        <option value="0" ${o.leaves === 0 ? 'selected' : ''}>None (cased opening)</option></select></div>
+      ${o.leaves === 0 ? '' : `<div class="field"><label>Leaf</label>
         <select data-glass><option value="" ${doorGlass(o) ? '' : 'selected'}>Solid panel</option>
         <option value="full" ${doorGlass(o) === 'full' ? 'selected' : ''}>Glass</option>
-        <option value="half" ${doorGlass(o) === 'half' ? 'selected' : ''}>Half glass</option></select></div>` : ''}
+        <option value="half" ${doorGlass(o) === 'half' ? 'selected' : ''}>Half glass</option></select></div>`}` : ''}
       <div class="field"><label>Position along wall</label>
         <input type="range" min="0.02" max="0.98" step="0.005" value="${o.t}" data-t></div>
       <button class="btn danger" data-del>${icon('trash')}DELETE</button>`;

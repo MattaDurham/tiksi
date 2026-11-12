@@ -4556,7 +4556,7 @@ function renderInspectorBody() {
         <option value="full" ${doorGlass(o) === 'full' ? 'selected' : ''}>Glass</option>
         <option value="half" ${doorGlass(o) === 'half' ? 'selected' : ''}>Half glass</option></select></div>` : ''}
       <div class="field"><label>Position along wall</label><input type="range" min="0.02" max="0.98" step="0.005" value="${finiteNum(o.t, 0.5)}" data-t></div>
-      <div class="empty">Interior doors wider than 4 ft become cased openings unless PLAN sets their leaves. Interior doors stand ajar so you can see through rooms.</div>
+      <div class="empty">PLAN sets a door's leaves: one, a pair, or none (a cased opening). Left unset, an interior door wider than 4 ft is a cased opening. Interior doors stand ajar so you can see through rooms.</div>
       ${researchButtonHtml(o.id, 'fixture', o.type === 'window' ? 'RESEARCH WINDOW' : 'RESEARCH DOOR / OPENING')}
       ${linkedProductsHtml(o.id)}
       <button class="btn" data-wall>SELECT WALL</button>
