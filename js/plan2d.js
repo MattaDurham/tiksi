@@ -17,7 +17,6 @@ import { materialSelectHtml } from './materials.js';
 import { safeUrl } from './material-identity.js';
 import { printSheet } from './print-sheet.js';
 import { icon } from './icons.js';
-import { attachMarkup } from './markup-layer.js';
 import { markupBounds } from './markups.js';
 import { beginGeometryEdit, cancelGeometryEdit, restoreGeometryEdit, revertGeometryEdit, endGeometryHold } from './edit-history.js';
 import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
@@ -124,7 +123,9 @@ let calib = null;            // {a:[x,y], b:[x,y]|null}
 let hoverPt = null;          // last cursor world pos
 let drag = null;             // active drag descriptor
 let spaceDown = false;
-let markup = null;             // markup mode over the plan (markup-layer.js): ink and numbered notes
+// Markup mode over the plan (markup-layer.js): ink and numbered notes. The layer is fetched the
+// first time it is wanted (MARK UP is chosen, or the property already has markups on a plan).
+let markup = null, markupLoading = null, markupUsed = false;
 // Fingers on the canvas (pointerType 'touch'): pointerId -> [sx, sy]. A finger never drags
 // geometry; one finger pans, two pinch to zoom, and a tap acts like a mouse click.
 const fingers = new Map();
@@ -2138,7 +2139,7 @@ function onKeyDown(e) {
   if (document.querySelector('dialog[open]')) return;
   invalidate();
   if (markup && markup.key(e)) { if (e.key === ' ') spaceDown = true; return; }
-  if (e.key === 'u' && !e.metaKey && !e.ctrlKey && markup) { markup.toggle(); return; }
+  if (e.key === 'u' && !e.metaKey && !e.ctrlKey) { toggleMarkup(); return; }
   if (e.key === ' ') { spaceDown = true; e.preventDefault(); updateCursor(); return; }
   if (e.key === 'Alt') { altDown = true; return; }
   const keys = { v: 'select', w: 'wall', d: 'door', n: 'window', r: 'room', c: 'calibrate' };
@@ -2174,6 +2175,28 @@ function onKeyUp(e) {
 // ---------- markup mode ----------
 // What markup-layer.js needs from this page: plan metres to and from the screen, the level, and
 // a picture of the plan to put a markup's ink on.
+// The layer, fetched and put over the plan if it is not there yet. Null when it could not load.
+function needMarkup() {
+  if (markup) return Promise.resolve(markup);
+  if (!markupLoading) {
+    const at = wrapEl;
+    const loading = markupLoading = import('./markup-layer.js').then(layer => {
+      if (!wrapEl || wrapEl !== at) return null;   // PLAN was left or rebuilt meanwhile
+      if (!markup) {
+        markupUsed = true;
+        markup = layer.attachMarkup(markupHost());
+        renderToolCol();   // markup mode kept on across a rebuild lights its button
+      }
+      return markup;
+    }, e => {
+      console.error('markup mode could not load', e);
+      if (wrapEl === at) { note = 'MARK UP could not load. Check the connection to the Mac and try again.'; updateHint(); }
+      return null;
+    }).finally(() => { if (markupLoading === loading) markupLoading = null; });
+  }
+  return markupLoading;
+}
+function toggleMarkup() { needMarkup().then(layer => { if (layer) layer.toggle(); }); }
 function markupHost() {
   return {
     kind: 'plan', wrap: wrapEl, surface: canvas,
@@ -2222,7 +2245,7 @@ async function markupPicture(m, marks) {
 
 // Markup mode as plain data, with the plan view it is being drawn on.
 export function markupState() {
-  return markup && vs ? { ...markup.state(), level: lvl().id, view: { zoom: vs.zoom, panX: vs.panX, panY: vs.panY } } : null;
+  return vs ? { ...(markup ? markup.state() : { on: false, loaded: false }), level: lvl().id, view: { zoom: vs.zoom, panX: vs.panX, panY: vs.panY } } : null;
 }
 
 // ---------- tool column / hint ----------
@@ -2361,7 +2384,7 @@ function renderToolCol() {
   tc.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => setTool(b.dataset.tool));
   tc.querySelectorAll('[data-level]').forEach(b => b.onclick = () => switchLevel(b.dataset.level));
   tc.querySelector('[data-act=add-level]').onclick = addLevelUI;
-  tc.querySelector('[data-act=markup]').onclick = () => { if (markup) markup.toggle(); };
+  tc.querySelector('[data-act=markup]').onclick = toggleMarkup;
   tc.querySelectorAll('[data-preset]').forEach(b => b.onclick = () => { wallPreset = b.dataset.preset; renderToolCol(); });
   const file = tc.querySelector('input[type=file]');
   tc.querySelector('[data-act=upload]').onclick = () => file.click();
@@ -2823,7 +2846,7 @@ export function mount(root) {
   canvas.addEventListener('contextmenu', e => e.preventDefault());
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
-  markup = attachMarkup(markupHost());
+  if (markupUsed || (prop.markups || []).some(m => m.on === 'plan')) needMarkup();
 
   // Inspector edits and other views' changes reach the canvas through the store; layout
   // changes (panel resize, browser zoom) through the observer. Everything else is an input.
@@ -2892,6 +2915,7 @@ function selectFromLink(id) {
 export function unmount() {
   cancelAnimationFrame(raf);
   if (markup) { markup.dispose(); markup = null; }
+  markupLoading = null;
   // Every disk save remounts the view; typing down the schedule must survive that.
   const a = document.activeElement;
   scheduleResume = scheduleEl && a && scheduleEl.contains(a) && a.dataset.psLen

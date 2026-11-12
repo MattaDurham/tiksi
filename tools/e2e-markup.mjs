@@ -85,10 +85,12 @@ try {
     const box = await page.locator('canvas.v-canvas').boundingBox();
     const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
 
-    assert.equal((await modelState(page)).on, false);
-    assert.equal(await page.locator('.mk-bar').isVisible(), false);
+    // Until it is asked for, markup mode is not even downloaded.
+    assert.deepEqual([(await modelState(page)).on, (await modelState(page)).loaded], [false, false]);
+    assert.equal(await page.locator('.mk-bar').count(), 0);
+    assert.equal(await page.evaluate(() => performance.getEntriesByType('resource').some(r => r.name.endsWith('/js/markup-layer.js'))), false);
     await page.locator('.tool-col [data-act=markup]').click();
-    assert.equal(await page.locator('.mk-bar').isVisible(), true);
+    await page.locator('.mk-bar').waitFor();
     assert.equal(await page.locator('.tool-col [data-act=markup]').evaluate(b => b.classList.contains('active')), true);
     assert.match(await page.locator('.v-hint').innerText(), /^Drag: the pen draws\. The wheel/);
     const cam0 = (await modelState(page)).camera;
@@ -246,6 +248,7 @@ try {
     const box = await page.locator('canvas.v-canvas').boundingBox();
     const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
     await page.evaluate(async () => (await import('/js/viewer3d.js')).fieldAction('tool', 'markup'));
+    await page.locator('.mk-bar').waitFor();
     let st = await modelState(page);
     assert.equal(st.on, true);
     assert.equal(st.fingerDraws, true, 'until a pen is seen, a finger draws');
@@ -330,6 +333,7 @@ try {
     const at = (v, x, y) => [box.x + (x - v.panX) * v.zoom, box.y + (y - v.panY) * v.zoom];   // plan metres -> page px
 
     await page.keyboard.press('u');
+    await page.locator('.mk-bar').waitFor();
     assert.equal((await planState(page)).on, true);
     assert.equal(await page.locator('.tool-col [data-act=markup]').evaluate(b => b.classList.contains('active')), true);
 
