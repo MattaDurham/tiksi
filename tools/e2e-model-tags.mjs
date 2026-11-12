@@ -139,6 +139,27 @@ try {
   await page.locator('.v-view-tab').first().click();
   assert.equal(await prop(page, 'return p.tags.find(t => t.id === "tag-roof").visible'), false, 'the saved view brings back its tags');
 
+  // A saved view is renamed in its tab: a double-click opens the name, Enter keeps it; the
+  // pencil beside the current tab opens RENAME too, and Esc leaves the name as it was.
+  await page.locator('.v-view-tab').first().dblclick();
+  await page.locator('.v-views [data-view-name]').waitFor();
+  await page.locator('.v-views [data-view-name]').fill('Kitchen corner');
+  await page.locator('.v-views [data-view-name]').press('Enter');
+  await page.locator('.v-view-tab', { hasText: 'Kitchen corner' }).waitFor();
+  assert.equal(await prop(page, 'return p.savedViews[0].name'), 'Kitchen corner', 'a double-click renames the view');
+  assert.ok(await page.locator('.v-views [data-view-edit]').isVisible(), 'the current view shows its pencil');
+  await page.locator('.v-views [data-view-edit]').click();
+  await page.locator('.v-ctx [data-ctx="view-rename"]').click();
+  await page.locator('.v-views [data-view-name]').fill('Not kept');
+  await page.locator('.v-views [data-view-name]').press('Escape');
+  await page.locator('.v-view-tab', { hasText: 'Kitchen corner' }).waitFor();
+  assert.equal(await prop(page, 'return p.savedViews[0].name'), 'Kitchen corner', 'Esc leaves the name as it was');
+  await page.locator('.v-views [data-view-edit]').click();
+  await page.locator('.v-ctx [data-ctx="view-rename"]').click();
+  await page.locator('.v-views [data-view-name]').fill('Kitchen from the door');
+  await page.locator('.v-views [data-view-name]').press('Enter');
+  assert.equal(await prop(page, 'return p.savedViews[0].name'), 'Kitchen from the door', 'the pencil renames the view');
+
   // DOCUMENTS: a 3D view from above follows the model (no red), and its own override shows the roof.
   const vpId = await page.evaluate(async () => {
     const s = await import('/js/store.js'), ds = await import('/js/doc-sets.js');
@@ -167,6 +188,7 @@ try {
   assert.equal(await prop(page, `return p.tagOf[${JSON.stringify(chairKey)}]`), moved, 'the chair is still on its new tag after a reload');
   assert.equal(await prop(page, 'return p.tags.find(t => t.id === "tag-roof").visible'), false);
   assert.equal(await prop(page, 'return p.savedViews.length'), 1);
+  assert.equal(await prop(page, 'return p.savedViews[0].name'), 'Kitchen from the door', 'the new name comes back from the project file');
 
   // Rename Roof in the tag list; the name, the hidden state, the chair's tag and the saved view
   // all come back from the project file.
@@ -188,7 +210,7 @@ try {
   assert.equal(back.tagOf[chairKey], moved);
   assert.deepEqual(back.views, [false], 'the saved view and its tags survive the project file');
   assert.deepEqual(errors, []);
-  console.log('model tags: roof detected and hidden in MODEL and DOCUMENTS, part moved and kept, saved view and renamed tag survive the project file');
+  console.log('model tags: roof detected and hidden in MODEL and DOCUMENTS, part moved and kept, saved view (renamed in its tab) and renamed tag survive the project file');
 } finally {
   await browser.close();
   server.close();
