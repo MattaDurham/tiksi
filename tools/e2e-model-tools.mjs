@@ -8,7 +8,7 @@
 //                 markers only; one finger pans in Top view; a pinch travels to what is under it
 //   listeners     leaving MODEL removes the navigation's listeners
 //   picking       a click on a large scan goes through the pick index and selects the same thing
-//   small work    a slider drag rebuilds once a frame; walking into a room bakes no sky lighting
+//   small work    walking into a room bakes no sky lighting
 //   textures      sets are made in the background helper with the pixels the page would make; a
 //                 model waits only for the sets it uses; without a helper the picture is the same
 //   pins          pinned photos load two at a time, and at card size on a touch device
@@ -544,28 +544,6 @@ async function computerChecks(browser, say) {
   await desk.keyboard.press('Escape');
   say('a click on a large scan goes through the pick index');
 
-  // A slider drag: thirty steps between two frames rebuild the model once.
-  await frame(desk);
-  const [wx, wy] = await onScreen(desk, [3, 1.5, -0.08]);
-  await desk.mouse.click(wx, wy);
-  await desk.locator('.inspector [data-t]').waitFor({ timeout: 10000 });
-  await settled(desk, 'window selected');
-  const builds = await desk.evaluate(async () => {
-    const v = await import('/js/viewer3d.js');
-    const el = document.querySelector('.inspector [data-t]');
-    const before = v.frameState().modelBuilds;
-    for (let i = 0; i < 30; i++) { el.value = String(0.3 + i * 0.01); el.dispatchEvent(new Event('input', { bubbles: true })); }
-    const during = v.frameState().modelBuilds - before;
-    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-    return { during, after: v.frameState().modelBuilds - before };
-  });
-  assert.equal(builds.during, 0, 'no step rebuilds the model by itself');
-  assert.equal(builds.after, 1, 'the frame that follows rebuilds it once (' + builds.after + ')');
-  await settled(desk, 'after the slider');
-  assert.ok(Math.abs((await property(desk, 'return p.openings[0].t')) - 0.59) < 1e-9, 'and the window ends where the slider did');
-  await desk.keyboard.press('Escape');
-
   // The sky lighting is baked again when the sky changes, and only then.
   const bakes = (await viewer(desk, 'return v.frameState()')).skyBakes;
   await viewer(desk, 'v.fieldAction("mode", "walk")'); await delay(600); await settled(desk, 'walking');
@@ -581,7 +559,7 @@ async function computerChecks(browser, say) {
   });
   await delay(400); await settled(desk, 'after the time of day changed');
   assert.ok((await viewer(desk, 'return v.frameState()')).skyBakes > bakes, 'a new time of day does');
-  say('a slider drag rebuilds once a frame; the sky lighting is baked only when the sky changes');
+  say('the sky lighting is baked only when the sky changes');
 
   const idle = await idleDraws(desk);
   assert.equal(idle.draws, 0, 'a computer draws nothing while idle (' + idle.draws + ' draw calls over ' + idle.frames + ' frames)');

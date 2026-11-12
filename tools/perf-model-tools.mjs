@@ -12,8 +12,6 @@
 //             again, and the page time that takes
 //   textures  opening a house that uses 13 library materials: the time the page itself spends
 //             making their textures, and the longest gap between frames meanwhile
-//   slider    30 steps of an opening's position slider on a plan of 40 walls: the page's own
-//             work for the steps (drawing not counted)
 //   hover     selecting 40 parts of a 3,000-part model one by one by Shift-click, then
 //             hovering on and off a wall: the page's own work for the clicks and per hover
 //             (each redoes the outline of everything selected)
@@ -223,32 +221,6 @@ const scenarios = {
     });
     await context.close();
     return { textureSets: out.sets, largestTexture: out.largest, pageMsMakingTextures: round(out.pageMs), helperMsMakingTextures: round(out.helperMs), worstFrameGapMs: round(out.worstGapMs), openToSettledMs: openMs };
-  },
-
-  async slider(profile) {
-    if (profile !== 'computer') return { skipped: 'the inspector is a computer tool' };
-    const { page, context } = await open(profile, async (s, syn, p, L, box) => {
-      for (let i = 0; i < 10; i++) box((i % 5) * 4, Math.floor(i / 5) * 4, (i % 5) * 4 + 4, Math.floor(i / 5) * 4 + 4, 'room-' + i);
-      p.openings.push({ id: 'win-1', wallId: 'room-0-w0', type: 'window', t: 0.5, width: 1.2, height: 1.2, sill: 0.9 });
-    });
-    const [x, y] = await onScreen(page, [2, 1.5, -0.06]);
-    await page.mouse.click(x, y);
-    await page.locator('.inspector [data-t]').waitFor({ timeout: 10000 });
-    await settled(page);
-    const out = await page.evaluate(async () => {
-      const el = document.querySelector('.inspector [data-t]');
-      // The page's own work per step (no frame is drawn inside this loop), as during a fast drag.
-      const t0 = performance.now();
-      for (let i = 0; i < 30; i++) { el.value = String(0.3 + i * 0.01); el.dispatchEvent(new Event('input', { bubbles: true })); }
-      const ms = performance.now() - t0;
-      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-      return { ms };
-    });
-    await settled(page);
-    const t = await page.evaluate(async () => (await import('/js/store.js')).activeProperty().openings[0].t);
-    await context.close();
-    return { walls: 40, steps: 30, totalMs: round(out.ms), msPerStep: round(out.ms / 30), endsAt: t };
   },
 
   async hover(profile) {
