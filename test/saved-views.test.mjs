@@ -57,7 +57,7 @@ test('hostile saved views are cleaned or dropped; the views travel in the projec
   SV.normalizeSavedViews(p);
   assert.equal(p.savedViews.length, 3);
   const [a, b, c] = p.savedViews;
-  assert.deepEqual(a, { id: 'v1', name: 'Good', camera: { position: [1, 2, 3], target: [0, 0, 0], fov: 110 }, mode: 'orbit', tags: { 'tag-roof': false }, section: { on: false, height: 1.2 }, xray: false, hiddenLevels: ['lvl-0'] });
+  assert.deepEqual(a, { id: 'v1', name: 'Good', camera: { position: [1, 2, 3], target: [0, 0, 0], fov: 150 }, mode: 'orbit', tags: { 'tag-roof': false }, section: { on: false, height: 1.2 }, xray: false, hiddenLevels: ['lvl-0'] });
   assert.notEqual(b.id, 'v1', 'a repeated id is replaced');
   assert.equal(c.name.length, 60);
   assert.deepEqual(c.camera.position, [1, 2, 3]);

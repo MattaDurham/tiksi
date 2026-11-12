@@ -348,7 +348,9 @@ function render() {
     const tooLarge = st.tooLarge.map(s => `<div class="fd-too-large" style="margin:0 0 12px"><div style="font-size:14.5px;color:var(--ink)">${escapeHtml(s.label)}</div>
         <div style="font-size:13px;line-height:1.4;color:var(--dim);margin:2px 0 8px">Not loaded: ${escapeHtml(s.detail)}. Loading it could close this page.</div>
         <button type="button" class="fd-chip" data-act="load-scan" data-id="${escapeHtml(s.id)}">Load anyway</button></div>`).join('');
-    model = section('View', `<div class="fd-segs" role="group" aria-label="How to move">${modes}</div><div class="fd-chips">${cams}</div>`)
+    // The lens: iPhone 17 Pro 0.5x, 1x and 2x, so the view frames the model as its pictures do.
+    const lenses = (st.lenses || []).map(l => `<button type="button" class="fd-seg ${l.on ? 'on' : ''}" aria-pressed="${l.on}" data-act="lens" data-id="${escapeHtml(l.id)}">${escapeHtml(l.label)}</button>`).join('');
+    model = section('View', `<div class="fd-segs" role="group" aria-label="How to move">${modes}</div><div class="fd-chips">${cams}</div>${lenses ? `<div class="fd-segs" role="group" aria-label="Lens" style="margin-top:8px">${lenses}</div>` : ''}`)
       + section('Measure', `<div class="fd-chips">${measure}</div>`)
       + section('Before and after', compare)
       + section('Too large for this device', tooLarge)
