@@ -201,6 +201,16 @@ try {
     await page.keyboard.press(mod + '+z');
     assert.equal((await markups(page))[0].strokes[0].id, s0.id, 'undo puts the erased stroke back');
 
+    // A dead-straight line is saved as its two ends, and is still read all along its length.
+    await page.keyboard.press('p');
+    await page.mouse.move(cx - 140, cy + 60); await page.mouse.down(); await page.mouse.move(cx + 140, cy + 60); await page.mouse.up();
+    await waitUntil(async () => !!(await markups(page))[0].strokes.at(-1).on, 'the straight stroke is read');
+    const straight = (await markups(page))[0].strokes.at(-1);
+    assert.equal(straight.pts.length, 6, 'two points');
+    assert.equal(straight.on.length, 8, 'eight readings along it');
+    assert.ok(straight.on.every(h => h.k === 'room' && h.id === 'r-k') && straight.on[7].p[0] - straight.on[0].p[0] > 1, 'spread across the kitchen floor: ' + JSON.stringify(straight.on.map(h => h.p[0])));
+    await page.keyboard.press(mod + '+z');
+
     // One eraser drag across two strokes takes both; undo puts them back in their old order.
     await page.keyboard.press('p');
     await page.mouse.move(cx - 150, cy - 70); await page.mouse.down(); await page.mouse.move(cx, cy - 72, { steps: 4 }); await page.mouse.move(cx + 150, cy - 70, { steps: 4 }); await page.mouse.up();

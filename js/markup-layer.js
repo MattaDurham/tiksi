@@ -330,10 +330,17 @@ export function attachMarkup(host) {
     if (gone) return;
     const m = markupById(prop(), markupId), s = m && m.strokes.find(x => x.id === strokeId);
     if (!s || !onView(m)) return;
-    const n = s.pts.length / 3, take = Math.min(8, n), r = surface.getBoundingClientRect(), on = [];
-    for (let k = 0; k < take; k++) {
-      const i = take === 1 ? 0 : Math.round(k * (n - 1) / (take - 1));
-      const [x, y] = toPx(s.pts[i * 3], s.pts[i * 3 + 1]);
+    // Evenly along its length, not at its saved points: a straight line across a wall is saved
+    // as its two ends, and it is the wall between them that matters.
+    const n = s.pts.length / 3, r = surface.getBoundingClientRect(), on = [];
+    const at = [], run = [0];
+    for (let i = 0; i < n; i++) { at.push(toPx(s.pts[i * 3], s.pts[i * 3 + 1])); if (i) run.push(run[i - 1] + Math.hypot(at[i][0] - at[i - 1][0], at[i][1] - at[i - 1][1])); }
+    const total = run[n - 1], take = total > 4 ? 8 : 1;
+    for (let k = 0, i = 1; k < take; k++) {
+      const d = take === 1 ? 0 : total * k / (take - 1);
+      while (i < n - 1 && run[i] < d) i++;
+      const t = n > 1 && run[i] > run[i - 1] ? (d - run[i - 1]) / (run[i] - run[i - 1]) : 0;
+      const x = n > 1 ? at[i - 1][0] + (at[i][0] - at[i - 1][0]) * t : at[0][0], y = n > 1 ? at[i - 1][1] + (at[i][1] - at[i - 1][1]) * t : at[0][1];
       const hit = host.hitAt(r.left + x, r.top + y);
       if (hit) on.push({ k: hit.kind, id: hit.ref || '', p: hit.p.map(v => Math.round(v * 1000) / 1000) });
     }
