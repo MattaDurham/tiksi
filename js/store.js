@@ -8,7 +8,6 @@ import { normaliseFixtures } from './fixtures.js';
 import { normalizeDocSets } from './doc-sets.js';
 import { normalizeTags } from './tags.js';
 import { normalizeSavedViews } from './saved-views.js';
-import { normalizeMarkups } from './markups.js';
 import { isPictureRef, inlineBundlePictures } from './picture-assets.js';
 import { normalizeOnePager, emptyOnePager } from './one-pager-record.js';
 import { sameJson } from './workspace-merge.js';
@@ -784,8 +783,10 @@ function migrate(d) {
     normalizeTags(p);
     // Saved views (saved-views.js): MODEL's tabs, each a camera with its tags.
     normalizeSavedViews(p);
-    // Markups (markups.js): ink and numbered notes drawn over MODEL and PLAN.
-    normalizeMarkups(p);
+    // Markups (markups.js: ink and numbered notes drawn over MODEL and PLAN) are a list here and
+    // nothing more; the markup layer tidies them when it loads, so a phone's first open of the
+    // app does not download their code.
+    if (!Array.isArray(p.markups)) p.markups = [];
     // The one-pager (one-pager.js): the client teaser's text, picture choice and saved versions.
     normalizeOnePager(p);
     // Notes pinned to a point in the model (MODEL, right-click). `notes` on the property is

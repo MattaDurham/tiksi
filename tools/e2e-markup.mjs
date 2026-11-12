@@ -88,7 +88,7 @@ try {
     // Until it is asked for, markup mode is not even downloaded.
     assert.deepEqual([(await modelState(page)).on, (await modelState(page)).loaded], [false, false]);
     assert.equal(await page.locator('.mk-bar').count(), 0);
-    assert.equal(await page.evaluate(() => performance.getEntriesByType('resource').some(r => r.name.endsWith('/js/markup-layer.js'))), false);
+    assert.deepEqual(await page.evaluate(() => performance.getEntriesByType('resource').map(r => r.name).filter(n => /markup/.test(n))), [], 'none of its files is fetched');
     await page.locator('.tool-col [data-act=markup]').click();
     await page.locator('.mk-bar').waitFor();
     assert.equal(await page.locator('.tool-col [data-act=markup]').evaluate(b => b.classList.contains('active')), true);
@@ -291,7 +291,8 @@ try {
     // pencil's is kept, and the pencil does not turn the view.
     await touch('touchStart', [[cx + 230, cy + 190]]);
     await touch('touchMove', [[cx + 236, cy + 196]]);
-    await pen.line([[cx - 100, cy - 120], [cx - 50, cy - 118], [cx, cy - 122], [cx + 50, cy - 118], [cx + 100, cy - 120]], [0.15, 0.35, 0.6, 0.85, 0.4]);
+    // (Drawn clear of the component list, which floats over the top left of the view.)
+    await pen.line([[cx - 20, cy - 120], [cx + 30, cy - 118], [cx + 80, cy - 122], [cx + 130, cy - 118], [cx + 180, cy - 120]], [0.15, 0.35, 0.6, 0.85, 0.4]);
     await touch('touchMove', [[cx + 240, cy + 200]]);
     await touch('touchEnd', []);
     list = await markups(page);

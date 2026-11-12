@@ -21,13 +21,42 @@
 //          hitAt(clientX, clientY) -> { anchor, kind, ref, p } | null, project(anchor) -> [x, y] | null
 //   plan:  levelId(), toDoc(x, y) -> metres, toPx(x, y) -> px, unit() -> px per metre, viewKey() }
 
-import { icon } from './icons.js';
+import { icon as appIcon } from './icons.js';
 import { touch, escapeHtml } from './store.js';
 import {
   MARKUP_COLORS, MARKER_ALPHA, addMarkup, addStroke, removeStroke, addNote, removeNote, setNoteText, markupById, markupTitle,
   deleteMarkup, restoreMarkup, renameMarkup, setMarkupStatus, pruneEmptyMarkups, simplifyPoints, roundPoints, strokeHit, penWidth,
-  evenPressure, sameCamera, markupEmpty,
+  evenPressure, sameCamera, markupEmpty, normalizeMarkups,
 } from './markups.js';
+
+// This layer's stylesheet and its own icons come with it, not with the app's first load.
+const ICONS = {
+  pen: '<path d="M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19z"/><path d="m14.5 6.5 3 3"/>',
+  marker: '<path d="m9 14 8.5-8.5a1.8 1.8 0 0 1 2.5 0l.5.5a1.8 1.8 0 0 1 0 2.5L12 17z"/><path d="m9 14-2 2 3 3 2-2"/><path d="m7 16-3 4h4l1-1"/>',
+  eraser: '<path d="M8.5 19 3.6 14.1a1.5 1.5 0 0 1 0-2.1l8-8a1.5 1.5 0 0 1 2.1 0l6.7 6.7a1.5 1.5 0 0 1 0 2.1L14 19z"/><path d="m8 8.5 7.5 7.5M8.5 19H21"/>',
+  hand: '<path d="M8 12.5V6a1.5 1.5 0 0 1 3 0v5m0-6.5a1.5 1.5 0 0 1 3 0V11m0-5a1.5 1.5 0 0 1 3 0v6m0-2.5a1.5 1.5 0 0 1 3 0V15a6 6 0 0 1-6 6h-1.6a6 6 0 0 1-4.6-2.2L4.6 14a1.6 1.6 0 0 1 2.4-2.1l1 1.1"/>',
+  finger: '<path d="M10 13.5v-9a1.5 1.5 0 0 1 3 0V10l4.3.9a2 2 0 0 1 1.6 2.3l-.7 4.3a3 3 0 0 1-3 2.5h-3.1a3 3 0 0 1-2.4-1.2L6.3 14a1.5 1.5 0 0 1 2.3-1.9z"/>',
+  list: '<path d="M8.5 6H20M8.5 12H20M8.5 18H20"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
+};
+const icon = name => ICONS[name]
+  ? `<svg class="ic ic-${name}" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true">${ICONS[name]}</svg>`
+  : appIcon(name);
+// Resolves once the stylesheet is in (or could not be fetched: the layer still works, plainly).
+export const ready = new Promise(resolve => {
+  if (document.querySelector('link[data-markup-css]')) { resolve(); return; }
+  const link = document.createElement('link');
+  link.rel = 'stylesheet'; link.href = './css/markup.css'; link.dataset.markupCss = '';
+  link.onload = link.onerror = () => resolve();
+  document.head.append(link);
+});
+// Lists already tidied (markups.js), so a rebuilt page does not redo it; a list another device
+// changed is tidied again when the page says so (`refresh(true)`).
+const tidied = new WeakSet();
+function tidy(prop, again = false) {
+  if (!prop || (!again && tidied.has(prop.markups))) return;
+  normalizeMarkups(prop);
+  tidied.add(prop.markups);
+}
 
 // Line widths in px on the screen at the moment of drawing: fine, medium, bold.
 const PEN_PX = [2.5, 5, 9], MARKER_PX = [14, 22, 34], ERASER_PX = 12;
@@ -129,6 +158,7 @@ export function attachMarkup(host) {
   let confirmDelete = null, renaming = null, busyPicture = false;
   const undo = [], redo = [];
   const prop = () => host.prop();
+  tidy(prop());
   const active = () => { const m = markupById(prop(), S.activeId); return m && m.on === host.kind ? m : null; };
 
   // ---------- geometry ----------
@@ -238,7 +268,8 @@ export function attachMarkup(host) {
     raf = requestAnimationFrame(loop);
     if (liveDirty) paintLive();
   }
-  function refresh() { inkDirty = true; notesKey = ''; refreshChip(); if (!listEl.hidden) renderList(); frame(); }
+  // `outside`: the records were changed by something other than this layer (another device).
+  function refresh(outside = false) { if (outside) tidy(prop(), true); inkDirty = true; notesKey = ''; refreshChip(); if (!listEl.hidden) renderList(); frame(); }
 
   // ---------- which markup a mark joins ----------
   // The open markup while the view is still its own (over the model) or the level is (on the

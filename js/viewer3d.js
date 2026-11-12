@@ -2054,7 +2054,7 @@ const LAYER_FIELDS = new Set(['markups']);
 export function sharedChange(keys) {
   if (!scene || !prop || keys.some(key => !REDRAWN_FIELDS.has(key) && !UNDRAWN_FIELDS.has(key) && !LAYER_FIELDS.has(key))) return false;
   if (keys.some(key => REDRAWN_FIELDS.has(key))) { setSelection(null); rebuildModel(); }
-  if (keys.includes('markups')) { if (markup) markup.refresh(); else if (hasMarkups()) needMarkup(); }
+  if (keys.includes('markups')) { if (markup) markup.refresh(true); else if (hasMarkups()) needMarkup(); }
   renderInspector();
   return true;
 }
@@ -5074,7 +5074,7 @@ function renderToolCol() {
     ${measures.length ? tb('clearm', 'close', 'CLEAR MEASURES') : ''}
     ${tb('pin', 'pin', 'PIN', 'P', tool === 'pin')}
     ${tb('note', 'note', 'NOTE', 'N', tool === 'note')}
-    ${tb('markup', 'pen', 'MARK UP', 'U', !!markup && markup.isOn())}
+    ${tb('markup', 'edit', 'MARK UP', 'U', !!markup && markup.isOn())}
     ${tb('sketchup', 'external', 'EDIT IN SKETCHUP')}`,
     onScreen('model.tags', false) && `<div class="tool-head" title="Show or hide each tag. With nothing selected, the panel on the right renames, recolours, adds and deletes tags.">TAGS</div>
     ${tagRows}`,
@@ -5146,27 +5146,27 @@ function setTool(next) {
 }
 
 // ---------- markup mode ----------
-// What markup-layer.js needs from this page: the camera, what is under a point of the view, where
-// a pinned note is on the screen, and a picture of the view to put a markup's ink on.
-const markupPoint = new THREE.Vector3();
-function projectToView(a, w, h) {
-  markupPoint.set(a.x, a.y, a.z).project(camera);
-  if (markupPoint.z < -1 || markupPoint.z > 1) return null;   // behind the camera, or past its far plane
-  return [(markupPoint.x + 1) / 2 * w, (1 - markupPoint.y) / 2 * h];
+// markup-model.js holds this page's side of markup mode and is fetched with the layer; this is
+// what it works with.
+const hasMarkups = () => !!prop && Array.isArray(prop.markups) && prop.markups.some(m => m && m.on === 'model');
+function markupParts() {
+  const token = mountId;
+  return {
+    THREE, wrapEl, canvas: renderer.domElement, camera, controls, nav, prop: () => prop, alive: () => token === mountId && !!scene && !!modelGroup,
+    pick, anchorOf, viewState, showView, renderStillBlob, quality, toast, setHint, requestRender, setMode, setTool, endMatch, setSelection, renderToolCol, syncSectionHandles,
+    get mode() { return mode; }, get tool() { return tool; }, get match() { return match; }, get selection() { return selection; },
+    get tween() { return tween; }, set tween(v) { tween = v; }, set activeViewId(v) { activeViewId = v; },
+  };
 }
-const hasMarkups = () => !!prop && (prop.markups || []).some(m => m.on === 'model');
 // The layer, fetched and put over the view if it is not there yet. Null when it could not load.
 function needMarkup() {
   if (markup) return Promise.resolve(markup);
   if (!markupLoading) {
     const token = mountId;
-    const loading = markupLoading = import('./markup-layer.js').then(layer => {
+    const loading = markupLoading = import('./markup-model.js').then(async part => {
+      await part.ready;
       if (token !== mountId || !wrapEl || !renderer) return null;   // MODEL was left meanwhile
-      if (!markup) {
-        markupUsed = true;
-        markup = layer.attachMarkup(markupHost(renderer.domElement));
-        renderToolCol();   // markup mode kept on across a rebuild lights its button
-      }
+      if (!markup) { markupUsed = true; markup = part.attachModelMarkup(markupParts()); renderToolCol(); }
       return markup;
     }, e => {
       console.error('markup mode could not load', e);
@@ -5177,65 +5177,6 @@ function needMarkup() {
   return markupLoading;
 }
 function toggleMarkup() { needMarkup().then(layer => { if (layer) layer.toggle(); }); }
-function markupHost(canvas) {
-  return {
-    kind: 'model', wrap: wrapEl, surface: canvas,
-    prop: () => prop,
-    camera: () => ({ position: camera.position.toArray(), target: controls.target.toArray(), fov: camera.fov }),
-    viewNow: viewState,
-    // A stroke is about to start: the view stops where it is (a flight ends, a turn stops
-    // easing), or the ink would be drawn from one camera and saved with another.
-    hold() {
-      if (tween) { camera.position.copy(tween.p1); controls.target.copy(tween.t1); camera.lookAt(controls.target); tween = null; }
-      controls._sphericalDelta.set(0, 0, 0); controls._panOffset.set(0, 0, 0);
-      controls.update();
-      requestRender(2);
-    },
-    goTo: m => { activeViewId = null; if (mode === 'walk') setMode('orbit'); showView(m.view); },
-    hitAt(clientX, clientY) {
-      if (!scene || !modelGroup) return null;
-      const hit = pick({ clientX, clientY }, { surfaceOnly: true, ground: true });
-      return hit ? { anchor: anchorOf(hit), kind: hit.kind, ref: typeof hit.id === 'string' ? hit.id : '', p: hit.point.toArray() } : null;
-    },
-    project: a => projectToView(a, canvas.clientWidth, canvas.clientHeight),
-    picture: markupPicture,
-    hint: setHint,
-    toast,
-    // Markup mode went on or off, or its tool changed: this page's own tools stand down.
-    changed(on) {
-      if (on) {
-        if (mode === 'walk') setMode('orbit');
-        if (tool !== 'select') setTool('select');
-        if (match) endMatch();
-        if (selection) setSelection(null);
-      }
-      if (nav) nav.refresh();
-      syncSectionHandles();
-      renderToolCol();
-      if (!on) setHint('');
-      requestRender(2);
-    },
-  };
-}
-// The view a markup was drawn from as a canvas, twice the screen's size at most, with the
-// markup's ink and note numbers on top when `marks` is on. The same call with `marks` off is
-// the clean picture of the same view.
-async function markupPicture(m, marks) {
-  const token = mountId, canvas = renderer.domElement;
-  if (mode === 'walk') setMode('orbit');
-  activeViewId = null;
-  showView(m.view, 0);
-  const w = canvas.clientWidth, h = canvas.clientHeight;
-  if (!(w > 0 && h > 0)) throw new Error('The view has no size yet.');
-  const scale = Math.min(2, 2400 / w);
-  const W = Math.round(w * scale), H = Math.round(h * scale);
-  const out = await renderStillBlob({ width: W, height: H, quality: quality(), annotations: false, asCanvas: true });
-  if (token !== mountId || !markup) throw new Error('The page changed while the picture was being made.');
-  if (marks) markup.paint(out.getContext('2d'), m, (u, v) => [W / 2 + u * H, H / 2 + v * H], H,
-    n => n.anchor ? projectToView(n.anchor, W, H) : [W / 2 + n.at[0] * H, H / 2 + n.at[1] * H], Math.round(13 * scale));
-  return out;
-}
-
 // Markup mode as plain data, with the camera it is being drawn from.
 export function markupState() {
   return camera && controls ? { ...(markup ? markup.state() : { on: false, loaded: false }), camera: { position: camera.position.toArray(), target: controls.target.toArray(), fov: camera.fov } } : null;

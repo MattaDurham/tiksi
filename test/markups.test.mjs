@@ -61,7 +61,8 @@ test('markups survive the project file', () => {
   const m = M.addMarkup(p, { on: 'model', view: view() });
   const s = M.addStroke(m, { ...line(), on: [{ k: 'wall', id: 'w-1', p: [1, 0.9, 2] }] });
   M.addNote(m, { at: [0, 0], anchor: { x: 1, y: 0.9, z: 2 }, text: 'Chair rail here' });
-  const back = store.tidiedCopy(d).properties[0];
+  // The store carries the list as it is; the markup layer tidies it (normalizeMarkups) on loading.
+  const back = M.normalizeMarkups(store.tidiedCopy(d).properties[0]);
   assert.equal(back.markups.length, 1);
   assert.deepEqual(back.markups[0].strokes[0], s);
   assert.deepEqual(back.markups[0].strokes[0].on, [{ k: 'wall', id: 'w-1', p: [1, 0.9, 2] }]);

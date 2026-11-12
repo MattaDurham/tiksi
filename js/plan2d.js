@@ -17,7 +17,6 @@ import { materialSelectHtml } from './materials.js';
 import { safeUrl } from './material-identity.js';
 import { printSheet } from './print-sheet.js';
 import { icon } from './icons.js';
-import { markupBounds } from './markups.js';
 import { beginGeometryEdit, cancelGeometryEdit, restoreGeometryEdit, revertGeometryEdit, endGeometryHold } from './edit-history.js';
 import { planFromScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import {
@@ -2173,20 +2172,25 @@ function onKeyUp(e) {
 }
 
 // ---------- markup mode ----------
-// What markup-layer.js needs from this page: plan metres to and from the screen, the level, and
-// a picture of the plan to put a markup's ink on.
+// markup-plan.js holds this page's side of markup mode and is fetched with the layer; this is
+// what it works with.
+function markupParts() {
+  return {
+    wrapEl, canvas, RULER, prop: () => prop, lvl, s2w, w2s, vs: () => vs, switchLevel, invalidate, planImage, setHint, updateHint, renderToolCol, renderInspector, updateCursor,
+    say(text) { note = text; updateHint(); },
+    // Markup mode came on: this page's own tools, drafts and selection stand down.
+    stand() { tool = 'select'; drawing = null; roomDraft = null; calib = null; selection = null; hover = null; },
+  };
+}
 // The layer, fetched and put over the plan if it is not there yet. Null when it could not load.
 function needMarkup() {
   if (markup) return Promise.resolve(markup);
   if (!markupLoading) {
     const at = wrapEl;
-    const loading = markupLoading = import('./markup-layer.js').then(layer => {
+    const loading = markupLoading = import('./markup-plan.js').then(async part => {
+      await part.ready;
       if (!wrapEl || wrapEl !== at) return null;   // PLAN was left or rebuilt meanwhile
-      if (!markup) {
-        markupUsed = true;
-        markup = layer.attachMarkup(markupHost());
-        renderToolCol();   // markup mode kept on across a rebuild lights its button
-      }
+      if (!markup) { markupUsed = true; markup = part.attachPlanMarkup(markupParts()); renderToolCol(); }
       return markup;
     }, e => {
       console.error('markup mode could not load', e);
@@ -2197,52 +2201,6 @@ function needMarkup() {
   return markupLoading;
 }
 function toggleMarkup() { needMarkup().then(layer => { if (layer) layer.toggle(); }); }
-function markupHost() {
-  return {
-    kind: 'plan', wrap: wrapEl, surface: canvas,
-    prop: () => prop,
-    levelId: () => lvl().id,
-    toDoc: (x, y) => s2w(x, y),
-    toPx: (x, y) => w2s([x, y]),
-    unit: () => vs.zoom,
-    viewKey: () => lvl().id + ':' + vs.zoom + ':' + vs.panX + ':' + vs.panY,
-    // Show a markup: its level, with everything in it on the screen.
-    goTo(m) {
-      if (prop.levels.some(l => l.id === m.levelId) && m.levelId !== lvl().id) switchLevel(m.levelId);
-      const b = markupBounds(m);
-      if (!b || !wrapEl) return;
-      const w = wrapEl.clientWidth, h = wrapEl.clientHeight;
-      const bw = Math.max(b[2] - b[0], 0.5), bh = Math.max(b[3] - b[1], 0.5);
-      const shown = (b[0] - vs.panX) * vs.zoom > RULER && (b[1] - vs.panY) * vs.zoom > RULER && (b[2] - vs.panX) * vs.zoom < w && (b[3] - vs.panY) * vs.zoom < h;
-      if (shown) return;
-      vs.zoom = Math.max(4, Math.min(400, vs.zoom, (w - RULER) / (bw * 1.4), (h - RULER) / (bh * 1.4)));
-      vs.panX = (b[0] + b[2]) / 2 - (w + RULER) / 2 / vs.zoom;
-      vs.panY = (b[1] + b[3]) / 2 - (h + RULER) / 2 / vs.zoom;
-      invalidate();
-    },
-    picture: markupPicture,
-    hint: text => { if (text) setHint(text); else updateHint(); },
-    toast: text => { note = text; updateHint(); },
-    // Markup mode went on or off, or its tool changed: this page's own tools stand down.
-    changed(on) {
-      if (on && tool !== 'select') { tool = 'select'; drawing = null; roomDraft = null; calib = null; }
-      if (on) { selection = null; hover = null; }
-      renderToolCol(); renderInspector(); updateCursor(); invalidate();
-      if (!on) updateHint();
-    },
-  };
-}
-// The markup's level as a picture (the whole level, fitted, twice the screen's size at most),
-// with the markup's ink and note numbers on top when `marks` is on.
-async function markupPicture(m, marks) {
-  if (!prop.levels.some(l => l.id === m.levelId)) throw new Error('The level this markup was drawn on is gone.');
-  if (m.levelId !== lvl().id) switchLevel(m.levelId);
-  const W = Math.max(640, wrapEl.clientWidth), H = Math.max(480, wrapEl.clientHeight), scale = Math.min(2, 2400 / W);
-  // The level and everything the markup holds, so ink drawn outside the walls is in the picture
-  // (with or without the marks, so the two pictures of one markup line up).
-  return planImage(W, H, scale, false, marks ? c => markup.paint(c, m, (x, y) => w2s([x, y]), vs.zoom, n => w2s(n.at), 13) : null, markupBounds(m));
-}
-
 // Markup mode as plain data, with the plan view it is being drawn on.
 export function markupState() {
   return vs ? { ...(markup ? markup.state() : { on: false, loaded: false }), level: lvl().id, view: { zoom: vs.zoom, panX: vs.panX, panY: vs.panY } } : null;
@@ -2354,7 +2312,7 @@ function renderToolCol() {
   tc.innerHTML = `
     <div class="tool-head">Tools</div>
     ${tools.map(([id, name, key, ic]) => toolBtn(`data-tool="${id}"`, ic, name, key, tool === id)).join('')}
-    ${toolBtn('data-act="markup"', 'pen', 'MARK UP', 'U', !!markup && markup.isOn())}
+    ${toolBtn('data-act="markup"', 'edit', 'MARK UP', 'U', !!markup && markup.isOn())}
     ${toolBtn('data-act="sketchup"', 'external', 'EDIT IN SKETCHUP', '', false)}
     <div class="tool-sep"></div>
     <div class="tool-head">Level</div>
@@ -2852,7 +2810,7 @@ export function mount(root) {
   canvas.addEventListener('contextmenu', e => e.preventDefault());
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
-  if (markupUsed || (prop.markups || []).some(m => m.on === 'plan')) needMarkup();
+  if (markupUsed || (Array.isArray(prop.markups) && prop.markups.some(m => m && m.on === 'plan'))) needMarkup();
 
   // Inspector edits and other views' changes reach the canvas through the store; layout
   // changes (panel resize, browser zoom) through the observer. Everything else is an input.
