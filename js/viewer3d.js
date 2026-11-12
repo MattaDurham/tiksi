@@ -75,7 +75,7 @@ let renderer = null, pmrem = null;
 let el = null, wrapEl = null, inspEl = null, hud = {};
 let scene = null, camera = null, controls = null, nav = null, walk = null, gizmo = null, composer = null, passes = {};
 let sky = null, envSky = null, sun = null, hemi = null, envRT = null, skyScene = null, panoTex = null, panoId = null;
-let modelGroup = null, groundGroup = null, scanRoot = null, pinRoot = null, noteRoot = null, lightRoot = null, measureRoot = null;
+let modelGroup = null, groundGroup = null, scanRoot = null, pinRoot = null, noteRoot = null, lightRoot = null, measureRoot = null, markupRoot = null;
 let cameraRoot = null, positionRoot = null;   // photo cameras and numbered photo positions
 let prop = null;
 let selection = null;          // {kind:'wall'|'room'|'opening'|'scan'|'pin'|'note', id}
@@ -360,6 +360,7 @@ function setupScene() {
   cameraRoot = new THREE.Group(); cameraRoot.name = 'photo cameras'; scene.add(cameraRoot);
   positionRoot = new THREE.Group(); positionRoot.name = 'photo positions'; scene.add(positionRoot);
   measureRoot = new THREE.Group(); measureRoot.name = 'measures'; scene.add(measureRoot);
+  markupRoot = new THREE.Group(); markupRoot.name = 'markup ink'; scene.add(markupRoot);
   sheetRoot = new THREE.Group(); sheetRoot.name = 'section planes'; scene.add(sheetRoot);
   batches = new ModelBatches();
   scene.add(batches.root);
@@ -1538,8 +1539,13 @@ function resize() {
   camera.updateProjectionMatrix();
   if (match) applyMatchFrame();
   placeLensFrame();
-  for (const m of measures) m.line.material.resolution.set(w * pr, h * pr);
+  lineResolution(w * pr, h * pr);
   requestRender(2);
+}
+// Fat lines (measures, markup ink) are drawn in pixels of the picture they go into.
+function lineResolution(w, h) {
+  for (const m of measures) m.line.material.resolution.set(w, h);
+  if (markupRoot) markupRoot.traverse(o => { if (o.material && o.material.isLineMaterial) o.material.resolution.set(w, h); });
 }
 
 // ---------- still render ----------
@@ -1625,7 +1631,7 @@ async function renderStillBlob(options) {
   const c = composer, r = renderer;
   const savedPasses = [passes.outline, passes.hover].map(p => [p, p.enabled]);
   const handles = new Set([gizmo.getHelper(), ...sectionOverlays()]);   // never in the image
-  const roots = [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, ...handles].map(o => [o, o && o.visible]);
+  const roots = [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, markupRoot, ...handles].map(o => [o, o && o.visible]);
   const oldAspect = camera.aspect, oldFov = camera.fov;
   const oldPos = camera.position.clone(), oldQuat = camera.quaternion.clone();
   const matchEl = match && match.el;
@@ -1641,6 +1647,8 @@ async function renderStillBlob(options) {
     for (const [p] of savedPasses) p.enabled = false;
     // Photo pins and notes hidden with their toggles stay out of the image too.
     for (const [o, visible] of roots) if (o) o.visible = options.annotations && visible && !handles.has(o);
+    // A markup's picture asks for its own ink on the surfaces, without the other annotations.
+    if (markupRoot && options.markupInk !== undefined) markupRoot.visible = !!options.markupInk;
     if (matchEl) matchEl.style.visibility = 'hidden';
     r.setPixelRatio(1); c.setPixelRatio(1);
     r.setSize(width, height, false); c.setSize(width, height);
@@ -1655,7 +1663,7 @@ async function renderStillBlob(options) {
       camera.updateMatrixWorld();
     }
     camera.updateProjectionMatrix();
-    for (const m of measures) m.line.material.resolution.set(width, height);
+    lineResolution(width, height);
     invalidateShadows();
     renderFrame(true);
     // A large still is itself a way to lose the context: what was just drawn is then gone.
@@ -5302,7 +5310,8 @@ const hasMarkups = () => !!prop && Array.isArray(prop.markups) && prop.markups.s
 function markupParts() {
   const token = mountId;
   return {
-    THREE, wrapEl, canvas: renderer.domElement, camera, controls, nav, prop: () => prop, alive: () => token === mountId && !!scene && !!modelGroup,
+    THREE, wrapEl, canvas: renderer.domElement, camera, controls, nav, markupRoot, prop: () => prop, alive: () => token === mountId && !!scene && !!modelGroup,
+    rayAt: e => { camera.updateMatrixWorld(); raycaster.setFromCamera(ndcFromEvent(e), camera); return { o: raycaster.ray.origin.toArray(), d: raycaster.ray.direction.toArray() }; },
     pick, anchorOf, viewState, showView, renderStillBlob, quality, toast, setHint, requestRender, setMode, setTool, endMatch, setSelection, renderToolCol, syncSectionHandles,
     get mode() { return mode; }, get tool() { return tool; }, get match() { return match; }, get selection() { return selection; },
     get tween() { return tween; }, set tween(v) { tween = v; }, set activeViewId(v) { activeViewId = v; },
@@ -5735,7 +5744,7 @@ export function unmount() {
     renderer.clear();
   }
   scene = null; camera = null; skyScene = null; sun = null; hemi = null;
-  scanRoot = null; pinRoot = null; noteRoot = null; measureRoot = null; cameraRoot = null; positionRoot = null;
+  scanRoot = null; pinRoot = null; noteRoot = null; measureRoot = null; markupRoot = null; cameraRoot = null; positionRoot = null;
   el = null; wrapEl = null; inspEl = null; hud = {};
   selection = null; hoverTarget = null; tween = null; pressed = null; dragLook = null; rightPress = null; movingNoteId = null;
 }
