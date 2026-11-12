@@ -70,7 +70,7 @@ async function captureFrame(page, name, timeout = 90000) {
 }
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, acceptDownloads: true });
-  await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
+  await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true,"model.objects":false}'));   // MODEL's tools on the screen (tiksi-menu.js); the component list off it, since this suite clicks the model at fixed places
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
   // Integrated builds import research eagerly. Use the real route when present and register

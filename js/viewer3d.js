@@ -3366,7 +3366,7 @@ function openContextMenu(e) {
     items.push(['photo', 'OPEN PHOTO', () => { setSelection({ kind: 'pin', id: hit.id }); openLightbox(hit.id); }]);
   } else if (hit) {
     const thing = hit.kind !== 'ground' && !fieldLayout() ? thingForHit(hit, false) : null;
-    if (thing && thing.keys.length) {
+    if (thing && (thing.keys.length || thing.whole)) {
       items.push(['select', 'SELECT ' + (thing.name ? thing.name.toUpperCase().slice(0, 40) : 'THIS OBJECT'), () => pickThing(thing, false)]);
       items.push(['hide', 'HIDE IT', () => hideThings([thing], true)]);
     }
@@ -3885,13 +3885,18 @@ function toggleTag(id) {
 // Hide or show objects one by one (the eye in the component list, HIDE in the panel, H): only
 // these objects change; their tags and everything else on those tags stay as they are.
 function hideThings(things, on) {
+  // A model that is one object hides by its own switch (the eye beside its name in the list).
+  const whole = things.filter(t => t.whole);
+  for (const t of whole) setModelVisible(t.scanId, !on);
+  if (whole.length && on) toast((whole[0].name || 'The model') + ' is hidden. The eye beside its name in the component list shows it again.', 'ok', 6000);
+  things = things.filter(t => !t.whole);
   const keys = [...new Set(things.flatMap(t => t.keys))];
   if (!setHidden(prop, keys, on)) return;
   tagsChanged();
   if (on) toast((things.length === 1 ? (things[0].name || 'The object') + ' is' : things.length + ' objects are') + ' hidden. SHOW ALL HIDDEN in the component list (or Shift+H) brings back everything hidden this way.', 'ok', 6000);
 }
 function hideSelection() {
-  if (picked.length && picked.every(t => t.keys.length)) hideThings(picked, picked.some(t => hiddenState(prop, t.keys) !== 'hidden'));
+  if (picked.length && picked.every(t => t.keys.length || t.whole)) hideThings(picked, picked.some(t => t.whole || hiddenState(prop, t.keys) !== 'hidden'));
 }
 function showHidden() {
   const keys = showAllHidden(prop);
@@ -4881,6 +4886,8 @@ function applyScreen() {
   if (hud.compassBox) hud.compassBox.hidden = !onScreen('model.compass', true);
   if (hud.views) hud.views.hidden = !onScreen('model.views', true);
   if (hud.objects) hud.objects.hidden = !onScreen('model.objects', true);
+  // The bars in the middle of the view move over to make room for the list (viewer.css).
+  wrapEl && wrapEl.classList.toggle('v-list-on', !!hud.objects && !hud.objects.hidden && !fieldLayout());
   wrapEl && wrapEl.classList.toggle('v-views-on', !hud.views.hidden);
 }
 function menuGroups() {

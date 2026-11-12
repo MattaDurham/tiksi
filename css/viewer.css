@@ -362,3 +362,16 @@ html.phone .v-objects { display: none !important; }
 .inspector .op-crumbs .link-btn { display: inline; flex: none; white-space: normal; color: var(--dim); }
 .inspector .btn.op-child { text-align: left; justify-content: flex-start; }
 .inspector .model-panel > h3:first-child { margin-top: 18px; }
+/* While the list is on the screen, the bars centred over the model are centred over what is
+   left of it, so the list never covers the view bar, the section bar, a message or a progress card. */
+.v-wrap { --list-w: 286px; }
+.v-wrap.v-list-on .v-modes, .v-wrap.v-list-on .v-sections, .v-wrap.v-list-on .v-toast, .v-wrap.v-list-on .v-progress { left: calc(50% + (var(--list-w) + 12px) / 2); }
+.v-wrap.v-list-on .v-sections { max-width: calc(100% - var(--list-w) - 36px); }
+/* The view bar shares the top edge with the compass on the right: it keeps clear of both. */
+.v-wrap.v-list-on .v-modes { left: calc(50% + (var(--list-w) - 68px) / 2); max-width: calc(100% - var(--list-w) - 116px); }
+.v-wrap.v-list-on .v-toast { max-width: calc(70% - var(--list-w) / 2); }
+.v-objects { width: var(--list-w); }
+/* A container cannot restyle itself from its own query: the narrower list is set on the parts. */
+@container (max-width: 760px) { .v-objects, .v-modes, .v-sections, .v-toast, .v-progress { --list-w: 228px; } }
+/* A panel opened on purpose (lighting and sun) sits over the list. */
+.v-env.open { z-index: 7; }
