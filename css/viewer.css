@@ -100,6 +100,18 @@
 .v-row-sel { grid-template-columns: 78px 1fr; }
 .v-row-sel select { width: 100%; font-size: 11px; padding: 3px 5px; }
 .v-row-sel select + select { grid-column: 2; margin-top: 4px; }
+.v-light-presets { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0 4px; }
+.v-light-presets .v-pill { font-size: 9px; padding: 4px 7px; }
+.v-light-list { margin: 6px 0; font-size: 11px; color: var(--dim); }
+.v-light-list summary { cursor: pointer; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; color: var(--dim); }
+.v-light-list ul { list-style: none; margin: 6px 0; padding: 0; }
+.v-light-list li { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+.v-light-list li em { font-style: normal; font-family: var(--mono); font-size: 10px; color: var(--faint); white-space: nowrap; }
+.v-light-list p { margin: 4px 0 0; line-height: 1.4; color: var(--faint); }
+/* A finger needs a 44-point target: presets and the fixture list on touch devices. */
+html.touch .v-light-presets .v-pill { min-height: 44px; padding: 6px 10px; font-size: 10px; }
+html.touch .v-light-list summary { display: flex; align-items: center; min-height: 44px; }
+.v-env-rule { border-top: 1px solid rgba(139, 154, 167, 0.18); margin: 10px 0 4px; }
 .v-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; margin-top: 8px; }
 .v-checks label { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; color: var(--dim); cursor: pointer; }
 
