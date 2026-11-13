@@ -12,6 +12,20 @@ export function geometrySnapshot(prop) {
   };
 }
 
+function mergeGeometry(base, target, current) {
+  const result = mergeShared(base, target, current);
+  const walls = new Set(result.value.walls.map(w => w.id)), levels = new Set(result.value.levels.map(l => l.id));
+  for (const kind of ['openings', 'trims']) for (const record of result.value[kind] || []) {
+    // A restored trim also needs the host it had before the edit, even when another
+    // editor has since deleted that wall. Keep pre-existing opening behavior unchanged.
+    const snapshots = kind === 'trims' ? [current, base, target] : [current];
+    if (!walls.has(record.wallId) && snapshots.some(s => s.walls.some(w => w.id === record.wallId))) result.conflicts.push(kind + '.' + record.id);
+  }
+  for (const record of [...result.value.walls, ...result.value.rooms, ...(result.value.fixtures || [])]) if (record.level && !levels.has(record.level) && current.levels.some(l => l.id === record.level)) result.conflicts.push('levels.' + record.level);
+  for (const trim of result.value.trims || []) if (trim.level && !levels.has(trim.level) && [current, base, target].some(s => s.levels.some(l => l.id === trim.level))) result.conflicts.push('levels.' + trim.level);
+  return result;
+}
+
 export class GeometryHistory {
   constructor(limit = 80) { this.limit = limit; this.undo = []; this.redo = []; this.pending = null; }
   // A held edit (a drag in progress) is not closed by the change events that arrive while it
@@ -36,10 +50,7 @@ export class GeometryHistory {
     if (!entry || entry.before.data.id !== prop.id) return null;
     const [base, target] = direction === 'undo' ? [entry.after, entry.before] : [entry.before, entry.after];
     current = current || geometrySnapshot(prop).data;
-    const result = mergeShared(base.data, target.data, current);
-    const walls = new Set(result.value.walls.map(w => w.id)), levels = new Set(result.value.levels.map(l => l.id));
-    for (const opening of result.value.openings) if (!walls.has(opening.wallId) && current.walls.some(w => w.id === opening.wallId)) result.conflicts.push('openings.' + opening.id);
-    for (const record of [...result.value.walls, ...result.value.rooms, ...(result.value.fixtures || [])]) if (record.level && !levels.has(record.level) && current.levels.some(l => l.id === record.level)) result.conflicts.push('levels.' + record.level);
+    const result = mergeGeometry(base.data, target.data, current);
     return { entry, target, ...result };
   }
   state(prop, direction, current = null) {
@@ -52,13 +63,30 @@ export class GeometryHistory {
     const current = this.undo.length || this.redo.length ? geometrySnapshot(prop).data : null;
     return { undo: this.state(prop, 'undo', current), redo: this.state(prop, 'redo', current) };
   }
-  // Put the geometry back as it was when the pending edit began and drop the edit: a drag the
-  // browser cancelled leaves nothing behind. Underlays stay as they are now (no image copies).
-  revert(prop) {
+  // A scoped cancellation names only the fields last written by its owner, for example
+  // {trims:[{id, y}]}. Reversing that edit preserves unrelated changes received during a
+  // held drag, and refuses conflicting writes to the same field. Older callers omit it.
+  revert(prop, localAfter) {
     const pending = this.pending;
     this.pending = null;
     if (!pending || pending.before.data.id !== prop.id) return false;
-    const data = clone(pending.before.data);
+    let data = clone(pending.before.data);
+    if (localAfter !== undefined) {
+      const after = clone(pending.before.data);
+      for (const [collection, patches] of Object.entries(localAfter)) {
+        if (!Array.isArray(after[collection]) || !Array.isArray(patches)) return false;
+        for (const patch of patches) {
+          const record = after[collection].find(r => r.id === patch.id);
+          if (!record) return false;
+          for (const [key, value] of Object.entries(patch)) if (key !== 'id') {
+            if (value === undefined) delete record[key]; else record[key] = clone(value);
+          }
+        }
+      }
+      const result = mergeGeometry(after, pending.before.data, geometrySnapshot(prop).data);
+      if (result.conflicts.length) return false;
+      data = clone(result.value);
+    }
     const plans = Object.fromEntries(prop.levels.map(level => [level.id, level.plan || null]));
     for (const level of data.levels) level.plan = (level.id in plans ? plans[level.id] : pending.before.plans[level.id]) || null;
     for (const key of ['walls', 'openings', 'rooms', 'fixtures', 'trims', 'levels', 'activeLevelId']) prop[key] = key === 'fixtures' || key === 'trims' ? data[key] || [] : data[key];

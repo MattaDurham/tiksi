@@ -21,6 +21,7 @@ import math
 import os
 from pathlib import Path
 import sys
+import tempfile
 
 if __package__:
     from .sketchup_convert import API, Ref, Point, Transform, Color, get_data, set_data, to_ref
@@ -698,6 +699,44 @@ def write_baseboards(api, entities, wall, layer, materials):
             paint(api, face, mat)
 
 
+def write_trim_details(api, entities, wall, layer, materials, tags=None):
+    """Keep the viewer's generated trim triangles, including profiles and corner cuts.
+
+    These children belong to their wall rather than claiming an independently editable
+    native trim representation. The wall's guard protects their exact geometry on read.
+    """
+    for trim in wall.get('trims', []):
+        if not isinstance(trim, dict) or not isinstance(trim.get('id'), str):
+            raise ValueError('A generated wall trim needs its source id')
+        group = new_group(api, entities, str(trim.get('name') or 'Wall trim'), translation(0, 0, 0))
+        trim_layer = (tags or {}).get(trim.get('tag')) or layer
+        set_layer(api, group, trim_layer)
+        inner = api.ref('SUGroupGetEntities', group)
+        for part in trim.get('parts', []):
+            positions = part.get('positions')
+            if (not isinstance(positions, list) or len(positions) % 9 or
+                    any(not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) for v in positions)):
+                raise ValueError('Generated wall trim needs finite expanded triangles')
+            if not positions:
+                continue
+            # Tiksi local axes: along the wall, up, across its positive plan side.
+            points = [[positions[i]*IN, -positions[i+2]*IN, positions[i+1]*IN] for i in range(0, len(positions), 3)]
+            faces = [([i, i+1, i+2], []) for i in range(0, len(points), 3)]
+            child = new_group(api, inner, str(part.get('role') or 'Trim surface'), translation(0, 0, 0))
+            set_layer(api, child, trim_layer)
+            body = api.ref('SUGroupGetEntities', child)
+            fill(api, body, points, faces)
+            mat = materials.get(part.get('material'))
+            for face in api.collection(body, 'Faces'):
+                paint(api, face, mat)
+            set_data(api, to_ref(api, 'SUGroupToEntity', child), {
+                'kind': 'trim-part', 'role': part.get('role'), 'material': part.get('material')})
+        set_data(api, to_ref(api, 'SUGroupToEntity', group), {
+            'kind': 'trim-detail', 'id': trim['id'], 'name': trim.get('name'),
+            'tag': trim.get('tag'), 'meshSig': trim.get('meshSig'),
+            'source': trim.get('source'), 'product': trim.get('product')})
+
+
 def write_wall(api, entities, wall, layer, materials, tags=None):
     ax, ay, bx, by = wall['ax'], wall['ay'], wall['bx'], wall['by']
     L = math.hypot(bx - ax, by - ay)
@@ -725,9 +764,19 @@ def write_wall(api, entities, wall, layer, materials, tags=None):
             base[key] = json.loads(json.dumps(wall[key]))
     if isinstance(wall.get('profile'), dict):
         base['profile'] = json.loads(json.dumps(wall['profile']))
+    if 'trimState' in wall:
+        base['trimState'] = json.loads(json.dumps(wall['trimState']))
+    if wall.get('trims'):
+        base['trimGeometry'] = [{'id': t['id'], 'meshSig': t['meshSig']} for t in wall['trims']]
     write_baseboards(api, inner, wall, layer, materials)
-    set_data(api, to_ref(api, 'SUGroupToEntity', group), {'kind': 'wall', 'id': wall['id'], 'level': wall['level'], 'base': base,
-                                                          'local': {'x0': 0, 'x1': r6(L * IN), 'y0': r6(-th / 2 * IN), 'y1': r6(th / 2 * IN), 'z0': 0, 'z1': r6(H * IN)}})
+    write_trim_details(api, inner, wall, layer, materials, tags)
+    data = {'kind': 'wall', 'id': wall['id'], 'level': wall['level'], 'base': base,
+            'local': {'x0': 0, 'x1': r6(L * IN), 'y0': r6(-th / 2 * IN), 'y1': r6(th / 2 * IN), 'z0': 0, 'z1': r6(H * IN)}}
+    if wall.get('trims'):
+        data['trimGuard'] = {'transform': group_transform(api, group), 'bounds': face_bounds(api, inner)}
+        if data['trimGuard']['bounds'] is None:
+            raise ValueError('A wall with generated trim needs wall faces for a safe native round trip')
+    set_data(api, to_ref(api, 'SUGroupToEntity', group), data)
     for h in wall.get('holes', []):
         if not h.get('id'):
             continue
@@ -898,7 +947,7 @@ def face_fingerprint(api, group):
 
 
 
-def generated_detail_fingerprint(api, group):
+def generated_detail_fingerprint(api, group, exclude_managed=True):
     """Generated descendants in their parent's frame, excluding separately managed pieces.
 
     Moving a whole wall/opening/fixture remains representable. Editing, moving, deleting or
@@ -912,7 +961,7 @@ def generated_detail_fingerprint(api, group):
         children = []
         for child in api.collection(entities, 'Groups'):
             data = get_data(api, to_ref(api, 'SUGroupToEntity', child)) or {}
-            if data.get('kind') in managed and data.get('id'):
+            if exclude_managed and data.get('kind') in managed and data.get('id'):
                 continue
             inner = api.ref('SUGroupGetEntities', child)
             children.append({'type': 'group', 'transform': [round(v, 8) for v in group_transform(api, child)],
@@ -947,6 +996,107 @@ def unsupported_group_geometry(api, group, data):
                          or (data.get('generatedDetailFingerprint') and data['generatedDetailFingerprint'] != generated_detail_fingerprint(api, group))))
 
 
+def trim_appearance_fingerprint(api, group, material_cache=None):
+    """Native trim finishes and object visibility cannot silently disappear on a rewrite.
+
+    Only trim descendants participate; wall paint and global tag visibility retain their
+    existing semantics. Material values and texture pixels are cached across the traversal.
+    """
+    cache = {} if material_cache is None else material_cache
+    with tempfile.TemporaryDirectory(prefix='tiksi-trim-finish-') as folder:
+        def material(ref):
+            if not ref.ptr:
+                return None
+            if ref.ptr not in cache:
+                color, opacity, use_opacity, kind = Color(), C.c_double(1), C.c_bool(), C.c_int()
+                api.call('SUMaterialGetColor', ref, C.byref(color))
+                api.call('SUMaterialGetOpacity', ref, C.byref(opacity))
+                api.call('SUMaterialGetUseOpacity', ref, C.byref(use_opacity))
+                api.call('SUMaterialGetType', ref, C.byref(kind))
+                value = {'name': api.text('SUMaterialGetName', ref), 'color': [color.red, color.green, color.blue, color.alpha],
+                         'opacity': opacity.value, 'useOpacity': use_opacity.value, 'type': kind.value}
+                texture = Ref()
+                if not api.call('SUMaterialGetTexture', ref, C.byref(texture), optional=True) and texture.ptr:
+                    path = Path(folder) / ('texture-' + str(len(cache)) + '.png')
+                    api.call('SUTextureWriteToFile', texture, os.fsencode(path))
+                    value['texture'] = hashlib.sha256(path.read_bytes()).hexdigest()
+                cache[ref.ptr] = value
+            return cache[ref.ptr]
+
+        def drawing(ref, assigned=False):
+            hidden = C.c_bool(); api.call('SUDrawingElementGetHidden', ref, C.byref(hidden))
+            layer = api.ref('SUDrawingElementGetLayer', ref)
+            result = {'hidden': hidden.value, 'tag': api.text('SULayerGetName', layer) if layer.ptr else None}
+            if assigned:
+                mat = Ref(); api.call('SUDrawingElementGetMaterial', ref, C.byref(mat), optional=True)
+                result['material'] = material(mat)
+            return result
+
+        def records(entities, depth=0):
+            if depth > 64:
+                raise ValueError('SketchUp trim nesting is too deep to verify safely')
+            out = []
+            for face in api.collection(entities, 'Faces'):
+                front, back = Ref(), Ref()
+                api.call('SUFaceGetFrontMaterial', face, C.byref(front), optional=True)
+                api.call('SUFaceGetBackMaterial', face, C.byref(back), optional=True)
+                out.append({'face': sorted(tuple(round(v, 5) for v in p) for p in face_ring(api, face)),
+                            'drawing': drawing(to_ref(api, 'SUFaceToDrawingElement', face)),
+                            'front': material(front), 'back': material(back)})
+            for child in api.collection(entities, 'Groups'):
+                out.append({'group': drawing(to_ref(api, 'SUGroupToDrawingElement', child), assigned=True),
+                            'children': records(api.ref('SUGroupGetEntities', child), depth+1)})
+            for instance in api.collection(entities, 'Instances'):
+                definition = api.ref('SUComponentInstanceGetDefinition', instance)
+                out.append({'instance': drawing(to_ref(api, 'SUComponentInstanceToDrawingElement', instance), assigned=True),
+                            'children': records(api.ref('SUComponentDefinitionGetEntities', definition), depth+1)})
+            return sorted(out, key=lambda value: json.dumps(value, sort_keys=True))
+
+        payload = []
+        for child in api.collection(api.ref('SUGroupGetEntities', group), 'Groups'):
+            data = get_data(api, to_ref(api, 'SUGroupToEntity', child)) or {}
+            if data.get('kind') == 'trim-detail':
+                payload.append({'drawing': drawing(to_ref(api, 'SUGroupToDrawingElement', child), assigned=True),
+                                'children': records(api.ref('SUGroupGetEntities', child))})
+        return hashlib.sha256(json.dumps(sorted(payload, key=lambda value: json.dumps(value, sort_keys=True)), sort_keys=True).encode()).hexdigest()
+
+
+def verify_trim_wall(api, group, data, material_cache=None):
+    """Refuse native edits the wall-attached parametric trim cannot safely reproduce.
+
+    Proper XY rigid moves retain the local meshes. The browser separately regenerates
+    their hashes before merging to check that neighboring walls have not changed mitres.
+    Opening edits affect trim cutouts, so this guard includes managed opening children.
+    """
+    guard = data.get('trimGuard') if isinstance(data, dict) else None
+    if guard is None:
+        return
+    label = 'Wall ' + str(data.get('id')) + ' with generated trim'
+    written = guard.get('transform') if isinstance(guard, dict) else None
+    m = group_transform(api, group)
+    tol = 1e-7
+    rigid = (isinstance(written, list) and len(written) == 16 and
+             all(math.isfinite(v) for v in m) and
+             all(abs(m[i]) < tol for i in (2, 3, 6, 7, 8, 9, 11)) and
+             abs(m[10]-1) < tol and abs(m[15]-1) < tol and
+             abs(m[0]**2+m[1]**2-1) < tol and abs(m[4]**2+m[5]**2-1) < tol and
+             abs(m[0]*m[4]+m[1]*m[5]) < tol and m[0]*m[5]-m[1]*m[4] > 0 and
+             abs(m[14]-written[14]) < tol)
+    if not rigid:
+        raise ValueError(label + ' was scaled, reflected, tilted or raised; the native model is preserved for review')
+    box = face_bounds(api, api.ref('SUGroupGetEntities', group))
+    before = guard.get('bounds')
+    if (not box or not isinstance(before, list) or len(before) != 2 or
+            any(not isinstance(row, list) or len(row) != 3 for row in before) or
+            any(abs(box[i][j]-before[i][j]) > 1e-5 for i in range(2) for j in range(3))):
+        raise ValueError(label + ' has changed wall dimensions; the native model is preserved for review')
+    if (unsupported_group_geometry(api, group, data) or not guard.get('details') or
+            guard['details'] != generated_detail_fingerprint(api, group, exclude_managed=False)):
+        raise ValueError(label + ' has edited trim, opening or wall geometry; the native model is preserved for review')
+    if not guard.get('appearance') or guard['appearance'] != trim_appearance_fingerprint(api, group, material_cache):
+        raise ValueError(label + ' has edited trim finishes, tags or visibility; the native model is preserved for review')
+
+
 def write_mirror(folder):
     folder = Path(folder)
     spec = json.loads((folder / 'mirror.json').read_text(encoding='utf-8'))
@@ -965,9 +1115,11 @@ def write_mirror(folder):
         entities = api.ref('SUModelGetEntities', model)
         underlays = {u['level']: u for u in spec.get('underlays', [])}
         kept_underlays, erase = set(), []
+        appearance_cache = {}
         def check_faces(groups):
             for group in groups:
                 data = get_data(api, to_ref(api, 'SUGroupToEntity', group))
+                verify_trim_wall(api, group, data, appearance_cache)
                 if unsupported_group_geometry(api, group, data):
                     raise ValueError('Local SketchUp face edits need review; the existing mirror was preserved')
                 check_faces(api.collection(api.ref('SUGroupGetEntities', group), 'Groups'))
@@ -975,6 +1127,8 @@ def write_mirror(folder):
         for group in api.collection(entities, 'Groups'):
             entity = to_ref(api, 'SUGroupToEntity', group)
             old_data = get_data(api, entity)
+            if old_data and old_data.get('kind') in ('trim-detail', 'trim-part'):
+                raise ValueError('Generated trim was detached from its wall; the native model is preserved for review')
             if old_data is not None:
                 erase.append(entity)
         for image in api.collection(entities, 'Images'):
@@ -1012,6 +1166,7 @@ def write_mirror(folder):
             if not path.is_relative_to(folder.resolve()) or not path.is_file():
                 raise ValueError('Underlay image is missing from the mirror package')
             write_underlay(api, entities, underlay, path, layers.get(level))
+        appearance_cache = {}
         def stamp(groups):
             for group in groups:
                 entity = to_ref(api, 'SUGroupToEntity', group)
@@ -1020,6 +1175,9 @@ def write_mirror(folder):
                     data['faceFingerprint'] = face_fingerprint(api, group)
                     if data.get('kind') in ('wall', 'opening', 'room', 'fixture'):
                         data['generatedDetailFingerprint'] = generated_detail_fingerprint(api, group)
+                    if data.get('trimGuard'):
+                        data['trimGuard']['details'] = generated_detail_fingerprint(api, group, exclude_managed=False)
+                        data['trimGuard']['appearance'] = trim_appearance_fingerprint(api, group, appearance_cache)
                     set_data(api, entity, data)
                 stamp(api.collection(api.ref('SUGroupGetEntities', group), 'Groups'))
         stamp(api.collection(entities, 'Groups'))
@@ -1085,7 +1243,8 @@ def face_ring(api, face):
     return out
 
 
-def read_wall(api, group, data, warnings):
+def read_wall(api, group, data, warnings, material_cache=None):
+    verify_trim_wall(api, group, data, material_cache)
     m = group_transform(api, group)
     inner = api.ref('SUGroupGetEntities', group)
     box = face_bounds(api, inner)
@@ -1102,6 +1261,9 @@ def read_wall(api, group, data, warnings):
            'thickness': r6(dist(side0, side1) / IN), 'height': r6(dist(a, top) / IN), 'elevation': r6(a[2] / IN)}
     across_reflected = m[0]*m[5]-m[1]*m[4] < 0
     base = data.get('base') or {}
+    for key in ('trimState', 'trimGeometry'):
+        if key in base:
+            now[key] = json.loads(json.dumps(base[key]))
     # End A/B follow local x-min/x-max, which are also the reported endpoints. A
     # reflected group moves those ends; swapping the IDs would move paint twice.
     for key in ('materialEndA', 'materialEndB'):
@@ -1264,14 +1426,17 @@ def read_mirror(folder):
                 inspect(api.collection(api.ref('SUGroupGetEntities', group), 'Groups'))
         inspect(api.collection(entities, 'Groups'))
         walls, rooms, fixtures, untagged_groups, stray = [], [], [], 0, 0
+        appearance_cache = {}
         for group in api.collection(entities, 'Groups'):
             data = get_data(api, to_ref(api, 'SUGroupToEntity', group))
             if data is None:
                 untagged_groups += 1
                 continue
             kind = data.get('kind')
+            if kind in ('trim-detail', 'trim-part'):
+                raise ValueError('Generated trim was detached from its wall; the native model is preserved for review')
             if kind == 'wall':
-                item = read_wall(api, group, data, warnings)
+                item = read_wall(api, group, data, warnings, appearance_cache)
                 if item: walls.append(item)
             elif kind == 'room':
                 item = read_room(api, group, data, warnings)

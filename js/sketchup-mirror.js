@@ -16,11 +16,13 @@
 // its version and the conflict is reported. The pure parts here (spec, signatures, merge)
 // run under Node for tests; the rest talks to /api/model-conversion/mirror.
 
-import { wallHeightOf, levelOfWall, levelOfRoom, levelHeight, roomsOn, uid } from './store.js';
+import { wallHeightOf, levelOfWall, levelOfRoom, levelHeight, roomsOn, wallsOn, openingsOn, uid } from './store.js';
 import { openingSpans, wallSolids, baseboardDetail, wallFaceMaterialIds, wallSides, doorGlassBand, plainOpening, doorDetail, windowDetail, doorShownOpen, doorGlass, leafGlazing } from './wall-solids.js';
 import { tagIdOf, tagById } from './tags.js';
 import { thresholdFloors } from './threshold-floors.js';
 import { fixtureShape, fixtureMirrorParams, fixtureLocalFrame, fixtureParts, fixtureLabel, fixturesOn, normaliseFixture, FIXTURE_FALLBACK } from './fixtures.js';
+import { trimMeshParts } from './trim-mesh.js';
+import { trimLabel, trimProduct } from './trims.js';
 
 export const MIRROR_FORMAT = 'tiksi-sketchup-mirror';
 // Signatures compare lengths to 0.1 mm, finer than any typed change, and the opening position
@@ -56,7 +58,20 @@ function wallParams(prop, w) {
   const p = { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by, thickness: w.thickness || 0.114, height: wallHeightOf(prop, w) };
   for (const key of ['profile', 'baseboardPos', 'baseboardNeg']) if (w[key] && typeof w[key] === 'object') p[key] = JSON.parse(JSON.stringify(w[key]));
   for (const key of ['materialEndA', 'materialEndB']) if (w[key]) p[key] = w[key];
+  const trims = (prop.trims || []).filter(t => t.wallId === w.id).sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  if (trims.length) p.trimState = { version: 1, records: trims.map(t => ({ source: structuredClone(t), product: structuredClone(trimProduct(t)) })) };
   return p;
+}
+
+// The viewer and native writer consume the same wall-local triangles. This signature is
+// also a readback guard: a rigid wall move is safe only if its regenerated mitres still fit.
+function trimMeshes(prop, wall) {
+  const level = levelOfWall(prop, wall), view = { walls: wallsOn(prop, level.id), rooms: roomsOn(prop, level.id), wallHeight: levelHeight(prop, level.id) };
+  const openings = openingsOn(prop, level.id);
+  return (prop.trims || []).filter(t => t.wallId === wall.id).sort((a, b) => String(a.id).localeCompare(String(b.id))).map(source => {
+    const { parts } = trimMeshParts(source, wall, view, openings);
+    return { source, parts, meshSig: hash(JSON.stringify(stableDetail(parts.map(p => ({ role: p.role, positions: p.positions }))))) };
+  });
 }
 
 // Every element the mirror carries, with comparable signatures: id -> { kind, sig, params }.
@@ -94,6 +109,7 @@ function wallSigNow(p) {
   let sig = ['wall', tenth(p.ax), tenth(p.ay), tenth(p.bx), tenth(p.by), tenth(p.thickness), tenth(p.height)].join(',');
   for (const key of ['profile', 'baseboardPos', 'baseboardNeg']) if (p[key] && typeof p[key] === 'object') sig += '|' + key + ':' + JSON.stringify(stableDetail(p[key]));
   for (const key of ['materialEndA', 'materialEndB']) if (p[key]) sig += '|' + key + ':' + JSON.stringify(p[key]);
+  if (p.trimState) sig += '|trims:' + JSON.stringify(stableDetail(p.trimState));
   return sig + SIG_TAIL;
 }
 export function openingSig(p) { return openingSigNow(p); }
@@ -227,6 +243,11 @@ export function mirrorSpec(prop, materials, legacy = false) {
     const ids = wallFaceMaterialIds(w, roomsOn(prop, lvl.id));
     const faces = Object.fromEntries(Object.entries(ids).map(([face, id]) => [face, finish(id, 'wall', 'wall ' + w.id)]));
     const wall = Object.assign({ id: w.id, level: lvl.id, elevation: lvl.elevation, name: 'Wall ' + w.id, holes, materials: faces, tag: tag('wall:' + w.id) }, st.params);
+    if (wall.trimState) wall.trims = trimMeshes(prop, w).map(({ source, parts, meshSig }) => ({
+      id: source.id, name: trimLabel(source), tag: tag('trim:' + source.id), source: structuredClone(source), product: structuredClone(trimProduct(source)), meshSig,
+      parts: parts.map(part => ({ role: part.role, positions: part.positions,
+        material: part.role === 'backer' ? { id: null, name: 'Trim backer', color: '#2b2825' } : finish(source.material || 'mat-trim', 'door', 'trim ' + source.id) })),
+    }));
     const sides = wallSides(w, roomsOn(prop, lvl.id));
     for (const [side, key, sign] of [['pos', 'baseboardPos', 1], ['neg', 'baseboardNeg', -1]]) {
       const specified = w[key] && typeof w[key] === 'object' || Number.isFinite(w.profile?.baseboardHeight) || Number.isFinite(w.profile?.baseboardDepth);
@@ -316,6 +337,46 @@ const readSig = {
   fixture: p => fixtureSig(p),
 };
 
+// Catalog trim is generated against neighbouring walls. A rigid native move can therefore
+// alter a mitre when reconstructed. Check the complete proposed wall layout before mutating
+// any records, and preserve the native file whenever that layout is not exactly representable.
+function trimReadbackIssue(prop, read) {
+  const trimWalls = new Set((prop.trims || []).map(t => t.wallId));
+  const rows = read.walls || [], counts = new Map();
+  for (const row of rows) counts.set(row.id, (counts.get(row.id) || 0) + 1);
+  for (const row of rows) if (row.base?.trimState || row.now?.trimState || trimWalls.has(row.id)) {
+    if (!row.id || counts.get(row.id) > 1 || !(prop.walls || []).some(w => w.id === row.id)) {
+      return { id: row.id || 'trim', reason: 'Copying or importing a native wall with catalog trim needs review; the SketchUp copy was preserved.' };
+    }
+  }
+  if (trimWalls.size && rows.some(row => !row.id || counts.get(row.id) > 1 || !(prop.walls || []).some(w => w.id === row.id))) {
+    return { id: 'trim', reason: 'Native wall copies or additions can change editable trim joints; review them before syncing. The SketchUp copy was preserved.' };
+  }
+  const fields = ['ax', 'ay', 'bx', 'by', 'thickness', 'height'];
+  const changed = rows.filter(row => fields.some(k => Number.isFinite(row.now?.[k]) && Number.isFinite(row.base?.[k]) && Math.abs(row.now[k] - row.base[k]) > 1e-5));
+  const deleted = new Set((prop.walls || []).filter(w => read.model?.elements?.[w.id]?.kind === 'wall' && !counts.has(w.id)).map(w => w.id));
+  if ((!changed.length && !deleted.size) || !trimWalls.size) return null;
+  const byId = new Map(changed.map(row => [row.id, row]));
+  const candidate = { ...prop, walls: (prop.walls || []).filter(w => !deleted.has(w.id)).map(w => {
+    const row = byId.get(w.id);
+    return row ? { ...w, ...Object.fromEntries(fields.map(k => [k, row.now[k]])) } : w;
+  }) };
+  const geometry = (p, w) => trimMeshes(p, w).map(t => ({ id: t.source.id, meshSig: t.meshSig }));
+  const same = (a, b) => JSON.stringify(stableDetail(a)) === JSON.stringify(stableDetail(b));
+  for (const wall of prop.walls || []) {
+    if (!trimWalls.has(wall.id) || deleted.has(wall.id)) continue;
+    const row = byId.get(wall.id), proposed = candidate.walls.find(w => w.id === wall.id);
+    const after = geometry(candidate, proposed);
+    if (row && (!row.base?.trimState || !same(wallParams(prop, wall).trimState, row.base.trimState) || !same(after, row.base.trimGeometry))) {
+      return { id: wall.id, reason: 'This native wall move changes or predates its editable trim geometry; the SketchUp copy was preserved.' };
+    }
+    if (!same(geometry(prop, wall), after)) {
+      return { id: wall.id, reason: 'This native wall move changes a trim mitre against another wall; the SketchUp copy was preserved.' };
+    }
+  }
+  return null;
+}
+
 // `read` is the server's reading of the .skp. `synced` maps id -> signature at the last
 // moment Tiksi and the .skp agreed; `seenBefore` maps id -> the value the .skp reported last
 // time it was read. Both are empty for a mirror written on another machine.
@@ -330,6 +391,13 @@ export function mergeMirror(prop, read, synced, seenBefore) {
   seenBefore = seenBefore || {};
   const written = (read.model && read.model.elements && typeof read.model.elements === 'object') ? read.model.elements : {};
   const report = { ...(read.unsupportedGeometry?.length ? { blockWrite: true } : {}), applied: [], added: [], deleted: [], conflicts: [], warnings: (read.warnings || []).slice(), untagged: read.untagged || null, seen: {} };
+  const trimIssue = trimReadbackIssue(prop, read);
+  if (trimIssue) {
+    report.blockWrite = true;
+    report.conflicts.push({ ...trimIssue, kind: 'wall' });
+    report.warnings.push(trimIssue.reason);
+    return report;
+  }
   const before = elementState(prop);
   // A millimetre signature saved before SIG_TAIL stands for `sigNow` (the value's signature
   // today) when it is the millimetre signature of that same value; otherwise it differs from it.
@@ -434,6 +502,7 @@ export function mergeMirror(prop, read, synced, seenBefore) {
     if (cur.kind === 'wall') {
       prop.walls = prop.walls.filter(w => w.id !== id);
       prop.openings = prop.openings.filter(o => o.wallId !== id);
+      if (prop.trims) prop.trims = prop.trims.filter(t => t.wallId !== id);
     } else if (cur.kind === 'opening') prop.openings = prop.openings.filter(o => o.id !== id);
     else if (cur.kind === 'fixture') prop.fixtures = prop.fixtures.filter(f => f.id !== id);
     else prop.rooms = prop.rooms.filter(r => r.id !== id);

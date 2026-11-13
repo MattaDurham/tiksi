@@ -2163,7 +2163,7 @@ function onTrimPointerDown(e) {
   e.stopImmediatePropagation(); e.preventDefault();
   try { renderer.domElement.setPointerCapture(e.pointerId); } catch (err) { /* moves still reach the window */ }
   trimDrag = { ...grab, ids, x: e.clientX, y: e.clientY, shift: e.shiftKey, hit: under, moved: false,
-    base: new Map(ids.map(id => [id, JSON.parse(JSON.stringify(trimById(id)))])) };
+    base: new Map(ids.map(id => [id, JSON.parse(JSON.stringify(trimById(id)))])), localAfter: new Map() };
   window.addEventListener('pointermove', onTrimDragMove);
   window.addEventListener('pointerup', onTrimDragEnd);
   window.addEventListener('pointercancel', onTrimDragEnd);
@@ -2184,18 +2184,21 @@ function onTrimDragMove(e) {
       const t = trimById(id), b = d.base.get(id);
       if (!t || !b) continue;
       setTrimY(t, b.y + snapHeight(dy), trimWallHeight(t));   // every section moves by the same snapped distance
+      d.localAfter.set(id, { id, y: t.y });
     }
     note = 'Bottom edge ' + fmtLen(trimById(d.ids[0]).y) + (d.ids.length > 1 ? ' (' + d.ids.length + ' sections moved together)' : '');
   } else if (d.mode === 'top' || d.mode === 'bottom') {
     const t = trimById(d.t.id), b = d.base.get(d.t.id);
     Object.assign(t, { y: b.y, h: b.h });
     setFieldEdge(t, d.mode, snapHeight((d.mode === 'top' ? b.y + b.h : b.y) + dy), trimWallHeight(t));
+    d.localAfter.set(t.id, { id: t.id, y: t.y, h: t.h });
     note = 'Field ' + fmtLen(t.y) + ' to ' + fmtLen(t.y + t.h) + ' (' + fmtLen(t.h) + ' tall)';
   } else if (d.mode === 'divider') {
     const t = trimById(d.t.id), w = d.widths.slice(), min = .05;
     const move = Math.max(min - w[d.i], Math.min(w[d.i + 1] - min, snapHeight(dx)));
     w[d.i] += move; w[d.i + 1] -= move;
     t.widths = w.map(v => Math.round(v * 10000) / 10000); t.cols = w.length;
+    d.localAfter.set(t.id, { id: t.id, widths: t.widths.slice(), cols: t.cols });
     note = 'Boxes ' + fmtLen(w[d.i]) + ' and ' + fmtLen(w[d.i + 1]);
   }
   setHint('EDIT TRIM: ' + note);
@@ -2213,7 +2216,10 @@ function onTrimDragEnd(e) {
     if (e.type === 'pointerup') { const key = planKey('trim', d.hit.id); pickThing({ key, keys: [key], scanId: null, name: '', sel: { kind: 'trim', id: d.hit.id } }, d.shift); }
     return;
   }
-  if (e.type === 'pointercancel') { revertGeometryEdit(prop); rebuildModel(); renderInspector(); return; }
+  if (e.type === 'pointercancel') {
+    if (!revertGeometryEdit(prop, { trims: [...d.localAfter.values()] })) toast('Trim changed on another device; cancellation kept the current values.', 'warn');
+    touch(); rebuildModel(); renderInspector(); return;
+  }
   endGeometryHold(prop);
   touch();
   renderInspector();
@@ -4637,7 +4643,7 @@ function uncertaintyRecord(mesh) {
       const object = modelObjectTree(o).ofMesh.get(mesh);
       return object && scan ? modelObjectEvidence(scan, object) : scan;
     }
-    const collection = { wall: 'walls', opening: 'openings', fixture: 'fixtures', room: 'rooms', ceiling: 'rooms' }[u.kind];
+    const collection = { wall: 'walls', opening: 'openings', fixture: 'fixtures', room: 'rooms', ceiling: 'rooms', trim: 'trims' }[u.kind];
     if (collection) { const record=prop[collection]?.find(r => r.id === u.id); if(record) return elementEvidenceRecord(prop, u.kind, record); }
   }
   return null;
@@ -4646,7 +4652,7 @@ function renderEvidenceInspector() {
   if (!inspEl || !selection || picked.length > 1 || tool === 'pin' || match) return;
   const object = selectedModelObject();
   const scan = selection.kind === 'scan' && prop.scans.find(s => s.id === selection.id);
-  const collection = { wall:'walls', opening:'openings', fixture:'fixtures', room:'rooms', ceiling:'rooms' }[selection.kind];
+  const collection = { wall:'walls', opening:'openings', fixture:'fixtures', room:'rooms', ceiling:'rooms', trim:'trims' }[selection.kind];
   const native = prop[collection]?.find(r => r.id === selection.id);
   const record = object ? modelObjectEvidence(scan, object) : scan || elementEvidenceRecord(prop, selection.kind, native);
   if (!record) return;
