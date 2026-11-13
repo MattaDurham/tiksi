@@ -582,3 +582,20 @@ test('baseboard profile edits participate in conflict detection and native detai
   addedWall.baseboardPos.height = .2;
   assert.equal(p.walls[0].baseboardPos.height, .10);
 });
+
+test('reflected native trim replaces its former side and a second reflection restores it', () => {
+  const p = room(), profile = { height: .09, depth: .012, profile: 'rounded' };
+  p.walls[0].baseboardPos = structuredClone(profile);
+  let synced = syncedState(p), read = readOf(mirrorSpec(p));
+  read.walls[0].now.baseboardPos = null;
+  read.walls[0].now.baseboardNeg = structuredClone(profile);
+  assert.deepEqual(mergeMirror(p, read, synced).applied, ['w-s']);
+  assert.equal(Object.hasOwn(p.walls[0], 'baseboardPos'), false);
+  assert.deepEqual(p.walls[0].baseboardNeg, profile);
+  synced = syncedState(p); read = readOf(mirrorSpec(p));
+  read.walls[0].now.baseboardNeg = null;
+  read.walls[0].now.baseboardPos = structuredClone(profile);
+  assert.deepEqual(mergeMirror(p, read, synced).applied, ['w-s']);
+  assert.equal(Object.hasOwn(p.walls[0], 'baseboardNeg'), false);
+  assert.deepEqual(p.walls[0].baseboardPos, profile);
+});

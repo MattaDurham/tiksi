@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 
-from server.sketchup_convert import API, Ref, library_path
+from server.sketchup_convert import API, Ref, Transform, library_path
 from server.sketchup_mirror import opening_detail_parts, scaled_opening_detail, get_data, to_ref, face_bounds, face_ring, group_transform, multiply, apply, baseboard_part, scaled_baseboard, IN
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -180,6 +180,46 @@ class BaseboardGeometryTests(unittest.TestCase):
 
 @unittest.skipUnless(library_path(), 'SketchUp SDK not installed')
 class NativeOpeningDetailTests(unittest.TestCase):
+    def test_native_reflections_preserve_hinge_swing_and_side_specific_trim(self):
+        cases = [(0, True, False), (1, False, False), (1, False, True), (0, True, True), (2, False, False)]
+        for wall_flips, opening_x, opening_y in cases:
+            with self.subTest(wall_flips=wall_flips, opening_x=opening_x, opening_y=opening_y), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp); source = spec(); source['rooms'] = []
+                wall = source['walls'][0]; wall['holes'] = [door()]
+                wall['baseboardPos'] = {'height': .09, 'depth': .012, 'profile': 'rounded'}
+                (root/'mirror.json').write_text(json.dumps(source))
+                result = subprocess.run([sys.executable, str(ROOT/'server/sketchup_mirror.py'), 'write', str(root)], capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                reflect_native(root/'model.skp', root/'source.skp', wall_flips, opening_x, opening_y)
+                result = subprocess.run([sys.executable, str(ROOT/'server/sketchup_mirror.py'), 'read', str(root)], capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                read = json.loads((root/'mirror-read.json').read_text()); actual = read['walls'][0]
+                detail = actual['openings'][0]['now']['detail']['door']
+                self.assertEqual(detail['hinge'], 'end' if opening_x else 'start')
+                self.assertEqual(detail.get('swingSide', 'positive'), 'negative' if bool(wall_flips % 2) != opening_y else 'positive')
+                self.assertEqual(actual['openings'][0]['now']['width'], .8)
+                self.assertEqual(actual['openings'][0]['now']['t'], .25)
+                if wall_flips % 2:
+                    self.assertIsNone(actual['now']['baseboardPos'])
+                    self.assertEqual(actual['now']['baseboardNeg'], wall['baseboardPos'])
+                    self.assertTrue(any('face finishes' in warning for warning in read['warnings']))
+                else:
+                    self.assertEqual(actual['now'], actual['base'])
+                if wall_flips == 2:
+                    self.assertEqual(actual['openings'][0]['now'], actual['openings'][0]['base'])
+
+    def test_across_wall_window_reflection_is_refused_instead_of_reported_unchanged(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); source = spec()
+            (root/'mirror.json').write_text(json.dumps(source))
+            result = subprocess.run([sys.executable, str(ROOT/'server/sketchup_mirror.py'), 'write', str(root)], capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            reflect_native(root/'model.skp', root/'source.skp', 1, False, False)
+            result = subprocess.run([sys.executable, str(ROOT/'server/sketchup_mirror.py'), 'read', str(root)], capture_output=True, text=True, timeout=60)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('reversed sash/casing depth', result.stderr)
+            self.assertTrue((root/'source.skp').is_file())
+
     def test_open_leaf_handing_on_rotated_wall_matches_world_coordinates(self):
         angle = math.radians(60)
         ux, uy, nx, ny = math.cos(angle), math.sin(angle), -math.sin(angle), math.cos(angle)
@@ -260,6 +300,34 @@ class NativeOpeningDetailTests(unittest.TestCase):
             ceiling = observed['room']['parts']['Finished ceiling']
             self.assertAlmostEqual(ceiling[0][2] / IN, 2.5)
             self.assertAlmostEqual(ceiling[1][2] / IN, 2.527)
+
+
+def reflect_native(source, destination, wall_flips, opening_x, opening_y):
+    api, model = API(), Ref()
+    def set_transform(group, values):
+        transform = Transform(); transform.values[:] = values
+        api.call('SUGroupSetTransform', group, C.byref(transform))
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
+        for wall in api.collection(api.ref('SUModelGetEntities', model), 'Groups'):
+            data = get_data(api, to_ref(api, 'SUGroupToEntity', wall))
+            if not data or data.get('kind') != 'wall': continue
+            values = group_transform(api, wall)
+            for _ in range(wall_flips): values[4:8] = [-v for v in values[4:8]]
+            set_transform(wall, values)
+            for opening in api.collection(api.ref('SUGroupGetEntities', wall), 'Groups'):
+                data = get_data(api, to_ref(api, 'SUGroupToEntity', opening))
+                if not data or data.get('kind') != 'opening': continue
+                values = group_transform(api, opening)
+                if opening_x:
+                    values[:4] = [-v for v in values[:4]]
+                    values[12] += data['base']['width'] * IN
+                if opening_y: values[4:8] = [-v for v in values[4:8]]
+                set_transform(opening, values)
+        api.call('SUModelSaveToFile', model, str(destination).encode())
+    finally:
+        if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
 
 
 def named_world_points(path, name):

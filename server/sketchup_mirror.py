@@ -624,8 +624,8 @@ def write_opening_detail(api, entities, hole, thickness, layer, materials):
             paint(api, face, mat)
 
 
-def scaled_opening_detail(detail, sx, sy, sz):
-    """Explicit metric dimensions follow a transformed native opening; labels survive."""
+def scaled_opening_detail(detail, sx, sy, sz, flip_x=False, flip_y=False, orientation=None):
+    """Dimensions and handing follow a native opening's signed local transform."""
     result = json.loads(json.dumps(detail))
     axes = {'leafWidth': sx, 'leafHeight': sz, 'leafThickness': sy, 'jambWidth': sx,
             'casingWidth': sx, 'casingDepth': sy, 'frameWidth': sx, 'sashWidth': sx, 'muntinWidth': sx}
@@ -637,6 +637,25 @@ def scaled_opening_detail(detail, sx, sy, sz):
             value = values.get(key)
             if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
                 values[key] = value if abs(scale-1) < 1e-10 else r6(value*scale)
+    door = result.get('door')
+    if isinstance(door, dict):
+        if flip_x:
+            door['hinge'] = 'start' if door.get('hinge') == 'end' else 'end'
+        if flip_y:
+            orientation = orientation or {}
+            if 'sides' not in orientation:
+                raise ValueError('A reflected opening has no recorded casing sides; keep the native model and establish its orientation before syncing.')
+            sides = orientation.get('sides') or {}
+            if bool(sides.get('pos')) != bool(sides.get('neg')):
+                raise ValueError('A reflected opening with one-sided casing cannot be represented faithfully; keep the native model and review its orientation.')
+            side = door.get('swingSide')
+            if side not in ('positive', 'negative'):
+                side = {1: 'positive', -1: 'negative'}.get(orientation.get('swingSide'))
+            if side is None:
+                raise ValueError('A reflected opening has no recorded original swing side; keep the native model and establish its handing before syncing.')
+            door['swingSide'] = 'negative' if side == 'positive' else 'positive'
+    if isinstance(result.get('window'), dict) and flip_y:
+        raise ValueError('A window reflected across its wall has reversed sash/casing depth that cannot be represented faithfully; keep the native model and review its orientation.')
     return result
 
 
@@ -750,8 +769,9 @@ def write_wall(api, entities, wall, layer, materials, tags=None):
             obase['configuration'] = h['configuration']
         if 'floorContinuity' in h:
             obase['floorContinuity'] = h['floorContinuity']
+        orientation = {'sides': h.get('sides') or {}, 'swingSide': (h.get('resolved') or {}).get('swingSide')}
         set_data(api, to_ref(api, 'SUGroupToEntity', og), {'kind': 'opening', 'id': h['id'], 'type': h.get('type'), 'base': obase,
-                                                           'local': {'x1': r6(w * IN), 'z1': r6(hh * IN)}})
+                                                           'orientation': orientation, 'local': {'x1': r6(w * IN), 'z1': r6(hh * IN)}})
     return group
 
 
@@ -997,10 +1017,17 @@ def read_wall(api, group, data, warnings):
     pa, pb = skp_to_plan(a), skp_to_plan(b)
     now = {'ax': r6(pa[0]), 'ay': r6(pa[1]), 'bx': r6(pb[0]), 'by': r6(pb[1]),
            'thickness': r6(dist(side0, side1) / IN), 'height': r6(dist(a, top) / IN), 'elevation': r6(a[2] / IN)}
-    for key in ('baseboardPos', 'baseboardNeg'):
-        value = (data.get('base') or {}).get(key)
+    across_reflected = m[0]*m[5]-m[1]*m[4] < 0
+    base = data.get('base') or {}
+    for key, opposite in (('baseboardPos', 'baseboardNeg'), ('baseboardNeg', 'baseboardPos')):
+        source = opposite if across_reflected else key
+        value = base.get(source)
         if isinstance(value, dict):
             now[key] = scaled_baseboard(value, axis_scale(m, 1), axis_scale(m, 2))
+        elif across_reflected and isinstance(base.get(key), dict):
+            now[key] = None   # explicitly remove the old side during the merge
+    if across_reflected:
+        warnings.append('Wall ' + str(data.get('id')) + ' was reflected; geometry details follow the reflection, but wall face finishes remain from Tiksi and need review.')
     openings = []
     length_local = x1 - x0
     sx, sz = axis_scale(m, 0), axis_scale(m, 2)
@@ -1025,7 +1052,11 @@ def read_wall(api, group, data, warnings):
         detail = (odata.get('base') or {}).get('detail')
         if isinstance(detail, dict):
             combined = multiply(m, om)
-            onow['detail'] = scaled_opening_detail(detail, axis_scale(combined, 0), axis_scale(combined, 1), axis_scale(combined, 2))
+            # The wall's read-back start/end already follow its X direction. Only the
+            # opening's own X reflection swaps hinge jambs. Across-wall reflections
+            # compose: reflecting both parent and opening cancels the swing flip.
+            onow['detail'] = scaled_opening_detail(detail, axis_scale(combined, 0), axis_scale(combined, 1), axis_scale(combined, 2),
+                                                   om[0] < 0, across_reflected != (om[5] < 0), odata.get('orientation'))
         openings.append({'id': odata.get('id'), 'type': odata.get('type'), 'base': odata.get('base') or {}, 'now': onow})
     return {'id': data.get('id'), 'level': data.get('level'), 'name': api.text('SUGroupGetName', group), 'base': data.get('base') or {}, 'now': now, 'openings': openings}
 
