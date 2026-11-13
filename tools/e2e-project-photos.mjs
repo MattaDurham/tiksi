@@ -93,10 +93,11 @@ try {
     return { file: rec.file, notes: rec.notes, original: rec.original, stored: !!(await s.getFile('ph-held')) };
   });
   check(record.file.path === 'Photos/Porch.png' && record.notes === 'Held note', 'its record names the file in the folder and keeps its notes');
-  check(!record.original && !record.stored, 'Tiksi let go of its own copy');
   await page.waitForFunction(() => document.querySelector('#save-status')?.textContent === 'SAVED TO DISK');
   await page.evaluate(async () => (await import('/js/disk-workspace.js')).diskWorkspace.sync());
   check(!(await snapshot()).assets['ph-held'], 'the project file no longer holds the photo');
+  const stored = await page.evaluate(async () => !!(await (await import('/js/store.js')).getFile('ph-held')));
+  check(!record.original && !stored, 'Tiksi let go of its own copy');
 
   const groups = await page.locator('[data-group]').evaluateAll(buttons => Object.fromEntries(buttons.map(b => [b.dataset.group, b.querySelector('.mono').textContent])));
   check(groups.photo === '2' && groups.scan === '2' && groups.rendering === '1', 'the group buttons count photos, scan frames and renderings');

@@ -539,7 +539,7 @@ function renderFilters() {
       <option value="-" ${filters.room === '-' ? 'selected' : ''}>(no room)</option>${rooms}
     </select>
     <select data-filter="pin" aria-label="Filter by pinned, unpinned or selected">
-      <option value="">PINNED, UNPINNED + SELECTED</option>
+      <option value="">ALL PHOTOS</option>
       <option value="pinned" ${filters.pin === 'pinned' ? 'selected' : ''}>PINNED IN 3D</option>
       <option value="unpinned" ${filters.pin === 'unpinned' ? 'selected' : ''}>NOT PINNED</option>
       <option value="selected" ${filters.pin === 'selected' ? 'selected' : ''}>SELECTED</option>
