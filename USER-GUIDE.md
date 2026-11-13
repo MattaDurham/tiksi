@@ -288,6 +288,7 @@ MODEL as it starts: its views, tools and tags in the left pane. Roof is hidden i
 6. Open the TAGS tab of the list for the tags themselves, with how many objects each holds. Click an eye to hide or show a whole tag. Rename a tag by typing over its name, change its colour with the swatch, add one with ADD TAG, or delete one with the X: its objects move to Untagged.
 7. Choose the + at the top left of the model (or SAVE THIS VIEW in the left pane) to save the current camera as a view, with everything that decides what shows: the tags, the section cuts and whether they were done, x-ray, hidden levels, objects hidden one by one, which imported models show, BEFORE or AFTER, photo pins and notes. Click a tab to go back to it; double-click to rename; right-click to update it to what shows now, move it or delete it. Page Up and Page Down step through the tabs.
 8. Every view, tool and switch of MODEL is in the left pane. Click a group's header to fold it to the header, and again to open it. The eye beside SAVED VIEWS, DISPLAY and COMPONENTS shows or hides that bar over the model.
+9. RESTART TIKSI at the bottom of the Tiksi menu (the logo) saves what is waiting, then starts the Mac's Tiksi server again with the newest code (after a merge, say). The page reloads by itself when the server is back, in a few seconds. If photo to 3D or another long job is running on the Mac, Tiksi names it and asks before stopping it.
 
 ### Other features here
 

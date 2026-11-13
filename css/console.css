@@ -1352,3 +1352,9 @@ html.touch .file-dialog .file-units .seg-btn { min-height:44px; }
   position: fixed; z-index: 61; min-width: 180px; padding: 4px 0;
   background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 8px; box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);
 }
+.tk-menu .tk-last { border-top: 1px solid var(--line); border-bottom: 0; padding: 4px 0 2px; }
+/* RESTART TIKSI: the page waits under this cover until the Mac's server is back. */
+.tk-restarting {
+  position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; padding: 24px; text-align: center;
+  background: rgba(8, 10, 14, 0.82); color: var(--ink); font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em;
+}

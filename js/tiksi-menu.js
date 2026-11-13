@@ -19,7 +19,7 @@ import { icon } from './icons.js';
 const KEY = 'tiksi.onScreen.v1', SHUT = 'tiksi.paneShut.v1', TABS = 'tiksi.tabLabels.v1';
 const listeners = new Set();
 let prefs = readPrefs();
-let provider = null, menuEl = null, button = null;
+let provider = null, menuEl = null, button = null, restartAction = null;
 
 function readJson(key) {
   try {
@@ -56,6 +56,8 @@ export function resetScreen(all = false) {
   refreshPane();
 }
 export function onScreenChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+// RESTART TIKSI at the bottom of the menu, shown once the Mac's server offers it (js/main.js).
+export function setRestartAction(fn) { restartAction = fn; if (menuEl) renderMenu(); }
 export function setMenuProvider(fn) {
   provider = fn;
   refreshPane();
@@ -212,10 +214,13 @@ function renderMenu() {
       <button type="button" class="tk-item" data-tab-toggle><span>Page tabs: ${tabLabels() === 'icons' ? 'show icon and word' : 'show icon only'}</span></button>
       <button type="button" class="tk-item" data-field-layout="phone" data-close-menu><span>Phone layout (field view)</span></button>
     </section>
-    <p class="tk-foot"><button class="link-btn" data-screen-reset>Back to the default screen</button> · <a href="https://github.com/MattaDurham/tiksi" target="_blank" rel="noopener" data-close-menu>GitHub</a></p>`;
+    <p class="tk-foot"><button class="link-btn" data-screen-reset>Back to the default screen</button> · <a href="https://github.com/MattaDurham/tiksi" target="_blank" rel="noopener" data-close-menu>GitHub</a></p>`
+    + (restartAction ? '<div class="tk-group tk-last"><button class="tk-item" role="menuitem" data-restart title="Save, then start the Mac\'s Tiksi server again with its newest code; this page reloads when it is back"><span>RESTART TIKSI</span></button></div>' : '');
   if (top) menuEl.querySelector('.tk-top-host').append(top);
   menuEl.querySelector('[data-screen-reset]').onclick = () => { resetScreen(); renderMenu(); };
   menuEl.querySelector('[data-side]').onchange = e => setOnScreen('app.side', e.target.checked);
+  const restart = menuEl.querySelector('[data-restart]');
+  if (restart) restart.onclick = () => { close(); restartAction(); };
   menuEl.querySelector('[data-tab-toggle]').onclick = () => { setTabLabels(tabLabels() === 'icons' ? 'words' : 'icons'); renderMenu(); };
 }
 function park() {
