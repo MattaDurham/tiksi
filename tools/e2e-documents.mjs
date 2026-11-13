@@ -105,6 +105,13 @@ try {
   check(marks(await planSvg()).join() === 'D1,D2,W1', 'checking it again brings them back');
 
   // Move and resize the plan by dragging; the sheet snaps to 1/8 inch.
+  // The layer edit also schedules a debounced redraw. Let that edit settle before
+  // checking that pointer movement itself does not rebuild the sheet.
+  await page.waitForFunction(() => {
+    const svg = document.querySelector('.dc-paper svg'), previous = window.__settledSheet;
+    if (!previous || previous.svg !== svg) { window.__settledSheet = { svg, since: performance.now() }; return false; }
+    return svg && performance.now() - previous.since >= 200;
+  });
   const hit = page.locator(`.dc-vp-hit[data-vp="${plan.id}"]`);
   const box = await boxOf(hit);
   const inch = box.width / plan.w;
