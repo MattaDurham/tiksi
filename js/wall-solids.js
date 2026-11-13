@@ -92,13 +92,16 @@ export const EXTERIOR_UNKNOWN = 'mat-exterior-unknown';
 // - the outside face of an exterior wall (a room on one side only) takes the wall's own finish
 //   only when that says something the interior does not: a wall whose own finish is unset or the
 //   same as its interior shows EXTERIOR_UNKNOWN there, never a copy of the room's paint;
-// - every other face (ends, top, reveals, a free-standing wall's sides) the wall's own finish.
+// - every other face (ends, top, reveals) takes the interior finish when the wall borders a room:
+//   they are the drywall returns and the cut top seen from inside, never the outside cladding;
+//   a free-standing wall (no room either side) wears its own finish everywhere.
 export function wallFaceMaterialIds(wall, rooms) {
   const sides = wallSides(wall, rooms), inId = wallInteriorMaterialId(wall, rooms);
   const exterior = !!sides.pos !== !!sides.neg;
   const outside = exterior && !(wall.material && wall.material !== inId) ? EXTERIOR_UNKNOWN : wall.material;
   const face = (own, room) => own || (room ? inId : outside);
-  return { pos: face(wall.materialPos, sides.pos), neg: face(wall.materialNeg, sides.neg), other: wall.material };
+  const other = sides.pos || sides.neg ? inId : wall.material;
+  return { pos: face(wall.materialPos, sides.pos), neg: face(wall.materialNeg, sides.neg), other };
 }
 
 // Names for the two long faces, for inspectors: the compass side each looks toward and what
