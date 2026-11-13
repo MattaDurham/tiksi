@@ -110,7 +110,7 @@ test('hostile tag records are cleaned, and a clean record survives normalising u
   assert.equal(p.tags[3].name, 'Tag');
   assert.deepEqual(Object.keys(p.tagOf).sort(), ['node:scan-a#0/1', 'wall:w1']);
   assert.equal(Object.getPrototypeOf(p.tagOf), Object.prototype, 'no prototype was replaced');
-  assert.deepEqual(p.tagDefaults, { wall: '', room: '', ceiling: '', opening: 'tag-long', fixture: '', furniture: '' });
+  assert.deepEqual(p.tagDefaults, { wall: '', room: '', ceiling: '', opening: 'tag-long', fixture: '', furniture: '', trim: '' });
   assert.equal(p.tagUntaggedVisible, true);
   const again = JSON.parse(JSON.stringify(p));
   T.normalizeTags(again);
@@ -124,7 +124,7 @@ test('hostile tag records are cleaned, and a clean record survives normalising u
 
 test('a property gets the plan tags; the old FURNITURE switch becomes the furniture tag', () => {
   const p = store.propertyTemplate('New');
-  assert.deepEqual(p.tags.map(t => t.name), ['Walls', 'Floor', 'Ceiling', 'Doors and windows', 'Cabinets and built-ins', 'Furniture and fixtures']);
+  assert.deepEqual(p.tags.map(t => t.name), ['Walls', 'Floor', 'Ceiling', 'Doors and windows', 'Cabinets and built-ins', 'Furniture and fixtures', 'Wall trim and wainscoting']);
   assert.equal(p.tagDefaults.wall, T.CANON.walls.id);
   const old = { walls: [], scans: [], env: { hideFurniture: true } };
   T.normalizeTags(old);

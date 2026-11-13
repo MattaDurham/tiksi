@@ -15,6 +15,7 @@
 import { escapeHtml, fmtLen } from './store.js';
 import { icon } from './icons.js';
 import { fixtureLabel } from './fixtures.js';
+import { trimLabel } from './trims.js';
 import { isHidden, tagIdOf, tagById, tagShown, planKey, hiddenKeys, UNTAGGED_LABEL } from './tags.js';
 
 const MAX_ROWS = 400;
@@ -32,12 +33,12 @@ const plural = (n, one, many) => n + ' ' + (n === 1 ? one : (many || one + 's'))
 
 // ---------- the plan's objects ----------
 const PLAN_GROUPS = [
-  ['wall', 'Walls'], ['room', 'Floors'], ['ceiling', 'Ceilings'], ['opening', 'Doors and windows'], ['fixture', 'Fixtures and furniture'],
+  ['wall', 'Walls'], ['room', 'Floors'], ['ceiling', 'Ceilings'], ['opening', 'Doors and windows'], ['fixture', 'Fixtures and furniture'], ['trim', 'Wall trim'],
 ];
 export function planThings(prop) {
   const many = (prop.levels || []).length > 1;
   const level = id => many ? ((prop.levels || []).find(l => l.id === id) || {}).name || '' : '';
-  const out = { wall: [], room: [], ceiling: [], opening: [], fixture: [] };
+  const out = { wall: [], room: [], ceiling: [], opening: [], fixture: [], trim: [] };
   const thing = (kind, id, name, note, sel) => ({ key: planKey(kind, id), keys: [planKey(kind, id)], scanId: null, name, note, sel });
   for (const w of prop.walls || []) out.wall.push(thing('wall', w.id, 'Wall ' + fmtLen(Math.hypot(w.bx - w.ax, w.by - w.ay)), level(w.level), { kind: 'wall', id: w.id }));
   for (const r of prop.rooms || []) {
@@ -46,6 +47,7 @@ export function planThings(prop) {
   }
   for (const o of prop.openings || []) out.opening.push(thing('opening', o.id, (o.type === 'window' ? 'Window ' : 'Door or opening ') + fmtLen(o.width), '', { kind: 'opening', id: o.id }));
   for (const f of prop.fixtures || []) out.fixture.push(thing('fixture', f.id, f.name || fixtureLabel(f) || 'Fixture', level(f.level), { kind: 'fixture', id: f.id }));
+  for (const t of prop.trims || []) out.trim.push(thing('trim', t.id, trimLabel(t), level(t.level), { kind: 'trim', id: t.id }));
   return out;
 }
 // A model object as a thing.

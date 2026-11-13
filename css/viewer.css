@@ -394,6 +394,31 @@ html.phone .v-objects { display: none !important; }
 /* A panel opened on purpose (lighting and sun) sits over the list. */
 .v-env.open { z-index: 7; }
 
+/* ---------- wall trim panel (trim-panel.js) ---------- */
+.tp-sub { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em; color: var(--dim); margin: 12px 0 6px; }
+.tp-product { display: flex; gap: 10px; align-items: flex-start; padding: 8px; margin: 8px 0; border: 1px solid var(--line-2); border-radius: var(--radius); background: rgba(255, 255, 255, 0.03); }
+.tp-product-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 11.5px; line-height: 1.35; }
+.tp-product-text b { color: var(--ink); font-size: 12px; }
+.tp-meta { color: var(--dim); font-size: 10.5px; }
+.tp-meta a { color: var(--accent); }
+.tp-evidence { color: var(--faint); }
+.tp-prof { flex: none; background: #f2efe8; border-radius: 4px; }
+.tp-prof path { fill: #c9c2b4; stroke: #4a4640; stroke-width: 1; stroke-linejoin: round; }
+.tp-cat-filter { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.tp-chip { border: 1px solid var(--line-2); background: transparent; color: var(--dim); border-radius: 999px; padding: 3px 8px; font-size: 10.5px; cursor: pointer; }
+.tp-chip:hover { color: var(--ink); }
+.tp-chip.active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.tp-cat-list { position: relative; max-height: 340px; overflow-y: auto; border: 1px solid var(--line-2); border-radius: var(--radius); padding: 4px; outline: none; }
+.tp-cat-list:focus-visible { box-shadow: var(--focus); }
+.tp-cat-head { font-family: var(--mono); font-size: 9px; letter-spacing: 0.12em; color: var(--faint); text-transform: uppercase; padding: 8px 4px 3px; }
+.tp-cat-item { display: flex; gap: 8px; align-items: center; width: 100%; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 5px; padding: 5px; color: var(--ink); cursor: pointer; }
+.tp-cat-item:hover { background: rgba(255, 255, 255, 0.05); }
+.tp-cat-item.active { border-color: var(--accent); background: var(--accent-soft); }
+.tp-cat-text { display: flex; flex-direction: column; min-width: 0; font-size: 10.5px; color: var(--dim); line-height: 1.3; }
+.tp-cat-text b { color: var(--ink); font-size: 11.5px; font-weight: 600; }
+.tp-widths { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.tp-widths input { width: 68px; flex: 1 1 60px; }
+
 /* DONE: a clean section. Only EDIT CUTS stays, small and faint in the bottom right corner
    (after the component-list rules above, which would centre it). */
 .v-sections .v-sec-done-btn { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); font-weight: 700; }
