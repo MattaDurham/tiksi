@@ -20,6 +20,7 @@ const { buildWallGroup, buildTrimGroup } = await import('../js/geometry.js');
 const T = await import('../js/trims.js');
 const { TRIM_CATALOG, catalogItem, catalogFor } = await import('../js/trim-catalog.js');
 const { sectionOf } = await import('../js/trim-profiles.js');
+const { trimMeshParts } = await import('../js/trim-mesh.js');
 
 const X = { matOpts: { transparent: true, opacity: 0.5 } };
 const WALL = { id: 'w1', ax: 0, ay: 0, bx: 4, by: 0, thickness: 0.114, height: 2.44, level: 'l1' };
@@ -232,5 +233,27 @@ test('crown sits at the ceiling; fields draw every part', () => {
     assert.ok(mesh.geometry.boundingBox.max.z <= -WALL.thickness / 2 + 1e-6, style + ' sits on the other face');
     const n = mesh.geometry.getAttribute('normal');
     for (let i = 0; i < n.count; i++) assert.ok(Number.isFinite(n.getX(i)), style + ' normals');
+  }
+});
+
+
+test('rendered trim uses the same local mesh and layout as native export', () => {
+  const wall = { ...WALL, ax: 1.25, ay: -0.7, bx: 3.65, by: 2.5 };
+  const neighbour = { ...WALL, id: 'w2', ax: wall.bx, ay: wall.by, bx: wall.bx - 2.4, by: wall.by + 1.8 };
+  const view = { walls: [wall, neighbour], wallHeight: 2.44 };
+  for (const style of Object.keys(T.TRIM_STYLES)) for (const side of [-1, 1]) {
+    const trim = T.trimTemplate(style, null, wall, side, view);
+    const expected = trimMeshParts(trim, wall, view, [DOOR]);
+    const group = buildTrimGroup(trim, wall, view, [DOOR], X);
+    assert.deepEqual(group.userData.layout, expected.layout, style + ' layout');
+    assert.equal(group.children.length, expected.parts.length, style + ' material parts');
+    expected.parts.forEach((part, i) => {
+      for (const [attribute, values] of [['position', part.positions], ['normal', part.normals], ['uv', part.uv]]) {
+        assert.deepEqual(group.children[i].geometry.getAttribute(attribute).array, new Float32Array(values), style + ' ' + attribute);
+      }
+    });
+    near(group.position.x, wall.ax, 'local origin x'); near(group.position.z, wall.ay, 'local origin z');
+    near(group.rotation.y, -Math.atan2(3.2, 2.4), 'local wall rotation');
+    group.traverse(o => o.geometry?.dispose());
   }
 });

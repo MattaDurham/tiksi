@@ -23,8 +23,8 @@ import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
 import { applyPlanTagVisibility } from './tags-scene.js';
 import { cutPrism } from './section-planes.js';
 import { thresholdFloors as derivedThresholdFloors } from './threshold-floors.js';
-import { trimLayout } from './trims.js';
-import { sectionOf } from './trim-profiles.js';
+import { wallFrame, wallEnds } from './wall-joins.js';
+import { trimMeshParts } from './trim-mesh.js';
 
 const FALLBACK_WALL = '#d8d4cc';
 const FALLBACK_FLOOR = '#97999b';
@@ -36,9 +36,6 @@ const FALLBACK_CEILING = '#f1efe9';
 // the foot of every piece of furniture and hid anything thinner, a rug or a hearth.)
 export const FLOOR_T = 0.06;
 export const CEILING_T = 0.027;
-const EPS = 0.0005;               // buried-face margin so joined solids never share a plane
-const JOIN_TOL = 0.012;           // wall endpoints closer than this meet at one joint
-const COLLINEAR = 0.3;            // sin of the deflection below which a neighbour continues the wall
 
 // ---------- materials ----------
 // Local fallbacks are cached for the life of the page; they are ours to keep.
@@ -252,144 +249,6 @@ function segDist(px, py, ax, ay, bx, by) {
 }
 
 // ---------- wall joints ----------
-function wallFrame(wall) {
-  const L = Math.hypot(wall.bx - wall.ax, wall.by - wall.ay);
-  const d = L || 1;
-  const ux = (wall.bx - wall.ax) / d, uy = (wall.by - wall.ay) / d;
-  return { L, ux, uy, nx: -uy, ny: ux, h: (wall.thickness || 0.114) / 2 };
-}
-
-// Parameter along (dx, dy) from (ax, ay) where that line meets the line through (bx, by)
-// with direction (qx, qy); null when the lines are parallel.
-function lineHit(ax, ay, dx, dy, bx, by, qx, qy) {
-  const den = dx * qy - dy * qx;
-  if (Math.abs(den) < 1e-6) return null;
-  return ((bx - ax) * qy - (by - ay) * qx) / den;
-}
-
-// Two directions out of a shared point that run (nearly) opposite: one wall carrying on as the other.
-function continues(ax, ay, bx, by) {
-  return ax * bx + ay * by < 0 && Math.abs(ax * by - ay * bx) < COLLINEAR;
-}
-
-// Deterministic winner between two straight runs crossing at a point: thicker, then lower id,
-// so both runs agree on which one passes through and which is cut at its face.
-function outranks(p, q) {
-  const tp = Math.max(p[0].thickness || 0.114, p[1].thickness || 0.114);
-  const tq = Math.max(q[0].thickness || 0.114, q[1].thickness || 0.114);
-  if (tp !== tq) return tp > tq;
-  return [String(p[0].id), String(p[1].id)].sort()[0] < [String(q[0].id), String(q[1].id)].sort()[0];
-}
-
-// Close one end of a wall against the walls meeting it. Returns, in wall-local x, where the
-// +z face (`pos`) and the -z face (`neg`) stop, plus `tip` (a local {x, z} between the two)
-// when the end needs an extra corner: three or more walls meeting at a point, or a pair
-// that jogs where we abut it. `inflate` thickens every wall by that much per side, which
-// is how wall trim gets mitres matching the faces it sits on.
-function wallEnd(wall, end, walls, inflate) {
-  inflate = inflate || 0;
-  const f = wallFrame(wall);
-  const h = f.h + inflate;
-  const atStart = end === 'a';
-  const px = atStart ? wall.ax : wall.bx, py = atStart ? wall.ay : wall.by;
-  const dx = atStart ? -f.ux : f.ux, dy = atStart ? -f.uy : f.uy;   // outward along the axis
-  const ex = -dx, ey = -dy;                                          // into this wall
-  const local = (a) => atStart ? -a : f.L + a;
-  // tip: [outward extension, local z] of an extra footprint vertex between the two face cuts.
-  const result = (aPos, aNeg, tip) => ({ pos: local(aPos), neg: local(aNeg), tip: tip ? { x: local(tip[0]), z: tip[1] } : null });
-
-  const joined = [], through = [];
-  for (const o of walls) {
-    if (o === wall || o.id === wall.id) continue;
-    const g = wallFrame(o);
-    if (g.L < 0.01) continue;
-    const nearA = Math.hypot(o.ax - px, o.ay - py) < JOIN_TOL, nearB = Math.hypot(o.bx - px, o.by - py) < JOIN_TOL;
-    if (nearA || nearB) {
-      const s = nearA ? 1 : -1;
-      const ix = g.ux * s, iy = g.uy * s;                             // from the joint into the neighbour
-      if (ix * ex + iy * ey > 0 && Math.abs(ix * ey - iy * ex) < COLLINEAR) continue; // folds back over us
-      joined.push({ o, g, ix, iy, cont: continues(ex, ey, ix, iy) });
-    } else {
-      // A wall running past our endpoint within its own thickness: we abut it mid-span.
-      const t = (px - o.ax) * g.ux + (py - o.ay) * g.uy;
-      const d = Math.abs((px - o.ax) * g.nx + (py - o.ay) * g.ny);
-      if (t > JOIN_TOL && t < g.L - JOIN_TOL && d < g.h + JOIN_TOL) through.push({ o, g });
-    }
-  }
-
-  // Where our face s (+1 / -1) meets face t of neighbour nb, as an outward extension.
-  const hit = (s, nb, t, bury) => {
-    const gh = nb.g.h + inflate;
-    let a = lineHit(px + f.nx * h * s, py + f.ny * h * s, dx, dy,
-      nb.o.ax + nb.g.nx * gh * t, nb.o.ay + nb.g.ny * gh * t, nb.g.ux, nb.g.uy);
-    if (a == null) return 0;
-    if (bury) a += EPS;                                   // stay a hair inside the wall we abut
-    const reach = 6 * Math.max(f.h, nb.g.h);              // acute mitres run away: cap at three thicknesses
-    return Math.max(-Math.min(reach, f.L * 0.45), Math.min(reach, a));
-  };
-  // Which of a corner neighbour's faces pairs with our face s: inner with inner, outer with outer.
-  const pair = (s, nb) => s * Math.sign(f.nx * nb.ix + f.ny * nb.iy || 1) * Math.sign(nb.g.nx * ex + nb.g.ny * ey || 1);
-  // The face of a passing wall on our side.
-  const near = (nb) => Math.sign(nb.g.nx * ex + nb.g.ny * ey || 1);
-  // Where face t of neighbour p meets face u of neighbour q, as [outward extension, local z].
-  const meet = (p, t, q, u) => {
-    const ph = p.g.h + inflate, qh = q.g.h + inflate;
-    const ax = p.o.ax + p.g.nx * ph * t, ay = p.o.ay + p.g.ny * ph * t;
-    const s = lineHit(ax, ay, p.g.ux, p.g.uy, q.o.ax + q.g.nx * qh * u, q.o.ay + q.g.ny * qh * u, q.g.ux, q.g.uy);
-    if (s == null) return null;
-    const qx = ax + p.g.ux * s - px, qy = ay + p.g.uy * s - py;
-    return [qx * dx + qy * dy, qx * f.nx + qy * f.ny];
-  };
-  // Keep an extra vertex only if it sits within the wall's width and beyond the straight cut,
-  // so the footprint stays convex.
-  const beyond = (tip, aPos, aNeg) => {
-    if (!tip || Math.abs(tip[1]) > h - 0.001) return null;
-    const chord = aNeg + (tip[1] + h) / (2 * h) * (aPos - aNeg);
-    return tip[0] > chord + 0.001 ? tip : null;
-  };
-
-  if (through.length) {
-    const t = near(through[0]);
-    return result(hit(1, through[0], t, true), hit(-1, through[0], t, true), null);
-  }
-  const corners = joined.filter(j => !j.cont);
-  const conts = joined.filter(j => j.cont).sort((p, q) => Math.abs(p.ix * ey - p.iy * ex) - Math.abs(q.ix * ey - q.iy * ex));
-  // Angular neighbours: the corner wall first met sweeping from our axis towards +z, and towards -z.
-  for (const j of corners) j.phi = (Math.atan2(j.ix * f.nx + j.iy * f.ny, j.ix * ex + j.iy * ey) + 2 * Math.PI) % (2 * Math.PI);
-  const posNb = corners.length ? corners.reduce((m, j) => j.phi < m.phi ? j : m) : null;
-  const negNb = corners.length ? corners.reduce((m, j) => j.phi > m.phi ? j : m) : null;
-  // A corner neighbour that carries straight on past the joint cuts us at its face.
-  const passes = (nb) => joined.some(k => k !== nb && continues(nb.ix, nb.iy, k.ix, k.iy));
-
-  if (conts.length) {
-    const c = conts[0];
-    // Two straight runs crossing here: the one that outranks passes, the other is cut.
-    if (posNb && negNb && posNb !== negNb && continues(posNb.ix, posNb.iy, negNb.ix, negNb.iy) && outranks([posNb.o, negNb.o], [wall, c.o])) {
-      return result(hit(1, posNb, pair(1, posNb), true), hit(-1, negNb, pair(-1, negNb), true), null);
-    }
-    // Straight on there is nothing to add; a slight jog mitres the faces by a few millimetres.
-    return result(hit(1, c, pair(1, c), false), hit(-1, c, pair(-1, c), false), null);
-  }
-  if (!posNb) return result(0, 0, null);
-  const buryPos = passes(posNb), buryNeg = passes(negNb);
-  const tPos = pair(1, posNb), tNeg = pair(-1, negNb);
-  const aPos = hit(1, posNb, tPos, buryPos), aNeg = hit(-1, negNb, tNeg, buryNeg);
-  let tip = null;
-  if (posNb !== negNb && !buryPos && !buryNeg) {
-    // Three or more walls meeting at a point: the two face cuts leave a wedge in front of
-    // the end; a tip on the centreline at the joint fills it, and the neighbours' tips meet it there.
-    tip = [0, 0];
-  } else if (posNb !== negNb && buryPos && buryNeg) {
-    // Abutting a pair that jogs rather than runs straight: the end bends where the two
-    // faces meet instead of cutting a straight line between them and leaving a notch.
-    tip = meet(posNb, tPos, negNb, tNeg);
-  }
-  return result(aPos, aNeg, beyond(tip, aPos, aNeg));
-}
-function wallEnds(wall, walls, inflate) {
-  return { a: wallEnd(wall, 'a', walls, inflate), b: wallEnd(wall, 'b', walls, inflate) };
-}
-
 // Where one face (side +1 / -1) of a solid piece starts and stops along the wall: pieces
 // touching a wall end take that end's cut, the others keep their own span.
 function faceSpan(s, L, ends, side) {
@@ -723,52 +582,7 @@ export function buildWallGroup(wall, openings, property, ctx) {
 }
 
 // ---------- wall trim ----------
-// Each trim record (trims.js) is a group in its wall's frame, like the wall itself: every part
-// of its layout swept from its section (trim-profiles.js). A run that reaches the end of its
-// wall is mitred there, each point of its section stopping where the wall's face, thickened
-// by that point's depth, meets the next wall's face thickened the same: the baseboard of the
-// next wall meets it at the corner. The section's depth varies linearly between the face (no
-// thickening) and the profile's full depth, so the two face cuts bound every point.
-function sweepInto(out, sec, at, inward, outDir, capStart, capEnd) {
-  // sec: [a, d] points; at(k, end) -> [x, y, z] of section point k at the start (0) or end (1).
-  const n = sec.length;
-  let area = 0;
-  for (let i = 0; i < n; i++) { const [a0, d0] = sec[i], [a1, d1] = sec[(i + 1) % n]; area += a0 * d1 - a1 * d0; }
-  const ccw = area > 0;
-  const tri = (p, q, r, want) => {
-    const ux = q[0] - p[0], uy = q[1] - p[1], uz = q[2] - p[2], vx = r[0] - p[0], vy = r[1] - p[1], vz = r[2] - p[2];
-    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-    const len = Math.hypot(nx, ny, nz);
-    if (len < 1e-12) return;
-    if (nx * want[0] + ny * want[1] + nz * want[2] < 0) { [q, r] = [r, q]; nx = -nx; ny = -ny; nz = -nz; }
-    out.P.push(...p, ...q, ...r);
-    for (let i = 0; i < 3; i++) out.N.push(nx / len, ny / len, nz / len);
-    out.UV.push(p[0] + p[2], p[1], q[0] + q[2], q[1], r[0] + r[2], r[1]);
-  };
-  for (let k = 0; k < n; k++) {
-    const j = (k + 1) % n;
-    const da = sec[j][0] - sec[k][0], dd = sec[j][1] - sec[k][1];
-    if (Math.abs(da) + Math.abs(dd) < 1e-9) continue;
-    // The edge's outward normal in the section plane, then in 3D.
-    const na = ccw ? dd : -dd, nd = ccw ? -da : da;
-    const want = [inward[0] * na + outDir[0] * nd, inward[1] * na + outDir[1] * nd, inward[2] * na + outDir[2] * nd];
-    const s0 = at(k, 0), s1 = at(j, 0), e0 = at(k, 1), e1 = at(j, 1);
-    tri(s0, s1, e1, want); tri(s0, e1, e0, want);
-  }
-  const contour = [];
-  for (const [a, d] of sec) { const v = new THREE.Vector2(a, d); if (!contour.length || contour[contour.length - 1].distanceTo(v) > 1e-7) contour.push(v); }
-  if (contour.length > 2 && contour[0].distanceTo(contour[contour.length - 1]) < 1e-7) contour.pop();
-  if (contour.length < 3) return;
-  const idx = sec.map(([a, d]) => contour.findIndex(v => Math.abs(v.x - a) < 1e-7 && Math.abs(v.y - d) < 1e-7));
-  const back = new Map(); idx.forEach((ci, k) => { if (!back.has(ci)) back.set(ci, k); });
-  for (const [i, j, k] of THREE.ShapeUtils.triangulateShape(contour, [])) {
-    const ki = back.get(i), kj = back.get(j), kk = back.get(k);
-    if (ki == null || kj == null || kk == null) continue;
-    tri(at(ki, 0), at(kj, 0), at(kk, 0), capStart);
-    tri(at(ki, 1), at(kj, 1), at(kk, 1), capEnd);
-  }
-}
-
+// Both the viewer and native exporter consume the same wall-local triangles.
 export function buildTrimGroup(t, wall, view, openings, ctx) {
   ctx = ctx || {};
   const group = new THREE.Group();
@@ -778,68 +592,21 @@ export function buildTrimGroup(t, wall, view, openings, ctx) {
   if (f.L < 0.01) return group;
   group.position.set(wall.ax, 0, wall.ay);
   group.rotation.y = -Math.atan2(f.uy, f.ux);
-  const H = wall.height || view.wallHeight || 2.44;
-  const side = t.side === -1 ? -1 : 1, h = f.h;
-  const walls = view.walls || [];
-  const endsAt = new Map();
-  const faceEnds = (inflate) => {
-    const key = Math.round(inflate * 1e5);
-    if (!endsAt.has(key)) endsAt.set(key, wallEnds(wall, walls, inflate));
-    const e = endsAt.get(key);
-    return side > 0 ? [e.a.pos, e.b.pos] : [e.a.neg, e.b.neg];
-  };
-  const [e0, e1] = faceEnds(0);
-  const lay = trimLayout(t, wall, openings, { L: f.L, H, x0: e0, x1: e1 });
-  const z = d => side * (h + d);
-  const main = { P: [], N: [], UV: [] }, backer = { P: [], N: [], UV: [] };
-  const OUT = [0, 0, side];
-  for (const part of lay.parts) {
-    const out = part.role === 'backer' ? backer : main;
-    const lift = part.d || 0;
-    if (part.kind === 'run') {
-      const sec = sectionOf(part.profile, part.W, part.T);
-      const [o0, o1] = part.mitreA || part.mitreB ? faceEnds(part.T) : [part.x0, part.x1];
-      const xs = d => part.mitreA ? part.x0 + (o0 - part.x0) * d / part.T : part.x0;
-      const xe = d => part.mitreB ? part.x1 + (o1 - part.x1) * d / part.T : part.x1;
-      const yOf = a => part.crown ? H - a : part.y + a;
-      sweepInto(out, sec, (k, end) => { const [a, d] = sec[k]; return [end ? xe(d) : xs(d), yOf(a), z(d)]; },
-        [0, part.crown ? -1 : 1, 0], OUT, [-1, 0, 0], [1, 0, 0]);
-    } else if (part.kind === 'frame') {
-      const sec = sectionOf(part.profile, part.W, part.T);
-      const { x0, x1, y0, y1 } = part;
-      // Bottom, top, left, right: each mitred at 45 degrees, its inner edge shorter by its width.
-      sweepInto(out, sec, (k, end) => { const [w, d] = sec[k]; return [end ? x1 - w : x0 + w, y0 + w, z(d + lift)]; }, [0, 1, 0], OUT, [-1, 0, 0], [1, 0, 0]);
-      sweepInto(out, sec, (k, end) => { const [w, d] = sec[k]; return [end ? x1 - w : x0 + w, y1 - w, z(d + lift)]; }, [0, -1, 0], OUT, [-1, 0, 0], [1, 0, 0]);
-      sweepInto(out, sec, (k, end) => { const [w, d] = sec[k]; return [x0 + w, end ? y1 - w : y0 + w, z(d + lift)]; }, [1, 0, 0], OUT, [0, -1, 0], [0, 1, 0]);
-      sweepInto(out, sec, (k, end) => { const [w, d] = sec[k]; return [x1 - w, end ? y1 - w : y0 + w, z(d + lift)]; }, [-1, 0, 0], OUT, [0, -1, 0], [0, 1, 0]);
-    } else if (part.kind === 'board') {
-      const { x0, x1, y0, y1 } = part;
-      if (part.dir === 'v') {
-        const sec = sectionOf(part.profile, x1 - x0, part.T);
-        sweepInto(out, sec, (k, end) => { const [a, d] = sec[k]; return [x0 + a, end ? y1 : y0, z(d + lift)]; }, [1, 0, 0], OUT, [0, -1, 0], [0, 1, 0]);
-      } else {
-        const sec = sectionOf(part.profile, y1 - y0, part.T);
-        sweepInto(out, sec, (k, end) => { const [a, d] = sec[k]; return [end ? x1 : x0, y0 + a, z(d + lift)]; }, [0, 1, 0], OUT, [-1, 0, 0], [1, 0, 0]);
-      }
-    }
-  }
-  const meshOf = (buf, mat) => {
-    if (!buf.P.length) return null;
+  const { parts, layout } = trimMeshParts(t, wall, view, openings);
+  const record = t.material ? materialById(t.material) : null;
+  for (const part of parts) {
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(buf.P, 3));
-    g.setAttribute('normal', new THREE.Float32BufferAttribute(buf.N, 3));
-    g.setAttribute('uv', new THREE.Float32BufferAttribute(buf.UV, 2));
+    g.setAttribute('position', new THREE.Float32BufferAttribute(part.positions, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(part.normals, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(part.uv, 2));
+    const mat = part.role === 'backer' ? flatMat('#2b2825', 0.9, ctx.matOpts)
+      : record ? matFor(record, FALLBACK_TRIM, 0.55, ctx.matOpts) : trimMat(ctx.matOpts);
     const m = new THREE.Mesh(g, mat);
     m.castShadow = true; m.receiveShadow = true;
     m.userData = { kind: 'trim', id: t.id, wallId: wall.id };
-    return m;
-  };
-  const record = t.material ? materialById(t.material) : null;
-  const m1 = meshOf(main, record ? matFor(record, FALLBACK_TRIM, 0.55, ctx.matOpts) : trimMat(ctx.matOpts));
-  const m2 = meshOf(backer, flatMat('#2b2825', 0.9, ctx.matOpts));
-  if (m1) group.add(m1);
-  if (m2) group.add(m2);
-  group.userData.layout = { rects: lay.rects, boxes: lay.boxes, cols: lay.cols, H, side, h };
+    group.add(m);
+  }
+  group.userData.layout = layout;
   return group;
 }
 
