@@ -322,6 +322,24 @@ function render() {
   const sw = (act, it) => `<button type="button" class="fd-switch" role="switch" aria-checked="${!!it.on}" data-act="${act}" data-id="${escapeHtml(it.id)}" ${it.disabled ? 'disabled' : ''}>
       ${it.color ? `<b class="fd-dot" style="background:${escapeHtml(it.color)}"></b>` : ''}<span>${escapeHtml(it.label)}</span>${it.count != null ? `<small>${it.count}</small>` : ''}<i aria-hidden="true"></i></button>`;
   let model = '';
+  // The client page in the lab (client-view.js): the same panel with only what a client has.
+  if (st && st.client) {
+    const seg = (act, it) => `<button type="button" class="fd-seg ${it.on ? 'on' : ''}" aria-pressed="${!!it.on}" data-act="${act}" data-id="${escapeHtml(it.id)}">${escapeHtml(it.label)}</button>`;
+    const modes = [['orbit', 'Orbit'], ['walk', 'Walk']].map(([id, label]) => seg('mode', { id, label, on: st.mode === id })).join('');
+    const views = st.views.map(v => `<button type="button" class="fd-chip ${v.on ? 'on' : ''}" data-act="view" data-id="${escapeHtml(v.id)}">${escapeHtml(v.label)}</button>`).join('');
+    els.panel.innerHTML = `
+      <header class="fd-head"><div class="fd-prop-name"></div><button type="button" class="fd-btn fd-close" aria-label="Close the view panel">${CLOSE_SVG}</button></header>
+      <div class="fd-body">
+        ${section('View', `<div class="fd-segs" role="group" aria-label="How to move">${modes}</div>`)}
+        ${section('Show', st.client.states.length > 1 && `<div class="fd-segs" role="group" aria-label="What to show">${st.client.states.map(x => seg('client-show', x)).join('')}</div>`)}
+        ${st.client.furniture != null ? section('Display', sw('client-furniture', { id: 'furniture', label: 'Furniture', on: st.client.furniture })) : ''}
+        ${section('Saved views', views && `<div class="fd-chips">${views}</div>`)}
+        ${section('Quality on this device', `<div class="fd-segs fd-quality" role="group" aria-label="Drawing quality">${st.quality.map(q => seg('quality', q)).join('')}</div>`)}
+      </div>`;
+    const fresh = els.panel.querySelector('.fd-body');
+    if (fresh && scrolled) fresh.scrollTop = scrolled;
+    return;
+  }
   if (st) {
     const modes = [['orbit', 'Orbit'], ['walk', 'Walk'], ['top', 'Top']]
       .map(([id, label]) => `<button type="button" class="fd-seg ${st.mode === id ? 'on' : ''}" aria-pressed="${st.mode === id}" data-act="mode" data-id="${id}">${label}</button>`).join('');
