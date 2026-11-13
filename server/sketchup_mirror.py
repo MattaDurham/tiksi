@@ -420,6 +420,226 @@ def pane_bands(hole):
     return [b for b in ((0.0, g0, own), (g0, g1, glass.get('material')), (g1, hh, own)) if b[1] - b[0] > 0.001]
 
 
+
+def opening_detail_parts(hole, thickness):
+    """Resolved opening parts, in opening-local metres (x along wall, y across, z up).
+
+    Tiksi supplies resolved dimensions from the same helpers used by its viewer. Detail
+    groups are separate from the hidden opening outline, so swinging a leaf or adding
+    projecting trim cannot change the opening's read-back dimensions.
+    """
+    d = hole.get('resolved')
+    if not isinstance(d, dict) or not isinstance(hole.get('detail'), dict):
+        return []
+    w, h = hole['s1'] - hole['s0'], hole['v1'] - hole['v0']
+    parts = []
+    sides = hole.get('sides') or {}
+    own = hole.get('trimMaterial') or hole.get('material')
+    glass = hole.get('glassMaterial') or hole.get('material')
+    metal = hole.get('metalMaterial') or own
+    leaf_material = hole.get('leafMaterial') or own
+    knob_material = hole.get('knobMaterial') or metal
+
+    def add(name, points, faces, material, pivot=None):
+        if pivot:
+            px, angle = pivot
+            ca, sa = math.cos(angle), math.sin(angle)
+            points = [[px + ca * x - sa * y, sa * x + ca * y, z + .01] for x, y, z in points]
+        parts.append({'name': name, 'points': points, 'faces': faces, 'material': material})
+
+    def box(name, x0, x1, y0, y1, z0, z1, material=own, pivot=None):
+        if min(x1-x0, y1-y0, z1-z0) <= 1e-7:
+            return
+        points, faces = prism([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], z0, z1)
+        add(name, points, faces, leaf_material if pivot and material is own else material, pivot)
+
+    def cylinder(name, x, y, z, radius, length, axis, pivot):
+        points = []
+        for end in (-length/2, length/2):
+            for k in range(24):
+                a = 2*math.pi*k/24
+                q = [radius*math.cos(a), radius*math.sin(a)]
+                points.append(([x+end, y+q[0], z+q[1]] if axis == 0 else [x+q[0], y+end, z+q[1]]))
+        faces = [(list(range(23, -1, -1)), []), (list(range(24, 48)), [])]
+        faces += [([k, (k+1)%24, (k+1)%24+24, k+24], []) for k in range(24)]
+        add(name, points, faces, metal, pivot)
+
+    def knob(name, x, y, z, radius, pivot):
+        if d.get('knobShape') == 'faceted':
+            phi = (1+math.sqrt(5))/2
+            verts = [[-1,phi,0],[1,phi,0],[-1,-phi,0],[1,-phi,0],[0,-1,phi],[0,1,phi],[0,-1,-phi],[0,1,-phi],[phi,0,-1],[phi,0,1],[-phi,0,-1],[-phi,0,1]]
+            tris = [[0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],[1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],[3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],[4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]]
+            mids = {}
+            def midpoint(a, b):
+                key = tuple(sorted((a, b)))
+                if key not in mids:
+                    mids[key] = len(verts); verts.append([(va+vb)/2 for va, vb in zip(verts[a], verts[b])])
+                return mids[key]
+            faces = []
+            for a, b, c in tris:
+                ab, bc, ca = midpoint(a, b), midpoint(b, c), midpoint(c, a)
+                faces += [(tri, []) for tri in ([a,ab,ca], [b,bc,ab], [c,ca,bc], [ab,bc,ca])]
+            points = []
+            for vx, vy, vz in verts:
+                scale = radius/math.sqrt(vx*vx+vy*vy+vz*vz)
+                points.append([x+vx*scale, y+vy*scale*.85, z+vz*scale])
+            add(name, points, faces, knob_material, pivot)
+            return
+        n, rings = 20, 12
+        points = [[x, y-radius*.85, z]]
+        for j in range(1, rings):
+            a = math.pi*j/rings
+            for k in range(n):
+                b = 2*math.pi*k/n
+                points.append([x+radius*math.sin(a)*math.cos(b), y-radius*math.cos(a)*.85, z+radius*math.sin(a)*math.sin(b)])
+        points.append([x, y+radius*.85, z]); end = len(points)-1
+        faces = [([0, 1+(k+1)%n, 1+k], []) for k in range(n)]
+        for j in range(rings-2):
+            lo, hi = 1+j*n, 1+(j+1)*n
+            faces += [([lo+k, lo+(k+1)%n, hi+(k+1)%n, hi+k], []) for k in range(n)]
+        lo = 1+(rings-2)*n
+        faces += [([lo+k, lo+(k+1)%n, end], []) for k in range(n)]
+        add(name, points, faces, knob_material, pivot)
+
+    if hole.get('type') != 'window':
+        if hole.get('plain'):
+            return []
+        j, cw, cd = d['jambWidth'], d['casingWidth'], d['casingDepth']
+        box('Start jamb', 0, j, -thickness/2-.008, thickness/2+.008, 0, h)
+        box('End jamb', w-j, w, -thickness/2-.008, thickness/2+.008, 0, h)
+        box('Head jamb', j, w-j, -thickness/2-.008, thickness/2+.008, h-j, h)
+        for sign, key in ((1, 'pos'), (-1, 'neg')):
+            if not sides.get(key) or cw <= 0 or cd <= 0:
+                continue
+            # SketchUp's across-wall axis is the negative of Tiksi's.
+            a, b = -sign*thickness/2, -sign*(thickness/2+cd)
+            a, b = sorted((a, b))
+            box('Start casing', -cw, .01, a, b, 0, h+cw)
+            box('End casing', w-.01, w+cw, a, b, 0, h+cw)
+            box('Head casing', -cw, w+cw, a, b, h-.01, h+cw)
+        leaves = d.get('leaves', hole.get('leaves', 1))
+        if not leaves:
+            return parts
+        lw, lh, lt = d['leafWidth'], d['leafHeight'], d['leafThickness']
+        swing = d['swingSide']*math.radians(25) if hole.get('shownOpen') else 0
+        hinges = ('start', 'end') if leaves == 2 else (d['hinge'],)
+        for hinge in hinges:
+            pivot = (j+.003, -swing) if hinge == 'start' else (w-j-.003, math.pi+swing)
+            glazing = hole.get('leafGlazing')
+            if isinstance(glazing, dict):
+                gx0, gx1, gz0, gz1 = glazing['glass']
+                panel = glazing.get('panel')
+                box('Leaf stile', 0, gx0, -lt/2, lt/2, 0, lh, pivot=pivot)
+                box('Leaf stile', gx1, lw, -lt/2, lt/2, 0, lh, pivot=pivot)
+                box('Leaf top rail', gx0, gx1, -lt/2, lt/2, gz1, lh, pivot=pivot)
+                box('Leaf bottom rail', gx0, gx1, -lt/2, lt/2, 0, panel[2] if panel else gz0, pivot=pivot)
+                if panel:
+                    box('Leaf mid rail', gx0, gx1, -lt/2, lt/2, panel[3], gz0, pivot=pivot)
+                    box('Leaf lower panel', gx0, gx1, -lt/2+.012, lt/2-.012, panel[2], panel[3], pivot=pivot)
+                box('Leaf glass', gx0, gx1, -.003, .003, gz0, gz1, glass, pivot)
+            elif d.get('style') == 'six-panel':
+                # Shallow recessed fields in a rail-and-stile leaf, rather than a texture
+                # baked into a flat native pane. Dimensions stay within the leaf envelope.
+                mx, my, gx, gy = lw*24/256, lh*26/512, lw*18/256, lh*20/512
+                usable = lh-2*my-2*gy
+                bands, z = [], my
+                for proportion in (.38, .38, .24):
+                    bands.append((z, z+usable*proportion)); z += usable*proportion+gy
+                half = (lw-gx)/2
+                box('Leaf start stile', 0, mx, -lt/2, lt/2, 0, lh, pivot=pivot)
+                box('Leaf end stile', lw-mx, lw, -lt/2, lt/2, 0, lh, pivot=pivot)
+                box('Leaf centre stile', half, half+gx, -lt/2, lt/2, 0, lh, pivot=pivot)
+                previous = 0
+                for z0, z1 in bands:
+                    box('Leaf rail', mx, lw-mx, -lt/2, lt/2, previous, z0, pivot=pivot)
+                    for x0, x1 in ((mx, half), (half+gx, lw-mx)):
+                        box('Leaf recessed panel', x0, x1, -lt/2+.004, lt/2-.004, z0, z1, pivot=pivot)
+                    previous = z1
+                box('Leaf top rail', mx, lw-mx, -lt/2, lt/2, previous, lh, pivot=pivot)
+            else:
+                box('Slab leaf', 0, lw, -lt/2, lt/2, 0, lh, pivot=pivot)
+            if d.get('hardware') != 'none':
+                hx, hz = lw-.075, min(1.0, lh-.1)
+                for sign in (1, -1):
+                    cylinder('Handle rose', hx, sign*(lt/2+.005), hz, .028, .01, 1, pivot)
+                    cylinder('Handle stem', hx, sign*(lt/2+.03), hz, .009, .05, 1, pivot)
+                    if d.get('hardware') == 'knob':
+                        knob('Door knob', hx, sign*(lt/2+.05), hz, .027, pivot)
+                    else:
+                        cylinder('Door lever', hx-.055, sign*(lt/2+.05), hz, .008, .12, 0, pivot)
+        return parts
+
+    fw, sw, mw = d['frameWidth'], d['sashWidth'], d['muntinWidth']
+    box('Window frame', 0, fw, -thickness/2-.005, thickness/2+.005, 0, h)
+    box('Window frame', w-fw, w, -thickness/2-.005, thickness/2+.005, 0, h)
+    box('Window frame', fw, w-fw, -thickness/2-.005, thickness/2+.005, 0, fw)
+    box('Window frame', fw, w-fw, -thickness/2-.005, thickness/2+.005, h-fw, h)
+
+    def sash(name, z0, z1, columns, rows, depth=0):
+        x0, x1 = fw, w-fw
+        box(name+' stile', x0, x0+sw, depth-.024, depth+.024, z0, z1)
+        box(name+' stile', x1-sw, x1, depth-.024, depth+.024, z0, z1)
+        box(name+' rail', x0+sw, x1-sw, depth-.024, depth+.024, z0, z0+sw)
+        box(name+' rail', x0+sw, x1-sw, depth-.024, depth+.024, z1-sw, z1)
+        gx0, gx1, gz0, gz1 = x0+sw, x1-sw, z0+sw, z1-sw
+        for col in range(1, columns):
+            x = gx0+(gx1-gx0)*col/columns
+            box(name+' vertical muntin', x-mw/2, x+mw/2, depth-.016, depth+.016, gz0, gz1)
+        for row in range(1, rows):
+            z = gz0+(gz1-gz0)*row/rows
+            box(name+' horizontal muntin', gx0, gx1, depth-.016, depth+.016, z-mw/2, z+mw/2)
+        box(name+' glass', gx0, gx1, depth-.003, depth+.003, gz0, gz1, glass)
+    inside = 1 if sides.get('pos') else -1 if sides.get('neg') else 1
+    if d.get('type') == 'double-hung':
+        mid = h/2
+        sash('Lower sash', fw, mid+sw/2, d['lower']['columns'], d['lower']['rows'], -inside*.025)
+        sash('Upper sash', mid-sw/2, h-fw, d['upper']['columns'], d['upper']['rows'], inside*.025)
+    else:
+        sash('Sash', fw, h-fw, d['columns'], d['rows'])
+    inside = 1 if sides.get('pos') else -1 if sides.get('neg') else 1
+    room_sides = (1, -1) if sides.get('pos') and sides.get('neg') else (inside,)
+    for sign in room_sides:
+        face, outer = -sign*thickness/2, -sign*(thickness/2+.016)
+        a, b = sorted((face, outer))
+        stool = -sign*(thickness/2+.06)
+        box('Window stool', -.06, w+.06, min(0, stool), max(0, stool), -.028, 0)
+        box('Window apron', -.07, w+.07, a, b, -.11, -.028)
+        box('Window casing', -.07, .01, a, b, 0, h+.07)
+        box('Window casing', w-.01, w+.07, a, b, 0, h+.07)
+        box('Window casing', -.07, w+.07, a, b, h-.01, h+.07)
+    if len(room_sides) == 1:
+        outer = inside*(thickness/2+.045)
+        box('Exterior sill', -.03, w+.03, min(0, outer), max(0, outer), -.04, 0)
+    return parts
+
+
+def write_opening_detail(api, entities, hole, thickness, layer, materials):
+    for part in opening_detail_parts(hole, thickness):
+        group = new_group(api, entities, part['name'], translation(0, 0, 0))
+        set_layer(api, group, layer)
+        inner = api.ref('SUGroupGetEntities', group)
+        fill(api, inner, [[v*IN for v in p] for p in part['points']], part['faces'])
+        mat = materials.get(part['material'])
+        for face in api.collection(inner, 'Faces'):
+            paint(api, face, mat)
+
+
+def scaled_opening_detail(detail, sx, sy, sz):
+    """Explicit metric dimensions follow a transformed native opening; labels survive."""
+    result = json.loads(json.dumps(detail))
+    axes = {'leafWidth': sx, 'leafHeight': sz, 'leafThickness': sy, 'jambWidth': sx,
+            'casingWidth': sx, 'casingDepth': sy, 'frameWidth': sx, 'sashWidth': sx, 'muntinWidth': sx}
+    for kind in ('door', 'window'):
+        values = result.get(kind)
+        if not isinstance(values, dict):
+            continue
+        for key, scale in axes.items():
+            value = values.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+                values[key] = value if abs(scale-1) < 1e-10 else r6(value*scale)
+    return result
+
+
 def write_wall(api, entities, wall, layer, materials, tags=None):
     ax, ay, bx, by = wall['ax'], wall['ay'], wall['bx'], wall['by']
     L = math.hypot(bx - ax, by - ay)
@@ -458,7 +678,24 @@ def write_wall(api, entities, wall, layer, materials, tags=None):
             zs = [p[2] / IN for p in face_ring(api, face)]
             mid = (min(zs) + max(zs)) / 2
             paint(api, face, materials.get(next((b[2] for b in bands if b[0] <= mid <= b[1]), h.get('material'))))
+        if isinstance(h.get('detail'), dict) and isinstance(h.get('resolved'), dict):
+            # The direct pane is only a read-back anchor. Hide its edges as well as faces.
+            for item in api.collection(pane, 'Faces'):
+                api.call('SUDrawingElementSetHidden', to_ref(api, 'SUFaceToDrawingElement', item), C.c_bool(True))
+                count = C.c_size_t()
+                api.call('SUFaceGetNumEdges', item, C.byref(count))
+                edges = (Ref * count.value)()
+                api.call('SUFaceGetEdges', item, count, edges, C.byref(count))
+                for edge in edges:
+                    api.call('SUDrawingElementSetHidden', to_ref(api, 'SUEdgeToDrawingElement', edge), C.c_bool(True))
+            write_opening_detail(api, pane, h, th, (tags or {}).get(h.get('tag')) or layer, materials)
         obase = {'wallId': wall['id'], 't': r6(h['t']), 'width': r6(h['width']), 'height': r6(h['height']), 'sill': r6(h.get('sill') or 0)}
+        if isinstance(h.get('detail'), dict):
+            obase['detail'] = h['detail']
+        if isinstance(h.get('configuration'), dict):
+            obase['configuration'] = h['configuration']
+        if 'floorContinuity' in h:
+            obase['floorContinuity'] = h['floorContinuity']
         set_data(api, to_ref(api, 'SUGroupToEntity', og), {'kind': 'opening', 'id': h['id'], 'type': h.get('type'), 'base': obase,
                                                            'local': {'x1': r6(w * IN), 'z1': r6(hh * IN)}})
     return group
@@ -480,7 +717,35 @@ def write_room(api, entities, room, layer, materials):
     mat = materials.get(room.get('material'))
     for face in api.collection(floor, 'Faces'):
         paint(api, face, mat, (0, 0, 1))
+    # Separate threshold subgroups cannot change the room outline read from direct faces.
+    for patch in room.get('thresholds', []):
+        if len(patch.get('pts') or []) < 3:
+            continue
+        threshold = new_group(api, floor, 'Floor through opening', translation(0, 0, 0))
+        set_layer(api, threshold, layer)
+        inner = api.ref('SUGroupGetEntities', threshold)
+        ring = [plan_to_skp(x, y) for x, y in patch['pts']]
+        area = sum(ring[i][0]*ring[(i+1)%len(ring)][1]-ring[(i+1)%len(ring)][0]*ring[i][1] for i in range(len(ring)))
+        if area < 0:
+            ring.reverse()
+        fill(api, inner, ring, [(list(range(len(ring))), [])])
+        mat = materials.get(patch.get('material') or room.get('material'))
+        for face in api.collection(inner, 'Faces'):
+            paint(api, face, mat, (0, 0, 1))
+    height = room.get('ceilingHeight')
+    if isinstance(height, (int, float)) and not isinstance(height, bool) and math.isfinite(height) and height > 0:
+        ceiling = new_group(api, floor, 'Finished ceiling', translation(0, 0, 0))
+        set_layer(api, ceiling, layer)
+        inner = api.ref('SUGroupGetEntities', ceiling)
+        ring = [(x*IN, -y*IN) for x, y in pts]
+        points, faces = prism(ring, height*IN, (height+.027)*IN)
+        fill(api, inner, points, faces)
+        mat = materials.get(room.get('ceilingMaterial'))
+        for face in api.collection(inner, 'Faces'):
+            paint(api, face, mat)
     base = {'pts': [[r6(x), r6(y)] for x, y in pts], 'name': room.get('name') or '', 'elevation': r6(elev)}
+    if isinstance(height, (int, float)) and not isinstance(height, bool) and math.isfinite(height) and height > 0:
+        base['ceilingHeight'] = r6(height)
     set_data(api, to_ref(api, 'SUGroupToEntity', group), {'kind': 'room', 'id': room['id'], 'level': room['level'], 'base': base})
     return group
 
@@ -695,6 +960,14 @@ def read_wall(api, group, data, warnings):
         v0, v1 = min(p0[2], p1[2]), max(p0[2], p1[2])
         onow = {'wallId': data.get('id'), 't': r6(((s0 + s1) / 2 - x0) / length_local), 'width': r6((s1 - s0) * sx / IN),
                 'height': r6((v1 - v0) * sz / IN), 'sill': r6((v0 - z0) * sz / IN)}
+        if isinstance((odata.get('base') or {}).get('configuration'), dict):
+            onow['configuration'] = json.loads(json.dumps(odata['base']['configuration']))
+        if 'floorContinuity' in (odata.get('base') or {}):
+            onow['floorContinuity'] = odata['base']['floorContinuity']
+        detail = (odata.get('base') or {}).get('detail')
+        if isinstance(detail, dict):
+            combined = multiply(m, om)
+            onow['detail'] = scaled_opening_detail(detail, axis_scale(combined, 0), axis_scale(combined, 1), axis_scale(combined, 2))
         openings.append({'id': odata.get('id'), 'type': odata.get('type'), 'base': odata.get('base') or {}, 'now': onow})
     return {'id': data.get('id'), 'level': data.get('level'), 'name': api.text('SUGroupGetName', group), 'base': data.get('base') or {}, 'now': now, 'openings': openings}
 
@@ -722,6 +995,8 @@ def read_room(api, group, data, warnings):
     if base.get('pts') and polygon_area(base['pts']) < 0:
         pts.reverse()
     now = {'pts': rotate_to(pts, base.get('pts')), 'name': api.text('SUGroupGetName', group), 'elevation': r6(min(p[2] for p in best) / IN)}
+    if isinstance(base.get('ceilingHeight'), (int, float)):
+        now['ceilingHeight'] = r6(base['ceilingHeight']*axis_scale(m, 2))
     return {'id': data.get('id'), 'level': data.get('level'), 'base': base, 'now': now}
 
 

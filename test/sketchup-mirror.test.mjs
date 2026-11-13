@@ -31,12 +31,16 @@ function readOf(spec) {
         id: w.id, level: w.level, base, now: { ...base },
         openings: w.holes.map(h => {
           const ob = { wallId: w.id, t: h.t, width: h.width, height: h.height, sill: h.sill };
+          if (h.detail) ob.detail = structuredClone(h.detail);
+          if (h.configuration) ob.configuration = structuredClone(h.configuration);
+          if (h.floorContinuity === false) ob.floorContinuity = false;
           return { id: h.id, type: h.type, base: ob, now: { ...ob } };
         }),
       };
     }),
     rooms: spec.rooms.map(r => {
       const base = { pts: r.pts, name: r.name, elevation: r.elevation };
+      if (r.ceilingHeight > 0) base.ceilingHeight = r.ceilingHeight;
       return { id: r.id, level: r.level, base, now: { ...base, pts: r.pts.map(q => [...q]) } };
     }),
     untagged: { faces: 0, groups: 0, instances: 0 }, warnings: [],
@@ -413,4 +417,125 @@ test('materials sharing a name keep separate SketchUp materials', () => {
   const south = mirrorSpec(p, list).walls.find(w => w.id === 'w-s').materials;
   assert.equal(south.pos.name, 'Brick, red (mat-sage)');
   assert.equal(south.neg.name, 'Brick, red (mat-brick)');
+});
+
+
+test('measured opening detail reaches the native mirror and survives a read and store import', () => {
+  const p = room();
+  p.openings[0].detail = { door: { hinge: 'end', swingSide: 'negative', style: 'slab', hardware: 'knob', leafWidth: .84, jambWidth: .025, leafThickness: .035 } };
+  p.openings[1].detail = { window: { type: 'double-hung', upperColumns: 3, upperRows: 2, lowerColumns: 1, lowerRows: 1 } };
+  const spec = mirrorSpec(p), holes = spec.walls[0].holes;
+  assert.deepEqual(holes[0].detail, p.openings[0].detail);
+  assert.deepEqual([holes[0].resolved.hinge, holes[0].resolved.leafWidth, holes[0].resolved.style, holes[0].resolved.hardware], ['end', .84, 'slab', 'knob']);
+  assert.deepEqual(holes[1].resolved.upper, { columns: 3, rows: 2 });
+  assert.deepEqual(holes[1].resolved.lower, { columns: 1, rows: 1 });
+  assert.equal(holes[1].glassMaterial.opacity, .22);
+  const before = structuredClone(p);
+  assert.deepEqual(mergeMirror(p, readOf(spec), syncedState(p)).applied, []);
+  assert.deepEqual(p, before);
+  store.ws.data = store.emptyWorkspace();
+  store.mergeWorkspace({ version: 2, properties: [p], materials: [], products: [], projects: [] });
+  assert.deepEqual(store.ws.data.properties[0].openings[0].detail, before.openings[0].detail);
+});
+
+test('copied native opening retains an independent construction record', () => {
+  const p = room();
+  p.openings[0].detail = { door: { style: 'slab', hardware: 'knob', hinge: 'end' } };
+  const spec = mirrorSpec(p), read = readOf(spec), synced = syncedState(p);
+  const duplicate = structuredClone(read.walls[0]);
+  duplicate.now.ay = duplicate.now.by = 6;
+  read.walls.push(duplicate);
+  const result = mergeMirror(p, read, synced);
+  const copied = p.openings.find(o => o.id !== 'o-door' && o.type === 'door');
+  assert.ok(result.added.includes(copied.id));
+  assert.deepEqual(copied.detail, p.openings[0].detail);
+  copied.detail.door.hinge = 'start';
+  assert.equal(p.openings[0].detail.door.hinge, 'end');
+});
+
+test('changing handing protects an opening against a concurrent native edit', () => {
+  const p = room();
+  p.openings[0].detail = { door: { style: 'slab', hinge: 'start' } };
+  const read = readOf(mirrorSpec(p)), synced = syncedState(p);
+  p.openings[0].detail.door.hinge = 'end';
+  read.walls[0].openings[0].now.t += .1;
+  const result = mergeMirror(p, read, synced);
+  assert.deepEqual(result.conflicts.map(c => c.id), ['o-door']);
+  assert.equal(p.openings[0].t, .25);
+  assert.equal(p.openings[0].detail.door.hinge, 'end');
+});
+
+test('native detail updates preserve measured dimensions and have key-order independent signatures', () => {
+  const p = room();
+  p.openings[0].detail = { door: { leafWidth: .84, jambWidth: .025, hardware: 'knob' } };
+  const synced = syncedState(p), read = readOf(mirrorSpec(p));
+  const oldSig = synced['o-door'];
+  p.openings[0].detail = { door: { hardware: 'knob', jambWidth: .025, leafWidth: .84 } };
+  assert.equal(syncedState(p)['o-door'], oldSig);
+  read.walls[0].openings[0].now = structuredClone(read.walls[0].openings[0].now);
+  read.walls[0].openings[0].now.detail.door.leafWidth = .85;
+  assert.deepEqual(mergeMirror(p, read, synced).applied, ['o-door']);
+  assert.equal(p.openings[0].detail.door.leafWidth, .85);
+});
+
+
+test('native thresholds fill only the doorway gap and do not become extra rooms', () => {
+  const p = room(), level = p.levels[0].id;
+  p.walls = [{ id: 'w-divider', level, ax: 0, ay: 0, bx: 4, by: 0, thickness: .1 }];
+  p.openings = [{ id: 'o-passage', wallId: 'w-divider', type: 'door', width: 1, height: 2, t: .5, leaves: 0 }];
+  p.rooms = [
+    { id: 'r-north', level, name: 'North', pts: [[0, -.05], [0, -3], [4, -3], [4, -.05]], material: 'mat-oak' },
+    { id: 'r-south', level, name: 'South', pts: [[0, .05], [4, .05], [4, 3], [0, 3]], material: 'mat-oak' },
+  ];
+  const spec = mirrorSpec(p);
+  assert.equal(spec.rooms.length, 2);
+  const patches = spec.rooms.flatMap(r => r.thresholds || []);
+  assert.equal(patches.length, 2);
+  assert.ok(patches.every(t => t.pts.every(([x, y]) => x >= 1.5 && x <= 2.5 && Math.abs(y) <= .05)));
+  assert.equal(Object.values(spec.elements).filter(e => e.kind === 'room').length, 2);
+  p.openings[0].floorContinuity = false;
+  const voidSpec = mirrorSpec(p);
+  assert.ok(voidSpec.rooms.every(r => !r.thresholds));
+  assert.equal(voidSpec.walls[0].holes[0].floorContinuity, false);
+  assert.deepEqual(mergeMirror(p, readOf(voidSpec), syncedState(p)).applied, []);
+});
+
+
+test('explicit soffit height is mirrored and roundtrips without changing room outline', () => {
+  const p = room(); p.rooms[0].ceilingHeight = 2.05;
+  const spec = mirrorSpec(p), synced = syncedState(p), read = readOf(spec);
+  assert.equal(spec.rooms[0].ceilingHeight, 2.05);
+  assert.deepEqual(spec.rooms[0].pts, p.rooms[0].pts);
+  assert.deepEqual(mergeMirror(p, read, synced).applied, []);
+  read.rooms[0].now.ceilingHeight = 2.1;
+  assert.deepEqual(mergeMirror(p, read, synced).applied, ['r-1']);
+  assert.equal(p.rooms[0].ceilingHeight, 2.1);
+});
+
+
+test('a detailed opening received without a local template retains door configuration', () => {
+  const p = room();
+  p.openings[0].detail = { door: { style: 'slab', hardware: 'knob' } };
+  p.openings[0].leaves = 2; p.openings[0].glass = 'full'; p.openings[0].doorState = 'closed';
+  const read = readOf(mirrorSpec(p));
+  read.model = {};
+  const target = room(); target.openings = [];
+  const result = mergeMirror(target, read, {});
+  assert.ok(result.added.includes('o-door'));
+  const added = target.openings.find(o => o.id === 'o-door');
+  assert.deepEqual([added.leaves, added.glass, added.doorState], [2, 'full', 'closed']);
+  assert.deepEqual(added.detail, p.openings[0].detail);
+});
+
+
+test('project export retains a custom door leaf finish and its specification', () => {
+  const p = room(); p.openings[0].detail = { door: { leafMaterial: 'mat-leaf-wood', style: 'slab' } };
+  const material = { id: 'mat-leaf-wood', name: 'Wood door finish', color: '#9a704a', custom: true };
+  const product = { id: 'prod-finish', name: 'Specified finish', materialIds: [material.id], itemIds: [] };
+  const data = { ...store.emptyWorkspace(), properties: [p], materials: [material], products: [product] };
+  const exported = JSON.parse(JSON.stringify(store.projectSlice(p.id, data)));
+  assert.deepEqual(exported.materials, [material]);
+  assert.deepEqual(exported.products, [product]);
+  const spec = mirrorSpec(exported.properties[0], exported.materials);
+  assert.equal(spec.walls[0].holes[0].leafMaterial.color, '#9a704a');
 });

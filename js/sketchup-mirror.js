@@ -17,8 +17,9 @@
 // run under Node for tests; the rest talks to /api/model-conversion/mirror.
 
 import { wallHeightOf, levelOfWall, levelOfRoom, levelHeight, roomsOn, uid } from './store.js';
-import { openingSpans, wallFaceMaterialIds, doorGlassBand, plainOpening } from './wall-solids.js';
+import { openingSpans, wallFaceMaterialIds, wallSides, doorGlassBand, plainOpening, doorDetail, windowDetail, doorShownOpen, doorGlass, leafGlazing } from './wall-solids.js';
 import { tagIdOf, tagById } from './tags.js';
+import { thresholdFloors } from './threshold-floors.js';
 import { fixtureShape, fixtureMirrorParams, fixtureLocalFrame, fixtureParts, fixtureLabel, fixturesOn, normaliseFixture, FIXTURE_FALLBACK } from './fixtures.js';
 
 export const MIRROR_FORMAT = 'tiksi-sketchup-mirror';
@@ -42,7 +43,13 @@ const current = s => typeof s === 'string' && s.endsWith(SIG_TAIL);
 function openingParams(o, s0, s1, L, H) {
   const v0 = o.type === 'window' ? Math.max(0, o.sill || 0) : 0;
   const v1 = Math.min(v0 + (o.height || 0), H);
-  return { wallId: o.wallId, t: (s0 + s1) / 2 / L, width: s1 - s0, height: v1 - v0, sill: v0, s0, s1, v0, v1 };
+  const p = { wallId: o.wallId, t: (s0 + s1) / 2 / L, width: s1 - s0, height: v1 - v0, sill: v0, s0, s1, v0, v1 };
+  if (o.detail && typeof o.detail === 'object') {
+    p.detail = JSON.parse(JSON.stringify(o.detail));
+    p.configuration = Object.fromEntries(['leaves', 'glass', 'doorState', 'plain'].filter(k => o[k] !== undefined).map(k => [k, o[k]]));
+  }
+  if (o.floorContinuity === false) p.floorContinuity = false;
+  return p;
 }
 
 function wallParams(prop, w) {
@@ -68,6 +75,7 @@ export function elementState(prop, legacy = false) {
   for (const r of prop.rooms || []) {
     if ((r.pts || []).length < 3) continue;
     const p = { pts: r.pts.map(q => [q[0], q[1]]), name: r.name || '' };
+    if (Number.isFinite(r.ceilingHeight) && r.ceilingHeight > 0) p.ceilingHeight = r.ceilingHeight;
     out.set(r.id, { kind: 'room', sig: roomSig(p), params: p });
   }
   for (const f of prop.fixtures || []) {
@@ -81,9 +89,24 @@ export function elementState(prop, legacy = false) {
 export function wallSig(p) { return wallSigNow(p); }
 function wallSigNow(p) { return ['wall', tenth(p.ax), tenth(p.ay), tenth(p.bx), tenth(p.by), tenth(p.thickness), tenth(p.height)].join(',') + SIG_TAIL; }
 export function openingSig(p) { return openingSigNow(p); }
-function openingSigNow(p) { return ['opening', p.wallId, along(p.t), tenth(p.width), tenth(p.height), tenth(p.sill)].join(',') + SIG_TAIL; }
+// Detail is optional so old opening signatures remain unchanged. Sorting keys makes the
+// signature independent of JSON field order and catches concurrent handing/profile edits.
+function stableDetail(value) {
+  if (Array.isArray(value)) return value.map(stableDetail);
+  if (!value || typeof value !== 'object') return typeof value === 'number' ? micro(value) : value;
+  return Object.fromEntries(Object.keys(value).sort().map(k => [k, stableDetail(value[k])]));
+}
+function openingSigNow(p) {
+  const sig = ['opening', p.wallId, along(p.t), tenth(p.width), tenth(p.height), tenth(p.sill)].join(',');
+  return sig + (p.detail && typeof p.detail === 'object' ? '|detail:' + JSON.stringify(stableDetail(p.detail)) : '')
+    + (p.configuration ? '|configuration:' + JSON.stringify(stableDetail(p.configuration)) : '')
+    + (p.floorContinuity === false ? '|floor:false' : '') + SIG_TAIL;
+}
 export function roomSig(p) { return roomSigNow(p); }
-function roomSigNow(p) { return ['room', p.name || '', ...(p.pts || []).map(q => tenth(q[0]) + ':' + tenth(q[1]))].join(',') + SIG_TAIL; }
+function roomSigNow(p) {
+  return ['room', p.name || '', ...(p.pts || []).map(q => tenth(q[0]) + ':' + tenth(q[1]))].join(',')
+    + (Number.isFinite(p.ceilingHeight) && p.ceilingHeight > 0 ? '|ceiling:' + tenth(p.ceilingHeight) : '') + SIG_TAIL;
+}
 // Rotation to a tenth of a degree, the rest to 0.1 mm.
 const decideg = v => ((Math.round(Number(v || 0) * 10) % 3600) + 3600) % 3600;
 export function fixtureSig(p) { return fixtureSigNow(p); }
@@ -112,6 +135,7 @@ const LEGACY_SIG = {
 // Two materials sharing a name both take their id in brackets, so neither repaints the other.
 const FALLBACK = {
   wall: { name: 'Default wall', color: '#d8d4cc' }, floor: { name: 'Default floor', color: '#97999b' },
+  ceiling: { name: 'Default ceiling', color: '#f1efe9' },
   door: { name: 'Default trim', color: '#f3f1ec' }, window: { name: 'Default glass', color: '#d2e7ee' },
   'fx-top': { name: 'Default counter', color: FIXTURE_FALLBACK.top }, 'fx-body': { name: 'Default cabinet', color: FIXTURE_FALLBACK.body },
   'fx-kick': { name: 'Default toe kick', color: FIXTURE_FALLBACK.kick }, 'fx-appliance': { name: 'Default appliance', color: FIXTURE_FALLBACK.appliance },
@@ -163,6 +187,29 @@ export function mirrorSpec(prop, materials, legacy = false) {
       if (open) hole.material = { id: null, name: 'Opening, no door', color: '#ffffff', opacity: 0.06 };
       const band = open ? null : doorGlassBand(o, p.v0, p.v1);
       if (band) hole.glass = { v0: band[0], v1: band[1], material: finish(OPENING_MATERIAL.window, 'window', 'opening ' + o.id) };
+      if (p.floorContinuity === false) hole.floorContinuity = false;
+      if (p.detail) {
+        hole.detail = JSON.parse(JSON.stringify(p.detail));
+        hole.configuration = JSON.parse(JSON.stringify(p.configuration));
+        const observedSides = wallSides(w, roomsOn(prop, lvl.id));
+        hole.sides = { pos: !!observedSides.pos, neg: !!observedSides.neg };
+        const interior = hole.sides.pos && hole.sides.neg;
+        hole.resolved = role === 'door' ? doorDetail(o, p.width, p.height, interior, hole.sides) : windowDetail(o, p.width, p.height);
+        hole.trimMaterial = finish('mat-trim', 'door', 'opening ' + o.id);
+        const glassFinish = finish('mat-glass', 'window', 'opening ' + o.id);
+        // Keep a distinct native material from older opaque opening-marker panes.
+        hole.glassMaterial = { ...glassFinish, name: glassFinish.name + ' (transparent)', opacity: 0.22 };
+        const hardware = hole.resolved.hardwareFinish || 'chrome';
+        hole.metalMaterial = { id: null, name: 'Door hardware, ' + (hardware === 'glass' ? 'chrome' : hardware), color: hardware === 'brass' ? '#b99b54' : hardware === 'dark' ? '#35332e' : '#b9bcc0' };
+        hole.knobMaterial = hardware === 'glass' ? hole.glassMaterial : hole.metalMaterial;
+        hole.leafMaterial = finish(hole.resolved.leafMaterial || 'mat-trim', 'door', 'opening ' + o.id);
+        if (role === 'door') {
+          hole.leaves = open ? 0 : hole.resolved.leaves;
+          hole.shownOpen = doorShownOpen(o, interior);
+          hole.leafGlazing = leafGlazing(doorGlass(o), hole.resolved.leafWidth, hole.resolved.leafHeight);
+          hole.plain = plainOpening(o);
+        }
+      }
       return hole;
     });
     // pos: the long face on the side the plan normal (-uy, ux) of a -> b points to (in the
@@ -173,8 +220,18 @@ export function mirrorSpec(prop, materials, legacy = false) {
   }
   const rooms = (prop.rooms || []).filter(r => state.has(r.id)).map(r => {
     const lvl = levelOfRoom(prop, r);
-    return { id: r.id, level: lvl.id, elevation: lvl.elevation, name: r.name || '', pts: state.get(r.id).params.pts, material: finish(r.material, 'floor', 'room ' + r.id), tag: tag('room:' + r.id) };
+    const room = { id: r.id, level: lvl.id, elevation: lvl.elevation, name: r.name || '', pts: state.get(r.id).params.pts, material: finish(r.material, 'floor', 'room ' + r.id), tag: tag('room:' + r.id) };
+    if (Number.isFinite(r.ceilingHeight) && r.ceilingHeight > 0) {
+      room.ceilingHeight = r.ceilingHeight;
+      room.ceilingMaterial = finish(r.ceilingMaterial || 'mat-ceiling', 'ceiling', 'room ' + r.id);
+    }
+    return room;
   });
+  for (const patch of thresholdFloors(prop)) {
+    const room = rooms.find(r => r.id === patch.roomId);
+    if (!room) continue;
+    (room.thresholds ||= []).push({ pts: patch.pts, material: finish(patch.material, 'floor', 'threshold ' + patch.openingId) });
+  }
   // Fixtures: one group per fixture, framed at its origin (a box's centre, a run's first
   // back-line point) along its own direction; parts are prisms in that frame, (u, v) metres.
   const fixtures = [];
@@ -299,7 +356,7 @@ export function mergeMirror(prop, read, synced, seenBefore) {
       const existing = (prop.openings || []).find(o => o.id === oid);
       if (oaction === 'apply') { applyOpening(existing, ro.now, parentId); report.applied.push(oid); }
       else if (oaction === 'copy' || oaction === 'add') {
-        const fresh = Object.assign({}, existing || { type: ro.type === 'window' ? 'window' : 'door' }, { id: oaction === 'copy' ? uid('o') : oid });
+        const fresh = Object.assign(JSON.parse(JSON.stringify(existing || { type: ro.type === 'window' ? 'window' : 'door' })), { id: oaction === 'copy' ? uid('o') : oid });
         applyOpening(fresh, ro.now, parentId);
         prop.openings.push(fresh);
         report.added.push(fresh.id);
@@ -373,6 +430,14 @@ function applyOpening(o, now, wallId) {
   if (now.width > 0.05) o.width = round(now.width);
   if (now.height > 0.05) o.height = round(now.height);
   if (o.type === 'window') o.sill = round(Math.max(0, now.sill));
+  if (now.detail && typeof now.detail === 'object') o.detail = JSON.parse(JSON.stringify(now.detail));
+  if (now.floorContinuity === false) o.floorContinuity = false;
+  if (now.configuration && typeof now.configuration === 'object') {
+    for (const key of ['leaves', 'glass', 'doorState', 'plain']) {
+      if (Object.hasOwn(now.configuration, key)) o[key] = now.configuration[key];
+      else delete o[key];
+    }
+  }
 }
 
 // A fixture moved, turned or stretched in SketchUp. Its own parameters (toe kick, seat
@@ -393,6 +458,7 @@ function applyFixture(f, now) {
 }
 
 function applyRoom(r, now) {
+  if (Number.isFinite(now.ceilingHeight) && now.ceilingHeight > 0) r.ceilingHeight = round(now.ceilingHeight);
   if (Array.isArray(now.pts) && now.pts.length >= 3) r.pts = now.pts.map(p => [round(p[0]), round(p[1])]);
   if (now.name) r.name = String(now.name).slice(0, 120);
 }

@@ -316,6 +316,7 @@ export function projectSlice(propId, data) {
   for (const s of p.scans || []) for (const id of [...Object.values(s.materialBindings || {}),...Object.values(s.materialIdentities || {})]) matIds.add(id);
   for (const w of p.walls || []) for (const k of ['material', 'materialIn', 'materialPos', 'materialNeg']) matIds.add(w[k]);
   for (const r of p.rooms || []) { matIds.add(r.material); matIds.add(r.ceilingMaterial); }
+  for (const o of p.openings || []) matIds.add(o.detail?.door?.leafMaterial);
   for (const f of p.fixtures || []) { matIds.add(f.material); matIds.add(f.bodyMaterial); }
   for (const m of d.materials || []) if (m && m.custom && materialOwners(m).includes(propId)) matIds.add(m.id);
   // A product added while this property was open (propertyIds) stays with it before it is linked to work.

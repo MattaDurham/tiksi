@@ -185,6 +185,52 @@ class ConversionTests(unittest.TestCase):
         data=(self.root/'tagged.glb').read_bytes();n=struct.unpack_from('<I',data,12)[0];doc=json.loads(data[20:20+n])
         tags={node['name']:(node.get('extras') or {}).get('sketchupTag') for node in doc['nodes']}
         self.assertEqual(tags,{'Shed roof':'Roof','Back wall':'Walls','Loose part':None})
+    @unittest.skipUnless(library_path(), 'SketchUp SDK not installed')
+    def test_native_conversion_omits_hidden_faces_groups_and_instances(self):
+        tri = [0, 0, 0, 1, 0, 0, 0, 1, 0]
+        source = self.root / 'visibility.json'
+        source.write_text(json.dumps({
+            'meshes': [{'name': name, 'positions': tri} for name in ['Visible face', 'Hidden face', 'Hidden group']],
+            'components': [{'id': 'part', 'name': 'Part', 'meshes': [{'positions': tri}]}],
+            'instances': [{'component': 'part', 'name': name, 'matrix': [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]} for name in ['Visible instance', 'Hidden instance']],
+        }))
+        worker = Path(__file__).resolve().parent.parent / 'server/sketchup_convert.py'
+        skp, out = self.root / 'visibility.skp', self.root / 'visibility.glb'
+        result = subprocess.run([sys.executable, str(worker), str(source), str(skp)], capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        hide = r"""
+import ctypes as C, sys
+sys.path.insert(0, sys.argv[1])
+from server.sketchup_convert import API, Ref
+api = API(); model = Ref()
+api.call('SUModelCreateFromFile', C.byref(model), sys.argv[2].encode())
+entities = api.ref('SUModelGetEntities', model)
+def cast(name, value):
+    fn = getattr(api.lib, name); fn.restype = Ref; fn.argtypes = [Ref]
+    return fn(value)
+for group in api.collection(entities, 'Groups'):
+    name = api.text('SUGroupGetName', group)
+    if name == 'Hidden group':
+        api.call('SUDrawingElementSetHidden', cast('SUComponentInstanceToDrawingElement', cast('SUGroupToComponentInstance', group)), C.c_bool(True))
+    elif name == 'Hidden face':
+        for face in api.collection(api.ref('SUGroupGetEntities', group), 'Faces'):
+            api.call('SUDrawingElementSetHidden', cast('SUFaceToDrawingElement', face), C.c_bool(True))
+for instance in api.collection(entities, 'Instances'):
+    if api.text('SUComponentInstanceGetName', instance) == 'Hidden instance':
+        api.call('SUDrawingElementSetHidden', cast('SUComponentInstanceToDrawingElement', instance), C.c_bool(True))
+api.call('SUModelSaveToFile', model, sys.argv[2].encode())
+api.call('SUModelRelease', C.byref(model)); api.lib.SUTerminate()
+"""
+        result = subprocess.run([sys.executable, '-c', hide, str(worker.parent.parent), str(skp)], capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        result = subprocess.run([sys.executable, str(worker), str(skp), str(out)], capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        data = out.read_bytes(); length = struct.unpack_from('<I', data, 12)[0]; doc = json.loads(data[20:20 + length])
+        names = {node.get('name') for node in doc['nodes']}
+        self.assertIn('Visible face', names)
+        self.assertIn('Visible instance', names)
+        for name in ['Hidden face', 'Hidden group', 'Hidden instance']: self.assertNotIn(name, names)
+
     @unittest.skipUnless(library_path(),'SketchUp SDK not installed')
     def test_real_native_skp_components_share_one_mesh(self):
         # A wine rack: 300 instances of one bottle component (glass body on the default material
