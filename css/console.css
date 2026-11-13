@@ -1256,10 +1256,10 @@ html.touch .file-dialog .file-units .seg-btn { min-height:44px; }
 .file-dialog .file-env .v-env-body { display:block; padding:0; }
 .file-dialog { margin:auto; }
 
-.src-card [data-floor-review] { font-size: 11px; color: var(--dim); }
-.src-card [data-floor-review] summary { cursor: pointer; color: var(--accent); }
-.src-card [data-floor-review] table { display: block; max-width: 100%; overflow-x: auto; font: 10px var(--mono); border-collapse: collapse; }
-.src-card [data-floor-review] th, .src-card [data-floor-review] td { padding: 5px; text-align: left; border-bottom: 1px solid var(--line-2); }
+[data-floor-review] { font-size: 11px; color: var(--dim); }
+[data-floor-review] summary { cursor: pointer; color: var(--accent); }
+[data-floor-review] table { display: block; max-width: 100%; overflow-x: auto; font: 10px var(--mono); border-collapse: collapse; }
+[data-floor-review] th, [data-floor-review] td { padding: 5px; text-align: left; border-bottom: 1px solid var(--line-2); }
 
 /* Fixture proposals from a scan (fixtures-ui.js) */
 .fx-review .fx-list { list-style: none; margin: 0 0 12px; padding: 0; border-top: 1px solid var(--line); }

@@ -24,6 +24,7 @@ import { applyPlanTagVisibility } from './tags-scene.js';
 import { cutPrism } from './section-planes.js';
 import { thresholdFloors as derivedThresholdFloors } from './threshold-floors.js';
 import { wallFrame, wallEnds } from './wall-joins.js';
+import { roomFaces } from './room-faces.js';
 import { trimMeshParts } from './trim-mesh.js';
 
 const FALLBACK_WALL = '#d8d4cc';
@@ -65,6 +66,8 @@ function matFor(record, fallbackColor, fallbackRough, opts) {
   }
   return m;
 }
+// Wall tops, bottoms and reveals once the room faces carry the paint: plain, untextured.
+function capMat(opts) { return flatMat('#e4e1da', 0.95, opts); }
 function trimMat(opts) { return matFor(materialById('mat-trim'), FALLBACK_TRIM, 0.55, opts); }
 function ceilingMat(id, opts) { return matFor(materialById(id || 'mat-ceiling'), FALLBACK_CEILING, 0.95, opts); }
 
@@ -196,6 +199,18 @@ export function metricPrism(footprint, y0, y1, faces, edgeKinds) {
   g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2));
   g.setIndex(I);
+  return g;
+}
+
+// One long side of a wall piece, x0..x1 along the wall and y0..y1 up, in the plane z, facing
+// +z for side 1 and -z for side -1. UVs in metres as metricPrism's long faces (u = x, v = y).
+function faceQuad(x0, x1, y0, y1, z, side) {
+  const xs = side > 0 ? [x0, x1] : [x1, x0];
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute([xs[0], y0, z, xs[1], y0, z, xs[1], y1, z, xs[0], y1, z], 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute([0, 0, side, 0, 0, side, 0, 0, side, 0, 0, side], 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute([xs[0], y0, xs[1], y0, xs[1], y1, xs[0], y1], 2));
+  g.setIndex([0, 1, 2, 0, 2, 3]);
   return g;
 }
 
@@ -500,9 +515,15 @@ export function buildWallGroup(wall, openings, property, ctx) {
     if (!b) buckets.push(b = { mat, mask: 0, geos: [] });
     b.mask |= mask;
   };
-  bucket(matOf(faceIds.other), FACE_OTHER);
-  bucket(matOf(faceIds.pos), FACE_POS);
-  bucket(matOf(faceIds.neg), FACE_NEG);
+  // With room faces (ctx.faces, room-faces.js) the wall's two long sides are drawn by the faces
+  // it carries, and what is left (top, bottom, the reveals of its openings) wears a plain
+  // finish: no room sees it, so it carries no paint and is never counted.
+  const parts = ctx.faces ? ctx.faces.flatMap(fc => fc.parts.filter(p => p.wallId === wall.id).map(p => ({ ...p, faceId: fc.id }))) : null;
+  bucket(parts ? capMat(ctx.matOpts) : matOf(faceIds.other), FACE_OTHER);
+  if (!parts) {
+    bucket(matOf(faceIds.pos), FACE_POS);
+    bucket(matOf(faceIds.neg), FACE_NEG);
+  }
   if (faceIds.endA) bucket(matOf(faceIds.endA), FACE_END_A);
   if (faceIds.endB) bucket(matOf(faceIds.endB), FACE_END_B);
 
@@ -562,8 +583,31 @@ export function buildWallGroup(wall, openings, property, ctx) {
     }
   }
   for (const b of buckets) {
-    const m = mergedMesh(b.geos, b.mat, { kind: 'wall', id: wall.id });
+    // With room faces these are the wall's top, bottom, ends and reveals: a surface to measure
+    // or pin a note on, but not something a click selects (`cap`).
+    const m = mergedMesh(b.geos, b.mat, parts ? { kind: 'wall', id: wall.id, cap: true } : { kind: 'wall', id: wall.id });
     if (m) group.add(m);
+  }
+  // The long sides, one mesh per face this wall carries, each clipped to the face's span. They
+  // sit in the wall's own frame; the caller hangs them under their face's group. Each mesh still
+  // names its wall, so tags, notes, pins and measuring treat it as that wall's surface.
+  if (parts) {
+    group.userData.faceParts = [];
+    for (const p of parts) {
+      const geos = [];
+      for (const sp of solids) {
+        const [a, b] = faceSpan(sp, L, ends, p.side);
+        const x0 = Math.max(a, p.s0 - 0.001), x1 = Math.min(b, p.s1 + 0.001);
+        if (x1 - x0 < 1e-4) continue;
+        geos.push(faceQuad(x0, x1, sp.v0, sp.v1 >= H - 0.001 ? H + lift : sp.v1, p.side * h, p.side));
+      }
+      const m = mergedMesh(geos, matOf(p.side > 0 ? faceIds.pos : faceIds.neg), { kind: 'wall', id: wall.id, faceId: p.faceId, side: p.side });
+      if (!m) continue;
+      const holder = new THREE.Group();
+      holder.position.copy(group.position); holder.rotation.copy(group.rotation);
+      holder.add(m);
+      group.userData.faceParts.push({ faceId: p.faceId, object: holder });
+    }
   }
   const baseMesh = mergedMesh(baseGeos, trimMat(ctx.matOpts), { kind: 'wall', id: wall.id });
   if (baseMesh) group.add(baseMesh);
@@ -742,9 +786,22 @@ export function buildPropertyGroup(property, opts) {
       const floor = buildRoomFloor({ ...patch, id: patch.roomId, thresholdOf: patch.openingId }, ctx);
       if (floor) { floor.userData.threshold = patch.openingId; lg.add(floor); }
     }
+    // Room faces (room-faces.js): one group per face, holding the wall sides it is made of.
+    const faces = roomFaces({ walls: view.walls, rooms: view.rooms, openings, heightOf: w => w.height || H });
+    const faceGroups = new Map(faces.map(fc => {
+      const g = new THREE.Group();
+      g.name = 'face:' + fc.id;
+      g.userData = { kind: 'face', id: fc.id, level: lvl.id };
+      return [fc.id, g];
+    }));
     view.walls.forEach((wall, index) => {
-      lg.add(buildWallGroup(wall, openings, view, Object.assign({ index }, ctx)));
+      const wg = buildWallGroup(wall, openings, view, Object.assign({ index, faces }, ctx));
+      for (const { faceId, object } of wg.userData.faceParts || []) faceGroups.get(faceId)?.add(object);
+      delete wg.userData.faceParts;
+      lg.add(wg);
     });
+    for (const g of faceGroups.values()) if (g.children.length) lg.add(g);
+    lg.userData.faces = faces;
     for (const f of fixturesOn(property, lvl.id)) lg.add(buildFixtureGroup(f, ctx));
     const wallById = new Map(view.walls.map(w => [w.id, w]));
     for (const t of property.trims || []) {

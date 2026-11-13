@@ -330,7 +330,7 @@ export async function placeScanBytes(prop, scan, buffer, hooks, choose) {
 export function proposalSummary(result, applied) {
   const summary = geometrySummary(result, applied);
   const report = floorDetectionReport(result);
-  return summary + (result && result.cellNote ? '; ' + result.cellNote : '') + (report?.required ? '. ' + floorReviewText(report) : '');
+  return summary + (result && result.cellNote ? '; ' + result.cellNote : '') + (report?.required ? '. ' + floorReviewText(report, v => fmtLen(v)) : '');
 }
 
 function geometrySummary(result, applied) {

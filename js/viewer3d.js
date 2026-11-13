@@ -2,6 +2,8 @@ import { openingProblems } from './opening-validation.js';
 import { openingDimensions } from './opening-dimensions.js';
 import { openingProfileValue, openingGridFields } from './opening-profile-edit.js';
 import { modelAnnotations } from './model-annotations.js';
+import { faceTotals } from './room-faces.js';
+import { floorReviewText } from './scan-surfaces.js';
 import { EVIDENCE_STATES, EVIDENCE_COLORS, evidenceState, setEvidence, elementEvidenceRecord } from './evidence.js';
 import { withUncertainty } from './uncertainty-view.js';
 // 3D model view: a rendering, not a debug scene.
@@ -46,7 +48,7 @@ import { pendingTextureJobs, setTextureQuality, setTextureLimits, beginTextureBu
 import { qualityProfile, stillDimensions, effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, touchDevice, scanTooLarge, megabytes, QUALITY_NAMES } from './render-quality.js';
 import { icon } from './icons.js';
 import { buildPropertyGroup, buildFixtureGroup, buildTrimGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
-import { wallFaceLabels, wallSides, doorLeaves, doorShownOpen, setDoorShownOpen, doorGlass, plainOpening } from './wall-solids.js';
+import { wallFaceLabels, wallFaceMaterialIds, wallSides, doorLeaves, doorShownOpen, setDoorShownOpen, doorGlass, plainOpening } from './wall-solids.js';
 import { SECTION_KINDS, SECTION_LABELS, MAX_SECTIONS, TURN_SNAP_DEG, moveSnapStep, snapTo, quatRotate, planeNormal, planeOf, flipped, rangeAlong, movedTo, makeSection, normalizeSections, levelHeightOf } from './section-planes.js';
 import { addPhotoFromFile, photoUrl, photoById, revokePhotoUrls, photoBytes, ensureCameraFacts } from './photos-store.js';
 import { normalizeView, defaultHfov, hfovOf, viewFrame, viewForPin, FOV_MIN, FOV_MAX, FOUND_SOURCES } from './photo-match.js';
@@ -2024,7 +2026,7 @@ function pick(e, opts) {
     if (opts.surfaceOnly && ['pin', 'note', 'camera', 'position'].includes(o.userData.kind)) continue;
     const n = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : new THREE.Vector3(0, 1, 0);
     const part = o.userData.kind === 'scan' ? partKeyForObject(o, h.object) : null;
-    return { kind: o.userData.kind, id: o.userData.id, point: h.point, normal: n, object: o, wallId: o.userData.wallId, part, mesh: h.object };
+    return { kind: o.userData.kind, id: o.userData.id, point: h.point, normal: n, object: o, wallId: o.userData.wallId, faceId: o.userData.faceId, cap: !!o.userData.cap, part, mesh: h.object };
   }
   return null;
 }
@@ -2083,6 +2085,8 @@ function onPointerUp(e) {
   const now = performance.now();
   const again = !!lastClick && now - lastClick.t < 450 && Math.hypot(e.clientX - lastClick.x, e.clientY - lastClick.y) < 6;
   lastClick = { t: now, x: e.clientX, y: e.clientY };
+  // A wall's top, ends and reveals belong to no room face: a click there selects nothing.
+  if (hit.cap) { if (!e.shiftKey) setSelection(null); return; }
   if (hit.kind === 'wall') wallFaceClicked = wallSideOfHit(hit);
   const thing = thingForHit(hit, again && !e.shiftKey);
   // A piece grouped in a subproject (project-pieces.js) brings the rest of its group with it;
@@ -2104,6 +2108,8 @@ function selectPieces(kind, ids) {
 }
 // What a click on the model picked, as a thing (see `picked`).
 function thingForHit(hit, deeper) {
+  // A wall's surface picks the room face it belongs to (room-faces.js), never the whole wall.
+  if (hit.faceId) return faceThing(hit.faceId);
   if (hit.kind === 'scan') {
     const tree = modelObjectTree(hit.object);
     const scan = prop.scans.find(s => s.id === hit.id);
@@ -2173,7 +2179,7 @@ function onPointerMove(e) {
     hoverPending = false;
     if (!scene) return;
     const hit = pick(e, { scans: false, ground: false });
-    const next = hit && ['wall', 'room', 'opening', 'ceiling', 'trim'].includes(hit.kind) ? hit.object : null;
+    const next = hit && hit.faceId ? findGroupFor('face', hit.faceId) : hit && !hit.cap && ['wall', 'room', 'opening', 'ceiling', 'trim'].includes(hit.kind) ? hit.object : null;
     const under = trimEdit && hit ? trimUnder(e, hit) : null;
     if (under) { const g = trimGrab(e, under); renderer.domElement.style.cursor = g && g.mode === 'divider' ? 'ew-resize' : 'ns-resize'; return; }
     if (tool === 'fov') renderer.domElement.style.cursor = 'ns-resize';
@@ -2195,7 +2201,7 @@ function findGroupFor(kind, id) {
 function objectForKey(key) {
   const m = /^node:([^#]+)#/.exec(key);
   if (m) { const w = scanObjs[m[1]]; const part = w && partOfModel(w, key); return part ? part.object : null; }
-  const k = /^(wall|room|ceiling|opening|fixture|trim):(.+)$/.exec(key);
+  const k = /^(wall|room|ceiling|opening|fixture|trim|face):(.+)$/.exec(key);
   if (!k || !modelGroup) return null;
   if (k[1] !== 'ceiling') return findGroupFor(k[1], k[2]);
   let found = null;
@@ -4835,7 +4841,7 @@ function uncertaintyRecord(mesh) {
   return null;
 }
 function renderEvidenceInspector() {
-  if (!inspEl || !selection || picked.length > 1 || tool === 'pin' || match) return;
+  if (!inspEl || !selection || picked.length > 1 || tool === 'pin' || match || selection.kind === 'face') return;
   const object = selectedModelObject();
   const scan = selection.kind === 'scan' && prop.scans.find(s => s.id === selection.id);
   const collection = { wall:'walls', opening:'openings', fixture:'fixtures', room:'rooms', ceiling:'rooms', trim:'trims' }[selection.kind];
@@ -4882,7 +4888,7 @@ function renderInspector() {
   if (!inspEl || tool === 'pin' || match) return;
   addProjectBlock();
   // One object of a model, and several objects, draw their own tag line (object-panel.js).
-  if (!selection || picked.length > 1 || selectedModelObject()) return;
+  if (!selection || picked.length > 1 || selectedModelObject() || selection.kind === 'face') return;
   const sec = document.createElement('div');
   sec.className = 'v-tags';
   if (selection.kind === 'scan') { sec.innerHTML = tagPickHtml(); bindTagPick(sec); }
@@ -5021,6 +5027,98 @@ function renderObjectPanel(o) {
   bindObjectPanel(inspEl, ctx);
   bindModelPanel(inspEl, modelPanelCtx(s, w));
 }
+// ---------- floor review ----------
+// What PROPOSE PLAN FROM SCAN found level in the scan (scan-surfaces.js floorDetectionReport):
+// each horizontal surface, which ones it took as a floor or ceiling, their heights, areas and
+// where they lie in plan. Kept with the scan; read-only.
+function floorReviewHtml(scan) {
+  const r = scan.floorDetection;
+  if (!r || !Array.isArray(r.surfaces)) return '';
+  const role = sf => r.levels.some(l => l.datum && l.datum.surfaceId === sf.id) ? ' · floor datum' : r.levels.some(l => l.datum && l.datum.ceilingSurfaceId === sf.id) ? ' · ceiling' : '';
+  const L = v => fmtLen(v, { short: true });
+  const row = sf => `<tr><td>${escapeHtml(sf.id)}${role(sf)}</td><td>${escapeHtml(L(sf.elevation))}</td><td>${escapeHtml(L(sf.minElevation) + ' to ' + L(sf.maxElevation))}</td><td>${escapeHtml(fmtArea(sf.area))}</td><td>${escapeHtml(sf.facing)}</td>
+    <td>${escapeHtml(L(sf.bounds.x1 - sf.bounds.x0) + ' × ' + L(sf.bounds.z1 - sf.bounds.z0))}</td><td>${escapeHtml(L(sf.bounds.x0) + ', ' + L(sf.bounds.z0))}</td></tr>`;
+  return `<details data-floor-review ${r.required ? 'open' : ''}><summary>${escapeHtml(floorReviewText(r, v => fmtLen(v)))}</summary>
+    <p>Level surfaces the scan shows, kept apart from the model's levels. Heights are from the project's floor datum; positions are plan east and south of the plan's origin.</p>
+    <table><thead><tr><th>Surface</th><th>Height</th><th>Range</th><th>Area</th><th>Facing</th><th>Size</th><th>Corner at</th></tr></thead><tbody>${r.surfaces.map(row).join('')}</tbody></table>
+    <p>The underlay keeps lower supported surfaces within each storey's height range. Site evidence is not an indoor area measurement.</p></details>`;
+}
+
+// ---------- room faces ----------
+// Walls are picked by room face (room-faces.js): the surface one room sees, inside corner to
+// inside corner. The faces come from the model as built, per level (buildPropertyGroup).
+const SMALL_FACE = 0.0762;   // m (3"): faces shorter than this share one line in the face list
+function allFaces() {
+  const out = [];
+  for (const l of (modelGroup && modelGroup.userData.levels) || []) for (const f of l.group.userData.faces || []) out.push({ ...f, levelId: l.id });
+  return out;
+}
+function faceById(id) { return allFaces().find(f => f.id === id) || null; }
+function faceThing(id) {
+  const f = faceById(id);
+  return { key: 'face:' + id, keys: ['face:' + id], scanId: null, name: f ? f.label : 'Wall face', sel: { kind: 'face', id } };
+}
+function selectFaces(ids) {
+  const things = ids.map(faceThing);
+  if (!things.length) { setSelection(null); return; }
+  setSelection(things[things.length - 1].sel, things.map(t => t.key), things);
+}
+// The finish a face wears, as drawn (wall-solids.js wallFaceMaterialIds: the side's own finish,
+// else the automatic one), or null when the walls it is made of differ.
+function faceFinish(f) {
+  const ids = new Set(f.parts.map(p => {
+    const w = prop.walls.find(x => x.id === p.wallId);
+    if (!w) return '';
+    const ids = wallFaceMaterialIds(w, roomsOn(prop, levelOfWall(prop, w).id));
+    return (p.side > 0 ? ids.pos : ids.neg) || '';
+  }));
+  return ids.size === 1 ? [...ids][0] : null;
+}
+function renderFacePanel() {
+  const faces = picked.map(t => faceById(t.sel.id)).filter(Boolean);
+  if (!faces.length) { setSelection(null); return; }
+  const t = faceTotals(faces), one = faces.length === 1 ? faces[0] : null;
+  const finishes = new Set(faces.map(faceFinish));
+  const finish = finishes.size === 1 ? [...finishes][0] : null;
+  const levelName = id => (prop.levels.find(l => l.id === id) || {}).name || '';
+  const line = (k, v, title) => `<div class="stat-line"${title ? ` title="${escapeHtml(title)}"` : ''}><span>${escapeHtml(k)}</span><b>${escapeHtml(v)}</b></div>`;
+  const walls = one ? [...new Set(one.parts.map(p => p.wallId))] : [];
+  const roomIds = [...new Set(faces.map(f => f.roomId).filter(Boolean))];
+  inspEl.innerHTML = `<h3>${one ? 'WALL FACE' : faces.length + ' WALL FACES'}</h3>
+    ${one ? `<div class="op-name">${escapeHtml(one.label)}</div>${prop.levels.length > 1 ? line('Level', levelName(one.levelId)) : ''}${line('Height', fmtLen(one.height))}`
+      : (() => {
+        // Faces under 3" (a wall end showing past a wall that butts into it) are real surface
+        // and count in the totals, but share one line here.
+        const small = faces.filter(f => f.length < SMALL_FACE), rows = faces.filter(f => f.length >= SMALL_FACE);
+        return `<div class="v-face-rows">${rows.map(f => `<div class="stat-line" title="${escapeHtml(fmtArea(f.gross))} gross, ${f.openings.length} opening${f.openings.length === 1 ? '' : 's'}"><span>${escapeHtml(f.label)} &middot; ${escapeHtml(fmtLen(f.length))}</span><b>${escapeHtml(fmtArea(f.net))}</b></div>`).join('')}
+          ${small.length ? `<div class="stat-line" title="Wall ends showing past a wall that butts into them"><span>${small.length} small return${small.length === 1 ? '' : 's'} under ${escapeHtml(fmtLen(SMALL_FACE))}</span><b>${escapeHtml(fmtArea(small.reduce((n, f) => n + f.net, 0)))}</b></div>` : ''}</div>`;
+      })()}
+    <h3>${one ? 'TAKEOFF' : 'TOTAL'}</h3>
+    ${line('Area, gross', fmtArea(t.gross), 'Length × height, openings included')}
+    ${line('Openings subtracted', t.openings + (t.openings ? ' (' + fmtArea(t.gross - t.net) + ')' : ''), 'Doors and windows in these faces, each counted once per face')}
+    ${line('Area, net', fmtArea(t.net), 'Gross area less the doors and windows')}
+    ${line('Face length', fmtLen(t.length), 'Along the floor, inside corner to inside corner')}
+    ${line('Baseboard length', fmtLen(t.baseboard), 'Face length less the door widths')}
+    <div class="field" style="margin-top:10px"><label>Finish${faces.length > 1 ? ' (all ' + faces.length + ')' : ''}</label>${materialSelectHtml('wall', finish || '', 'data-face-mat').replace('(none)', finishes.size > 1 ? '(several finishes)' : 'Automatic (the wall\'s own)')}</div>
+    ${roomIds.length === 1 ? `<button class="btn" data-face-room title="Select every wall face of this room">SELECT ALL WALLS OF ${escapeHtml((prop.rooms.find(r => r.id === roomIds[0]) || {}).name || 'THIS ROOM').toUpperCase()}</button>` : ''}
+    ${one ? walls.map(id => `<button class="btn" data-face-wall="${escapeHtml(id)}" title="The wall behind this face: its research, scope, products, photos and trim">THE WALL BEHIND${walls.length > 1 ? ' (' + (walls.indexOf(id) + 1) + ' of ' + walls.length + ')' : ''}</button>`).join('') : ''}
+    <p class="empty">Click a wall to select its face; Shift-click adds or removes faces. Each face is one flat run of one room, inside corner to inside corner. Walls change in SketchUp.</p>`;
+  inspEl.querySelector('[data-face-mat]').onchange = e => {
+    const id = e.target.value;
+    if (!id && finishes.size > 1) return;
+    beginGeometryEdit(prop, faces.length > 1 ? 'change wall finishes' : 'change wall finish');
+    for (const f of faces) for (const p of f.parts) {
+      const w = prop.walls.find(x => x.id === p.wallId);
+      if (!w) continue;
+      const k = p.side > 0 ? 'materialPos' : 'materialNeg';
+      if (id) w[k] = id; else delete w[k];
+    }
+    touch(); rebuildModel(); renderInspector();
+  };
+  const fr = inspEl.querySelector('[data-face-room]');
+  if (fr) fr.onclick = () => selectFaces(allFaces().filter(f => f.roomId === roomIds[0]).map(f => f.id));
+  inspEl.querySelectorAll('[data-face-wall]').forEach(b => b.onclick = () => setSelection({ kind: 'wall', id: b.dataset.faceWall }));
+}
 function renderMultiPanel() {
   const ctx = { ...thingsCtx(picked), count: picked.length, names: picked.map(t => t.name || (t.sel && t.sel.kind) || 'object') };
   inspEl.innerHTML = multiPanelHtml(ctx);
@@ -5108,6 +5206,7 @@ function renderInspectorBody() {
   if (tool === 'fov' && !match) return renderFovPanel();
   if (match) return renderMatchPanel();
   if (trimIds().length) return renderTrimPanel();
+  if (selection && picked.length && picked.every(t => t.sel && t.sel.kind === 'face')) return renderFacePanel();
   if (selection && picked.length > 1) return renderMultiPanel();
   const modelObject = selectedModelObject();
   if (modelObject) return renderObjectPanel(modelObject);
@@ -5259,7 +5358,9 @@ function renderInspectorBody() {
       ${photoLinksHtml(r.id)}
       ${addTrimHtml([{ label: 'Every wall of this room' }], { button: 'ADD TRIM AROUND THIS ROOM' })}
       ${roomTrimCountHtml(r)}
+      <button class="btn" data-room-faces title="Select every wall face of this room, to read their square feet and lengths">SELECT THIS ROOM'S WALLS</button>
       <button class="btn" data-walk>WALK INTO ROOM</button>`;
+    inspEl.querySelector('[data-room-faces]').onclick = () => selectFaces(allFaces().filter(f => f.roomId === r.id).map(f => f.id));
     bindAddTrim(inspEl, [{}], productId => addTrims(productId, roomTrimFaces(r)));
     const rt = inspEl.querySelector('[data-room-trims]');
     if (rt) rt.onclick = () => selectTrims(roomTrimIds(r));
@@ -5420,6 +5521,7 @@ function renderInspectorBody() {
       <button class="btn" data-center ${dis}>CENTER ON MODEL</button>
       ${s.kind === 'mesh' ? `<button class="btn" data-plan ${dis} title="Find the floor and ceiling, square the scan up, propose walls, rooms, doors and windows, and render the plan underlay from the scan">${icon('plan')}PROPOSE PLAN FROM SCAN</button>
       <button class="btn" data-fixtures ${dis} title="Read counter runs, wall cabinets, tall appliances and furniture from the scan, for review">${icon('scan')}PROPOSE FIXTURES FROM SCAN</button>` : ''}
+      ${s.kind === 'mesh' ? floorReviewHtml(s) : ''}
       ${s.source && s.source.url ? `<a class="btn" href="${escapeHtml(s.source.url)}" target="_blank" rel="noopener" style="display:flex; text-decoration:none; justify-content:center">${icon('link')}OPEN ON POLYCAM</a>` : ''}
       ${s.importWarnings?.length ? `<p class="empty">${s.importWarnings.map(escapeHtml).join('<br>')}</p>` : ''}
       ${s.kind === 'mesh' ? `<button class="btn" data-exchange ${dis}>EDIT / BRING BACK</button>
