@@ -130,6 +130,51 @@ export function doorLeaves(o, width, interior) {
   return width > 1.25 ? (interior ? 0 : 2) : 1;
 }
 
+// Optional measured construction details. Opening width/height continue to describe the
+// wall cut; leaf sizes describe the slab itself, not that cut or the clear passage. Missing
+// details retain the old appearance, so an existing drawing is not silently re-specified.
+const size = (d, key, fallback, max = Infinity, min = 0) => Number.isFinite(d[key]) && d[key] >= min && d[key] <= max ? d[key] : fallback;
+export function doorDetail(o, width, top, interior, sides = {}) {
+  const d = o?.detail?.door || {}, leaves = doorLeaves(o, width, interior);
+  const jambWidth = size(d, 'jambWidth', 0.05, Math.min(width / 4, top / 4));
+  const gap = leaves === 2 ? 0.009 : 0.006;
+  const availableWidth = Math.max(0.01, (width - jambWidth * 2 - gap) / (leaves === 2 ? 2 : 1));
+  const availableHeight = Math.max(0.01, top - jambWidth - 0.012);
+  const warnings = [];
+  if (Number.isFinite(d.leafWidth) && d.leafWidth > availableWidth + 1e-6) warnings.push('Leaf width exceeds the framed opening');
+  if (Number.isFinite(d.leafHeight) && d.leafHeight > availableHeight + 1e-6) warnings.push('Leaf height exceeds the framed opening');
+  return {
+    leaves, jambWidth, leafWidth: size(d, 'leafWidth', availableWidth, availableWidth + 1e-6, 0.01),
+    leafHeight: size(d, 'leafHeight', availableHeight, availableHeight + 1e-6, 0.01),
+    leafThickness: size(d, 'leafThickness', 0.045, 0.2, 0.005),
+    casingWidth: size(d, 'casingWidth', 0.07, 0.4), casingDepth: size(d, 'casingDepth', 0.016, 0.1),
+    hinge: d.hinge === 'end' ? 'end' : 'start',
+    swingSide: d.swingSide === 'negative' ? -1 : d.swingSide === 'positive' ? 1 : sides.pos ? 1 : -1,
+    style: d.style === 'slab' ? 'slab' : 'six-panel',
+    hardware: ['knob', 'none'].includes(d.hardware) ? d.hardware : 'lever',
+    hardwareFinish: ['brass', 'dark', 'glass'].includes(d.hardwareFinish) ? d.hardwareFinish : 'chrome',
+    knobShape: d.knobShape === 'faceted' ? 'faceted' : 'round',
+    leafMaterial: typeof d.leafMaterial === 'string' ? d.leafMaterial : null,
+    warnings,
+  };
+}
+
+const gridCount = (v, fallback) => Number.isInteger(v) && v >= 1 && v <= 12 ? v : fallback;
+export function windowDetail(o, width, height) {
+  const d = o?.detail?.window || {};
+  const type = ['double-hung', 'casement', 'fixed'].includes(d.type) ? d.type : 'legacy';
+  const columns = gridCount(d.columns, type === 'legacy' ? (width >= 1.1 ? 3 : 2) : 1);
+  const rows = gridCount(d.rows, type === 'legacy' ? (height >= 0.7 ? 2 : 1) : 1);
+  return {
+    type, columns, rows,
+    upper: { columns: gridCount(d.upperColumns, columns), rows: gridCount(d.upperRows, rows) },
+    lower: { columns: gridCount(d.lowerColumns, columns), rows: gridCount(d.lowerRows, rows) },
+    frameWidth: size(d, 'frameWidth', 0.045, Math.min(width, height) / 5, 0.005),
+    sashWidth: size(d, 'sashWidth', 0.035, Math.min(width, height) / 5, 0.005),
+    muntinWidth: size(d, 'muntinWidth', 0.022, Math.min(width, height) / 8, 0.002),
+  };
+}
+
 // ---------- open and closed doors ----------
 // How MODEL shows a hung door's leaf. o.doorState is the owner's call: 'closed' shuts it,
 // 'open' stands it ajar. Without it an interior door stands ajar so you can see through rooms
@@ -183,5 +228,11 @@ export function doorGlassBand(o, v0, v1) {
 export function doorSwings(o) {
   const half = o.width / 2;
   if (o.leaves === 0 || plainOpening(o)) return [];
-  return o.leaves === 2 ? [{ s: -half, r: half, dir: 1 }, { s: half, r: half, dir: -1 }] : [{ s: -half, r: o.width, dir: 1 }];
+  const d = o.detail?.door;
+  // Keep legacy plan symbols exactly as before when no construction record exists.
+  if (!d) return o.leaves === 2 ? [{ s: -half, r: half, dir: 1 }, { s: half, r: half, dir: -1 }] : [{ s: -half, r: o.width, dir: 1 }];
+  const q = doorDetail(o, o.width, o.height || 2.03, false, { pos: true });
+  const a = -half + q.jambWidth + 0.003, b = half - q.jambWidth - 0.003;
+  const swing = (s, dir) => ({ s, r: q.leafWidth, dir, side: q.swingSide });
+  return q.leaves === 2 ? [swing(a, 1), swing(b, -1)] : [q.hinge === 'end' ? swing(b, -1) : swing(a, 1)];
 }
