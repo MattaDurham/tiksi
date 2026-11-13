@@ -3071,7 +3071,7 @@ function camerasPanelHtml() {
     return `<div class="v-cams" data-set="${escapeHtml(set.id)}">
       <div class="stat-line"><span>${escapeHtml(set.name)}</span><b>${set.keyframes.length} frames</b></div>
       <div class="stat-line"><span>Sessions lined up</span><b>${lined.length} of ${segs.length}</b></div>
-      ${segs.map(s => { const x = set.sessions[String(s)]; return `<div class="stat-line small"><span>Session ${s}</span><b>${x ? Math.round(x.inliers * 100) + '% · ' + (x.fitM * 100).toFixed(1) + ' cm' : 'not yet'}</b></div>`; }).join('')}
+      ${segs.map(s => { const x = set.sessions[String(s)]; return `<div class="stat-line small"><span>Session ${s}</span><b>${x ? Math.round(x.inliers * 100) + '% · ' + fmtLen(x.fitM) : 'not yet'}</b></div>`; }).join('')}
       <div class="field"><label>Folder on this Mac (for automatic placement)</label><input type="text" data-cams-path placeholder="/Users/…/Source media/keyframes" value="${escapeHtml(set.exportPath || '')}"></div>
       <button class="btn" data-cams-align>LINE UP WITH THE MODEL</button>
       <button class="btn" data-cams-frames ${lined.length ? '' : 'disabled'}>ADD SHARP FRAMES AS PHOTOS</button>
@@ -3820,7 +3820,7 @@ function defaultHint() {
   if (tool === 'pin') return 'PIN: choose a photo or document, then click the surface to hang it on.';
   if (tool === 'note') return noteHint();
   if (tool === 'move') return 'MOVE: select a wall or an object of an imported model and drag an arrow. Walls joined to a moved wall follow on release.';
-  if (section.on) return fieldLayout() || !sectionSheets ? 'SECTION: slide the cut to look inside.' : 'SECTION: drag the arrow to slide the cut, a ring to turn it. SNAP holds it to ' + TURN_SNAP_DEG + '° turns and ' + (units() === 'metric' ? '5 cm' : '1"') + ' steps.';
+  if (section.on) return fieldLayout() || !sectionSheets ? 'SECTION: slide the cut to look inside.' : 'SECTION: drag the arrow to slide the cut, a ring to turn it. SNAP holds it to ' + TURN_SNAP_DEG + '° turns and ' + (units() === 'metric' ? '50 mm' : '1"') + ' steps.';
   return 'Drag or middle-drag to orbit, hold Shift to pan, scroll or pinch to zoom. Click elements to inspect; right-click to pin a note.';
 }
 function showProgress(label, frac) {
@@ -3897,7 +3897,7 @@ function renderSectionBar() {
       <span class="v-section-ang">${escapeHtml(r.angle)}</span>
       <span class="v-pill-sep"></span>
       <button class="v-pill" data-cut-flip title="Cut away the other side">FLIP</button>
-      <button class="v-pill ${sectionSnap ? 'active' : ''}" data-cut-snap aria-pressed="${sectionSnap}" title="Snap: turns in ${TURN_SNAP_DEG}° steps, slides in ${units() === 'metric' ? '5 cm' : '1 inch'} steps">SNAP</button>
+      <button class="v-pill ${sectionSnap ? 'active' : ''}" data-cut-snap aria-pressed="${sectionSnap}" title="Snap: turns in ${TURN_SNAP_DEG}° steps, slides in ${units() === 'metric' ? '50 mm' : '1 inch'} steps">SNAP</button>
       <button class="v-pill ${sectionSheets ? 'active' : ''}" data-cut-sheets aria-pressed="${sectionSheets}" title="Show the floating planes and their handles">PLANES</button>
       <button class="v-pill" data-cut-remove title="Remove this cut">REMOVE</button>
     </div>`;

@@ -1261,6 +1261,9 @@ html.touch #view .guide-view-map a:not([hidden]) { display: inline-flex; align-i
 .file-dialog .btn { min-height:44px; margin:4px 4px 4px 0; }
 .file-dialog label { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin:16px 0; }
 .file-dialog select { min-width:0; max-width:100%; padding:8px; }
+.file-dialog .file-units { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin:16px 0; }
+.file-dialog .file-units .seg-btn { min-height:36px; padding:6px 14px; }
+html.touch .file-dialog .file-units .seg-btn { min-height:44px; }
 .file-dialog details { border-top:1px solid var(--line); margin-top:20px; padding-top:12px; }
 .file-dialog summary { cursor:pointer; min-height:44px; display:flex; align-items:center; color:var(--dim); font-size:13px; }
 .file-dialog [hidden] { display:none; }

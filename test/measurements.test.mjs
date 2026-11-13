@@ -29,8 +29,11 @@ test('readings parse tape notation; bare numbers are inches; stray text is refus
   assert.equal(ms.fmtReading(33.5 * IN), '33 1/2"'); assert.equal(ms.fmtReading(0.5 * IN), '1/2"');
   assert.equal(ms.fmtReading(36 * IN), '36"'); assert.equal(ms.fmtReading(130.25 * IN), "10'-10 1/4\"");
   store.ws.data.settings.units = 'metric';
-  assert.ok(Math.abs(ms.parseReading('0.85') - 0.85) < 1e-12, 'metric bare numbers are metres, as everywhere');
-  assert.equal(ms.fmtReading(0.851), '85.1 cm');
+  assert.ok(Math.abs(ms.parseReading('850') - 0.85) < 1e-12, 'metric bare numbers are millimetres, as everywhere');
+  assert.equal(ms.fmtReading(0.851), '851 mm');
+  store.ws.data.settings.units = 'imperial'; store.ws.data.settings.inchPrecision = 8;
+  assert.equal(ms.fmtReading((33 + 15 / 32) * IN), '33 1/2"', 'readings follow the chosen precision');
+  store.ws.data.settings.inchPrecision = 16;
 });
 
 test('a reading attached to an opening applies through history; undo shows the model no longer matches', () => {
