@@ -114,7 +114,7 @@ try {
   ok('NUMBERS shows D1, W1 and W2, the schedule\'s marks');
 
   // The labels sit over their points: the door's mark is left of the kitchen's window mark from the front.
-  await page.locator('.tool-col [data-act=front]').click();
+  await page.locator('#side [data-act=front]').click();
   await page.waitForTimeout(900); await idle();
   const at = mark => page.locator('.v-annot-num', { hasText: mark }).evaluate(e => { const r = e.getBoundingClientRect(); return e.style.display === 'none' ? null : r.left + r.width / 2; });
   const [d1, w1] = [await at('D1'), await at('W1')];
@@ -129,13 +129,12 @@ try {
   assert.deepEqual(await env(), { dims: false, rooms: false, numbers: false });
   ok('a second click takes each kind of label off');
 
-  // The Tiksi menu's Display items switch the same labels.
-  await page.locator('#tiksi-menu').click();
-  await page.locator('.tk-item', { hasText: 'Wall dimensions' }).click();
-  await page.keyboard.press('Escape');
+  // The left pane's Display items switch the same labels.
+  await page.locator('#side .sd-item[data-act=dims]', { hasText: 'Wall dimensions' }).click();
   assert.equal(await pressed(pill('dims')), true, 'Display > Wall dimensions turns DIMENSIONS on');
   assert.equal(await page.locator('.v-annot-dim').count(), 8);
-  ok('the Tiksi menu\'s Wall dimensions turns DIMENSIONS on');
+  assert.equal(await page.locator('#side .sd-item[data-act=dims]').getAttribute('aria-pressed'), 'true', 'and the pane item shows it on');
+  ok('the left pane\'s Wall dimensions turns DIMENSIONS on');
 
   // Kept with the property: on after a reload.
   await pill('rooms').click(); await pill('numbers').click();
@@ -149,11 +148,11 @@ try {
   ok('the switches and their labels survive a reload');
 
   // A hidden level hides its labels.
-  await page.locator('.tool-col [data-level="lvl-up"]').click();
+  await page.locator('#side [data-level="lvl-up"]').click();
   assert.deepEqual(await rooms(), [['Kitchen', '192 sf']], 'hiding the loft level takes its room label away');
   assert.equal(await page.locator('.v-annot-dim').count(), 4, 'and its walls\' lengths');
   assert.deepEqual(await texts('.v-annot-num'), ['D1', 'W1'], 'and its window\'s number');
-  await page.locator('.tool-col [data-level="lvl-up"]').click();
+  await page.locator('#side [data-level="lvl-up"]').click();
   assert.ok(await page.locator('.v-annot-dim').count() === 8 && await page.locator('.v-annot-room').count() === 2 && await page.locator('.v-annot-num').count() === 3, 'showing the level brings them back');
   ok('a hidden level hides its labels');
   for (const kind of ['dims', 'rooms', 'numbers']) await pill(kind).click();   // a clear view for the clicks below
@@ -177,7 +176,7 @@ try {
   ok('Shift+P and the pill switch PARALLEL');
 
   // A click in PARALLEL selects the wall under it: the front wall, seen from the front.
-  await page.locator('.tool-col [data-act=front]').click();
+  await page.locator('#side [data-act=front]').click();
   await page.waitForTimeout(900); await idle();
   assert.equal(await parallelOn(), true, 'FRONT keeps PARALLEL');
   const box = await canvas.boundingBox();
@@ -221,7 +220,7 @@ try {
   await parallelPill.click();
   await waitUntil(async () => !(await parallelOn()), 'the pill turns PARALLEL off');
   await page.locator('.v-pill[data-mode="orbit"]').click();
-  await page.locator('.tool-col [data-act=front]').click();
+  await page.locator('#side [data-act=front]').click();
   await page.waitForTimeout(900);
   await page.locator('.v-view-tab').first().click();
   await waitUntil(parallelOn, 'the saved view brings PARALLEL back');
