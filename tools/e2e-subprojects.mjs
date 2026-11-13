@@ -32,7 +32,7 @@ const data = () => page.evaluate(async () => {
 
 try {
   await page.goto(url + '/#/plan');
-  await page.waitForSelector('#btn-file');
+  await page.waitForSelector('#btn-file', { state: 'attached' });
   await page.evaluate(async () => {
     const s = await import('/js/store.js');
     s.ws.data = s.emptyWorkspace();
@@ -127,7 +127,7 @@ try {
   await page.waitForSelector('#proj-list .proj-card');
   const cards = () => page.locator('#proj-list .proj-card b').allTextContents();
   check((await cards()).join() === 'Kitchen', 'Test House lists only its own project (' + (await cards()).join() + ')');
-  await page.selectOption('#property-select', second);
+  await page.click('#tiksi-menu'); await page.selectOption('#property-select', second);
   await page.waitForSelector('#proj-list .proj-card[data-id="proj-cabin"]');
   check((await cards()).join() === 'Cabin porch', 'Lake Cabin lists only its own project (' + (await cards()).join() + ')');
   await page.goto(url + '/#/budget');

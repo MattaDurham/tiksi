@@ -79,7 +79,7 @@ try {
   const page = await context.newPage();
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto(base + '/#/plan');
-  await page.locator('#btn-file').waitFor();
+  await page.locator('#btn-file').waitFor({ state: 'attached' });
   await page.evaluate(async quality => {
     const s = await import('/js/store.js');
     localStorage.removeItem('tiksi.onScreen.v1');

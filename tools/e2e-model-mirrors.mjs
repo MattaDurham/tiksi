@@ -175,7 +175,7 @@ try {
   // The real viewer must retain the explicit material declaration through GLB parsing,
   // material sharing, its composer and a saved/reloaded project, not just the helper scene.
   await page.goto(url + '/#/plan');
-  await page.locator('#btn-file').waitFor();
+  await page.locator('#btn-file').waitFor({ state: 'attached' });
   await page.evaluate(async () => {
     const s = await import('/js/store.js');
     const { writeGlb } = await import('/tools/synthetic-model.mjs');
@@ -232,7 +232,7 @@ try {
   assert.ok(await viewerRed() > 40, 'selection outlines and high-quality shading retain the reflected target');
   await page.keyboard.press('Escape');
   const mirrorTag = await page.evaluate(async () => (await import('/js/store.js')).activeProperty().tags.find(t => t.name === 'Reflectors').id);
-  await page.locator('.v-objects [data-ol-tab="tags"]').click();
+  await page.locator('#side [data-act=tag-list]').click();
   await page.locator(`.v-tags [data-tag-eye="${mirrorTag}"]`).click();
   assert.equal(await viewerRed(), 0, 'hiding the mirror tag removes the actual viewer reflection');
   await page.locator(`.v-tags [data-tag-eye="${mirrorTag}"]`).click();

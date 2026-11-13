@@ -184,6 +184,25 @@ try {
   await page.locator('[data-cut-sheets]').click();
   assert.deepEqual([(await scene()).sheetsShown, (await scene()).handles], [true, 2]);
 
+  // DONE: a clean section. The planes, their handles and the strip go; only EDIT CUTS stays.
+  await page.locator('[data-cut-done]').click();
+  sc = await scene();
+  assert.deepEqual([sc.sheetsShown, sc.handles, sc.clip], [false, 0, 3], 'DONE keeps the cuts and puts away the planes and handles');
+  assert.equal(await bar.locator('[data-cut-add]').count(), 0, 'and the strip of controls');
+  assert.equal(await bar.locator('[data-cut-edit]').isVisible(), true, 'EDIT CUTS stays to bring them back');
+  assert.equal((await state()).done, true);
+  // A view saved now keeps the clean section: editing again, then going back to the view, puts
+  // the planes away again.
+  await page.locator('.v-views .v-view-add').click();
+  assert.equal(await page.evaluate(async () => (await import('/js/store.js')).activeProperty().savedViews.at(-1).section.done), true, 'the view records the clean section');
+  await page.locator('[data-cut-edit]').click();
+  assert.deepEqual([(await scene()).sheetsShown, (await scene()).handles, (await state()).done], [true, 2, false], 'EDIT CUTS brings the planes back');
+  await page.locator('.v-views [role=tab]').last().click();
+  await page.waitForTimeout(900);
+  assert.deepEqual([(await scene()).sheetsShown, (await scene()).handles, (await scene()).clip], [false, 0, 3], 'the saved view opens clean');
+  await page.locator('#side [data-act=cut-edit]').click();
+  assert.equal((await state()).done, false, 'the left pane edits the cuts too');
+
   // The cuts stay with the property when the view is left and opened again.
   await page.locator('#rail a[data-view=plan]').click();
   await page.locator('#rail a[data-view=model]').click();

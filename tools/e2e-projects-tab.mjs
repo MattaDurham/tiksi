@@ -32,7 +32,7 @@ const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcS
 
 try {
   await page.goto(url + '/#/plan');
-  await page.waitForSelector('#btn-file');
+  await page.waitForSelector('#btn-file', { state: 'attached' });
   await page.evaluate(async pixel => {
     const s = await import('/js/store.js');
     localStorage.clear();

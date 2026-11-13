@@ -99,7 +99,7 @@ try {
   await page.mouse.click(canvas.x+canvas.width*0.60,canvas.y+canvas.height*0.90);
   await page.keyboard.press('Escape');
   assert.equal(await page.evaluate(async()=>{const s=await import('/js/store.js');return s.activeProperty().walls.length;}),beforeWalls+1,'canvas tracing creates a wall');
-  await page.locator('[data-act=undo]').click();
+  await page.keyboard.press('ControlOrMeta+z');
   assert.equal(await page.evaluate(async()=>{const s=await import('/js/store.js');return s.activeProperty().walls.length;}),beforeWalls,'undo restores traced geometry');
   await navigateToView(page, 'projects'); await page.locator('#new-project').waitFor();
   await page.locator('#new-project').click();

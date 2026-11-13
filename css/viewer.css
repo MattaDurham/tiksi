@@ -418,3 +418,9 @@ html.phone .v-objects { display: none !important; }
 .tp-cat-text b { color: var(--ink); font-size: 11.5px; font-weight: 600; }
 .tp-widths { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
 .tp-widths input { width: 68px; flex: 1 1 60px; }
+
+/* DONE: a clean section. Only EDIT CUTS stays, small and faint in the bottom right corner
+   (after the component-list rules above, which would centre it). */
+.v-sections .v-sec-done-btn { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); font-weight: 700; }
+.v-wrap .v-sections.v-sec-done { left: auto; right: 14px; max-width: none; transform: none; padding: 2px; opacity: 0.55; transition: opacity var(--dur) var(--ease); }
+.v-wrap .v-sections.v-sec-done:hover, .v-wrap .v-sections.v-sec-done:focus-within { opacity: 1; }
