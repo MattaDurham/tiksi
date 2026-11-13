@@ -912,7 +912,7 @@ async function undoKeepsTheOtherDevicesChange() {
   await two.waitForTimeout(500);
   // UNDO on device two takes back its own floor.
   assert.equal(await two.locator('#btn-undo').isEnabled(), true, 'UNDO is still offered after the other device\'s change');
-  await two.locator('#btn-undo').click();
+  await two.click('#tiksi-menu'); await two.locator('.tk-menu #btn-undo').click(); await two.keyboard.press('Escape');   // UNDO is in the Tiksi menu
   await has(two, first, 'p.rooms[0].material === ' + JSON.stringify(was));
   await saveNow(two); await two.waitForFunction(SAVED);
   await two.waitForTimeout(500);

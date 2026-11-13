@@ -151,7 +151,7 @@ try {
   assert.equal(await label.isVisible(), false, 'Icon only hides the words');
   assert.equal(await page.locator('#rail a[data-view=model] .ic').isVisible(), true, 'and keeps the icon');
   assert.equal(await page.locator('#rail a[data-view=model]').getAttribute('aria-label'), 'MODEL', 'the tab still names its page');
-  await page.locator('#rail a[data-view=plan]').click({ button: 'right' });
+  await page.locator('#rail a[data-view=materials]').click({ button: 'right' });   // any tab opens the same menu
   await page.locator('.tk-tabmenu [data-tab-labels=words]').click();
   assert.equal(await label.isVisible(), true, 'Icon and word brings them back');
 

@@ -204,7 +204,7 @@ try {
   assert.equal((await state()).done, false, 'the left pane edits the cuts too');
 
   // The cuts stay with the property when the view is left and opened again.
-  await page.locator('#rail a[data-view=plan]').click();
+  await page.locator('#rail a[data-view=materials]').click();
   await page.locator('#rail a[data-view=model]').click();
   await page.waitForFunction(() => window.testScene?.getObjectByName('section planes')?.children.length === 3);
   assert.equal((await scene()).clip, 3);

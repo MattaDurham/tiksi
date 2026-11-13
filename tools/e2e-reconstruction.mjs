@@ -80,13 +80,12 @@ try {
   await page.locator('[data-f=notes]').fill('Synthetic room reference');await page.locator('[data-f=notes]').dispatchEvent('change');
   await page.getByRole('button',{name:'MATERIAL',exact:true}).click();
   await page.waitForFunction(()=>window.test.store.ws.data.materials.some(m=>m.pattern==='photo'));
-  await page.getByRole('button',{name:'PLAN UNDERLAY',exact:true}).click();
-  await page.waitForFunction(()=>window.test.property.levels[0].plan?.imgW===4096);
+  assert.equal(await page.getByRole('button',{name:'PLAN UNDERLAY',exact:true}).count(),0,'PHOTOS no longer sends a picture to a plan underlay');
   const photoUses=await page.evaluate(()=>{
     const p=window.test.property.photos[0],m=window.test.store.ws.data.materials.find(m=>m.pattern==='photo');
-    return { name:p.name,notes:p.notes,materialLinked:m.photoId===p.id,underlay:window.test.property.levels[0].plan.imgW };
+    return { name:p.name,notes:p.notes,materialLinked:m.photoId===p.id };
   });
-  assert.equal(photoUses.name,'Renamed camera image');assert.equal(photoUses.notes,'Synthetic room reference');assert.equal(photoUses.materialLinked,true);assert.equal(photoUses.underlay,4096);
+  assert.equal(photoUses.name,'Renamed camera image');assert.equal(photoUses.notes,'Synthetic room reference');assert.equal(photoUses.materialLinked,true);
   await page.evaluate(async()=>{
     const c=document.createElement('canvas');c.width=4000;c.height=2000;c.getContext('2d').fillRect(0,0,4000,2000);
     const b=await new Promise(resolve=>c.toBlob(resolve,'image/png'));

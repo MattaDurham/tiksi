@@ -96,7 +96,7 @@ try {
   assert.equal((await inspect()).transparent, false); assert.equal((await inspect()).castShadow, true);
   assert.ok(await page.evaluate(() => window.testScene.getObjectByName('Synthetic_roof').material.clippingPlanes?.length === 1), 'restored material retains the current section cut');
   await page.locator('[data-section]').click();
-  await page.locator('#rail a[data-view=plan]').click();
+  await page.locator('#rail a[data-view=materials]').click();   // away from MODEL and back: the settings come back from the store
   await page.locator('#rail a[data-view=model]').click();
   await page.waitForFunction(() => window.testScene?.getObjectByName('Synthetic_roof'));
   const saved = await page.evaluate(async () => (await import('/js/store.js')).activeProperty().env);

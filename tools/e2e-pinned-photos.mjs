@@ -70,7 +70,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto(url + '/#/materials'); await page.locator('#btn-file').waitFor();
+  await page.goto(url + '/#/materials'); await page.locator('#btn-file').waitFor({ state: 'attached' });
   await page.evaluate(async () => {
     const store = await import('/js/store.js');
     store.ws.data = store.emptyWorkspace();

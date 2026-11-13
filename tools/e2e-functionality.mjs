@@ -91,7 +91,7 @@ try {
   await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   page.on('dialog', d => d.accept(d.type() === 'prompt' ? 'Synthetic audit project' : undefined));
-  await page.goto(url); await page.locator('#btn-file').waitFor();
+  await page.goto(url); await page.locator('#btn-file').waitFor({ state: 'attached' });
   // The app opens on MODEL; there is no PLAN link.
   assert.equal(await page.evaluate(() => document.querySelector('#rail a.active')?.dataset.view), 'model', 'the desktop opens on MODEL');
   assert.equal(await page.locator('#rail a[data-view="plan"]').count(), 0, 'the rail has no PLAN link');
@@ -157,14 +157,14 @@ try {
       (await s.getFile(s.planKey(p.levels[0].id, p.id)))?.img === p.levels[0].plan.img));
     return matches.every(Boolean);
   }), 'both property-scoped underlays persist before reload');
-  await page.goto(url + '/#/model'); await page.reload(); await page.locator('#btn-file').waitFor();
+  await page.goto(url + '/#/model'); await page.reload(); await page.locator('#btn-file').waitFor({ state: 'attached' });
   assert.deepEqual(await page.evaluate(async () => { const s=await import('/js/store.js');await s.whenHydrated();return s.ws.data.properties.map(p=>p.levels[0].plan.img); }),images,'two properties retain their own underlays after storage reload');
   await page.evaluate(async image=>{const s=await import('/js/store.js');s.ws.data.properties[0].levels[0].plan.img=image;s.save();},images[1]);
   await waitUntil(() => page.evaluate(async () => {
     const s = await import('/js/store.js'); const p = s.ws.data.properties[0];
     return (await s.getFile(s.planKey(p.levels[0].id, p.id)))?.img === p.levels[0].plan.img;
   }), 'replacement underlay persists before reload');
-  await page.goto(url + '/#/model'); await page.reload(); await page.locator('#btn-file').waitFor();
+  await page.goto(url + '/#/model'); await page.reload(); await page.locator('#btn-file').waitFor({ state: 'attached' });
   assert.equal(await page.evaluate(async()=>{const s=await import('/js/store.js');await s.whenHydrated();return s.ws.data.properties[0].levels[0].plan.img;}),images[1],'replacement underlay survives reload');
 
   const portable = await page.evaluate(async () => {
