@@ -157,8 +157,8 @@ try {
   console.log('Helper failures passed: one that dies mid-job is reported; one that could not load runs the job in the page.');
   await page.goto(`http://localhost:${server.address().port}/#/model`);
   await page.locator('canvas.v-canvas').waitFor();
-  // The floor-datum review was shown in PLAN's scan card, which went with PLAN; the review report
-  // itself stays with the scan, and a reload of the saved project brings it back whole.
+  // The floor-datum review stays with the scan, and a reload of the saved project brings it back
+  // whole; MODEL's scan panel shows it.
   await page.reload(); await page.locator('canvas.v-canvas').waitFor();
   const kept = await page.evaluate(async () => {
     const store = await import('/js/store.js'), { floorReviewText } = await import('/js/scan-surfaces.js');
@@ -174,6 +174,23 @@ try {
   assert.match(kept.text, /^Review floor datums/, 'and still asks for a review');
   assert.ok(kept.elevations.includes('-2.15'), 'the lower landing at -2.15 m is in the report: ' + kept.elevations);
   assert.ok(kept.datum && kept.ceiling, 'a level names its floor datum and ceiling surfaces');
+  // MODEL's scan panel shows the review: each surface with its height in feet and inches.
+  await page.evaluate(() => document.querySelector('#side [data-scan="mixed-source"]').click());
+  const review = page.locator('.inspector details[data-floor-review]');
+  await review.waitFor({ state: 'attached' });
+  const shown = await page.evaluate(async () => {
+    const store = await import('/js/store.js'), el = document.querySelector('.inspector details[data-floor-review]');
+    return { summary: el.querySelector('summary').textContent, open: el.open, rows: el.querySelectorAll('tbody tr').length,
+      heights: [...el.querySelectorAll('tbody tr td:nth-child(2)')].map(td => td.textContent), landing: store.fmtLen(-2.15, { short: true }),
+      roles: [...el.querySelectorAll('tbody tr td:first-child')].map(td => td.textContent).join(' | ') };
+  });
+  assert.match(shown.summary, /^Review floor datums: /, 'the summary asks for a review');
+  assert.doesNotMatch(shown.summary, / m \(/, 'and gives the datums in feet and inches, not metres: ' + shown.summary);
+  assert.equal(shown.open, true, 'a review that is needed starts open');
+  assert.equal(shown.rows, kept.report.surfaces.length, 'one row per surface');
+  assert.ok(shown.heights.some(h => h.trim() === shown.landing.trim()), 'the lower landing shows at ' + shown.landing + ': ' + shown.heights.join(', '));
+  assert.match(shown.roles, /floor datum/); assert.match(shown.roles, /ceiling/);
+  console.log('MODEL scan panel shows the floor review: ' + shown.rows + ' surfaces, landing at ' + shown.landing + '.');
   assert.deepEqual(errors, [], 'no page errors');
   console.log('Mixed underlay passed: indoor floor, yard and lower landing pixels retained; review report persists through a reload.');
 

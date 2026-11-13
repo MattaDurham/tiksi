@@ -3,6 +3,7 @@ import { openingDimensions } from './opening-dimensions.js';
 import { openingProfileValue, openingGridFields } from './opening-profile-edit.js';
 import { modelAnnotations } from './model-annotations.js';
 import { faceTotals } from './room-faces.js';
+import { floorReviewText } from './scan-surfaces.js';
 import { EVIDENCE_STATES, EVIDENCE_COLORS, evidenceState, setEvidence, elementEvidenceRecord } from './evidence.js';
 import { withUncertainty } from './uncertainty-view.js';
 // 3D model view: a rendering, not a debug scene.
@@ -4812,6 +4813,23 @@ function renderObjectPanel(o) {
   bindObjectPanel(inspEl, ctx);
   bindModelPanel(inspEl, modelPanelCtx(s, w));
 }
+// ---------- floor review ----------
+// What PROPOSE PLAN FROM SCAN found level in the scan (scan-surfaces.js floorDetectionReport):
+// each horizontal surface, which ones it took as a floor or ceiling, their heights, areas and
+// where they lie in plan. Kept with the scan; read-only.
+function floorReviewHtml(scan) {
+  const r = scan.floorDetection;
+  if (!r || !Array.isArray(r.surfaces)) return '';
+  const role = sf => r.levels.some(l => l.datum && l.datum.surfaceId === sf.id) ? ' · floor datum' : r.levels.some(l => l.datum && l.datum.ceilingSurfaceId === sf.id) ? ' · ceiling' : '';
+  const L = v => fmtLen(v, { short: true });
+  const row = sf => `<tr><td>${escapeHtml(sf.id)}${role(sf)}</td><td>${escapeHtml(L(sf.elevation))}</td><td>${escapeHtml(L(sf.minElevation) + ' to ' + L(sf.maxElevation))}</td><td>${escapeHtml(fmtArea(sf.area))}</td><td>${escapeHtml(sf.facing)}</td>
+    <td>${escapeHtml(L(sf.bounds.x1 - sf.bounds.x0) + ' × ' + L(sf.bounds.z1 - sf.bounds.z0))}</td><td>${escapeHtml(L(sf.bounds.x0) + ', ' + L(sf.bounds.z0))}</td></tr>`;
+  return `<details data-floor-review ${r.required ? 'open' : ''}><summary>${escapeHtml(floorReviewText(r, v => fmtLen(v)))}</summary>
+    <p>Level surfaces the scan shows, kept apart from the model's levels. Heights are from the project's floor datum; positions are plan east and south of the plan's origin.</p>
+    <table><thead><tr><th>Surface</th><th>Height</th><th>Range</th><th>Area</th><th>Facing</th><th>Size</th><th>Corner at</th></tr></thead><tbody>${r.surfaces.map(row).join('')}</tbody></table>
+    <p>The underlay keeps lower supported surfaces within each storey's height range. Site evidence is not an indoor area measurement.</p></details>`;
+}
+
 // ---------- room faces ----------
 // Walls are picked by room face (room-faces.js): the surface one room sees, inside corner to
 // inside corner. The faces come from the model as built, per level (buildPropertyGroup).
@@ -5289,6 +5307,7 @@ function renderInspectorBody() {
       <button class="btn" data-center ${dis}>CENTER ON MODEL</button>
       ${s.kind === 'mesh' ? `<button class="btn" data-plan ${dis} title="Find the floor and ceiling, square the scan up, propose walls, rooms, doors and windows, and render the plan underlay from the scan">${icon('plan')}PROPOSE PLAN FROM SCAN</button>
       <button class="btn" data-fixtures ${dis} title="Read counter runs, wall cabinets, tall appliances and furniture from the scan, for review">${icon('scan')}PROPOSE FIXTURES FROM SCAN</button>` : ''}
+      ${s.kind === 'mesh' ? floorReviewHtml(s) : ''}
       ${s.source && s.source.url ? `<a class="btn" href="${escapeHtml(s.source.url)}" target="_blank" rel="noopener" style="display:flex; text-decoration:none; justify-content:center">${icon('link')}OPEN ON POLYCAM</a>` : ''}
       ${s.importWarnings?.length ? `<p class="empty">${s.importWarnings.map(escapeHtml).join('<br>')}</p>` : ''}
       ${s.kind === 'mesh' ? `<button class="btn" data-exchange ${dis}>EDIT / BRING BACK</button>
