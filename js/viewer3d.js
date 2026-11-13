@@ -65,6 +65,7 @@ import {
 import { attachSketchupNavigation } from './sketchup-nav.js';
 import { diskWorkspace } from './disk-workspace.js';
 import { ModelBatches } from './model-batch.js';
+import { ModelMirrors } from './model-mirrors.js';
 import { componentKeyOf } from './model-components.js';
 import { modelObjectTree, objectForClick, objectBelow, objectOffset, setObjectOffset, applyPartOffsets, objectBox } from './model-objects.js';
 import { renderObjectList, showListTab, revealInList, objectThing, hiddenState } from './object-list.js';
@@ -110,6 +111,7 @@ let sheetRoot = null, secMove = null, secTurn = null, secDragAt = -Infinity;
 let framesLeft = 0, lastT = 0, tween = null, resizeObs = null;
 // Imported models drawn grouped by look (model-batch.js); built lazily as models arrive.
 let batches = null;
+let mirrors = null;
 // While the camera moves the frame skips ambient occlusion (and SMAA where MSAA already smooths
 // edges); the full frame follows once it has been still this long.
 const SETTLE_MS = 150;
@@ -313,6 +315,7 @@ function graphicsRestored() {
   hideNotice('draw');
   if (envRT) { envRT.dispose(); envRT = null; }
   scene.environment = null;
+  if (mirrors) mirrors.clear();
   if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
   // Buffers for smoothing, shading, outlines and glow at this device's quality and size.
   applyQuality();
@@ -371,6 +374,8 @@ function setupScene() {
   sheetRoot = new THREE.Group(); sheetRoot.name = 'section planes'; scene.add(sheetRoot);
   batches = new ModelBatches();
   scene.add(batches.root);
+  mirrors = new ModelMirrors();
+  scene.add(mirrors.root);
   invalidateShadows();
 
   controls = new OrbitControls(camera, renderer.domElement);
@@ -1477,10 +1482,16 @@ function renderFrame(still = false) {
   passes.smaa.enabled = !(fast && composer.renderTarget1.samples > 0);
   lastFrameFast = fast;
   frameCounts[fast ? 'fastFrames' : 'fullFrames']++;
+  mirrors.update(scanObjs, camera, { enabled: !xray && !uncertaintyShown,
+    textureSize: quality() === 'low' ? 256 : quality() === 'medium' ? 512 : 1024 });
   if (batches.beginFrame(scanObjs, uncertaintyShown)) invalidateShadows();
   if (renderer.shadowMap.needsUpdate) frameCounts.shadowRefreshes++;
   if (renderer.shadowMap.needsUpdate) sunThroughOpenings();
-  try { if (uncertaintyShown) withUncertainty([modelGroup, scanRoot], uncertaintyRecord, () => composer.render()); else composer.render(); }
+  try {
+    mirrors.render(renderer, scene, camera, { exclude: [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, markupRoot,
+      ...sectionOverlays(), gizmo && gizmo.getHelper()] });
+    if (uncertaintyShown) withUncertainty([modelGroup, scanRoot], uncertaintyRecord, () => composer.render()); else composer.render();
+  }
   finally { batches.endFrame(); }
 }
 
@@ -5487,7 +5498,7 @@ export function mount(root) {
     try { unmount(); } catch (err) { console.error(err); }
     // Whatever the failed open left half-built must not be torn down twice or drawn.
     if (renderer) { renderer.setAnimationLoop(null); renderer.domElement.remove(); }
-    scene = null; camera = null; composer = null; passes = {}; controls = null; modelGroup = null; groundGroup = null; batches = null;
+    scene = null; camera = null; composer = null; passes = {}; controls = null; modelGroup = null; groundGroup = null; batches = null; mirrors = null;
     el = null; wrapEl = null; inspEl = null; hud = {};
     const why = e && e.graphics
       ? 'This browser could not start 3D graphics, so MODEL cannot be shown. Close other tabs or apps that use 3D, then reload. The other pages still work.'
@@ -5646,6 +5657,10 @@ export function drawStats({ grouped } = {}) {
   return { calls: info.render.calls, triangles: Math.round(info.render.triangles), groups: batches.stats(),
     camera: { projection: camera.projectionMatrix.toArray(), inverse: camera.matrixWorldInverse.toArray() } };
 }
+
+// Reflection acceptance: actual surface planes and reflected camera positions, without
+// exposing or mutating the imported model tree.
+export function mirrorStats() { return mirrors ? mirrors.stats() : null; }
 // For the browser checks: draw one frame now, as the still view (`fast` false) or as a frame
 // drawn while the camera moves (`fast` true), and return its mean brightness, 0 to 1, read
 // straight off the canvas before the browser shows it.
@@ -5812,6 +5827,7 @@ export function unmount() {
   for (const id of Object.keys(positionObjs)) removePositionMarker(id);
   for (const id of Object.keys(noteObjs)) removeNote(id);
   if (batches) { batches.dispose(); batches = null; }
+  if (mirrors) { mirrors.dispose(); mirrors = null; }
   for (const id of Object.keys(scanObjs)) { disposeScanObject(scanObjs[id]); delete scanObjs[id]; }
   for (const id of Object.keys(scanState)) delete scanState[id];
   releaseSplatRenderer();
