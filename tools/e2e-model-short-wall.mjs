@@ -19,8 +19,7 @@ try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch('http://127.0.0.1:' + port)).ok) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
   browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-  // Everything on the screen but the component list: the long drag below would end over it.
-  await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true,"model.objects":false}'));
+  await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto('http://127.0.0.1:' + port + '/#/plan');
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
@@ -71,7 +70,8 @@ try {
         if (b > 100 && b > r * 1.8 && b > green * 1.8) points.push([x, y]);
       }
       if (!points.length) return null;
-      const y = points[Math.floor(points.length / 4)][1], row = points.filter(p => Math.abs(p[1] - y) < 2);
+      // The middle of the blue pixels: well inside the arrow, not where it meets the wall.
+      const y = points[Math.floor(points.length / 2)][1], row = points.filter(p => Math.abs(p[1] - y) < 2);
       return [row.reduce((sum, p) => sum + p[0], 0) / row.length, y];
     }, png.toString('base64'));
     assert(h, 'MODEL shows the wall move handle');
