@@ -60,6 +60,23 @@
 .ph-card.active .ph-thumb::after {
   content: ''; position: absolute; inset: 0; box-shadow: inset 0 0 0 2px var(--accent); pointer-events: none;
 }
+.ph-thumb img:not([src]) { visibility: hidden; }
+.ph-thumb.no-preview::before {
+  content: 'NO PREVIEW'; position: absolute; inset: 0; display: grid; place-items: center;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; color: var(--faint);
+}
+/* Selected: the tick in the corner of every card, filled in once picked. */
+.ph-pick {
+  position: absolute; top: 6px; right: 6px; width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 13px; font-weight: 700; line-height: 1;
+  color: #ffffffaa; background: #00000066; border: 1px solid #ffffff66; cursor: pointer;
+}
+.ph-pick:hover { color: #fff; border-color: #fff; }
+.ph-pick.on { color: #10140f; background: var(--green); border-color: var(--green); }
+.ph-more { grid-column: 1 / -1; display: flex; justify-content: center; padding: 12px 0 24px; }
+.ph-groups { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.ph-group .mono { opacity: 0.7; margin-left: 4px; }
+.ph-lb-cap .btn { margin-left: 10px; }
 .ph-card-body { padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 6px; }
 .ph-name { font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ph-chips { display: flex; flex-wrap: wrap; gap: 4px; }

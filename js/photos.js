@@ -2,13 +2,21 @@
 // Photos are first-class workspace objects: they link to rooms, model elements and scope
 // items (so cut sheets can pull site conditions per element), can be pinned in the 3D
 // model, used as the plan underlay, as the sky for lighting, or as a photo-based material.
-// Full-res bytes live in IndexedDB (photos-store.js); the JSON only carries a thumbnail.
+// With the Mac's server the gallery is the project folder: every picture in it and its
+// subfolders, read where it is (photos-store.js); Tiksi keeps a record only of the photos it
+// knows something about. Pictures fall in groups that can each be hidden: photos, panoramas,
+// Polycam scan frames, renderings and documents. Selected marks the good ones to come back to.
 
 import {
   ws, activeProperty, touch, escapeHtml, allScopeItems, elementInfo, materialById, fmtLen, fmtDate,
   activeLevel, levelOfRoom,
 } from './store.js';
-import { addPhotoFromFile, photoUrl, photoBytes, photoById, deletePhoto, isPanoramaAspect, revokePhotoUrls } from './photos-store.js';
+import {
+  addPhotoFromFile, photoUrl, photoBytes, photoById, deletePhoto, isPanoramaAspect, revokePhotoUrls,
+  keepsPhotosInFolder, folderListing, loadFolderPhotos, folderPreviewUrl, keepRecord, whenFilled,
+  heldPhotos, moveHeldPhotos, releaseIfBare, missingFiles,
+} from './photos-store.js';
+import { diskWorkspace } from './disk-workspace.js';
 import { addDocumentFromFile, documentCanvas, isPdfDocument } from './documents.js';
 import { FOUND_SOURCES } from './photo-match.js';
 import { ROLE_LABELS } from './positions.js';
@@ -18,9 +26,28 @@ import { isVideoFile, importVideos } from './videos.js';
 const PLAN_MAX_PX = 4096;   // detailed tracing without unbounded canvas memory
 const MATERIAL_KINDS = ['wall', 'floor', 'ceiling', 'trim', 'any'];
 
+// The groups a picture falls in, in the order the filter shows them; each can be hidden.
+const GROUPS = [['photo', 'PHOTOS'], ['pano', '360 PANORAMAS'], ['scan', 'SCAN FRAMES'], ['rendering', 'RENDERINGS'], ['document', 'DOCUMENTS']];
+const HIDDEN_KEY = 'tiksi.photos.hidden';
+const PAGE = 200;               // cards drawn at a time; more are drawn as the gallery scrolls
+const REFRESH_MS = 30000;       // the project folder is listed again this often while PHOTOS is open
+const PREVIEW_LOADS = 4;        // gallery previews asked of the Mac at once
+
+function savedHidden() {
+  try { const v = JSON.parse(localStorage.getItem(HIDDEN_KEY) || '[]'); return new Set(Array.isArray(v) ? v.filter(g => GROUPS.some(([k]) => k === g)) : []); }
+  catch (e) { return new Set(); }
+}
+function saveHidden() { try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...filters.hidden])); } catch (e) { /* this device only */ } }
+
 // Module-persistent view state (survives view switches, like the plan editor).
-const filters = { kind: '', room: '', pin: '', q: '' };
+const filters = { hidden: savedHidden(), room: '', pin: '', q: '' };
 let selectedId = null;
+let shown = PAGE;               // how many of the visible photos have cards
+let refreshTimer = 0;
+const moving = new Map();       // property id -> { done, total } while held photos move into the folder
+let thumbs = null;              // IntersectionObserver that loads gallery previews from the Mac
+const previewQueue = [];
+let previewsRunning = 0;
 
 let el = null, prop = null;
 let dropRoot = null;        // the shared #view element while the drop listeners are attached
@@ -33,21 +60,55 @@ let searchTimer = 0;        // the search waits for a pause in typing before it 
 let sheetOpen = false;      // the details sheet is up (small screens); a background redraw keeps it
 
 // ---------- data helpers ----------
+// Records: the photos Tiksi knows something about.
 function photos() { return prop.photos || (prop.photos = []); }
 
+// Every picture in the gallery: the records, and the project folder's pictures Tiksi has no
+// record of (`listed`), which become records the first time something is kept about them.
+let listedMemo = { listing: null, claimed: '', items: [], byId: new Map() };
+function listedItems() {
+  const listing = folderListing(prop);
+  if (!listing || !keepsPhotosInFolder(prop)) return [];
+  const paths = photos().filter(p => p.file).map(p => p.file.path);
+  const claimed = paths.join('\n');
+  if (listedMemo.listing === listing && listedMemo.claimed === claimed) return listedMemo.items;
+  const taken = new Set(paths);
+  const items = listing.files.filter(f => !taken.has(f.path) && !photoById(prop, f.key)).map(f => ({
+    id: f.key, name: f.name, kind: 'photo', w: 0, h: 0, mime: f.mime, thumb: '', createdAt: new Date(f.mtime || 0).toISOString(),
+    notes: '', roomId: '', elementIds: [], itemIds: [], pin: null, file: { path: f.path, size: f.size, mtime: f.mtime, group: f.group }, listed: true,
+  }));
+  listedMemo = { listing, claimed, items, byId: new Map(items.map(i => [i.id, i])) };
+  return items;
+}
+function allItems() { return photos().concat(listedItems()); }
+function itemById(id) { return photoById(prop, id) || (listedItems(), listedMemo.byId.get(id)) || null; }
+// The record of a gallery item, made now if it is a listed picture with none.
+function recordOf(item) { return item.listed ? keepRecord(prop, item) : item; }
+
+function groupOf(p) {
+  if (p.kind === 'document') return 'document';
+  if (p.kind === 'pano') return 'pano';
+  if (p.source === 'rendering') return 'rendering';
+  if (p.source === 'polycam-keyframe') return 'scan';
+  return p.file && p.file.group || 'photo';
+}
+
 function sortedPhotos() {
-  return photos().slice().sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  const when = p => String(p.takenAt || p.createdAt || '');
+  return allItems().sort((a, b) => when(b).localeCompare(when(a)));
 }
 
 function visiblePhotos() {
   const q = filters.q.trim().toLowerCase();
   return sortedPhotos().filter(p => {
-    if (filters.kind === 'rendering' ? p.source !== 'rendering' : filters.kind === 'photo' ? (p.kind !== 'photo' || p.source === 'rendering') : (filters.kind && p.kind !== filters.kind)) return false;
+    if (filters.hidden.has(groupOf(p))) return false;
     if (filters.room === '-' && p.roomId) return false;                          // "(no room)"
     if (filters.room && filters.room !== '-' && p.roomId !== filters.room) return false;
     if (filters.pin === 'pinned' && !p.pin) return false;
     if (filters.pin === 'unpinned' && p.pin) return false;
-    if (q && !(String(p.name || '').toLowerCase().includes(q) || String(p.notes || '').toLowerCase().includes(q))) return false;
+    if (filters.pin === 'selected' && !p.selected) return false;
+    if (q && !(String(p.name || '').toLowerCase().includes(q) || String(p.notes || '').toLowerCase().includes(q)
+      || (p.file && p.file.path.toLowerCase().includes(q)))) return false;
     return true;
   });
 }
@@ -64,9 +125,7 @@ function roomLabel(r) {
 }
 
 function kindLabel(p) {
-  if (p.kind === 'pano') return '360 PANO';
-  if (p.kind === 'document') return 'DOCUMENT';
-  return p.source === 'rendering' ? 'RENDERING' : p.source === 'polycam-keyframe' ? 'SCAN FRAME' : 'PHOTO';
+  return { pano: '360 PANO', document: 'DOCUMENT', rendering: 'RENDERING', scan: 'SCAN FRAME' }[groupOf(p)] || 'PHOTO';
 }
 const CAMERA_WORDS = { saved: 'lined up by eye', points: 'fitted to points', keyframe: 'from a scan frame', auto: 'placed automatically', position: 'from a numbered position' };
 function cameraWords(p) {
@@ -276,11 +335,50 @@ function clearReferences(id) {
 }
 
 async function remove(p) {
-  if (!confirm('Delete "' + p.name + '"? This removes the file from browser storage and clears its links.')) return;
+  const ask = p.file
+    ? 'Remove what Tiksi keeps about "' + p.name + '" (its notes, pin, links and selection)? The photo stays in the project folder: ' + p.file.path
+    : 'Delete "' + p.name + '"? This removes the file from browser storage and clears its links.';
+  if (!confirm(ask)) return;
   clearReferences(p.id);
   await deletePhoto(prop, p.id);
   if (selectedId === p.id) selectedId = null;
   render();
+}
+
+// Selected: the good pictures, picked once (from hundreds of scan frames, say) and found again
+// with the SELECTED filter. A folder picture gets a record when selected; one that was only
+// selected is let go of again when unselected.
+function toggleSelected(id) {
+  const item = itemById(id);
+  if (!item) return;
+  const rec = recordOf(item);
+  if (rec.selected) { delete rec.selected; releaseIfBare(prop, rec); }
+  else rec.selected = true;
+  touch();
+  refreshCard(id);
+  renderHead();
+  if (selectedId === id) renderDetail();
+  if (lightbox) renderLightboxCaption();
+}
+
+// One card drawn again in place (its chips changed), without drawing the gallery again.
+function refreshCard(id) {
+  const card = el && el.querySelector(`.ph-card[data-id="${CSS.escape(id)}"]`);
+  const item = itemById(id);
+  if (!card || !item) return;
+  // The picture already shown stays; only the name, the chips and the tick are drawn again.
+  const fresh = document.createElement('template');
+  fresh.innerHTML = cardHtml(item);
+  card.querySelector('.ph-card-body').replaceWith(fresh.content.querySelector('.ph-card-body'));
+  const pick = card.querySelector('.ph-pick');
+  pick.classList.toggle('on', !!item.selected);
+  pick.setAttribute('aria-checked', String(!!item.selected));
+  pick.title = (item.selected ? 'Unselect' : 'Select') + ' (S)';
+}
+
+async function showInFinder(p) {
+  try { await diskWorkspace.openProjectPath(prop, p.file.path); }
+  catch (e) { alert(e.message); }
 }
 
 // ---------- lightbox ----------
@@ -328,20 +426,38 @@ async function renderLightbox() {
   const box = el.querySelector('.ph-lightbox');
   if (!box || !lightbox) return;
   const id = lightbox.ids[lightbox.idx];
-  const p = photoById(prop, id);
+  const p = itemById(id);
   if (!p) { closeLightbox(); return; }
   const img = box.querySelector('img');
-  img.src = p.thumb;
+  img.src = p.thumb || '';
   img.alt = p.name;
   box.classList.toggle('pano', p.kind === 'pano');
-  box.querySelector('.ph-lb-cap').innerHTML =
-    `<b>${escapeHtml(p.name)}</b><span>${kindLabel(p)} - ${escapeHtml(p.w)} x ${escapeHtml(p.h)}${p.roomId ? ' - ' + escapeHtml(roomName(p.roomId)) : ''} - ${lightbox.idx + 1} / ${lightbox.ids.length}</span>`;
+  renderLightboxCaption();
   // A PDF shows its current page; a photo its full-resolution original.
   const url = isPdfDocument(p) ? await documentCanvas(p, 2400).then(c => c && c.toDataURL('image/jpeg', 0.9)).catch(() => null) : await photoUrl(id);
   if (url && lightbox && lightbox.ids[lightbox.idx] === id) img.src = url;
 }
 
+function renderLightboxCaption() {
+  const box = el && el.querySelector('.ph-lightbox');
+  if (!box || !lightbox) return;
+  const p = itemById(lightbox.ids[lightbox.idx]);
+  if (!p) return;
+  const size = p.w && p.h ? ' - ' + escapeHtml(p.w) + ' x ' + escapeHtml(p.h) : '';
+  box.querySelector('.ph-lb-cap').innerHTML =
+    `<b>${escapeHtml(p.name)}</b><span>${kindLabel(p)}${size}${p.roomId ? ' - ' + escapeHtml(roomName(p.roomId)) : ''} - ${lightbox.idx + 1} / ${lightbox.ids.length}</span>`
+    + `<button class="btn small ${p.selected ? 'on' : ''}" data-act="lb-select" title="Select or unselect this picture (S)">${p.selected ? 'SELECTED' : 'SELECT'}</button>`;
+  box.querySelector('[data-act=lb-select]').onclick = () => toggleSelected(p.id);
+}
+
+const typing = t => t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
 function onKeyDown(e) {
+  // S selects or unselects the picture in the viewer, or the one open in the details.
+  if ((e.key === 's' || e.key === 'S') && !e.metaKey && !e.ctrlKey && !e.altKey && !typing(e.target)) {
+    const id = lightbox ? lightbox.ids[lightbox.idx] : selectedId;
+    if (id) { e.preventDefault(); toggleSelected(id); }
+    return;
+  }
   if (!lightbox) return;
   if (e.key === 'Escape') { e.preventDefault(); closeLightbox(); }
   else if (e.key === 'ArrowLeft') { e.preventDefault(); stepLightbox(-1); }
@@ -360,22 +476,27 @@ function render() {
 function renderHead() {
   const head = el.querySelector('.ph-head');
   if (!head) return;
-  const all = photos();
+  const records = photos(), all = allItems();
+  const listing = keepsPhotosInFolder(prop) ? folderListing(prop) : null;
   const panos = all.filter(p => p.kind === 'pano').length;
-  const pinned = all.filter(p => p.pin).length;
+  const pinned = records.filter(p => p.pin).length;
+  const picked = records.filter(p => p.selected).length;
   // Unpinned photos are placed one after another in the model: click where each was taken.
-  const unpinned = all.filter(p => !p.pin);
+  // (Only photos Tiksi has a record of: a folder of scan frames is not placed one by one.)
+  const unpinned = records.filter(p => !p.pin);
+  const move = moving.get(prop.id);
   const canPlace = unpinned.length && !importing && (prop.walls.length || (prop.scans || []).length);
-  const sub = importing
-    ? `IMPORTING ${importing.done} / ${importing.total}`
-    : `${all.length} photo${all.length === 1 ? '' : 's'} - ${panos} panorama${panos === 1 ? '' : 's'} - ${pinned} pinned in 3D`;
+  const sub = importing ? `IMPORTING ${importing.done} / ${importing.total}`
+    : move ? `MOVING ${move.done} / ${move.total} PHOTOS INTO THE PROJECT FOLDER`
+    : `${all.length} photo${all.length === 1 ? '' : 's'}${listing ? ' in ' + listing.folder : ''} - ${panos} panorama${panos === 1 ? '' : 's'} - ${pinned} pinned in 3D - ${picked} selected`
+      + (listing && listing.truncated ? ' - the folder has more pictures than Tiksi lists' : '');
   head.innerHTML = `
     <div class="ph-head-text">
       <span class="view-title">PHOTOS</span>
-      <span class="view-sub ${importing ? 'busy' : ''}">${escapeHtml(sub)}</span>
+      <span class="view-sub ${importing || move ? 'busy' : ''}">${escapeHtml(sub)}</span>
     </div>
     <div class="ph-head-actions">
-      <span class="ph-hint">drop images anywhere - or paste</span>
+      <span class="ph-hint">${listing ? 'drop images anywhere - they are saved into ' + escapeHtml(listing.folder) + '/Photos' : 'drop images anywhere - or paste'}</span>
       ${canPlace ? `<button class="btn primary" data-act="place" title="Open the model and click where each unpinned photo was taken; each one links to the room and wall there">PLACE ${unpinned.length} IN 3D</button>` : ''}
       <button class="btn" data-act="reconstruct">PHOTO TO 3D</button>
       <button class="btn" data-act="camera" title="Take a photo with the phone camera">CAMERA</button>
@@ -405,28 +526,34 @@ function renderFilters() {
   const bar = el.querySelector('.ph-filters');
   if (!bar) return;
   const rooms = prop.rooms.map(r => `<option value="${escapeHtml(r.id)}" ${filters.room === r.id ? 'selected' : ''}>${escapeHtml(roomLabel(r))}</option>`).join('');
+  const counts = {};
+  for (const p of allItems()) { const g = groupOf(p); counts[g] = (counts[g] || 0) + 1; }
+  // A group with nothing in it is not offered, unless it is hidden (so it can be shown again).
+  const groups = GROUPS.filter(([g]) => counts[g] || filters.hidden.has(g)).map(([g, label]) =>
+    `<button type="button" class="btn small ph-group ${filters.hidden.has(g) ? '' : 'on'}" data-group="${g}" aria-pressed="${!filters.hidden.has(g)}"
+      title="${filters.hidden.has(g) ? 'Show' : 'Hide'} ${label.toLowerCase()}">${label} <span class="mono">${counts[g] || 0}</span></button>`).join('');
   bar.innerHTML = `
-    <select data-filter="kind" aria-label="Filter by kind">
-      <option value="">ALL KINDS</option>
-      <option value="photo" ${filters.kind === 'photo' ? 'selected' : ''}>PHOTOS</option>
-      <option value="pano" ${filters.kind === 'pano' ? 'selected' : ''}>360 PANORAMAS</option>
-      <option value="document" ${filters.kind === 'document' ? 'selected' : ''}>DOCUMENTS</option>
-      <option value="rendering" ${filters.kind === 'rendering' ? 'selected' : ''}>RENDERINGS</option>
-    </select>
+    <span class="ph-groups" role="group" aria-label="Show or hide each kind of picture">${groups}</span>
     <select data-filter="room" aria-label="Filter by room">
       <option value="">ALL ROOMS</option>
       <option value="-" ${filters.room === '-' ? 'selected' : ''}>(no room)</option>${rooms}
     </select>
-    <select data-filter="pin" aria-label="Filter by pin state">
-      <option value="">PINNED + UNPINNED</option>
+    <select data-filter="pin" aria-label="Filter by pinned, unpinned or selected">
+      <option value="">ALL PHOTOS</option>
       <option value="pinned" ${filters.pin === 'pinned' ? 'selected' : ''}>PINNED IN 3D</option>
       <option value="unpinned" ${filters.pin === 'unpinned' ? 'selected' : ''}>NOT PINNED</option>
+      <option value="selected" ${filters.pin === 'selected' ? 'selected' : ''}>SELECTED</option>
     </select>
     <input type="search" class="search-input" data-filter="q" value="${escapeHtml(filters.q)}" placeholder="search name or notes" aria-label="Search photos">
     <span class="sp"></span>
     <span class="ph-count mono"></span>`;
-  bar.querySelectorAll('select[data-filter]').forEach(s => s.onchange = () => { filters[s.dataset.filter] = s.value; renderGrid(); });
-  bar.querySelector('[data-filter=q]').oninput = e => { filters.q = e.target.value; clearTimeout(searchTimer); searchTimer = setTimeout(() => { if (el) renderGrid(); }, 200); };
+  bar.querySelectorAll('select[data-filter]').forEach(s => s.onchange = () => { filters[s.dataset.filter] = s.value; shown = PAGE; renderGrid(); });
+  bar.querySelectorAll('[data-group]').forEach(b => b.onclick = () => {
+    const g = b.dataset.group;
+    if (filters.hidden.has(g)) filters.hidden.delete(g); else filters.hidden.add(g);
+    saveHidden(); shown = PAGE; renderFilters(); renderGrid();
+  });
+  bar.querySelector('[data-filter=q]').oninput = e => { filters.q = e.target.value; clearTimeout(searchTimer); searchTimer = setTimeout(() => { if (el) { shown = PAGE; renderGrid(); } }, 200); };
 }
 
 function cardHtml(p) {
@@ -435,14 +562,17 @@ function cardHtml(p) {
     positionOf(p) ? `<span class="chip accent">POSITION ${positionOf(p).number} · ${(ROLE_LABELS[p.role] || '').toUpperCase()}</span>` : '',
     p.kind === 'photo' && p.view && FOUND_SOURCES.includes(p.view.from) ? '<span class="chip green">CAMERA</span>' : '',
     p.roomId ? `<span class="chip">${escapeHtml(roomName(p.roomId))}</span>` : '',
+    p.selected ? `<span class="chip green">SELECTED</span>` : '',
     p.pin ? `<span class="chip accent">PINNED</span>` : '',
+    missingFiles.has(p.id) ? `<span class="chip red">NOT IN FOLDER</span>` : '',
     (p.itemIds || []).length ? `<span class="chip green">${p.itemIds.length} ITEM${p.itemIds.length === 1 ? '' : 'S'}</span>` : '',
     (p.elementIds || []).length ? `<span class="chip">${p.elementIds.length} ELEMENT${p.elementIds.length === 1 ? '' : 'S'}</span>` : '',
     prop.env && prop.env.panoPhotoId === p.id ? `<span class="chip accent">SKY</span>` : '',
   ].filter(Boolean).join('');
   return `<button class="ph-card ${p.kind === 'pano' ? 'pano' : ''} ${p.id === selectedId ? 'active' : ''}" data-id="${escapeHtml(p.id)}"
-      aria-pressed="${p.id === selectedId}" title="${escapeHtml(p.name)} (double-click to zoom)">
-    <div class="ph-thumb"><img src="${escapeHtml(p.thumb || '')}" alt="" loading="lazy" draggable="false"></div>
+      aria-pressed="${p.id === selectedId}" title="${escapeHtml(p.file ? p.file.path : p.name)} (double-click to zoom, S to select)">
+    <div class="ph-thumb"><img ${p.thumb ? `src="${escapeHtml(p.thumb)}"` : p.file ? `data-preview="${escapeHtml(p.file.path)}"` : ''} alt="" loading="lazy" draggable="false">
+      <span class="ph-pick ${p.selected ? 'on' : ''}" role="checkbox" aria-checked="${!!p.selected}" aria-label="Selected" title="${p.selected ? 'Unselect' : 'Select'} (S)">&#x2713;</span></div>
     <div class="ph-card-body">
       <div class="ph-name">${escapeHtml(p.name)}</div>
       <div class="ph-chips">${chips}</div>
@@ -469,14 +599,15 @@ function emptyStateHtml() {
       <input type="file" class="hidden-file" data-file="upload" accept="image/*,application/pdf,.pdf" multiple>
       <input type="file" class="hidden-file" data-file="camera" accept="image/*" capture="environment">
     </div>
-    <p class="ph-empty-foot">Drop image files anywhere on this view, or paste an image from the clipboard. Nothing leaves your browser.</p>
+    <p class="ph-empty-foot">${keepsPhotosInFolder(prop) ? 'Pictures put anywhere in the project folder ' + escapeHtml((folderListing(prop) || {}).folder || '') + ' show here. Photos dropped or pasted here are saved into its Photos folder.'
+      : 'Drop image files anywhere on this view, or paste an image from the clipboard. Nothing leaves your browser.'}</p>
   </div>`;
 }
 
 function renderGrid() {
   const grid = el.querySelector('.ph-grid');
   if (!grid) return;
-  const all = photos();
+  const all = allItems();
   const list = visiblePhotos();
   const count = el.querySelector('.ph-count');
   if (count) count.textContent = all.length && list.length !== all.length ? `${list.length} OF ${all.length}` : '';
@@ -490,11 +621,16 @@ function renderGrid() {
   if (!list.length) {
     if (importing) { grid.innerHTML = `<div class="ph-none"><span>Importing ${importing.done} of ${importing.total}...</span></div>`; return; }
     grid.innerHTML = `<div class="ph-none"><span>No photos match these filters.</span><button class="btn small" data-act="clear">CLEAR FILTERS</button></div>`;
-    grid.querySelector('[data-act=clear]').onclick = () => { filters.kind = filters.room = filters.pin = filters.q = ''; renderFilters(); renderGrid(); };
+    grid.querySelector('[data-act=clear]').onclick = () => { filters.room = filters.pin = filters.q = ''; filters.hidden.clear(); saveHidden(); renderFilters(); renderGrid(); };
     return;
   }
-  grid.innerHTML = list.map(cardHtml).join('');
+  // A large folder is drawn a page at a time; the next page comes as the gallery scrolls to it.
+  const open = selectedId ? list.findIndex(p => p.id === selectedId) : -1;
+  if (open >= shown) shown = Math.ceil((open + 1) / PAGE) * PAGE;
+  grid.innerHTML = list.slice(0, shown).map(cardHtml).join('') + moreHtml(list.length - shown);
   grid.querySelectorAll('.ph-card').forEach(bindCard);
+  watchPreviews(grid);
+  bindMore(grid, list);
   let frame = 0;
   grid.onpointermove = e => {
     if (e.pointerType === 'touch') return;
@@ -520,6 +656,63 @@ function bindCard(card) {
     setSheet(true);
   };
   card.ondblclick = () => openLightbox(card.dataset.id);
+  const pick = card.querySelector('.ph-pick');
+  if (pick) {
+    pick.onclick = e => { e.stopPropagation(); toggleSelected(card.dataset.id); };
+    pick.ondblclick = e => e.stopPropagation();
+  }
+}
+
+function moreHtml(left) {
+  return left > 0 ? `<div class="ph-more"><button class="btn small" data-act="more">SHOW ${Math.min(left, PAGE)} MORE OF ${left}</button></div>` : '';
+}
+function bindMore(grid, list) {
+  const more = grid.querySelector('.ph-more');
+  if (!more) return;
+  const next = () => {
+    if (!more.isConnected) return;
+    const from = shown; shown += PAGE;
+    more.insertAdjacentHTML('beforebegin', list.slice(from, shown).map(cardHtml).join(''));
+    const cards = Array.from(grid.querySelectorAll('.ph-card')).slice(from);
+    cards.forEach(card => { bindCard(card); watchPreview(card); });
+    const left = list.length - shown;
+    if (left > 0) more.querySelector('button').textContent = `SHOW ${Math.min(left, PAGE)} MORE OF ${left}`;
+    else { observer.disconnect(); more.remove(); }
+  };
+  more.querySelector('button').onclick = next;
+  const observer = new IntersectionObserver(entries => { if (entries.some(e => e.isIntersecting)) next(); }, { root: grid, rootMargin: '600px' });
+  observer.observe(more);
+}
+
+// Gallery previews of folder pictures come from the Mac as their cards near the screen.
+function watchPreviews(grid) {
+  if (thumbs) thumbs.disconnect();
+  thumbs = new IntersectionObserver(entries => {
+    for (const e of entries) if (e.isIntersecting) { thumbs.unobserve(e.target); queuePreview(e.target); }
+  }, { root: grid, rootMargin: '400px' });
+  grid.querySelectorAll('img[data-preview]').forEach(img => thumbs.observe(img));
+}
+function watchPreview(card) {
+  const img = card.querySelector('img[data-preview]');
+  if (img && thumbs) thumbs.observe(img);
+}
+function queuePreview(img) {
+  previewQueue.push({ img, prop });
+  pumpPreviews();
+}
+function pumpPreviews() {
+  while (previewsRunning < PREVIEW_LOADS && previewQueue.length) {
+    const { img, prop: owner } = previewQueue.shift();
+    if (!img.isConnected || !img.dataset.preview || owner !== prop) continue;
+    previewsRunning++;
+    folderPreviewUrl(owner, img.dataset.preview, 256).then(url => {
+      // Shown, the picture no longer needs its URL; the browser keeps the copy for next time.
+      img.onload = img.onerror = () => URL.revokeObjectURL(url);
+      img.src = url;
+      delete img.dataset.preview;
+    }).catch(() => { img.closest('.ph-thumb')?.classList.add('no-preview'); })
+      .finally(() => { previewsRunning--; pumpPreviews(); });
+  }
 }
 
 // A photo just imported: its card goes in front (the gallery is newest first), or the gallery
@@ -527,10 +720,13 @@ function bindCard(card) {
 function addCard(rec) {
   const grid = el && el.querySelector('.ph-grid');
   if (!grid) return;
+  // A photo already in the folder came back as its own record: its card is there.
+  if (grid.querySelector(`.ph-card[data-id="${CSS.escape(rec.id)}"]`)) return;
   if (grid.classList.contains('is-empty') || !grid.querySelector('.ph-card') || !visiblePhotos().some(p => p.id === rec.id)) { renderGrid(); return; }
   grid.insertAdjacentHTML('afterbegin', cardHtml(rec));
   bindCard(grid.firstElementChild);
-  const count = el.querySelector('.ph-count'), all = photos(), n = grid.querySelectorAll('.ph-card').length;
+  watchPreview(grid.firstElementChild);
+  const count = el.querySelector('.ph-count'), all = allItems(), n = visiblePhotos().length;
   if (count) count.textContent = n !== all.length ? `${n} OF ${all.length}` : '';
 }
 
@@ -594,7 +790,9 @@ function elementOptionsHtml(p) {
 function renderDetail() {
   const pane = el.querySelector('.ph-detail');
   if (!pane) return;
-  const p = selectedId ? photoById(prop, selectedId) : null;
+  // A folder picture with no record yet gets one on the first thing kept about it (`kept`).
+  let p = selectedId ? itemById(selectedId) : null;
+  const kept = () => (p = recordOf(p));
   if (!p) {
     selectedId = null;
     setSheet(false);
@@ -609,9 +807,9 @@ function renderDetail() {
   pane.innerHTML = `
     <button type="button" class="ph-sheet-close" data-act="sheet-close" aria-label="Close the photo details">CLOSE</button>
     <div class="ph-preview ${p.kind === 'pano' ? 'pano' : ''}">
-      <img src="${escapeHtml(p.thumb || '')}" alt="${escapeHtml(p.name)}" draggable="false">
+      <img ${p.thumb ? `src="${escapeHtml(p.thumb)}"` : ''} alt="${escapeHtml(p.name)}" draggable="false">
       <button class="ph-zoom" data-act="zoom" title="Open viewer (double-click a card also works)" aria-label="Open viewer">ZOOM</button>
-      <span class="ph-preview-badge" data-storage hidden>THUMBNAIL ONLY</span>
+      <span class="ph-preview-badge" data-storage hidden>${p.file ? 'NOT IN THE FOLDER' : 'THUMBNAIL ONLY'}</span>
     </div>
     <div class="ph-detail-body">
       <h3>${kindLabel(p)}</h3>
@@ -634,6 +832,7 @@ function renderDetail() {
             : '<button class="btn" data-act="pin" title="Place this photo on a surface in the 3D model">PIN IN 3D</button>'}
           ${p.kind === 'pano' || p.kind === 'document' ? '' : '<button class="btn" data-act="match" title="Stand where this photo was taken, with the photo over the model, to check the model against the site">PHOTO MODE</button>'}
           ${isPdfDocument(p) ? '<button class="btn" data-act="openpdf" title="Open the PDF in a new tab">OPEN PDF</button>' : ''}
+          <button class="btn ${p.selected ? 'on' : ''}" data-act="select" title="Mark the good pictures; the SELECTED filter shows them (S)">${p.selected ? 'SELECTED' : 'SELECT'}</button>
           <div class="ph-mat">
             <button class="btn" data-act="material" title="Create a photo-based material from this image">MATERIAL</button>
             <select data-mat-kind aria-label="Material kind">${MATERIAL_KINDS.map(k => `<option value="${k}">${k}</option>`).join('')}</select>
@@ -651,8 +850,9 @@ function renderDetail() {
         <select multiple size="4" data-multi="elementIds" aria-label="Linked model elements">${elementOptionsHtml(p)}</select>
         <div class="ph-note">Photos of a wall or floor follow it onto every cut sheet that rebuilds it.</div></div>
 
-      <div class="stat-line"><span>Size</span><b>${escapeHtml(p.w)} x ${escapeHtml(p.h)}</b></div>
-      <div class="stat-line"><span>Added</span><b>${escapeHtml(fmtDate(String(p.createdAt || '').slice(0, 10)))}</b></div>
+      ${p.w && p.h ? `<div class="stat-line"><span>Size</span><b>${escapeHtml(p.w)} x ${escapeHtml(p.h)}</b></div>` : ''}
+      ${p.file ? `<div class="stat-line"><span>In the folder</span><b>${escapeHtml(p.file.path)}${missingFiles.has(p.id) ? ' (not there now)' : ''}</b></div>`
+        : `<div class="stat-line"><span>Added</span><b>${escapeHtml(fmtDate(String(p.createdAt || '').slice(0, 10)))}</b></div>`}
       <div class="stat-line"><span>Pinned in 3D</span><b>${p.pin ? `x ${(+p.pin.x).toFixed(2)}  y ${(+p.pin.y).toFixed(2)}  z ${(+p.pin.z).toFixed(2)}` : 'no'}</b></div>
       ${p.kind === 'document' ? `<div class="stat-line"><span>Sheet</span><b>${(p.sheetW * 39.37).toFixed(1)} x ${(p.sheetH * 39.37).toFixed(1)} in${p.pageCount > 1 ? ' · page ' + p.page + ' of ' + p.pageCount : ''}</b></div>`
         : `<div class="stat-line"><span>Camera</span><b>${escapeHtml(cameraWords(p))}</b></div>
@@ -663,8 +863,9 @@ function renderDetail() {
 
       <div class="ph-actions">
         ${p.pin ? '<button class="btn" data-act="unpin" title="Remove the 3D pin">UNPIN</button>' : ''}
+        ${p.file ? '<button class="btn" data-act="finder" title="Show this photo in Finder on the Mac">SHOW IN FINDER</button>' : ''}
         <button class="btn" data-act="download" title="Save the original file">DOWNLOAD</button>
-        <button class="btn danger" data-act="delete">DELETE</button>
+        ${p.listed ? '' : p.file ? '<button class="btn danger" data-act="delete" title="The photo stays in the project folder">REMOVE FROM TIKSI</button>' : '<button class="btn danger" data-act="delete">DELETE</button>'}
       </div>
     </div>`;
 
@@ -677,35 +878,39 @@ function renderDetail() {
   });
 
   pane.querySelector('[data-f=name]').onchange = e => {
-    p.name = e.target.value.trim() || p.name;
+    const name = e.target.value.trim() || p.name;
+    if (name !== p.name) { kept().name = name; touch(); }
     e.target.value = p.name;
-    touch();
-    const card = el.querySelector(`.ph-card[data-id="${p.id}"] .ph-name`);
+    const card = el.querySelector(`.ph-card[data-id="${CSS.escape(p.id)}"] .ph-name`);
     if (card) card.textContent = p.name;
   };
-  pane.querySelector('[data-f=notes]').onchange = e => { p.notes = e.target.value; touch(); };
-  pane.querySelector('[data-f=roomId]').onchange = e => { p.roomId = e.target.value; touch(); renderGrid(); };
+  pane.querySelector('[data-f=notes]').onchange = e => { kept().notes = e.target.value; touch(); };
+  pane.querySelector('[data-f=roomId]').onchange = e => { kept().roomId = e.target.value; touch(); renderGrid(); };
   pane.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => {
     if (p.kind === b.dataset.kind) return;
-    p.kind = b.dataset.kind;
+    kept().kind = b.dataset.kind;
     // Only the sky depends on the kind; a material built from the image keeps working.
     if (p.kind !== 'pano') clearSkyReference(p.id);
     touch(); render();
   });
   pane.querySelectorAll('[data-multi]').forEach(sel => sel.onchange = () => {
-    p[sel.dataset.multi] = Array.from(sel.selectedOptions).map(o => o.value);
+    kept()[sel.dataset.multi] = Array.from(sel.selectedOptions).map(o => o.value);
     touch(); renderGrid();
   });
   const act = (name, fn) => { const b = pane.querySelector(`[data-act=${name}]`); if (b) b.onclick = () => fn(p); };
+  // These need the photo's record, with its size read from the file, before they go on.
+  const actKept = (name, fn) => act(name, async () => { const r = kept(); await whenFilled(r); fn(r); });
   act('sheet-close', () => setSheet(false));
   act('zoom', () => openLightbox(p.id));
-  act('underlay', useAsUnderlay);
-  act('sky', useAsSky);
+  act('select', () => toggleSelected(p.id));
+  act('finder', showInFinder);
+  actKept('underlay', useAsUnderlay);
+  actKept('sky', useAsSky);
   act('clear-sky', clearSky);
-  act('pin', pinIn3d);
-  act('match', matchIn3d);
+  actKept('pin', pinIn3d);
+  actKept('match', matchIn3d);
   act('unpin', unpin);
-  act('material', materialFromPhoto);
+  actKept('material', materialFromPhoto);
   act('download', download);
   act('openpdf', async () => {
     const buf = await photoBytes(p.id);
@@ -730,10 +935,11 @@ export function mount(root) {
   const m = /[?&]select=([^&]+)/.exec(location.hash);
   let opened = false;
   if (m) {
-    if (photoById(prop, decodeURIComponent(m[1]))) { selectedId = decodeURIComponent(m[1]); opened = true; Object.assign(filters, { kind: '', room: '', pin: '', q: '' }); }
+    if (photoById(prop, decodeURIComponent(m[1]))) { selectedId = decodeURIComponent(m[1]); opened = true; Object.assign(filters, { room: '', pin: '', q: '' }); filters.hidden.clear(); saveHidden(); }
     history.replaceState(null, '', '#/photos');
   }
-  if (selectedId && !photoById(prop, selectedId)) selectedId = null;
+  if (selectedId && !itemById(selectedId)) selectedId = null;
+  shown = PAGE;
   // A room filter from another property (or a deleted room) would hide every photo while the
   // select shows ALL ROOMS.
   if (filters.room && filters.room !== '-' && !prop.rooms.some(r => r.id === filters.room)) filters.room = '';
@@ -760,6 +966,35 @@ export function mount(root) {
   dropRoot.addEventListener('drop', onDrop);
   document.addEventListener('paste', onPaste);
   window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('focus', onFocus);
+  readFolder(prop, true);
+}
+
+// The project folder is listed when PHOTOS opens, when the window comes back to the front and
+// every REFRESH_MS; the gallery is drawn again only when what the folder holds changed. Photos
+// Tiksi still holds are moved into the folder's Photos folder the first time.
+function onFocus() { if (prop) readFolder(prop, false); }
+async function readFolder(owner, first) {
+  clearTimeout(refreshTimer);
+  if (!keepsPhotosInFolder(owner)) return;
+  const before = folderListing(owner);
+  try {
+    let listing = await loadFolderPhotos(owner);
+    if (heldPhotos(owner).length && !moving.has(owner.id)) {
+      const state = { done: 0, total: 0 };
+      moving.set(owner.id, state);
+      if (owner === prop) renderHead();
+      const result = await moveHeldPhotos(owner, (done, total) => { Object.assign(state, { done, total }); if (owner === prop && el) renderHead(); })
+        .finally(() => moving.delete(owner.id));
+      listing = await loadFolderPhotos(owner);
+      if (result.failed.length) alert(result.failed.length + ' photo' + (result.failed.length === 1 ? '' : 's') + ' could not be moved into the project folder and are still kept in Tiksi: ' + result.failed.join(', '));
+    }
+    if (owner === prop && el && (first || !before || before.signature !== listing.signature)) { renderHead(); renderFilters(); renderGrid(); renderDetail(); }
+  } catch (e) {
+    console.error('Could not read the project folder', e);
+    if (owner === prop && el) { const sub = el.querySelector('.ph-head .view-sub'); if (sub) sub.textContent = 'The project folder could not be read: ' + e.message; }
+  }
+  if (owner === prop && el) refreshTimer = setTimeout(() => { if (prop === owner && el) readFolder(owner, false); }, REFRESH_MS);
 }
 
 export function unmount() {
@@ -772,6 +1007,10 @@ export function unmount() {
   }
   document.removeEventListener('paste', onPaste);
   window.removeEventListener('keydown', onKeyDown);
+  window.removeEventListener('focus', onFocus);
+  clearTimeout(refreshTimer);
+  if (thumbs) { thumbs.disconnect(); thumbs = null; }
+  previewQueue.length = 0;
   // A running upload batch keeps going (it owns its state); the preview and lightbox URLs go.
   revokePhotoUrls();
   clearTimeout(searchTimer);

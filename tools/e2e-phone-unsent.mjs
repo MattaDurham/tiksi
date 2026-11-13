@@ -186,6 +186,10 @@ async function run(name, type, profile) {
   // dropped. The next open finishes the save without uploading the photo again.
   let failSaves = true;
   const uploads = [];
+  // The project folder is out of reach for this step, so the photo is kept as an original Tiksi
+  // holds (a photo the Mac can take is written into the folder instead: e2e-project-photos.mjs).
+  const noFolder = route => route.abort();
+  await phoneContext.route('**/api/workspace/photos/**', noFolder);
   await phoneContext.route('**/api/workspace', route => failSaves && route.request().method() === 'PUT' ? route.abort() : route.continue());
   phoneContext.on('requestfinished', async request => {
     if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/workspace/blobs') uploads.push((await request.sizes().catch(() => null))?.requestBodySize ?? request.postDataBuffer()?.length);
@@ -212,6 +216,7 @@ async function run(name, type, profile) {
   assert.equal(mac.assets[second.id].size, second.size);
   await phone.waitForFunction(SAVED, null, { timeout: 30000 });
   assert.equal(uploads.filter(size => size === second.size).length, 0, 'a photo the Mac already holds is not uploaded again after the tab was dropped (uploads: ' + uploads.join(', ') + ')');
+  await phoneContext.unroute('**/api/workspace/photos/**', noFolder);
 
   step('8');
   // 8. An original is added a moment before the record that names it (a long video is

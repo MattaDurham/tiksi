@@ -33,7 +33,7 @@ HASH = re.compile(r'^[a-f0-9]{64}$')
 PICTURE_PREFIX = 'tiksi-picture:'
 PICTURE_REF = re.compile(r'^tiksi-picture:([a-z0-9.+-]+/[a-z0-9.+-]+):pic-([a-f0-9]{64})$')
 # What this server does beyond the original protocol; clients use only what is listed.
-FEATURES = ('picture-files', 'partial-projects', 'partial-properties', 'commit-paths', 'storage-cleanup')
+FEATURES = ('picture-files', 'partial-projects', 'partial-properties', 'commit-paths', 'storage-cleanup', 'project-photos')
 
 
 def picture_refs(value):
@@ -145,6 +145,39 @@ def file_state(path):
     except OSError: return 'unreadable'
     return 'file' if stat.S_ISREG(info.st_mode) else 'missing'
 
+
+
+def smaller_copy(source, folder, name, longest, run=subprocess.run, keep_original=True):
+    """A JPEG copy of the picture `source`, at most `longest` pixels on its longest side, made
+    once with the Mac's own image tool (sips) and kept in `folder` as <name>-<longest>.jpg.
+    Returns the copy, or `source` itself when it is no bigger and `keep_original` (a browser can
+    show it as it is). Raises WorkspaceError 415 when no copy can be made (not a picture, or no
+    image tool)."""
+    folder = Path(folder); folder.mkdir(parents=True, exist_ok=True)
+    made = folder / (name + '-' + str(longest) + '.jpg')
+    same = folder / (name + '-' + str(longest) + '.original')
+    if made.is_file(): return made
+    if keep_original and same.is_file(): return source
+    tool = shutil.which('sips') or ('/usr/bin/sips' if Path('/usr/bin/sips').is_file() else None)
+    def refused(reason):
+        error = WorkspaceError('No smaller copy of this file: ' + reason, 415); error.code = 'no-preview'; return error
+    if not tool: raise refused('this Mac has no image tool')
+    with PREVIEW_WORK:
+        if made.is_file(): return made
+        try:
+            found = run([tool, '-g', 'pixelWidth', '-g', 'pixelHeight', str(source)], capture_output=True, text=True, timeout=60)
+            sizes = [int(v) for v in re.findall(r'pixel(?:Width|Height): (\d+)', found.stdout)]
+            if found.returncode or len(sizes) != 2: raise refused('it is not a picture')
+            if keep_original and max(sizes) <= longest:
+                same.touch(); return source
+            with tempfile.NamedTemporaryFile(dir=folder, prefix='.', suffix='.jpg', delete=False) as out: temp = Path(out.name)
+            try:
+                done = run([tool, *(['-Z', str(longest)] if max(sizes) > longest else []), '-s', 'format', 'jpeg', '-s', 'formatOptions', '80', str(source), '--out', str(temp)], capture_output=True, text=True, timeout=120)
+                if done.returncode or not temp.is_file() or not temp.stat().st_size: raise refused('the picture could not be read')
+                os.replace(temp, made)
+            finally: temp.unlink(missing_ok=True)
+        except (OSError, subprocess.TimeoutExpired, ValueError): raise refused('the image tool did not answer')
+    return made
 
 # What a clean-up asked for by the owner offers to remove (nothing is removed on its own): of the
 # saved catalog copies, all but every recent save, one a day, then one a month; and stored
@@ -612,31 +645,7 @@ class WorkspaceService:
         made (not a picture, or no image tool), so the page falls back to the original."""
         source = self.root / 'blobs' / digest
         if not source.is_file(): raise WorkspaceError('Asset not found', 404)
-        folder = self.root / 'previews'; folder.mkdir(exist_ok=True)
-        made = folder / (digest + '-' + str(longest) + '.jpg')
-        same = folder / (digest + '-' + str(longest) + '.original')
-        if made.is_file(): return made
-        if same.is_file(): return source
-        tool = shutil.which('sips') or ('/usr/bin/sips' if Path('/usr/bin/sips').is_file() else None)
-        def refused(reason):
-            error = WorkspaceError('No smaller copy of this file: ' + reason, 415); error.code = 'no-preview'; return error
-        if not tool: raise refused('this Mac has no image tool')
-        with PREVIEW_WORK:
-            if made.is_file(): return made
-            try:
-                found = self.run([tool, '-g', 'pixelWidth', '-g', 'pixelHeight', str(source)], capture_output=True, text=True, timeout=60)
-                sizes = [int(v) for v in re.findall(r'pixel(?:Width|Height): (\d+)', found.stdout)]
-                if found.returncode or len(sizes) != 2: raise refused('it is not a picture')
-                if max(sizes) <= longest:
-                    same.touch(); return source
-                with tempfile.NamedTemporaryFile(dir=folder, prefix='.', suffix='.jpg', delete=False) as out: temp = Path(out.name)
-                try:
-                    done = self.run([tool, '-Z', str(longest), '-s', 'format', 'jpeg', '-s', 'formatOptions', '80', str(source), '--out', str(temp)], capture_output=True, text=True, timeout=120)
-                    if done.returncode or not temp.is_file() or not temp.stat().st_size: raise refused('the picture could not be read')
-                    os.replace(temp, made)
-                finally: temp.unlink(missing_ok=True)
-            except (OSError, subprocess.TimeoutExpired, ValueError): raise refused('the image tool did not answer')
-        return made
+        return smaller_copy(source, self.root / 'previews', digest, longest, self.run)
 
     def upload_state(self, digest):
         """How far an original sent in pieces has come: (received bytes, declared size or None)."""
@@ -1250,6 +1259,9 @@ class WorkspaceService:
                 target, action = open_in_folder(self.project_folder(identifier), request.get('path', ''), self.run)
                 # action is 'opened', or 'shown' when the file is not a document and was only shown in Finder.
                 self.reply(h, 200, {'path': str(target.relative_to(self.project_folder(identifier).resolve())), 'folder': self.project_folder(identifier).name, 'action': action})
+            elif path.startswith('/api/workspace/photos/'):
+                # The project's photos, read where they are in its folder (server/project_photos.py).
+                self.project_photos(h, path.removeprefix('/api/workspace/photos/'))
             elif path.startswith('/api/workspace/uploads/'):
                 # An original sent in pieces (see upload_piece); a stalled upload continues where it stopped.
                 digest = path.removeprefix('/api/workspace/uploads/')
@@ -1355,6 +1367,83 @@ class WorkspaceService:
         finally:
             with self.lock: self.jobs -= 1
         return True
+
+    def project_photos(self, h, rest):
+        from server import project_photos as photos
+        identifier, _, action = rest.partition('/')
+        identifier = unquote(identifier)
+        query = parse_qs(urlsplit(h.path).query)
+        asked = lambda name: query.get(name, [''])[0]
+        with self.lock:
+            if identifier not in self.paths: raise WorkspaceError('This property has no project folder yet; save it to disk first', 404)
+            self.check_available(identifier)
+            folder = self.project_folder(identifier)
+        if action == '' and h.command == 'GET':
+            self.reply(h, 200, {'folder': folder.name, **photos.list_photos(folder)})
+        elif action in ('file', 'preview') and h.command in ('GET', 'HEAD'):
+            source = photos.resolve(folder, asked('path'))
+            tag = photos.tag_of(source)
+            longest = asked('size')
+            if action == 'preview':
+                try: longest = int(longest)
+                except ValueError: raise WorkspaceError('Ask for size ' + ', '.join(map(str, PREVIEW_SIZES)))
+                tag = tag[:-1] + '-' + str(longest) + '"'
+            if tag in [t.strip() for t in h.headers.get('If-None-Match', '').split(',')]:
+                h.send_response(304); h.send_header('ETag', tag); h.send_header('Cache-Control', 'private, no-cache'); h.end_headers()
+                return
+            if action == 'preview':
+                copy = photos.preview(self.root / 'folder-previews', source, longest, self.run)
+                mime = 'image/jpeg' if copy != source else photos.PICTURES[photos.extension(source.name)]
+            else: copy, mime = source, photos.PICTURES[photos.extension(source.name)]
+            size = copy.stat().st_size
+            wanted = byte_range(h.headers.get('Range') if h.headers.get('If-Range', tag) == tag else None, size) if action == 'file' else None
+            if wanted == 'unsatisfiable':
+                h.send_response(416); h.send_header('Content-Range', 'bytes */%d' % size); h.send_header('Content-Length', '0'); h.end_headers()
+                return
+            start, end = wanted or (0, size - 1)
+            h.send_response(206 if wanted else 200)
+            if wanted: h.send_header('Content-Range', 'bytes %d-%d/%d' % (start, end, size))
+            h.send_header('Content-Type', mime)
+            h.send_header('Content-Length', str(end - start + 1))
+            h.send_header('Accept-Ranges', 'bytes')
+            h.send_header('ETag', tag)
+            # The browser keeps it and asks again with its tag: a file edited in the folder is sent again.
+            h.send_header('Cache-Control', 'private, no-cache')
+            h.end_headers()
+            if h.command == 'HEAD': return
+            with copy.open('rb') as stream:
+                stream.seek(start); part = Part(stream, end - start + 1)
+                while chunk := part.read(1024 * 1024): h.wfile.write(chunk)
+        elif action == 'info' and h.command == 'GET':
+            self.reply(h, 200, photos.describe(folder, photos.resolve(folder, asked('path')), self.run))
+        elif action == 'hashes' and h.command == 'POST':
+            try: paths = json.loads(self.read(h, 256 * 1024)).get('paths')
+            except (ValueError, UnicodeDecodeError, AttributeError): raise WorkspaceError('Send {"paths": [...]}')
+            self.reply(h, 200, {'hashes': photos.hashes(folder, paths)})
+        elif action == 'add' and h.command == 'POST':
+            # A photo taken or dropped in Tiksi, written into the project folder's Photos folder.
+            length = self.length(h, MAX_BLOB)
+            name = photos.clean_name(asked('name'), h.headers.get('Content-Type', ''))
+            temp, digest = photos.receive_into(folder, h.rfile.read, length)
+            try: relative, written = photos.place(folder, asked('folder') or 'Photos', name, temp, digest)
+            finally: temp.unlink(missing_ok=True)
+            self.reply(h, 200, {**photos.describe(folder, folder.resolve() / relative, self.run), 'written': written})
+        elif action == 'keep' and h.command == 'POST':
+            # An original this Mac already stores, copied into the project folder's Photos folder
+            # (the page then lets go of it), so it is not sent over again.
+            try: request = json.loads(self.read(h, 64 * 1024))
+            except (ValueError, UnicodeDecodeError): raise WorkspaceError('Send {"hash": ..., "name": ...}')
+            if not isinstance(request, dict) or not HASH.fullmatch(str(request.get('hash', ''))): raise WorkspaceError('Send the stored original\'s hash')
+            source = self.root / 'blobs' / request['hash']
+            if not source.is_file(): raise WorkspaceError('That original is not stored on this Mac', 404)
+            name = photos.clean_name(request.get('name'), str(request.get('mime') or ''))
+            temp, digest = photos.copy_into(folder, source)
+            try:
+                if digest != request['hash']: raise WorkspaceError('The stored original does not match its name; it was not copied', 409)
+                relative, written = photos.place(folder, str(request.get('folder') or 'Photos'), name, temp, digest)
+            finally: temp.unlink(missing_ok=True)
+            self.reply(h, 200, {**photos.describe(folder, folder.resolve() / relative, self.run), 'written': written})
+        else: raise WorkspaceError('Photo endpoint not found', 404)
 
     def save_answer(self, save_id):
         revision = self.committed(save_id)

@@ -408,6 +408,10 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     }
     return r;
   }
+  async function ask(path, options) {
+    try { return await request(path, options); }
+    catch (error) { if (error.status === 403 && /retrying/.test(error.message)) return request(path, options); throw error; }
+  }
   // Pictures are stored once by content; a stored picture never changes, so the
   // browser's own cache answers a repeat download (see the server's blob headers).
   const pictures = features.has('picture-files') ? pictureFiles({
@@ -979,7 +983,51 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   }, async openProjectPath(prop, path = '') {
     // A product document or the project folder itself, opened in Finder/Preview on this Mac.
     return (await request('/open/' + encodeURIComponent(prop.id), { method: 'POST', body: JSON.stringify({ path }), headers: { 'Content-Type': 'application/json' } })).json();
-  }, get paths() { return paths; }, get folder() { return cap.projectsFolder; }, get pending() { return pending; },
+  },
+  // The project's photos, read where they are in its folder on the Mac (server/project_photos.py).
+  // Tiksi keeps no copy of them: a photo taken or dropped here is written into the folder's
+  // Photos folder, and an original Tiksi still holds is copied there by `keep`.
+  projectPhotos: {
+    // (A Mac that restarted answers with a new token once: the question is asked again.)
+    available: prop => !!prop && features.has('project-photos') && !!paths[prop.id],
+    base: prop => '/photos/' + encodeURIComponent(prop.id),
+    // The Mac holds this original as it is here: it can be moved into the folder from there.
+    onTheMac: id => !!(assets[id] && assets[id].hash && !changedFiles.has(id)),
+    async list(prop) { return (await ask(this.base(prop))).json(); },
+    // { buffer, mime }; the browser keeps it and asks again with its tag (an edited file comes again).
+    async file(prop, path) {
+      const r = await ask(this.base(prop) + '/file?path=' + encodeURIComponent(path), { cache: 'no-cache' });
+      return { buffer: await r.arrayBuffer(), mime: r.headers.get('Content-Type') || '' };
+    },
+    async preview(prop, path, size) {
+      const r = await ask(this.base(prop) + '/preview?path=' + encodeURIComponent(path) + '&size=' + size, { cache: 'no-cache' });
+      return new Blob([await r.arrayBuffer()], { type: r.headers.get('Content-Type') || 'image/jpeg' });
+    },
+    async info(prop, path) { return (await ask(this.base(prop) + '/info?path=' + encodeURIComponent(path))).json(); },
+    async hashes(prop, list) {
+      return (await (await ask(this.base(prop) + '/hashes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths: list }) })).json()).hashes || {};
+    },
+    async add(prop, blob, name, folder = 'Photos') {
+      const at = this.base(prop) + '/add?name=' + encodeURIComponent(name || 'Photo') + '&folder=' + encodeURIComponent(folder);
+      return (await ask(at, { method: 'POST', body: blob, headers: blob.type ? { 'Content-Type': blob.type } : {} })).json();
+    },
+    // An original Tiksi holds, copied into the folder: by the Mac from its own store when the Mac
+    // has it as it is here, otherwise sent from this page. Returns the photo as now in the folder.
+    async keep(prop, id, name, mime, folder = 'Photos') {
+      const remote = assets[id];
+      if (remote && remote.hash && !changedFiles.has(id)) {
+        try {
+          return await (await ask(this.base(prop) + '/keep', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hash: remote.hash, name, mime, folder }) })).json();
+        } catch (error) { if (error.status !== 404) throw error; }
+      }
+      const local = await getCachedFile(id);
+      let buffer = local && local.buffer;
+      if (!buffer && remote && remote.hash) buffer = await (await ask('/blobs/' + remote.hash, { cache: 'default' })).arrayBuffer();
+      if (!buffer) return null;
+      return this.add(prop, new Blob([buffer], { type: mime || '' }), name, folder);
+    },
+  },
+  get paths() { return paths; }, get folder() { return cap.projectsFolder; }, get pending() { return pending; },
   // Projects whose file the Mac cannot read just now, and taking one off the Mac's list for
   // good (no file is deleted; a Mac that does not offer this answers that it cannot).
   get unavailable() { return unavailable; },

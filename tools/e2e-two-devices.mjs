@@ -1082,7 +1082,9 @@ async function aPhotoOnItsWayInHoldsTheReloadOff() {
   await page.reload();
   const copy = await untilOnTheMac(c => prop(c, first).photos.some(p => p.name === 'taken-just-now.png'), 'The photo taken while the code changed');
   const photo = prop(copy, first).photos.find(p => p.name === 'taken-just-now.png');
-  assert.equal(copy.assets[photo.id]?.size, png.length, 'with its original');
+  // The photo itself was written into the project folder's Photos folder when it was taken.
+  assert.equal(photo.file?.size, png.length, 'with its file in the project folder');
+  assert.equal(copy.assets[photo.id], undefined, 'and no copy held in the project file');
   await context.close();
 }
 

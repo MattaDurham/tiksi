@@ -32,8 +32,11 @@ try {
     s.ws.data.properties.push(a, b); s.ws.data.settings.activePropertyId = a.id; s.touch();
     await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
   });
-  await phone.goto('http://localhost:' + port + '/#/photos');
-  await phone.getByRole('button', { name: /Shared evidence/ }).waitFor();
+  // (Not PHOTOS: opening it moves a held photo into the project folder, e2e-project-photos.mjs.
+  // This suite is about an original Tiksi holds reaching every device.)
+  await phone.goto('http://localhost:' + port + '/#/plan');
+  await phone.evaluate(async () => { window.diskTestStore = await import('/js/store.js'); });
+  await phone.waitForFunction(() => window.diskTestStore.ws.data.properties.some(p => (p.photos || []).some(ph => ph.id === 'photo-shared')));
   const evidence = await phone.evaluate(async () => {
     const s = await import('/js/store.js'), original = await s.getFile('photo-shared');
     return { names: s.ws.data.properties.map(p => p.name), bytes: [...new Uint8Array(original.buffer)], local: localStorage.getItem('tiksi.workspace.v1'), databases: await indexedDB.databases() };
@@ -101,8 +104,10 @@ try {
   const delayed = new Promise(resolve => { releaseDownload = resolve; });
   let requested; const requestStarted = new Promise(resolve => { requested = resolve; });
   await slow.route('**/api/workspace/blobs/' + oldHash, async route => { requested(); await delayed; await route.continue(); });
-  await slow.goto('http://127.0.0.1:' + port + '/#/photos'); await slow.getByRole('button', { name: /Shared evidence/ }).waitFor();
-  await slow.evaluate(async () => { window.diskTestStore = await import('/js/store.js'); window.oldPhotoDownload = window.diskTestStore.getFile('photo-shared'); });
+  await slow.goto('http://127.0.0.1:' + port + '/#/plan');
+  await slow.evaluate(async () => { window.diskTestStore = await import('/js/store.js'); });
+  await slow.waitForFunction(() => window.diskTestStore.ws.data.properties.some(p => (p.photos || []).some(ph => ph.id === 'photo-shared')));
+  await slow.evaluate(() => { window.oldPhotoDownload = window.diskTestStore.getFile('photo-shared'); });
   await requestStarted;
   await desktop.evaluate(async () => {
     const s = await import('/js/store.js'), original = await s.getFile('photo-shared');
