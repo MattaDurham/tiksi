@@ -92,6 +92,8 @@ Unsent changes remain in their existing recovery store. Offline viewing never cr
 second writable workspace.
 The “kept on this device” status confirms the current edit's completed recovery write;
 an earlier snapshot cannot supply that confirmation while a newer edit is still waiting.
+Downloaded originals cached during a move are discarded once the Mac acknowledges their
+removal from the asset manifest. The project-folder original remains available by its path.
 
 ## Performance and completion checks
 
@@ -100,6 +102,8 @@ mesh is reused for its first display. Secondary pages load on demand, and fixtur
 reuse the rest of the built model. These remove specific allocations and rebuilds; they do
 not establish acceptable peak memory on every phone. Large mesh parsing, material changes
 and changes with structural dependencies still warrant representative device measurements.
+Lazy pages keep the normal undo, shared-change and failure/reload handling; delaying a
+page's import must not remove those behaviors.
 
 Completion requires following each discrepancy through its source, stored representation,
 transformation and output. Record what was reproduced, its cause, the correction and a
@@ -114,6 +118,8 @@ regression now checks server state before and after reconnection, proves that th
 storage-read failure occurred, and waits for sync to settle. Those checks distinguish a
 closed-page upload from unreadable-store replay; a later pass alone does not explain the
 original failure. Touch-layout checks separately wait for raw device emulation and app state.
+Separately, a delayed IndexedDB transaction reproduces a premature “kept on this device”
+message with the former status logic and passes after requiring the current recovery state.
 
 Service workers bypass Playwright's request interception. Fault-injection suites explicitly
 block workers and assert that blocked writes were intercepted; the dedicated uncertainty and

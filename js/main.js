@@ -49,10 +49,10 @@ import {
 function lazyView(load) {
   let module, mounted = false, token = 0;
   return {
-    mount(root) {
+    mount(root, onError) {
       const own = ++token; root.textContent = 'Opening…';
       load().then(value => { module = value; if (own !== token) return; root.textContent = ''; mounted = true; module.mount(root); })
-        .catch(error => { if (own === token) root.textContent = 'Could not open this page: ' + error.message; });
+        .catch(error => { if (own === token) onError(error); });
     },
     unmount() { token++; if (mounted) module?.unmount?.(); mounted = false; },
     undo() { if (mounted) module?.undo?.(); },
@@ -223,8 +223,7 @@ function remountView() {
 function openPage() {
   const root = document.getElementById('view');
   root.innerHTML = '';
-  try { currentView.mount(root); }
-  catch (error) {
+  const failed = error => {
     console.error(currentName + ' could not open', error);
     unmountCurrent();
     const label = document.querySelector(`#rail a[data-view="${currentName}"]`)?.textContent.trim() || currentName.toUpperCase();
@@ -232,7 +231,9 @@ function openPage() {
       <p>${escapeHtml(label)} could not open (${escapeHtml(String(error && error.message || error))}). The other pages still work, and nothing saved is affected.</p>
       <p><button class="btn primary" data-reload>RELOAD</button></p></div>`;
     root.querySelector('[data-reload]').onclick = () => location.reload();
-  }
+  };
+  try { currentView.mount(root, failed); }
+  catch (error) { failed(error); }
   refreshHistoryControls();
   fieldRouted(currentName);
 }

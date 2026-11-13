@@ -525,7 +525,13 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   }
   async function read(id, local) {
     const remote = assets[id];
-    if (!remote || changedFiles.has(id)) return local;
+    if (changedFiles.has(id)) return local;
+    if (!remote) {
+      // A download may have filled the cache while a move/removal was being saved.
+      // Once the Mac acknowledges removal, that old shared copy is no longer current.
+      if (local?.sharedHash) { heldOriginals.delete(id); await deleteFiles([id]); return null; }
+      return local;
+    }
     if (local?.sharedHash === remote.hash) { if (heldOriginals.has(id)) holdOriginal(id, heldOriginals.get(id)); return local; }
     const meta = { id, name: remote.name, format: remote.format, kind: remote.kind, mime: remote.mime, sharedHash: remote.hash };
     // Too large to hold: the bytes go straight to whoever asked, uncopied, and are not kept.
