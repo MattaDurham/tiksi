@@ -34,6 +34,32 @@ api.call('SUModelSaveToFile', model, sys.argv[2].encode())
 api.call('SUModelRelease', C.byref(model)); api.lib.SUTerminate()
 """
 
+# Adds two scenes to a synthetic SKP: a perspective one hiding the "Roof" tag, and a parallel plan.
+ADD_SCENES = r"""
+import ctypes as C, sys
+sys.path.insert(0, sys.argv[1])
+from server.sketchup_convert import API, Ref, Point, Vector
+api = API(); model = Ref()
+api.call('SUModelCreateFromFile', C.byref(model), sys.argv[2].encode())
+n = C.c_size_t(); api.call('SUModelGetNumLayers', model, C.byref(n)); layers = (Ref * n.value)(); api.call('SUModelGetLayers', model, n, layers, C.byref(n))
+roof = next(l for l in layers[:n.value] if api.text('SULayerGetName', l) == 'Roof')
+def scene(name, eye, target, up, perspective, value, hide):
+    s = Ref(); api.call('SUSceneCreate', C.byref(s)); api.call('SUSceneSetName', s, name.encode())
+    cam = Ref(); api.call('SUCameraCreate', C.byref(cam))
+    api.call('SUCameraSetOrientation', cam, C.byref(Point(*eye)), C.byref(Point(*target)), C.byref(Vector(*up)))
+    api.call('SUCameraSetPerspective', cam, C.c_bool(perspective))
+    if perspective: api.call('SUCameraSetPerspectiveFrustumFOV', cam, C.c_double(value))
+    else: api.call('SUCameraSetOrthographicFrustumHeight', cam, C.c_double(value))
+    i = C.c_int(); api.call('SUModelAddScene', model, C.c_int(-1), s, C.byref(i))
+    api.call('SUSceneSetCamera', s, cam); api.call('SUCameraRelease', C.byref(cam))
+    api.call('SUSceneSetUseCamera', s, C.c_bool(True)); api.call('SUSceneSetUseHiddenLayers', s, C.c_bool(True))
+    if hide: api.call('SUSceneAddLayer', s, roof)
+scene('01 Overview', (100, -200, 150), (0, 0, 40), (0, 0, 1), True, 50.0, True)
+scene('A1 Plan', (40, 70, 600), (40, 70, 0), (0, 1, 0), False, 200.0, False)
+api.call('SUModelSaveToFile', model, sys.argv[2].encode())
+api.call('SUModelRelease', C.byref(model)); api.lib.SUTerminate()
+"""
+
 class ConversionTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name);self.service=ModelConversionService(self.root)
@@ -339,6 +365,35 @@ api.call('SUModelRelease', C.byref(model)); api.lib.SUTerminate()
         mats=[doc['materials'][doc['meshes'][doc['nodes'][p['children'][0]]['mesh']]['primitives'][0]['material']]['name'] for p in placed]
         self.assertEqual(sorted(mats),['Blue paint','Red paint'])
         self.assertEqual(len(doc['meshes']),2)
+    @unittest.skipUnless(library_path(),'SketchUp SDK not installed')
+    def test_native_skp_scenes_travel_in_the_glb_and_read_on_their_own(self):
+        # A scene's camera comes out in the GLB's frame (metres, Y up: SketchUp x, z, -y), with the
+        # tags it hides; a parallel scene keeps its picture height. The scenes-only route reads
+        # the same scenes from the SKP without converting it, and keeps nothing in the history.
+        tri=[0,0,0,2,0,0,0,3,0]
+        source=self.root/'scenes.json';source.write_text(json.dumps({'meshes':[
+            {'name':'Shed roof','tag':'Roof','positions':tri,'material':{'name':'Shingle','color':[.3,.3,.3,1]}},
+            {'name':'Back wall','tag':'Walls','positions':[v+5 for v in tri],'material':{'name':'Paint','color':[.9,.9,.9,1]}}]}))
+        root=Path(__file__).resolve().parent.parent;worker=root/'server/sketchup_convert.py';skp=self.root/'scenes.skp'
+        r=subprocess.run([sys.executable,str(worker),str(source),str(skp)],capture_output=True,text=True,timeout=30);self.assertEqual(r.returncode,0,r.stderr)
+        script=self.root/'add_scenes.py';script.write_text(ADD_SCENES)
+        r=subprocess.run([sys.executable,str(script),str(root),str(skp)],capture_output=True,text=True,timeout=30);self.assertEqual(r.returncode,0,r.stderr)
+        r=subprocess.run([sys.executable,str(worker),str(skp),str(self.root/'scenes.glb')],capture_output=True,text=True,timeout=30);self.assertEqual(r.returncode,0,r.stderr)
+        self.assertIn('2 scenes kept as saved views',r.stdout)
+        data=(self.root/'scenes.glb').read_bytes();n=struct.unpack_from('<I',data,12)[0];doc=json.loads(data[20:20+n])
+        scenes=doc['scenes'][0]['extras']['sketchupScenes']
+        self.assertEqual([s['name'] for s in scenes],['01 Overview','A1 Plan'])
+        overview,plan=scenes
+        for got,want in zip(overview['camera']['eye'],[100*.0254,150*.0254,200*.0254]):self.assertAlmostEqual(got,want,4)
+        for got,want in zip(overview['camera']['target'],[0,40*.0254,0]):self.assertAlmostEqual(got,want,4)
+        self.assertTrue(overview['camera']['perspective']);self.assertAlmostEqual(overview['camera']['fov'],50,4)
+        self.assertEqual(overview['hiddenTags'],['Roof']);self.assertIs(overview.get('useTags'),True)
+        self.assertFalse(plan['camera']['perspective']);self.assertAlmostEqual(plan['camera']['height'],200*.0254,4)
+        for got,want in zip(plan['camera']['up'],[0,0,-1]):self.assertAlmostEqual(got,want,4)
+        self.assertEqual(plan['hiddenTags'],[])
+        self.assertEqual(json.loads(self.service.scenes(skp.read_bytes()))['scenes'],scenes)
+        self.assertEqual(list((self.root/'scenes').iterdir()) if (self.root/'scenes').exists() else [],[])
+        with self.assertRaises(ConversionError):self.service.scenes(b'')
     @unittest.skipUnless(library_path(),'SketchUp SDK not installed')
     def test_real_native_skp_round_trip(self):
         source=self.root/'mesh.json';source.write_text(json.dumps({'meshes':[{'name':'Test wall','positions':[0,0,0,2,0,0,0,3,0],'material':{'name':'Test paint','color':[.8,.1,.2,1]}}]}))
