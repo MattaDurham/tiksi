@@ -489,7 +489,9 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   }
   function showFailure() {
     const { refused, error } = failure;
-    const here = pending && keptHere ? (onlyHere().length ? ' The records changed here are kept on this device until the Mac has them.' : ' What changed here is kept on this device until the Mac has it.') : '';
+    // An earlier local copy is not confirmation of the edit currently on screen.
+    // A failed network request can finish before the deferred IndexedDB write does.
+    const here = pending && keptHere && keptMark === markNow() ? (onlyHere().length ? ' The records changed here are kept on this device until the Mac has them.' : ' What changed here is kept on this device until the Mac has it.') : '';
     const said = String(error.message || '').replace(/[.\s]+$/, '') + '.';
     if (refused) status((pending ? 'NOT SAVED: ' : 'PROJECT FILES: ') + brief(error.message), true, 'refused', said + (pending ? ' Sending the same save again cannot help, so it is not retried until something changes here.' : '') + here);
     else {

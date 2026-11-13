@@ -90,6 +90,8 @@ snapshot, not a complete offline 3D/document viewer. Shell caching needs a secur
 (localhost or HTTPS); an ordinary remote HTTP origin cannot install a service worker.
 Unsent changes remain in their existing recovery store. Offline viewing never creates a
 second writable workspace.
+The “kept on this device” status confirms the current edit's completed recovery write;
+an earlier snapshot cannot supply that confirmation while a newer edit is still waiting.
 
 ## Performance and completion checks
 
