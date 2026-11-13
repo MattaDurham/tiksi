@@ -345,52 +345,6 @@ h3.kicker { font-weight: 700; }
 .canvas-badge:empty { display: none; }
 .canvas-badge b { color: var(--ink); font-weight: 600; }
 .canvas-badge .ac { color: var(--accent); }
-/* the plan editor draws rulers along the top and left edges; move the overlays clear of them */
-/* PLAN handles its own touches: one finger pans the plan, two pinch it, a tap selects. The
-   page must not scroll, zoom or show a callout under a finger on the plan. */
-.plan-canvas canvas { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-.plan-canvas .canvas-badge { top: 30px; }
-.plan-canvas .canvas-hint { left: 30px; }
-/* which storey the plan canvas is showing: same glass pill as the badge, top left */
-.canvas-level {
-  position: absolute; left: 12px; top: 10px; pointer-events: none;
-  font-family: var(--mono); font-size: 10px; color: var(--accent); letter-spacing: 0.14em; font-weight: 700;
-  background: var(--glass-bg); border: 1px solid var(--glass-line); backdrop-filter: blur(8px);
-  padding: 4px 9px; border-radius: var(--radius); box-shadow: var(--shadow-1); white-space: nowrap;
-}
-.canvas-level:empty { display: none; }
-.plan-canvas .canvas-level { left: 30px; top: 30px; }
-/* NUMBER OPENINGS: the schedule floats on the canvas, clear of the badge and the scale bar */
-.plan-schedule {
-  position: absolute; right: 12px; top: 60px; width: 292px; max-height: calc(100% - 150px); display: flex; flex-direction: column;
-  background: var(--glass-bg); border: 1px solid var(--glass-line); backdrop-filter: blur(8px);
-  border-radius: var(--radius-lg); box-shadow: var(--shadow-2); font-size: 11.5px;
-}
-.plan-schedule[hidden] { display: none; }
-.plan-schedule .ps-head { padding: 9px 11px 4px; display: flex; flex-direction: column; gap: 2px; }
-.plan-schedule .ps-head b { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.14em; color: var(--accent); }
-.plan-schedule .ps-head span { font-family: var(--mono); font-size: 9.5px; color: var(--dim); }
-.plan-schedule .ps-acts { display: flex; gap: 6px; padding: 4px 11px 8px; border-bottom: 1px solid var(--line); }
-.plan-schedule .ps-rows { overflow-y: auto; padding: 4px; }
-.plan-schedule .empty { padding: 10px 11px 12px; }
-.ps-row { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--radius); cursor: pointer; border: 1px solid transparent; }
-.ps-row:hover { background: rgba(255, 255, 255, 0.04); }
-.ps-row.active { background: var(--accent-soft); border-color: rgba(232, 151, 58, 0.3); }
-.ps-num { font-family: var(--mono); font-weight: 700; font-size: 11px; text-align: center; border-radius: 999px; padding: 2px 0; border: 1px solid; }
-.ps-num.door { color: #d9b47c; border-color: rgba(217, 180, 124, 0.6); }
-.ps-num.window { color: var(--cyan); border-color: rgba(95, 179, 201, 0.6); }
-.ps-row.active .ps-num { color: var(--accent); border-color: var(--accent); }
-.ps-what { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
-.ps-what b { font-weight: 600; font-size: 11px; }
-.ps-what i { font-style: normal; color: var(--dim); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ps-size { display: flex; align-items: center; gap: 3px; }
-.ps-size em { font-style: normal; color: var(--faint); }
-.ps-size input {
-  width: 54px; padding: 3px 4px; font-family: var(--mono); font-size: 10.5px; text-align: right; color: var(--ink);
-  background: var(--panel-3); border: 1px solid var(--line-2); border-radius: 4px;
-}
-.ps-size input:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus); }
-
 .inspector {
   background: var(--panel); border-left: 1px solid var(--line);
   padding: 14px 14px 24px; overflow-y: auto; font-size: 12.5px;
@@ -1216,13 +1170,13 @@ kbd {
    html.touch is set by js/field.js from touchDevice() (render-quality.js), whatever the layout
    and the window width, so a narrow Mac window keeps its mouse sizes. PLAN and MODEL size their
    own tools. 44 points per target, 16-point fields (iPhone Safari zooms into smaller ones). */
-html.touch:not([data-view=plan]):not([data-view=model]) #view :is(.btn, .tb-btn, .seg-btn, .ps-chip, .mv-chip-btn, .sl-item, .row-del, .it-toggle, .it-links, .dep-summary, select, summary, input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=color]), textarea) {
+html.touch:not([data-view=model]) #view :is(.btn, .tb-btn, .seg-btn, .ps-chip, .mv-chip-btn, .sl-item, .row-del, .it-toggle, .it-links, .dep-summary, select, summary, input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=color]), textarea) {
   min-height: 44px;
 }
-html.touch:not([data-view=plan]):not([data-view=model]) #view :is(.btn, .tb-btn, .seg-btn, .ps-chip, .mv-chip-btn, .row-del, .it-toggle) { min-width: 44px; }
-html.touch:not([data-view=plan]):not([data-view=model]) #view :is(input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea),
+html.touch:not([data-view=model]) #view :is(.btn, .tb-btn, .seg-btn, .ps-chip, .mv-chip-btn, .row-del, .it-toggle) { min-width: 44px; }
+html.touch:not([data-view=model]) #view :is(input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea),
 html.touch dialog :is(input:not([type=checkbox]):not([type=radio]):not([type=range]), select, textarea) { font-size: 16px !important; }
-html.touch:not([data-view=plan]):not([data-view=model]) #view :is(.btn, .seg-btn, .ps-chip, .mv-chip-btn):not([hidden]) { display: inline-flex; align-items: center; justify-content: center; }
+html.touch:not([data-view=model]) #view :is(.btn, .seg-btn, .ps-chip, .mv-chip-btn):not([hidden]) { display: inline-flex; align-items: center; justify-content: center; }
 /* A small checkbox gets a finger-sized label around it to tap. */
 html.touch #view :is(.it-done-tap, .bd-sel-tap):not([hidden]) { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; margin: -6px 0; cursor: pointer; }
 html.touch #view :is(.it-done-tap, .bd-sel-tap) input { width: 22px; height: 22px; margin: 0; }

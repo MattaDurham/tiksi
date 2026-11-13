@@ -25,7 +25,7 @@ from server.workspace import WorkspaceService
 ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location('tiksi_serve_static', ROOT / 'tools/serve.py')
 serve = importlib.util.module_from_spec(spec); spec.loader.exec_module(serve)
-CLIP = '/js/guide-assets/plan.mp4'
+CLIP = '/js/guide-assets/photos.mp4'
 WORKSPACE = {'X-Tiksi-Workspace': '1'}
 
 

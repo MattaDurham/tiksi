@@ -3,7 +3,7 @@
 // file. Pure data only (no DOM, no three.js), so Node tests run it; MODEL (viewer3d.js) shows
 // them as tabs over the view, and a DOCUMENTS 3D view can start from one.
 //
-// prop.savedViews = [{ id, name, camera: { position: [x,y,z], target: [x,y,z], fov },
+// prop.savedViews = [{ id, name, camera: { position: [x,y,z], target: [x,y,z], fov, parallel? },
 //   mode: 'orbit' | 'top', tags: { tagId | '_untagged': shown },
 //   section: { on, height, planes: [{ id, kind, q, pos }], active }, xray, hiddenLevels: [levelId] }]
 // `planes` (section-planes.js) is every cut the view was saved with and `active` the one whose
@@ -42,7 +42,7 @@ export function normalizeSavedView(v, taken = new Set()) {
     section.active = planes.some(x => x.id === s.active) ? s.active : planes[0].id;
   }
   return {
-    id, name: clean(v.name) || 'View', camera: { position, target, fov },
+    id, name: clean(v.name) || 'View', camera: { position, target, fov, ...(c.parallel === true ? { parallel: true } : {}) },
     mode: v.mode === 'top' ? 'top' : 'orbit', tags,
     section,
     xray: v.xray === true,

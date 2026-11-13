@@ -164,6 +164,19 @@ html.touch .v-light-list summary { display: flex; align-items: center; min-heigh
   background: rgba(12, 16, 19, 0.85); border: 1px solid var(--accent); white-space: nowrap;
 }
 
+/* ---------- DIMENSIONS, ROOMS and NUMBERS labels over the model ---------- */
+.v-annot {
+  position: absolute; top: 0; left: 0; pointer-events: none; z-index: 3; white-space: nowrap;
+  font-family: var(--mono); font-size: 10.5px; line-height: 1.25; border-radius: 4px;
+}
+.v-annot-dim { color: var(--accent); padding: 1px 6px; background: rgba(12, 16, 19, 0.82); border: 1px solid rgba(232, 151, 58, 0.55); }
+.v-annot-room { display: flex; flex-direction: column; align-items: center; padding: 3px 8px; color: var(--ink); background: rgba(12, 16, 19, 0.78); border: 1px solid var(--line-2); }
+.v-annot-room b { font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; font-size: 10.5px; }
+.v-annot-room span { color: var(--dim); font-size: 10px; }
+.v-annot-num { min-width: 26px; text-align: center; padding: 1px 6px; border-radius: 999px; font-weight: 700; background: rgba(12, 16, 19, 0.85); border: 1px solid; }
+.v-annot-num.door { color: #d9b47c; border-color: rgba(217, 180, 124, 0.7); }
+.v-annot-num.window { color: var(--cyan); border-color: rgba(95, 179, 201, 0.7); }
+
 /* ---------- lightbox ---------- */
 .v-lightbox {
   position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px;

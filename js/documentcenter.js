@@ -575,7 +575,8 @@ function vpInspector(v) {
       ${field('Model style', styleSel)}
       <div class="dc-checks"><label><input type="checkbox" data-layer="model" ${v.layers.model ? 'checked' : ''}> Model</label>
       <label><input type="checkbox" data-layer="dims" ${v.layers.dims ? 'checked' : ''}> Wall dimensions</label>
-      <label><input type="checkbox" data-layer="rooms" ${v.layers.rooms ? 'checked' : ''}> Room names and areas</label></div>
+      <label><input type="checkbox" data-layer="rooms" ${v.layers.rooms ? 'checked' : ''}> Room names and areas</label>
+      <label><input type="checkbox" data-layer="numbers" ${v.layers.numbers ? 'checked' : ''}> Door and window numbers</label></div>
       <button class="btn small" data-fit>FIT TO PLAN</button>`;
   } else if (v.kind === 'section' || v.kind === 'elevation') {
     const walls = (prop.walls || []);

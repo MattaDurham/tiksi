@@ -77,6 +77,9 @@ export function attachModelMarkup(v) {
   }
   // How many metres one pixel of the view spans at the depth of p.
   function mPerPx(p) {
+    // PARALLEL: one pixel spans the same everywhere, the view's height over the canvas height.
+    const view = v.viewCamera ? v.viewCamera() : camera;
+    if (view.isOrthographicCamera) return (view.top - view.bottom) / view.zoom / Math.max(1, canvas.clientHeight);
     camera.getWorldDirection(_f);
     const depth = Math.max(camera.near, _a.set(p[0], p[1], p[2]).sub(camera.position).dot(_f));
     return 2 * depth * Math.tan(camera.fov * Math.PI / 360) / Math.max(1, canvas.clientHeight);
@@ -132,7 +135,7 @@ export function attachModelMarkup(v) {
   }
   function projectArr(p, w, h) { return project({ x: p[0], y: p[1], z: p[2] }, w, h); }
   function project(a, w, h) {
-    point.set(a.x, a.y, a.z).project(camera);
+    point.set(a.x, a.y, a.z).project(v.viewCamera ? v.viewCamera() : camera);
     if (point.z < -1 || point.z > 1) return null;   // behind the camera, or past its far plane
     return [(point.x + 1) / 2 * w, (1 - point.y) / 2 * h];
   }

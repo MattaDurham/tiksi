@@ -11,8 +11,7 @@ Open **GUIDE** at the top of Tiksi for chapter search, expandable screenshots an
 - [Your first renovation workflow](#start)
 - [Save, open and move your work](#files)
 - [Bring in a scan or Polycam capture](#capture)
-- [Draw and correct a floorplan](#plan)
-- [Inspect and edit the 3D model](#model)
+- [Inspect the 3D model](#model)
 - [Components, tags, saved views and the Tiksi menu](#tags)
 - [Edit elsewhere and compare before/after](#exchange)
 - [Choose and customize finishes](#materials)
@@ -46,8 +45,7 @@ The same sample property appears throughout this guide. The left rail changes vi
 | Workspace | Use it for |
 | --- | --- |
 | FILE | Open, import, save, exchange models, edit the one-pager and change settings. |
-| PLAN | Trace and measure the room; edit walls, openings and levels. |
-| MODEL | Inspect the 3D design, imported scans, photo pins and before/after. |
+| MODEL | Inspect the 3D design with its dimensions, room areas and door and window numbers, imported scans, photo pins and before/after. |
 | MATERIALS | Choose and tune finishes or make a material from a photo. |
 | PHOTOS | Keep site images, notes, room links and model pins together. |
 | MEASURE | Read tape measurements from walk-through video frames and apply them to the model. |
@@ -63,8 +61,8 @@ The same sample property appears throughout this guide. The left rail changes vi
 ### A useful first session
 
 1. Choose FILE → Project → NEW PROPERTY, or keep the demo property while you learn. Back from a site visit with everything in one folder? Choose NEW PROPERTY FROM A FOLDER instead and skip the next step.
-2. Use FILE → Import for a scan, Polycam link or photos. If you already have a floorplan image, use PLAN → UPLOAD IMAGE.
-3. In PLAN, check the scale and review or draw walls, rooms, doors and windows. Open MODEL to inspect the result.
+2. Use FILE → Import for a scan, Polycam link or photos.
+3. In MODEL, check the walls, rooms, doors and windows with DIMENSIONS, ROOMS and NUMBERS. Change them in SketchUp with EDIT IN SKETCHUP; saves there come back to Tiksi.
 4. In PHOTOS, add reference images and pin them to the model. In MATERIALS, choose the proposed finishes.
 5. In PROJECTS, add scope items, quantities, costs and durations. Link products and model elements to the work.
 6. Review BUDGET, SCHEDULE and CUT SHEETS. Finish with FILE → Project → SAVE PROJECT so the work travels in a .tiksi file.
@@ -132,16 +130,16 @@ FILE → Import offers CHOOSE FILES, POLYCAM LINK and PHOTOS → 3D.
 1. For an exported scan, open FILE → Import → CHOOSE FILES. Choose a self-contained GLB or the complete exported ZIP with its textures.
 2. For a shared capture, choose POLYCAM LINK and paste the share URL. You can also paste a Polycam URL into the console when no text field is focused.
 3. Follow the import log. If the public link cannot provide a model, download the model from Polycam and use the file-drop fallback.
-4. A normal file import opens its reference model in MODEL. Select the mesh in the left column and choose PROPOSE PLAN FROM SCAN when you want editable walls, rooms, openings, levels and a tracing underlay. Correct the proposal in PLAN.
+4. A normal file import opens its reference model in MODEL. Select the mesh in the left column and choose PROPOSE PLAN FROM SCAN when you want walls, rooms, openings and levels. Correct the proposal in SketchUp with EDIT IN SKETCHUP.
 5. The Polycam link workflow proposes a plan during import. When that workflow adds a scan to an existing plan, choose whether it is the next floor, a rescan, a separate building or reference only before applying it.
 
 ### Other features here
 
 **Meshes, clouds and splats.** MODEL can display several capture types. A mesh has surfaces; a cloud has points; a splat is a visual reference.
 
-**Propose plan later.** In MODEL, select a mesh scan and choose PROPOSE PLAN FROM SCAN. The PLAN property inspector also offers the action for its available source mesh.
+**Propose plan later.** In MODEL, select a mesh scan and choose PROPOSE PLAN FROM SCAN.
 
-**Fixtures from the scan.** After a plan proposal, or later with PROPOSE FIXTURES FROM SCAN (MODEL mesh inspector or the PLAN scan card), Tiksi reads counter runs, wall cabinets, tall appliances, beds, sofas, tables, desks and storage from the mesh. Each proposal shows its confidence and the heights it rests on; tick the ones that are really there. Click a fixture in MODEL to correct its sizes or mark it tape measured; ADD FIXTURE HERE adds one by hand. Fixtures save with the project, follow Undo, show as outlines in PLAN and become tagged groups in the SketchUp mirror, where moving, turning, stretching or deleting one comes back to Tiksi.
+**Fixtures from the scan.** After a plan proposal, or later with PROPOSE FIXTURES FROM SCAN (the MODEL mesh inspector), Tiksi reads counter runs, wall cabinets, tall appliances, beds, sofas, tables, desks and storage from the mesh. Each proposal shows its confidence and the heights it rests on; tick the ones that are really there. Click a fixture in MODEL to correct its sizes or mark it tape measured; ADD FIXTURE HERE adds one by hand. Fixtures save with the project, follow Undo and become tagged groups in the SketchUp mirror, where moving, turning, stretching or deleting one comes back to Tiksi.
 
 **A whole folder at once.** FILE → Project → NEW PROPERTY FROM A FOLDER (or CHOOSE A FOLDER in the New Property dialog) makes a property from the folder of a site visit. Tiksi first lists what the folder holds: every scan, photo, PDF and video that will come in, each with a tick you can clear, with a tick for each subfolder as well, and every file that stays behind with the reason. Nothing is made until you press CREATE. A note in the folder holding a Polycam share link brings that scan in, and the plan is proposed from the first mesh. With the local server on the Mac, the Mac’s own folder window opens, the files are read where they are, and the project file is kept in a Tiksi folder inside the folder you picked; nothing else in it is moved, renamed or deleted. Audio recordings, office files and anything over 600 MB stay in the folder and are listed.
 
@@ -151,64 +149,13 @@ FILE → Import offers CHOOSE FILES, POLYCAM LINK and PHOTOS → 3D.
 
 > **Good to know:** A shared Polycam link must expose a downloadable artifact. Room proposals need review, especially around furniture, glazing and diagonal walls. Point clouds and splats are references; the mesh-to-plan action does not automatically turn them into building elements.
 
-<a id="plan"></a>
-
-## Draw and correct a floorplan
-
-**Where:** PLAN
-
-The plan is editable building geometry. Walls, openings and rooms become the 3D model and can link to photos, materials and scope items.
-
-![Plan tools are on the left of the canvas. Select an element to edit dimensions, materials and scope links in the right inspector.](js/guide-assets/plan.png)
-
-Plan tools are on the left of the canvas. Select an element to edit dimensions, materials and scope links in the right inspector.
-
-### Try it
-
-1. Use UPLOAD IMAGE for a tracing underlay, or select a photo in PHOTOS and choose PLAN UNDERLAY.
-2. Choose CALIBRATE, mark two points with a known separation, enter the real distance in the inspector and apply the scale.
-3. Choose WALL, then click successive wall endpoints. Use the interior/exterior preset for the starting thickness. Escape ends the current drawing action.
-4. Place doors and windows on walls. Give each room a floor with the ROOM tool so it can have its own finish and area: click once inside a room the walls close, or click corner by corner where the walls leave it open.
-5. Choose SELECT and click an element to select it; a click never moves anything. Type precise dimensions in the inspector, or drag a wall or a selected wall's corner. Joined walls and the floors on them follow the edit.
-6. Use + LEVEL for another storey and set its elevation and wall height. Each level has its own underlay and plan geometry.
-
-<details><summary>Select a wall and change its dimensions</summary>
-
-![Select a wall and change its dimensions](js/guide-assets/plan.gif)
-
-In PLAN, use SELECT and click a wall. Edit the wall height in the inspector to eight feet. Open MODEL to inspect the updated design.
-
-[Download the video](js/guide-assets/plan.mp4)
-
-</details>
-
-### Other features here
-
-**Sticky walls.** Dragging a wall slides its straight run and connected geometry. Dragging a corner turns the walls there, and walls and floors attached along them stay on them. Hold Alt/Option to move that wall on its own.
-
-**Floor a room in one click.** With ROOM, a click inside an area the walls close floors it, with its corners on the wall centre lines; the canvas outlines that area before you click. Where the walls leave a room open, click its corners one by one instead. Start on a wall or Alt-click to outline a floor inside a closed room.
-
-**Floors follow walls.** A floor never moves on its own; dragging one pans the view. Its corners that sit on a wall as drawn are attached and move with the wall. Select a floor to see them: solid corners are attached, hollow ones are loose. Drag a corner to reshape the floor, or use SNAP CORNERS TO WALLS.
-
-**Snapping and dimensions.** SNAP helps with wall ends, wall centre lines, floor corners, axes and angles. DIMS displays wall dimension strings.
-
-**Opening schedule.** NUMBER OPENINGS (under SNAP and DIMS) tags every door D1, D2... and every window W1, W2... on the level and lists them with the rooms each one connects and its width × height. Numbers run bottom level first, then top to bottom and left to right across the plan, so they stay put when you edit sizes. Type a corrected size into a row (Enter moves down the column); it fits the wall and Undo reverts it. Click a row to select that opening. PRINT or SAVE PNG makes the numbered plan with the table, ready to send for corrections like "D4 is 30 × 80". The switch only changes the view.
-
-**Underlay editing.** Click the image to select it and change opacity; drag it only while selected to align it. Remove it without deleting the traced walls.
-
-**Mark up the plan.** MARK UP (U) draws over the plan with the same bar as in MODEL: pen, highlighter, eraser, numbered note and MOVE. Ink and notes are kept in real measurements on their level, so they stay on the plan through pan and zoom and show whenever that level is open. A pencil draws while fingers pan and zoom; with no pencil a finger or the mouse draws and Space-drag or two fingers move the plan. The list in the bar opens each markup and saves a picture of the level with the ink on it.
-
-**Navigation and undo.** Drag empty canvas or a floor to pan. The scroll wheel or a pinch zooms about the cursor; plan has no orbit. Space-drag or middle-drag pans anywhere; F fits the view. SHOW toggles the scan underlay (G) and furniture, cabinet and fixture footprints (K). UNDO and REDO are in the top bar in PLAN and MODEL. One wall gesture includes its joined walls, openings and floor corners.
-
-> **Good to know:** Calibrate the underlay before tracing: calibration changes the image scale, not walls you already drew. Rooms need their own ROOM floors to create floor surfaces and floor-area takeoffs. Recheck scan-generated geometry against measurements on site.
-
 <a id="model"></a>
 
-## Inspect and edit the 3D model
+## Inspect the 3D model
 
 **Where:** MODEL
 
-The 3D view combines the plan-generated building, imported captures and photo pins. It is also a place to edit model elements and inspect imported materials.
+The 3D view combines the building, imported captures and photo pins. It shows walls, rooms, doors and windows with their sizes and finishes; their shape changes in SketchUp.
 
 ![Here every group is ON SCREEN (Tiksi menu); by default the tools live in the menu under the Tiksi logo. The inspector follows the selected wall, room surface or imported model.](js/guide-assets/model.png)
 
@@ -216,21 +163,25 @@ Here every group is ON SCREEN (Tiksi menu); by default the tools live in the men
 
 ### Try it
 
-1. Open MODEL and use FRAME if the room is outside the camera. Drag or middle-drag to orbit about the point under the cursor, hold Shift to pan (even mid-drag), scroll to zoom, or use the TOP control for a plan-like view. On a trackpad, pinch also zooms.
-2. Click a wall, floor or ceiling to inspect it. Change the offered dimensions or material in the inspector.
-3. Choose MOVE, select a native wall and drag its gizmo. Joined walls and room corners follow. Return to PLAN for exact outlines; imported mesh surfaces do not expose native wall controls.
+1. Open MODEL and use FRAME if the room is outside the camera. Drag or middle-drag to orbit about the point under the cursor, hold Shift to pan (even mid-drag), scroll to zoom, or use TOP for a plan, drawn in PARALLEL projection. On a trackpad, pinch also zooms.
+2. Click a wall, floor or ceiling to inspect it: the panel shows its sizes and lets you choose its finishes. Walls, doors and windows change in SketchUp: EDIT IN SKETCHUP opens the project's model there, and a save comes back to Tiksi.
+3. Turn on DIMENSIONS, ROOMS and NUMBERS in the mode bar (or under Display in the Tiksi menu) to label every wall's length, each room's name and area, and each door and window's number. The labels read the same from any angle.
 4. Use SECTION to cut through the building and reveal interiors: the cut floats in the view as a see-through plane. Drag its arrow to slide it and a ring to turn it. Use X-RAY to inspect overlapping references.
 5. For lighting, choose LIGHT (or FILE → Settings → Model environment, which also holds render quality). For an image export, use FILE → 3D exchange → SAVE VIEW IMAGE while MODEL is open.
 
 ### Other features here
 
-**Undo and redo.** Use the top-bar buttons or Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (Ctrl+Y also redoes). PLAN and MODEL share up to 80 geometry edits per project during this session, including moves and geometry inspector changes. Disk saves and view switches retain history; a reload or file import starts fresh. Unrelated shared edits are kept; a conflicting geometry change disables restoration rather than overwriting it. Photos, notes, imported references and underlay placement are outside geometry undo.
+**Undo and redo.** Use the top-bar buttons or Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (Ctrl+Y also redoes). MODEL and MEASURE share up to 80 geometry edits per project during this session, such as finishes, door states, trim and applied tape readings. Disk saves and view switches retain history; a reload or file import starts fresh. Unrelated shared edits are kept; a conflicting geometry change disables restoration rather than overwriting it. Photos, notes and imported references are outside geometry undo.
 
 **Walk mode.** Choose WALK, then use W/A/S/D or the arrow keys to move and Shift to move faster. Drag to look or click the canvas to capture the mouse. Escape releases it or exits walk mode.
 
 **Measure surfaces.** Choose MEASURE and click two surface points to display a distance. CLEAR MEASURES removes temporary measurements; image export can include them.
 
 **Field of view.** Choose FIELD OF VIEW (Z), as in SketchUp, then press and drag on the model: up narrows the view and down widens it, while the camera stays where it stands (the middle button still orbits and scroll still moves the camera). The panel shows the angle across the picture's long and short sides and its 35 mm equivalent, and has the iPhone 17 Pro lenses: 0.5× (14 mm, the ultra wide), 1× (24 mm, the lens Polycam keyframes come from) and 2× (48 mm), plus DEFAULT. An outline shows the phone's 4:3 picture, fitted in the window, so the model lines up with keyframes and photos taken at that lens. The lenses are also under View in the Tiksi menu and in the phone's view panel. A saved view keeps its lens.
+
+**Parallel projection.** PARALLEL, in the mode bar beside TOP (Shift+P), draws the model with no perspective: lines that are parallel in the building stay parallel on the screen, as on a drawing. It is the far end of FIELD OF VIEW: keep dragging up past the narrowest angle, or choose PARALLEL in its panel; drag down to bring the perspective back. TOP turns it on and ORBIT turns it off again. Zoom, pan and orbit work as usual, and a saved view keeps it.
+
+**Dimensions, rooms and numbers.** DIMENSIONS labels each wall with its length measured on its centre line, on a line beside the wall just above the floor. ROOMS labels each room with its name and floor area to the wall centre lines. NUMBERS labels each door D1, D2... and each window W1, W2..., the same marks as the door and window schedule in DOCUMENTS. Labels stay upright and readable from any angle; a hidden level or a section cut hides its labels. Each switch is kept with the property.
 
 **Section cuts.** SECTION starts with one flat cut that slides up and down. The strip at the bottom of the view adds more: UP AND DOWN, SIDE TO SIDE, FRONT TO BACK, or CUSTOM, an upright cut facing you that the rings turn to any angle. Up to six cuts work at once; click a numbered cut to move its handles there. SNAP holds turns to 15° and slides to 5 cm (1 inch in feet and inches); switch it off to move freely. FLIP cuts away the other side, PLANES hides the floating planes while the cut stays, and REMOVE deletes the cut. A saved view keeps its cuts.
 
@@ -248,17 +199,17 @@ Here every group is ON SCREEN (Tiksi menu); by default the tools live in the men
 
 **Photo mode.** PHOTO MODE (on a selected pin, PHOTO in the pinned list, or an orange camera pyramid in the model) stands where the photo was taken and lays the photo over the model, OVER with an opacity slider or SIDE BY SIDE. The lens comes from the photo file (an iPhone ultra-wide photo is about 102° across), and a photo with no camera yet starts at the scan frame taken nearest in time, when scan cameras are imported. Line it up by eye, or choose FIT WITH POINTS and click a sharp corner in the photo, then the same spot in the model, four times or more: the camera is solved and the average error shown. A crooked photo is turned upright. SAVE CAMERA FOR THIS PHOTO keeps it, and the camera shows as a pyramid in the model. Anything that will not line up is where the model and the site differ. Esc or DONE ends.
 
-**Numbered photo positions.** MAKE NUMBERED POSITION turns a photo's found camera into a numbered position, marked like a section on a drawing in the model and on the plan. A position collects the before photo, a dated rendering of the current design from exactly that camera each time you choose RENDER ALL POSITIONS (or RENDER THIS POSITION), and the after photo (ADD AFTER PHOTO). VIEW FROM HERE stands at the position with its latest photo over the model. Numbers are never reused.
+**Numbered photo positions.** MAKE NUMBERED POSITION turns a photo's found camera into a numbered position, marked like a section on a drawing in the model. A position collects the before photo, a dated rendering of the current design from exactly that camera each time you choose RENDER ALL POSITIONS (or RENDER THIS POSITION), and the after photo (ADD AFTER PHOTO). VIEW FROM HERE stands at the position with its latest photo over the model. Numbers are never reused.
 
 **Scan cameras.** A Polycam raw data export (turn on Developer Mode in Polycam before scanning) records the camera of every scan frame. Under SCAN CAMERAS, with nothing selected, IMPORT POLYCAM CAMERAS reads them from the export folder, and LINE UP WITH THE MODEL fits each tracking session to the model from its depth maps, reporting how many points land within 5 cm. ADD SHARP FRAMES AS PHOTOS then adds scan frames as photos with their cameras already placed. PLACE PHOTOS AUTOMATICALLY sends photos to the placement helper on the Mac running Tiksi, which matches them against the scan frames; install it once with python3 tools/install-photo-placement.py and fill in the export folder path. Check each placed photo in PHOTO MODE; UNDO AUTOMATIC PLACEMENT puts the previous cameras back.
 
 **Notes anywhere.** Right-click a wall, floor, scan or the ground and choose ADD NOTE HERE, or use NOTE (N) and click. The note links to the room and wall under it. Right-click a note to edit, move or delete it; NOTES in the mode bar hides or shows them all. Both switches are kept with the property.
 
-**Open and closed doors.** Interior doors stand ajar so you can see through rooms, and exterior doors are shut. Right-click a door and choose CLOSE DOOR or OPEN DOOR to change that one; its panel on the right has the same choice under SHOWN. CLOSE ALL DOORS, at the bottom of the right-click menu and under Display in the Tiksi menu, shuts every interior door at once, and OPEN ALL DOORS stands them ajar again. Each is one step for Undo. PLAN still draws every door's swing.
+**Open and closed doors.** Interior doors stand ajar so you can see through rooms, and exterior doors are shut. Right-click a door and choose CLOSE DOOR or OPEN DOOR to change that one; its panel on the right has the same choice under SHOWN. CLOSE ALL DOORS, at the bottom of the right-click menu and under Display in the Tiksi menu, shuts every interior door at once, and OPEN ALL DOORS stands them ajar again. Each is one step for Undo. DOCUMENTS plans still draw every door's swing.
 
 **Mark up the model.** MARK UP (U) turns the view into a drawing surface, with its tools in a bar at the bottom: pen, highlighter, line, eraser, numbered note and MOVE, six colours and three line widths. An Apple Pencil or a tablet pen draws with its pressure, and fingers still orbit and zoom; while the pencil is down a resting hand is ignored. With no pencil, a finger or the mouse draws, and two fingers, the wheel, a right-drag or a Space-drag move the view; the finger button in the bar switches between drawing and moving. Ink goes onto the surfaces of the model itself: a stroke across a wall is drawn on that wall, follows it round a corner, stays on the plane of the wall over a window opening, and shows from any view, so marks from anywhere join the open markup. The box button in the bar (S) switches to ink flat on the screen instead: that ink belongs to the camera it was drawn from, so move the view and it is put away, the chip above the bar flies back to it, and the next flat mark from a new view starts a new markup. LINE (L) draws straight lines the way SketchUp does: click a point on a face, then the next; the line stays on the plane of that face and snaps to the ends, middles and edges you can see (those of the model and of the lines already drawn) and to the red, green and blue axes, and parallel or perpendicular to the edge touched last, with a label saying which. Type a length and press Enter to place the next point that far along; Shift holds the direction, the arrow keys hold the red, green or blue axis, a click on the first point closes the shape and Esc ends the line. A numbered note is pinned to the wall, floor or scan under it and shows from any view; tap it to change its words. The list in the bar opens, renames, ticks off or deletes each markup and saves a picture of it. UNDO and REDO step through the marks while MARK UP is on. Markups are kept in the project file.
 
-**Edit in SketchUp.** EDIT IN SKETCHUP (in MODEL and PLAN) brings the project's .skp up to date and opens it in SketchUp. Save there and walls, openings and rooms come back. It needs the project kept in a folder and Tiksi running on the Mac with SketchUp.
+**Edit in SketchUp.** EDIT IN SKETCHUP (in MODEL) brings the project's .skp up to date and opens it in SketchUp. Save there and walls, openings and rooms come back. It needs the project kept in a folder and Tiksi running on the Mac with SketchUp.
 
 **Finish takeoff.** A selected imported model can map material slots and create a measured finish estimate. See the exchange chapter for that workflow.
 
@@ -371,7 +322,7 @@ Select a material to open its preview and controls. The catalog can be searched 
 2. Adjust color, roughness and the controls offered by its pattern. For tile or plank patterns, set real repeat dimensions.
 3. Use DUPLICATE when you want a separate variation. Use NEW MATERIAL for a new custom finish.
 4. For a photographed finish, select its image in PHOTOS and choose MATERIAL, or select/upload a source image in the material editor.
-5. Assign the material from a selected wall or room in PLAN or MODEL. Use SOURCE THIS MATERIAL to research a purchasable match.
+5. Assign the material from a selected wall or room in MODEL. Use SOURCE THIS MATERIAL to research a purchasable match.
 
 ### Other features here
 
@@ -389,11 +340,11 @@ Select a material to open its preview and controls. The catalog can be searched 
 
 **Where:** PHOTOS
 
-The photo gallery holds site references and panoramas with notes, room links, model links and scope links. A photo can also become a plan underlay, a material or a 3D pin. With Tiksi running on the Mac, the gallery is the project folder: every picture in it and its subfolders shows where it is, and Tiksi keeps no copy.
+The photo gallery holds site references and panoramas with notes, room links, model links and scope links. A photo can also become a material or a 3D pin. With Tiksi running on the Mac, the gallery is the project folder: every picture in it and its subfolders shows where it is, and Tiksi keeps no copy.
 
-![Select a gallery card to open its inspector. Send to offers PLAN UNDERLAY, PIN IN 3D, MATERIAL and panorama lighting.](js/guide-assets/photos.png)
+![Select a gallery card to open its inspector. Send to offers PIN IN 3D, MATERIAL and panorama lighting.](js/guide-assets/photos.png)
 
-Select a gallery card to open its inspector. Send to offers PLAN UNDERLAY, PIN IN 3D, MATERIAL and panorama lighting.
+Select a gallery card to open its inspector. Send to offers PIN IN 3D, MATERIAL and panorama lighting.
 
 ### Try it
 
@@ -420,8 +371,6 @@ Open PHOTOS and select an unpinned reference card. Choose PIN IN 3D, then click 
 **Select the good ones.** Tick the corner of a card, choose SELECT in the details, or press S in the viewer while stepping through with the arrow keys. The SELECTED filter then shows only those, so a few hundred scan frames are gone through once.
 
 **Photos Tiksi held.** Photos added before Tiksi read the project folder are moved into its Photos folder the first time PHOTOS opens, with their notes, pins and links, and Tiksi lets go of its copy. A photo already in the folder is linked to that file instead of written twice.
-
-**Plan reference.** PLAN UNDERLAY sends the selected image to the active level for tracing and calibration.
 
 **Material from a photo.** MATERIAL creates a photo-based finish that you can tune in MATERIALS.
 
@@ -450,7 +399,7 @@ A phone video of someone holding a tape against cabinets, doors, appliances and 
 3. Use TAPE ▶ (Shift+→) to jump between those seconds. Each jump looks at the frames around that moment and shows the sharpest one in which the blade is still visible. → and ← step one second; . and , step a tenth; B looks for the sharpest frame near any moment.
 4. Scroll to zoom and drag to pan. Shift+drag (or CROP) draws a box around the numbers; the box is kept with the reading.
 5. Type the value as the tape shows it: 33 1/2, 33-1/2", 2'-9 1/2" or 850 mm. A bare number means inches, or millimetres when Settings shows millimetres; the field shows how it was read. Add what was measured, the direction (width, height, depth) and how sure you are (clear, probable, unreadable).
-6. Attach the reading to a door or window width or height or a wall length, or keep it as a note. SAVE READING stores it with its frame. APPLY changes the model the same way a typed edit in PLAN does, so UNDO in the top bar reverts it.
+6. Attach the reading to a door or window width or height or a wall length, or keep it as a note. SAVE READING stores it with its frame. APPLY changes that size in the model, so UNDO in the top bar reverts it.
 7. Readings nobody has explained yet (no element, nothing said about what was measured, or unreadable numbers) collect in ASK THE OWNER with their frames. COPY LIST copies the questions as text to send.
 
 ### Other features here
@@ -547,7 +496,7 @@ Choose a project to edit its scope. Each row can carry quantity, unit, low/likel
 2. Use ADD ITEM for each piece of work. Name it clearly and enter its quantity and unit.
 3. Enter low, likely and high unit costs. Keep quantity and price units consistent; the totals are calculated from these inputs.
 4. Add duration in days. Use the predecessor summary control to choose the items that must finish first.
-5. Open a scope item with the arrow beside its name to see its status, notes, linked rooms and walls, products and photos. Link rooms, walls and products there; each link opens PLAN, PRODUCTS or PHOTOS on that record. Photos can be linked to an item in PHOTOS.
+5. Open a scope item with the arrow beside its name to see its status, notes, linked rooms and walls, products and photos. Link rooms, walls and products there; each link opens MODEL, PRODUCTS or PHOTOS on that record. Photos can be linked to an item in PHOTOS.
 6. Tick the box at the start of a row when the item is done. Done items move to the bottom and the project counts them.
 7. Use the project’s selection checkbox to include or exclude it from the budget program and schedule.
 8. For a list of small jobs, such as a punch list, use ADD SUBPROJECT. Each subproject has its own status, priority, room and source, and is listed under its project, open ones first.
@@ -724,7 +673,7 @@ A sheet with a floor plan cut at 3'-11", a section through the plan, a 3D view a
 
 **Plan layer.** Plans draw the cut walls solid, door swings, windows, wall dimensions and room names with areas as crisp vectors over the model.
 
-**Schedules.** Door and window, room, product and scope item lists stay in step with PLAN, PRODUCTS and PROJECTS.
+**Schedules.** Door and window, room, product and scope item lists stay in step with the model, PRODUCTS and PROJECTS. A PLAN view can show each door and window's number from the schedule (Door and window numbers, with Wall dimensions and Room names and areas).
 
 **Revisions.** Each saved PDF becomes the next revision in the title block and a document of the property, so it travels in the project file.
 
@@ -780,7 +729,7 @@ Settings groups display, model environment and workspace maintenance. This synth
 
 ### Other features here
 
-**Keep a SketchUp mirror.** With the local server and SketchUp on this Mac, each project gets a .skp beside its canonical .tiksi. Keep Tiksi open on the Mac while authoring so saved native edits return to the shared project; phone clients see the synced results. The static edition instead needs a linked folder. EDIT IN SKETCHUP in MODEL or PLAN opens the native file on the Mac.
+**Keep a SketchUp mirror.** With the local server and SketchUp on this Mac, each project gets a .skp beside its canonical .tiksi. Keep Tiksi open on the Mac while authoring so saved native edits return to the shared project; phone clients see the synced results. The static edition instead needs a linked folder. EDIT IN SKETCHUP in MODEL opens the native file on the Mac.
 
 **Save workspace backup.** Exports every property together. Keep a .tiksi per property for ordinary project handoffs.
 
@@ -833,17 +782,11 @@ Use the visible tooltips and inspector labels when you forget a control. These a
 
 **Save / open.** Cmd/Ctrl+S: save. Cmd/Ctrl+Shift+S: save as. Cmd/Ctrl+O: open.
 
-**Plan navigation.** F: fit view. Drag empty canvas: pan. Scroll wheel or pinch: zoom. Space-drag or middle-drag: pan. G: scan underlay. K: furniture. [ and ]: step between levels.
+**Model navigation.** Drag or middle-drag: orbit. Shift+drag or right-drag: pan. Wheel or pinch: zoom. F: frame. O: orbit. W: walk. T: top, in parallel projection. Shift+P: parallel projection on or off. C: section. X: X-ray. G: the Scan capture tag. K: the Furniture and fixtures tag. Page Up / Page Down: previous or next saved view. D: measure. P: pin photo. N: note. Right-click: note menu.
 
-**Plan drawing.** V: select. W: wall. D: door. N: window. R: room. C: calibrate. With ROOM, a click inside closed walls floors that room and Alt-click starts an outline; click the first point or double-click to close an outline.
+**Mark up.** U: mark up on or off, in MODEL. While it is on, P: pen. H: highlighter. E: eraser. N: numbered note. V: move the view. 1, 2, 3: line width. Space-drag: move the view. Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z: undo and redo a mark. Esc: leave.
 
-**Model navigation.** Drag or middle-drag: orbit. Shift+drag or right-drag: pan. Wheel or pinch: zoom. F: frame. O: orbit. W: walk. T: top. C: section. X: X-ray. G: the Scan capture tag. K: the Furniture and fixtures tag. Page Up / Page Down: previous or next saved view. M: move walls. D: measure. P: pin photo. N: note. Right-click: note menu.
-
-**Mark up.** U: mark up on or off, in MODEL and PLAN. While it is on, P: pen. H: highlighter. E: eraser. N: numbered note. V: move the view. 1, 2, 3: line width. Space-drag: move the view. Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z: undo and redo a mark. Esc: leave.
-
-**Geometry undo.** Top-bar UNDO / REDO work in PLAN, MODEL and MEASURE (applied tape readings). Cmd/Ctrl+Z: undo. Cmd/Ctrl+Shift+Z or Ctrl+Y: redo. History is per project for the current session. Escape ends an active tool action.
-
-**Move one wall.** Alt/Option while dragging isolates that wall from the normal connected-wall behavior; floors stay where they are.
+**Geometry undo.** Top-bar UNDO / REDO work in MODEL and MEASURE (applied tape readings). Cmd/Ctrl+Z: undo. Cmd/Ctrl+Shift+Z or Ctrl+Y: redo. History is per project for the current session. Escape ends an active tool action.
 
 **Where is save/import?.** Open FILE at the top (on a phone, FILE in the side panel). Project handles .tiksi files; Import handles captures and photos; 3D exchange handles editing in other applications.
 

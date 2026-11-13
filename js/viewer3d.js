@@ -1,6 +1,6 @@
 import { openingProblems } from './opening-validation.js';
-import { resizeOpening } from './opening-schedule.js';
-import { openingDimensions, wallWidthFromSlab } from './opening-dimensions.js';
+import { openingDimensions } from './opening-dimensions.js';
+import { modelAnnotations } from './model-annotations.js';
 import { EVIDENCE_STATES, EVIDENCE_COLORS, evidenceState, setEvidence, elementEvidenceRecord } from './evidence.js';
 import { withUncertainty } from './uncertainty-view.js';
 // 3D model view: a rendering, not a debug scene.
@@ -33,7 +33,7 @@ import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 import {
-  ws, activeProperty, defaultEnv, uid, touch, units, fmtLen, parseLen, fmtArea, polyArea, countsAsFloor,
+  ws, activeProperty, defaultEnv, uid, touch, units, fmtLen, fmtArea, polyArea, countsAsFloor,
   escapeHtml, deleteFile, getFile, itemById, materialById, isoToday, projectLabel, propertyProjects,
   ensureLevels, wallsOn, roomsOn, wallHeightOf, levelOfWall, levelOfRoom, levelHeight, topOfLevels, openingsOn,
 } from './store.js';
@@ -47,14 +47,13 @@ import { icon } from './icons.js';
 import { buildPropertyGroup, buildFixtureGroup, buildTrimGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
 import { wallFaceLabels, wallSides, doorLeaves, doorShownOpen, setDoorShownOpen, doorGlass, plainOpening } from './wall-solids.js';
 import { SECTION_KINDS, SECTION_LABELS, MAX_SECTIONS, TURN_SNAP_DEG, moveSnapStep, snapTo, quatRotate, planeNormal, planeOf, flipped, rangeAlong, movedTo, makeSection, normalizeSections, levelHeightOf } from './section-planes.js';
-import { planWallMove, applyWallMove, normalOffset, movedWallLengths, moveLeavesShortWall } from './wallmove.js';
 import { addPhotoFromFile, photoUrl, photoById, revokePhotoUrls, photoBytes, ensureCameraFacts } from './photos-store.js';
 import { normalizeView, defaultHfov, hfovOf, viewFrame, viewForPin, FOV_MIN, FOV_MAX, FOUND_SOURCES } from './photo-match.js';
 import { wallAnchor, sheetPlacement, viewForSheet, PRINT_SIZES, DEFAULT_PRINT } from './pins.js';
 import { addDocumentFromFile, documentCanvas, setDocumentPage, isPdfDocument } from './documents.js';
 import { poseFromView, viewFromPose, lookAtPose, solvePose, lensFromHfov, hfovOfLens, project as projectPose, poseFromMatrix } from './camera-solve.js';
 import { takenAtMs } from './photo-exif.js';
-import { LENSES, lensById, vfovForLens, describeView, dragFov, lensFrameRect, DEFAULT_VFOV } from './lens.js';
+import { LENSES, lensById, vfovForLens, describeView, dragFov, lensFrameRect, DEFAULT_VFOV, VFOV_MIN } from './lens.js';
 import { KF, keyframeRow, keyframeModelPose, keyframeLens, nearestKeyframe, sharpKeyframes, segmentsOf, decodePng16, depthPoints, alignSession } from './polycam-cameras.js';
 import { addPosition, removePosition, picturesOf, positionLabel, renderingName, renderSize, ROLE_LABELS } from './positions.js';
 import {
@@ -83,9 +82,10 @@ let uncertaintyShown = false;
 
 // ---------- per-mount state ----------
 let el = null, wrapEl = null, inspEl = null, hud = {};
-let scene = null, camera = null, controls = null, nav = null, walk = null, gizmo = null, composer = null, passes = {};
+let scene = null, camera = null, controls = null, nav = null, walk = null, composer = null, passes = {};
 let sky = null, envSky = null, sun = null, hemi = null, envRT = null, skyScene = null, panoTex = null, panoId = null;
 let modelGroup = null, groundGroup = null, scanRoot = null, pinRoot = null, noteRoot = null, lightRoot = null, measureRoot = null, markupRoot = null;
+let annotRoot = null, annotLabels = [];   // DIMENSIONS, ROOMS and NUMBERS: lines in the scene, labels over the view
 let cameraRoot = null, positionRoot = null;   // photo cameras and numbered photo positions
 let prop = null;
 let selection = null;          // {kind:'wall'|'room'|'opening'|'scan'|'pin'|'note', id}
@@ -96,12 +96,19 @@ let tagPicks = [];             // tag keys (tags.js) of the selected objects; Sh
 // object; Shift-click adds more. Empty while a whole model, a pin or a note is selected.
 let picked = [];
 let lastClick = null;          // the last click on the model, to tell a double-click
-let movePivot = null;          // what the MOVE handle holds while it moves model objects
 let hoverTarget = null;
 let mode = 'orbit';            // orbit | walk | top
 let tool = 'select';           // select | move | measure | pin | note | fov
 let lensPick = null;           // the lens preset the view is set to (lens.js), fitted again when the window changes shape
 let fovDrag = null;            // { y, vfov } while the FIELD OF VIEW tool drags
+// PARALLEL: the stop past the narrow end of the field of view, where the sides no longer
+// converge. The perspective camera still moves as usual (orbit, pan, zoom); a parallel camera
+// copies it each frame and shows what it frames at the orbit target, so switching keeps the
+// picture's size there. TOP turns it on; `parallelFromTop` notes that, so leaving TOP turns
+// it off again unless it was chosen on its own.
+let parallel = false, parallelFromTop = false, orthoCam = null;
+const PARALLEL_BACK = 500, PARALLEL_DEPTH = 2500;   // m: the parallel camera stands this far back along its view, and sees this far
+const PARALLEL_SNAP = 40;      // px the FIELD OF VIEW drag goes past the narrowest angle to reach PARALLEL
 let xray = false;
 // Section cuts (section-planes.js), per property and kept across remounts:
 // { on, planes: [{ id, kind, q, pos }], active: id of the plane whose handles show }.
@@ -370,6 +377,7 @@ function setupScene() {
   cameraRoot = new THREE.Group(); cameraRoot.name = 'photo cameras'; scene.add(cameraRoot);
   positionRoot = new THREE.Group(); positionRoot.name = 'photo positions'; scene.add(positionRoot);
   measureRoot = new THREE.Group(); measureRoot.name = 'measures'; scene.add(measureRoot);
+  annotRoot = new THREE.Group(); annotRoot.name = 'annotations'; scene.add(annotRoot);
   markupRoot = new THREE.Group(); markupRoot.name = 'markup ink'; scene.add(markupRoot);
   sheetRoot = new THREE.Group(); sheetRoot.name = 'section planes'; scene.add(sheetRoot);
   batches = new ModelBatches();
@@ -388,6 +396,7 @@ function setupScene() {
     canOrbit: () => mode !== 'top',
     // FIELD OF VIEW takes the left drag for itself (the middle button still orbits).
     leftFree: () => tool === 'fov',
+    keepDistance: () => parallel && mode !== 'walk',
     // While one finger draws a markup it does not also turn the view; two fingers still do.
     oneFinger: () => !(markup && markup.fingerDraws()) && tool !== 'fov',
     onChange: () => { markMotion(); requestRender(2); },
@@ -398,19 +407,6 @@ function setupScene() {
   walk.addEventListener('lock', () => { walkLocked = true; setHint(''); });
   walk.addEventListener('unlock', () => { walkLocked = false; setHint(''); });
   walk.addEventListener('change', () => { markMotion(); requestRender(2); });
-
-  gizmo = new TransformControls(camera, renderer.domElement);
-  gizmo.setMode('translate');
-  gizmo.showY = false;
-  gizmo.addEventListener('dragging-changed', e => {
-    controls.enabled = !e.value && mode !== 'walk';
-    if (!e.value) commitGizmoMove();
-  });
-  gizmo.addEventListener('change', () => { if (gizmo.dragging) { if (movePivot && gizmo.object === movePivot) dragObjects(); invalidateShadows(); } requestRender(2); });
-  movePivot = new THREE.Object3D();
-  movePivot.name = 'move handle';
-  scene.add(movePivot);
-  scene.add(gizmo.getHelper());
 
   // A section plane has two sets of handles at once: an arrow that slides it along its own
   // normal, reaching out past two rings that turn it. While one drags, the other is switched
@@ -621,10 +617,71 @@ function rebuildModel() {
   rebuildNightLights();
   applySection();
   fitShadow();
-  reattachGizmo();
   updateOutlineTargets();
+  buildAnnotations();
   renderObjectsSoon();
   requestRender(3);
+}
+
+// ---------- dimensions, room names and opening numbers ----------
+// Three switches in the mode bar, kept with the property: DIMENSIONS (each wall's centre-line
+// length), ROOMS (name and floor area) and NUMBERS (each door and window's mark, as on the
+// DOCUMENTS schedule). The dimension lines are drawn in the scene over everything; every label
+// is a tag over the view, kept on its point each frame, so it reads the same from any angle.
+const ANNOT_KEYS = { dims: 'showDims', rooms: 'showRoomLabels', numbers: 'showOpeningNumbers' };
+function annotShown(kind) { return !!(prop && prop.env && prop.env[ANNOT_KEYS[kind]]); }
+function toggleAnnot(kind, on) {
+  const next = on == null ? !annotShown(kind) : !!on;
+  if (next === annotShown(kind)) return;
+  prop.env[ANNOT_KEYS[kind]] = next;
+  buildAnnotations();
+  touch();
+  renderHud();
+}
+const ANNOT_LINE = new THREE.LineBasicMaterial({ color: 0xe8973a, depthTest: false, depthWrite: false, transparent: true, opacity: 0.9 });
+function buildAnnotations() {
+  if (!annotRoot || !wrapEl) return;
+  for (const c of [...annotRoot.children]) { annotRoot.remove(c); c.geometry.dispose(); }
+  for (const l of annotLabels) l.el.remove();
+  annotLabels = [];
+  if (!annotShown('dims') && !annotShown('rooms') && !annotShown('numbers')) { requestRender(2); return; }
+  const a = modelAnnotations(prop, { hidden: hiddenLevels(), fmtLen, fmtArea });
+  const label = (cls, html, at) => {
+    const el = document.createElement('div');
+    el.className = 'v-annot ' + cls; el.innerHTML = html;
+    wrapEl.appendChild(el);
+    annotLabels.push({ el, at: new THREE.Vector3(...at) });
+  };
+  if (annotShown('dims') && a.dims.length) {
+    const pts = [];
+    for (const d of a.dims) {
+      pts.push(...d.a, ...d.b);
+      for (const [p, q] of d.ticks) pts.push(...p, ...q);
+      label('v-annot-dim', escapeHtml(d.text), d.at);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    const lines = new THREE.LineSegments(g, ANNOT_LINE);
+    lines.renderOrder = 20; lines.raycast = () => {};
+    annotRoot.add(lines);
+  }
+  if (annotShown('rooms')) for (const r of a.rooms) label('v-annot-room', `<b>${escapeHtml(r.name)}</b><span>${escapeHtml(r.text)}</span>`, r.at);
+  if (annotShown('numbers')) for (const o of a.openings) label('v-annot-num ' + (o.type === 'window' ? 'window' : 'door'), escapeHtml(o.text), o.at);
+  requestRender(2);
+}
+// Each label over its point; hidden behind the camera, or where a section cut takes its point away.
+const _annot = new THREE.Vector3();
+function updateAnnotLabels() {
+  if (!annotLabels.length) return;
+  const w = wrapEl.clientWidth, h = wrapEl.clientHeight, cam = viewCamera();
+  const cuts = section.on ? clipPlanes : [];
+  for (const l of annotLabels) {
+    const cut = cuts.some(p => p.distanceToPoint(l.at) < 0);
+    _annot.copy(l.at).project(cam);
+    const vis = !cut && _annot.z < 1 && _annot.z > -1 && Math.abs(_annot.x) < 1.1 && Math.abs(_annot.y) < 1.1;
+    l.el.style.display = vis ? '' : 'none';
+    if (vis) l.el.style.transform = `translate(${((_annot.x + 1) / 2 * w).toFixed(0)}px, ${((1 - _annot.y) / 2 * h).toFixed(0)}px) translate(-50%, -50%)`;
+  }
 }
 
 function rebuildGround() {
@@ -1326,6 +1383,8 @@ function setMode(next) {
   nav.refresh();
   // A photo can look up at a ceiling; ordinary orbiting stays above the horizon.
   controls.maxPolarAngle = match ? MATCH_POLAR : ORBIT_POLAR;
+  if (next === 'top') setParallel(true, true);
+  else if (parallelFromTop) setParallel(false);
   if (next === 'walk') startWalk();
   else if (next === 'top') presetView('top');
   else if (next === 'orbit' && camera.position.y < 0.3) camera.position.y = 0.3;
@@ -1485,6 +1544,7 @@ function renderFrame(still = false) {
   updateNotes();
   updateMatchMarkers();
   updateMeasureLabels();
+  updateAnnotLabels();
   updateCompass();
   // Fast frames while the camera moves: the passes are switched, never resized or reallocated.
   const fast = !still && moving();
@@ -1498,8 +1558,13 @@ function renderFrame(still = false) {
   if (batches.beginFrame(scanObjs, uncertaintyShown)) invalidateShadows();
   if (renderer.shadowMap.needsUpdate) frameCounts.shadowRefreshes++;
   if (renderer.shadowMap.needsUpdate) sunThroughOpenings();
+  const cam = viewCamera();
+  usePassCamera(cam);
+  // The parallel camera stands PARALLEL_BACK further off, so the distance haze starts that much later.
+  const fog = cam.isOrthographicCamera && scene.fog && scene.fog.isFog ? scene.fog : null;
+  if (fog) { fog.near += PARALLEL_BACK; fog.far += PARALLEL_BACK; }
   try { if (uncertaintyShown) withUncertainty([modelGroup, scanRoot], uncertaintyRecord, () => composer.render()); else composer.render(); }
-  finally { batches.endFrame(); }
+  finally { batches.endFrame(); if (fog) { fog.near -= PARALLEL_BACK; fog.far -= PARALLEL_BACK; } }
 }
 
 // The sun reaches inside only through windows and doors. What is hidden just to see in (the
@@ -1532,7 +1597,7 @@ function sunThroughOpenings() {
     for (const scan of prop.scans) if (scanObjs[scan.id]) applyModelTagVisibility(prop, scan, scanObjs[scan.id]);
   };
   const splats = hideSplats();
-  const helpers = [gizmo, secMove, secTurn].map(g => g && g.getHelper()).filter(h => h && h.visible);
+  const helpers = [secMove, secTurn].map(g => g && g.getHelper()).filter(h => h && h.visible);
   helpers.forEach(h => { h.visible = false; });
   const prevTarget = renderer.getRenderTarget();
   batches.endFrame();
@@ -1659,10 +1724,13 @@ async function renderStillBlob(options) {
   const { width, height } = options;
   const c = composer, r = renderer;
   const savedPasses = [passes.outline, passes.hover].map(p => [p, p.enabled]);
-  const handles = new Set([gizmo.getHelper(), ...sectionOverlays()]);   // never in the image
-  const roots = [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, markupRoot, ...handles].map(o => [o, o && o.visible]);
+  const handles = new Set(sectionOverlays());   // never in the image
+  const roots = [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, markupRoot, annotRoot, ...handles].map(o => [o, o && o.visible]);
   const oldAspect = camera.aspect, oldFov = camera.fov;
   const oldPos = camera.position.clone(), oldQuat = camera.quaternion.clone();
+  // A still from a camera of its own (a numbered position, a photo) is a perspective picture.
+  const oldParallel = parallel;
+  if (options.view) parallel = false;
   const matchEl = match && match.el;
   exportingStill = true;
   if (options.status) options.status('Rendering ' + width + ' × ' + height + '…');
@@ -1714,6 +1782,7 @@ async function renderStillBlob(options) {
       if (matchEl) matchEl.style.visibility = '';
       camera.position.copy(oldPos); camera.quaternion.copy(oldQuat);
       camera.aspect = oldAspect; camera.fov = oldFov; camera.updateProjectionMatrix();
+      parallel = oldParallel;
       if (controls) controls.update();
       configureRenderQuality(quality());
       resize();
@@ -1737,7 +1806,7 @@ function pick(e, opts) {
   // position until the renderer updates it; on a slow GPU the next click can come first.
   scene.updateMatrixWorld();
   camera.updateMatrixWorld();
-  raycaster.setFromCamera(ndcFromEvent(e), camera);
+  raycaster.setFromCamera(ndcFromEvent(e), viewCamera());
   const targets = [];
   if (modelGroup) targets.push(modelGroup);
   if (opts.pins !== false && pinRoot) targets.push(pinRoot);
@@ -1774,7 +1843,7 @@ function onPointerDown(e) {
   pressed = { x: e.clientX, y: e.clientY };
   // FIELD OF VIEW: the press starts a drag that widens or narrows the view (lens.js).
   if (tool === 'fov' && !match && e.isPrimary !== false) {
-    fovDrag = { y: e.clientY, vfov: camera.fov };
+    fovDrag = { y: e.clientY, vfov: camera.fov, parallel };
     try { renderer.domElement.setPointerCapture(e.pointerId); } catch (err) { /* the drag still follows the canvas */ }
     return;
   }
@@ -1786,7 +1855,7 @@ function onPointerUp(e) {
   const p = pressed; pressed = null; dragLook = null;
   if (fovDrag) { fovDrag = null; return; }
   // A press on a section handle moved or turned a plane; it is not a click on the model.
-  if (!p || e.button !== 0 || gizmo.dragging || secMove.dragging || secTurn.dragging || performance.now() - secDragAt < 80) return;
+  if (!p || e.button !== 0 || secMove.dragging || secTurn.dragging || performance.now() - secDragAt < 80) return;
   if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > 5) return;      // it was a drag, not a click
   // While marking up, a tap or click on the view is the markup's (or nobody's), never a selection.
   if (markup && markup.takesClicks()) return;
@@ -1859,7 +1928,19 @@ function selectedModelObject() {
 let hoverPending = false;
 function onPointerMove(e) {
   if (fovDrag) {
-    setViewFov(dragFov(fovDrag.vfov, e.clientY - fovDrag.y, wrapEl ? wrapEl.clientHeight : 0), null);
+    const h = wrapEl ? wrapEl.clientHeight : 0, dy = e.clientY - fovDrag.y;
+    // From PARALLEL, a drag down brings the sides back at the angle the camera has.
+    if (fovDrag.parallel) {
+      if (dy <= 0) return;
+      setParallel(false); setViewFov(dragFov(fovDrag.vfov, dy, h), null);
+      return;
+    }
+    // Past the narrowest angle by PARALLEL_SNAP pixels: PARALLEL; back down: the narrowest angle.
+    const tan = x => Math.tan(x * Math.PI / 360);
+    const narrowest = h / 2 * Math.log(tan(VFOV_MIN) / tan(fovDrag.vfov));
+    if (h > 0 && dy < narrowest - PARALLEL_SNAP) { setViewFov(VFOV_MIN, null); setParallel(true); return; }
+    if (parallel) setParallel(false);
+    setViewFov(dragFov(fovDrag.vfov, dy, h), null);
     return;
   }
   if (mode === 'walk' && dragLook) {
@@ -1962,7 +2043,6 @@ function setSelection(sel, picks, things) {
   // A selected numbered position is drawn in the accent colour.
   for (const s of [was, sel]) if (s && s.kind === 'position') { const pos = (prop.photoPositions || []).find(x => x.id === s.id); if (pos) buildPositionMarker(pos); }
   updateOutlineTargets();
-  reattachGizmo();
   renderInspector();
   renderToolCol();
   requestRender(2);
@@ -2092,7 +2172,7 @@ function trimFacePoint(e, t) {
   const off = t.side * ((w.thickness || 0.114) / 2);
   const elev = levelOfWall(prop, w).elevation || 0;
   _plane.setFromNormalAndCoplanarPoint(new THREE.Vector3(nx, 0, ny), new THREE.Vector3(w.ax + nx * off, 0, w.ay + ny * off));
-  raycaster.setFromCamera(ndcFromEvent(e), camera);
+  raycaster.setFromCamera(ndcFromEvent(e), viewCamera());
   if (!raycaster.ray.intersectPlane(_plane, _hitV)) return null;
   return { x: (_hitV.x - w.ax) * ux + (_hitV.z - w.ay) * uy, y: _hitV.y - elev };
 }
@@ -2205,126 +2285,15 @@ function onTrimDragEnd(e) {
   renderInspector();
 }
 
-// ---------- move walls gizmo ----------
-// The wall group's local z is the wall normal. A wall joined to others slides along it only,
-// and the walls, rooms and openings attached to it follow (wallmove.js, as in PLAN).
-function wallMovePlan(w) {
-  const levelId = levelOfWall(prop, w).id;
-  const walls = wallsOn(prop, levelId);
-  const ids = new Set(walls.map(x => x.id));
-  return planWallMove(w, walls, roomsOn(prop, levelId), (prop.openings || []).filter(o => ids.has(o.wallId)));
-}
-function reattachGizmo() {
-  gizmo.detach();
-  if (tool === 'move' && selection && selection.kind === 'wall') {
-    const g = findGroupFor('wall', selection.id);
-    const w = prop.walls.find(w => w.id === selection.id);
-    if (g && w) {
-      const mv = wallMovePlan(w);
-      gizmo.space = 'local';
-      gizmo.showX = !(mv && mv.connected);
-      gizmo.showY = false;
-      gizmo.showZ = true;
-      gizmo.attach(g);
-      g.userData.origin = g.position.clone();
-    }
-  } else if (tool === 'move') {
-    // Objects of an imported model: the handle sits at their middle and moves them together.
-    const mv = movableSelection();
-    if (mv) {
-      const box = new THREE.Box3(), one = new THREE.Box3();
-      for (const o of mv.objects) box.union(objectBox(o, one));
-      if (!box.isEmpty()) {
-        box.getCenter(movePivot.position);
-        movePivot.updateMatrixWorld(true);
-        movePivot.userData = { ...mv, origin: movePivot.position.clone(), base: mv.objects.map(o => objectOffset(mv.scan, o)) };
-        gizmo.space = 'world';
-        gizmo.showX = gizmo.showY = gizmo.showZ = true;
-        gizmo.attach(movePivot);
-      }
-    }
-  }
-  requestRender(2);
-}
-// The selected objects when the MOVE tool can move them: objects of one loaded model.
-function movableSelection() {
-  if (!picked.length || !picked[0].scanId || picked.some(t => t.whole || t.scanId !== picked[0].scanId)) return null;
-  const scan = prop.scans.find(s => s.id === picked[0].scanId), wrapper = scan && scanObjs[scan.id];
-  if (!wrapper || wrapper.userData.scanKind !== 'mesh') return null;
-  const tree = modelObjectTree(wrapper);
-  const objects = picked.map(t => tree.byKey.get(t.key)).filter(Boolean);
-  // An object inside another selected object moves with it; moving both would move it twice.
-  const top = objects.filter(o => { for (let p = o.parent; p; p = p.parent) if (objects.includes(p)) return false; return true; });
-  return top.length ? { scan, wrapper, objects: top } : null;
-}
-// Put a model's moved objects where its record says, and let grouped drawing follow.
-function objectsMoved(scan, wrapper) {
-  const meshes = applyPartOffsets(scan, wrapper);
-  if (batches && meshes.length) batches.partsMoved(meshes);
-  invalidateShadows();
-  requestRender(3);
-}
-// While the handle is dragged: how far it went, in the model's own frame, added to where
-// each object stood when the drag began.
-const _toModel = new THREE.Matrix4();
-function dragObjects() {
-  const d = movePivot.userData;
-  if (!d || !d.objects) return;
-  const w = movePivot.position.clone().sub(d.origin);
-  const inner = d.wrapper.userData.inner;
-  inner.updateWorldMatrix(true, false);
-  const e = _toModel.copy(inner.matrixWorld).invert().elements;
-  const local = [e[0] * w.x + e[4] * w.y + e[8] * w.z, e[1] * w.x + e[5] * w.y + e[9] * w.z, e[2] * w.x + e[6] * w.y + e[10] * w.z];
-  d.objects.forEach((o, i) => setObjectOffset(d.scan, o, d.base[i].map((b, k) => Math.round((b + local[k]) * 1000) / 1000)));
-  objectsMoved(d.scan, d.wrapper);
-}
-function commitObjectMove() {
-  const d = movePivot.userData;
-  if (!d || !d.objects || movePivot.position.distanceTo(d.origin) < 1e-5) return;
-  dragObjects();
-  applyScanTransform(d.scan, d.wrapper);   // the model's bounds follow
-  fitShadow(); applyEnvironment();
-  touch();
-  reattachGizmo();
-  renderInspector();
-}
-// Set how far one object stands from where its file has it (the panel's fields, PUT IT BACK).
+// Put an object an earlier version moved back where the model file has it (PUT IT BACK).
 function moveObjectTo(scan, wrapper, object, offset) {
   setObjectOffset(scan, object, offset.map(v => Math.round(v * 1000) / 1000));
-  objectsMoved(scan, wrapper);
+  const meshes = applyPartOffsets(scan, wrapper);
+  if (batches && meshes.length) batches.partsMoved(meshes);
   applyScanTransform(scan, wrapper);
-  fitShadow(); applyEnvironment();
+  fitShadow(); applyEnvironment(); invalidateShadows();
   touch();
-  reattachGizmo();
-  renderInspector();
-}
-function commitGizmoMove() {
-  const obj = gizmo.object;
-  if (obj && obj === movePivot) return commitObjectMove();
-  if (!obj || !selection || selection.kind !== 'wall') return;
-  const o = obj.userData.origin || new THREE.Vector3();
-  const dx = obj.position.x - o.x, dz = obj.position.z - o.z;
-  if (Math.abs(dx) < 1e-4 && Math.abs(dz) < 1e-4) return;
-  const w = prop.walls.find(w => w.id === selection.id);
-  if (!w) return;
-  const r = v => Math.round(v * 200) / 200;
-  const mv = wallMovePlan(w);
-  beginGeometryEdit(prop, 'move wall');
-  if (mv && mv.connected) {
-    // As in PLAN: a slide that squeezes a joined wall under 5 cm (or turns one over) is refused.
-    const before = movedWallLengths(mv);
-    applyWallMove(mv, r(normalOffset(mv, dx, dz)));
-    if (moveLeavesShortWall(before, 0.05)) {
-      // Refused: put everything back bit for bit with no undo entry and no change to save; the
-      // rebuild snaps the handle back.
-      revertGeometryEdit(prop);
-      toast('A wall cannot be shorter than ' + fmtLen(0.05) + '. Delete it instead.', 'warn');
-      rebuildModel(); renderInspector();
-      return;
-    }
-  } else { w.ax = r(w.ax + dx); w.ay = r(w.ay + dz); w.bx = r(w.bx + dx); w.by = r(w.by + dz); }
-  touch();
-  rebuildModel();
+  requestRender(3);
   renderInspector();
 }
 
@@ -2403,7 +2372,7 @@ function updateMeasureLabels() {
   if (!measures.length) return;
   const w = wrapEl.clientWidth, h = wrapEl.clientHeight;
   for (const m of measures) {
-    _v.addVectors(m.a, m.b).multiplyScalar(0.5).project(camera);
+    _v.addVectors(m.a, m.b).multiplyScalar(0.5).project(viewCamera());
     const vis = _v.z < 1;
     m.label.style.display = vis ? 'block' : 'none';
     if (vis) m.label.style.transform = `translate(${((_v.x + 1) / 2 * w).toFixed(0)}px, ${((1 - _v.y) / 2 * h).toFixed(0)}px) translate(-50%, -50%)`;
@@ -2621,7 +2590,6 @@ function startPinMode(photoId, one = false) {
   const ph = pinPhotoId && photoById(prop, pinPhotoId);
   // Placing a new photo chains on to the next unpinned one; MOVE PIN re-places just the one.
   pinBatch = !one && !!(ph && !ph.pin);
-  gizmo.detach();
   renderToolCol(); renderInspector();
   setHint(pinHint());
 }
@@ -2878,7 +2846,7 @@ function updateMatchMarkers() {
   const box = match.el.querySelector('.v-match-model-dots');
   const W = wrapEl.clientWidth, H = wrapEl.clientHeight;
   box.innerHTML = match.points.pairs.map((p, i) => {
-    const q = new THREE.Vector3(...p.world).project(camera);
+    const q = new THREE.Vector3(...p.world).project(viewCamera());
     if (q.z > 1) return '';
     return `<i class="v-match-dot model" style="left:${((q.x + 1) / 2 * W).toFixed(0)}px;top:${((1 - q.y) / 2 * H).toFixed(0)}px">${i + 1}</i>`;
   }).join('');
@@ -4079,7 +4047,6 @@ function taskText() {
   }
   if (tool === 'note') return 'Tap where the note belongs.';
   if (tool === 'pin') return pinPhotoId && photoById(prop, pinPhotoId) ? 'Tap where this photo was taken.' : 'Choose a photo on the PHOTOS page first.';
-  if (tool === 'move') return 'MOVE needs the desktop layout.';
   if (tool === 'fov') return 'Drag up to narrow the view, down to widen it.';
   return '';
 }
@@ -4089,7 +4056,6 @@ function defaultHint() {
   if (tool === 'fov') return 'FIELD OF VIEW: drag up to narrow the view, down to widen it. The panel has the iPhone 0.5×, 1× and 2× lenses. Esc ends.';
   if (tool === 'pin') return 'PIN: choose a photo or document, then click the surface to hang it on.';
   if (tool === 'note') return noteHint();
-  if (tool === 'move') return 'MOVE: select a wall or an object of an imported model and drag an arrow. Walls joined to a moved wall follow on release.';
   if (section.on) return fieldLayout() || !sectionSheets ? 'SECTION: slide the cut to look inside.' : 'SECTION: drag the arrow to slide the cut, a ring to turn it. SNAP holds it to ' + TURN_SNAP_DEG + '° turns and ' + (units() === 'metric' ? '50 mm' : '1"') + ' steps.';
   return 'Drag or middle-drag to orbit, hold Shift to pan, scroll or pinch to zoom. Click elements to inspect; right-click to pin a note.';
 }
@@ -4114,7 +4080,8 @@ function renderHud() {
   bar.innerHTML = `
     <button class="v-pill ${mode === 'orbit' ? 'active' : ''}" data-mode="orbit" title="Orbit (O)">ORBIT</button>
     <button class="v-pill ${mode === 'walk' ? 'active' : ''}" data-mode="walk" title="Walk through (W)">WALK</button>
-    <button class="v-pill ${mode === 'top' ? 'active' : ''}" data-mode="top" title="Top, north up (T)">TOP</button>
+    <button class="v-pill ${mode === 'top' ? 'active' : ''}" data-mode="top" title="Top, north up (T), in parallel projection">TOP</button>
+    <button class="v-pill ${parallel ? 'active' : ''}" data-parallel aria-pressed="${parallel}" ${mode === 'walk' ? 'disabled' : ''} title="Parallel projection (Shift+P): no perspective, as at the far end of FIELD OF VIEW">PARALLEL</button>
     <span class="v-pill-sep"></span>
     <button class="v-pill ${section.on ? 'active' : ''}" data-section title="Section cuts (C)">SECTION</button>
     <span class="v-pill-sep"></span>
@@ -4125,9 +4092,15 @@ function renderHud() {
     ${uncertaintyShown ? `<span role="note" aria-label="Geometry uncertainty legend">${Object.entries(EVIDENCE_COLORS).map(([k,c]) => `<span style="border-bottom:3px solid ${c};margin-right:8px">${k}</span>`).join('')} · geometry evidence; identity is separate</span>` : ''}
     <button class="v-pill" data-environment title="Lighting, sun and environment">LIGHT</button>
     <button class="v-pill ${markersShown('pins') ? 'active' : ''}" data-show="pins" aria-pressed="${markersShown('pins')}" title="${markersShown('pins') ? 'Hide' : 'Show'} photo pins (${prop.photos.filter(ph => ph.pin).length})">PHOTOS</button>
-    <button class="v-pill ${markersShown('notes') ? 'active' : ''}" data-show="notes" aria-pressed="${markersShown('notes')}" title="${markersShown('notes') ? 'Hide' : 'Show'} notes (${prop.notePins.length}); right-click the model to pin one">NOTES</button>`;
+    <button class="v-pill ${markersShown('notes') ? 'active' : ''}" data-show="notes" aria-pressed="${markersShown('notes')}" title="${markersShown('notes') ? 'Hide' : 'Show'} notes (${prop.notePins.length}); right-click the model to pin one">NOTES</button>
+    <span class="v-pill-sep"></span>
+    <button class="v-pill ${annotShown('dims') ? 'active' : ''}" data-annot="dims" aria-pressed="${annotShown('dims')}" title="${annotShown('dims') ? 'Hide' : 'Show'} each wall's length, measured on its centre line">DIMENSIONS</button>
+    <button class="v-pill ${annotShown('rooms') ? 'active' : ''}" data-annot="rooms" aria-pressed="${annotShown('rooms')}" title="${annotShown('rooms') ? 'Hide' : 'Show'} each room's name and floor area">ROOMS</button>
+    <button class="v-pill ${annotShown('numbers') ? 'active' : ''}" data-annot="numbers" aria-pressed="${annotShown('numbers')}" title="${annotShown('numbers') ? 'Hide' : 'Show'} door and window numbers (D1, W1...), as on the DOCUMENTS schedule">NUMBERS</button>`;
   bar.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => setMode(b.dataset.mode));
   bar.querySelectorAll('[data-show]').forEach(b => b.onclick = () => toggleMarkers(b.dataset.show));
+  bar.querySelectorAll('[data-annot]').forEach(b => b.onclick = () => toggleAnnot(b.dataset.annot));
+  bar.querySelector('[data-parallel]').onclick = () => setParallel(!parallel);
   bar.querySelector('[data-uncertainty]').onclick = () => { uncertaintyShown = !uncertaintyShown; renderHud(); requestRender(2); };
   bar.querySelector('[data-section]').onclick = toggleSection;
   bar.querySelector('[data-xray]').onclick = toggleXray;
@@ -4219,6 +4192,7 @@ function toggleLevel(id) {
   if (levels) for (const l of levels) l.group.visible = !hidden.has(l.id);
   rebuildNightLights();
   applySection();
+  buildAnnotations();
   const sel = selectedObject();
   if (sel && !isVisibleChain(sel)) { setSelection(null); return; }
   updateOutlineTargets();
@@ -4645,21 +4619,13 @@ function renderEvidenceInspector() {
   if (selection.kind === 'opening') {
     const issues = openingProblems(prop, record), dimensions=openingDimensions(prop,record);
     const profile = document.createElement('section');
-    const sizes=record.type==='window'?['frameWidth','sashWidth','muntinWidth','casingWidth','casingDepth']:['jambWidth','leafThickness','casingWidth','casingDepth','handleHeight','handleBackset'];
-    profile.innerHTML=`<h3>OPENING CONFIGURATION</h3><p class="empty">Stored width and height are the hole in the wall. Profiles and hardware remain provisional until documented.</p>${issues.length?`<p role="alert">${issues.map(escapeHtml).join('; ')}</p>`:''}
-      ${record.type!=='window' && dimensions.leaves ?`<div class="field"><label>Slab width per leaf (bare numbers are inches; metric mode uses metres)</label><input data-slab-width value="${escapeHtml(fmtLen(dimensions.slabWidth))}"></div>`:''}
-      ${sizes.map(k=>`<div class="field"><label>${escapeHtml(k.replace(/[A-Z]/g,c=>' '+c.toLowerCase()))} (metres; blank uses provisional default)</label><input type="number" step=".001" min="0.001" max="${k==='handleHeight'?2:.3}" data-profile="${k}" value="${escapeHtml(record.profile?.[k] ?? '')}"></div>`).join('')}
-      ${record.type==='window'?['columns','rows'].map(k=>`<div class="field"><label>Observed grid ${k}</label><input type="number" min="1" max="12" step="1" data-profile="${k}" value="${escapeHtml(record.profile?.[k] || 1)}"></div>`).join(''):`<div class="field"><label>Hardware</label><select data-profile-choice="hardware">${['lever','knob','none'].map(k=>`<option ${record.profile?.hardware===k?'selected':''}>${k}</option>`).join('')}</select></div><div class="field"><label>Door face</label><select data-profile-choice="panels"><option value="flat">Flat / unresolved</option><option value="six" ${record.profile?.panels==='six'?'selected':''}>Six panel</option></select></div>`}`;
+    // What the opening is built with, as the model holds it. Sizes change in SketchUp.
+    const stored=Object.entries(record.profile||{}).filter(([,v])=>v!==''&&v!=null);
+    const label=k=>k.replace(/[A-Z]/g,c=>' '+c.toLowerCase()).replace(/^./,c=>c.toUpperCase());
+    profile.innerHTML=`<h3>OPENING CONFIGURATION</h3><p class="empty">Width and height are the hole in the wall. Profiles and hardware stay provisional until documented; change them in SketchUp.</p>${issues.length?`<p role="alert">${issues.map(escapeHtml).join('; ')}</p>`:''}
+      ${record.type!=='window' && dimensions.leaves ?`<div class="stat-line"><span>Slab width per leaf</span><b>${escapeHtml(fmtLen(dimensions.slabWidth))}</b></div>`:''}
+      ${stored.map(([k,v])=>`<div class="stat-line"><span>${escapeHtml(label(k))}</span><b>${escapeHtml(typeof v==='number'&&!['columns','rows'].includes(k)?fmtLen(v):String(v))}</b></div>`).join('')}`;
     inspEl.append(profile);
-    profile.querySelectorAll('[data-profile],[data-profile-choice]').forEach(input=>input.onchange=()=>{
-      const key=input.dataset.profile || input.dataset.profileChoice;
-      if(input.dataset.profile && input.value && !input.checkValidity())return;
-      beginGeometryEdit(prop,'edit opening profile'); record.profile ||= {}; if (native) native.profile = record.profile;
-      if(input.value==='')delete record.profile[key];else record.profile[key]=input.dataset.profile?Number(input.value):input.value;
-      touch();rebuildModel();renderInspector();
-    });
-    const slab=profile.querySelector('[data-slab-width]');
-    if(slab)slab.onchange=()=>{const width=wallWidthFromSlab(record,parseLen(slab.value, 'inches'),dimensions.leaves);if(width){beginGeometryEdit(prop,'edit slab width'); if(!resizeOpening(prop,native || record,{width}))toast('That slab would overlap another opening.','warn');else (native || record).leaves=dimensions.leaves;touch();rebuildModel();renderInspector();}};
   }
   inspEl.append(section);
   section.querySelector('[data-evidence-save]').onclick = () => {
@@ -4765,17 +4731,17 @@ function renderObjectPanel(o) {
   const s = prop.scans.find(x => x.id === selection.id), w = scanObjs[s.id], tree = modelObjectTree(w);
   const things = picked;
   const ctx = {
-    ...thingsCtx(things), scan: s, tree, object: o, offset: objectOffset(s, o), moving: tool === 'move',
+    ...thingsCtx(things), scan: s, tree, object: o, offset: objectOffset(s, o),
     productHtml: o.kind === 'component' ? componentCardHtml(modelPanelCtx(s, w), componentKeyOf(o.nodes[0])) : '',
     selectObjects: objects => pickObjects(s.id, objects), selectModel: () => setSelection({ kind: 'scan', id: s.id }),
-    moveTo: offset => moveObjectTo(s, w, o, offset), startMove: () => setTool('move'),
+    moveTo: offset => moveObjectTo(s, w, o, offset),
   };
   inspEl.innerHTML = objectPanelHtml(ctx);
   bindObjectPanel(inspEl, ctx);
   bindModelPanel(inspEl, modelPanelCtx(s, w));
 }
 function renderMultiPanel() {
-  const ctx = { ...thingsCtx(picked), count: picked.length, names: picked.map(t => t.name || (t.sel && t.sel.kind) || 'object'), movable: !!movableSelection() };
+  const ctx = { ...thingsCtx(picked), count: picked.length, names: picked.map(t => t.name || (t.sel && t.sel.kind) || 'object') };
   inspEl.innerHTML = multiPanelHtml(ctx);
   bindMultiPanel(inspEl, ctx);
 }
@@ -4871,7 +4837,7 @@ function renderInspectorBody() {
       return `<div class="stat-line" title="Elevation ${escapeHtml(fmtLen(l.elevation))}, height ${escapeHtml(fmtLen(levelHeight(prop, l.id)))}"><span>${escapeHtml(l.name)}${hidden.has(l.id) ? ' (hidden)' : ''}</span><b>${nw} wall${nw === 1 ? '' : 's'} &middot; ${nr} room${nr === 1 ? '' : 's'}</b></div>`;
     }).join('');
     inspEl.innerHTML = `<h3>NOTHING SELECTED</h3>
-      <div class="empty" style="margin-bottom:12px">Click an object in the model or in the component list. This panel then shows that object and nothing else: its tag, hiding it, moving it.</div>
+      <div class="empty" style="margin-bottom:12px">Click an object in the model or in the component list. This panel then shows that object and nothing else: its tag and hiding it.</div>
       <h3>MODEL</h3>
       ${levelRows}
       <div class="tool-sep"></div>
@@ -4883,7 +4849,7 @@ function renderInspectorBody() {
       <div class="stat-line"><span>Photos</span><b>${prop.photos.length}</b></div>
       <div class="stat-line"><span>Notes</span><b>${prop.notePins.length}</b></div>
       <div class="empty" style="margin-top:12px">
-        Click a wall, door, window or floor to inspect and edit it. The model regenerates from the plan; edits here write back to the same data. Right-click anywhere on the model to pin a note.</div>
+        Click a wall, door, window or floor to inspect it and choose its finishes. Walls, doors and windows change in SketchUp (EDIT IN SKETCHUP). Right-click anywhere on the model to pin a note.</div>
       ${addFixtureHtml()}
       ${pinsListHtml()}
       ${positionsListHtml()}
@@ -4927,8 +4893,8 @@ function renderInspectorBody() {
       <div class="stat-line"><span>Length</span><b>${fmtLen(L)}</b></div>
       <div class="stat-line"><span>Face area</span><b>${fmtArea(L * h)}</b></div>
       <div class="stat-line"><span>Openings</span><b>${nOpen}</b></div>
-      <div class="field"><label>Thickness</label><input type="text" data-th value="${escapeHtml(fmtLen(w.thickness))}"></div>
-      <div class="field"><label>Height (blank = level default)</label><input type="text" data-h value="${w.height ? escapeHtml(fmtLen(w.height)) : ''}" placeholder="${escapeHtml(fmtLen(levelHeight(prop, lvl.id)))}"></div>
+      <div class="stat-line"><span>Thickness</span><b>${escapeHtml(fmtLen(w.thickness || 0.114))}</b></div>
+      <div class="stat-line"><span>Height</span><b>${escapeHtml(fmtLen(h))}</b></div>
       <div class="field"><label>Material</label>${materialSelectHtml('wall', w.material, 'data-mat')}</div>
       <div class="field"><label>Interior face material</label>${materialSelectHtml('wall', w.materialIn, 'data-matin').replace('(none)', 'Automatic')}</div>
       ${(() => { const names = wallFaceLabels(w, roomsOn(prop, lvl.id)); return ['pos', 'neg'].map(f => `<div class="field"><label>${escapeHtml(names[f])}</label>${materialSelectHtml('wall', f === 'pos' ? w.materialPos : w.materialNeg, 'data-matface="' + f + '"').replace('(none)', 'Automatic')}</div>`).join(''); })()}
@@ -4937,25 +4903,13 @@ function renderInspectorBody() {
       ${scopeAssignHtml(w.id)}
       ${linkedProductsHtml(w.id)}
       ${photoLinksHtml(w.id)}
-      <div class="empty" style="margin:8px 0">MOVE: drag the gizmo arrow to slide this wall; the walls, rooms and openings joined to it follow when you release.</div>
+      <div class="empty" style="margin:8px 0">Walls, doors and windows change in SketchUp (EDIT IN SKETCHUP); saves there come back here.</div>
       ${addTrimHtml(wallTrimFaces(w), { face: wallFaceClicked === -1 ? 1 : 0, button: 'ADD TRIM TO THIS FACE' })}
       ${trimCountHtml(w)}
-      <button class="btn" data-walk>WALK HERE</button>
-      <button class="btn danger" data-del>DELETE WALL</button>`;
+      <button class="btn" data-walk>WALK HERE</button>`;
     bindAddTrim(inspEl, wallTrimFaces(w), (productId, face) => addTrims(productId, [{ wall: w, side: face.side }]));
     const wt = inspEl.querySelector('[data-wall-trims]');
     if (wt) wt.onclick = () => selectTrims((prop.trims || []).filter(t => t.wallId === w.id).map(t => t.id));
-    inspEl.querySelector('[data-th]').onchange = e => {
-      const v = parseLen(e.target.value, 'feet');
-      if (!isNaN(v) && v > 0.02 && v < 1) { beginGeometryEdit(prop, 'change wall thickness'); w.thickness = v; touch(); rebuildModel(); }
-      renderInspector();
-    };
-    inspEl.querySelector('[data-h]').onchange = e => {
-      beginGeometryEdit(prop, 'change wall height');
-      if (!e.target.value.trim()) w.height = null;
-      else { const v = parseLen(e.target.value, 'feet'); if (!isNaN(v) && v > 0.3) w.height = v; }
-      touch(); rebuildModel(); renderInspector();
-    };
     inspEl.querySelector('[data-mat]').onchange = e => { beginGeometryEdit(prop, 'change wall material'); w.material = e.target.value || null; touch(); rebuildModel(); };
     // Room-facing faces only; blank = automatic (drywall on exterior walls, the wall material otherwise).
     inspEl.querySelector('[data-matin]').onchange = e => { beginGeometryEdit(prop, 'change interior finish'); w.materialIn = e.target.value || null; touch(); rebuildModel(); };
@@ -4966,14 +4920,6 @@ function renderInspectorBody() {
       touch(); rebuildModel();
     });
     inspEl.querySelector('[data-walk]').onclick = () => setMode('walk');
-    inspEl.querySelector('[data-del]').onclick = () => {
-      beginGeometryEdit(prop, 'delete wall');
-      prop.walls = prop.walls.filter(x => x.id !== w.id);
-      prop.openings = prop.openings.filter(o => o.wallId !== w.id);
-      prop.trims = (prop.trims || []).filter(t => t.wallId !== w.id);
-      setSelection(null);
-      touch(); rebuildModel();
-    };
     bindAssign(inspEl); bindPhotoLinks(inspEl); bindResearchActions(inspEl);
     return;
   }
@@ -4984,44 +4930,20 @@ function renderInspectorBody() {
     const ow = prop.walls.find(w => w.id === o.wallId), osides = ow ? wallSides(ow, roomsOn(prop, levelOfWall(prop, ow).id)) : {};
     const interior = !!(osides.pos && osides.neg), hung = o.type === 'door' && doorLeaves(o, o.width, interior) > 0;
     inspEl.innerHTML = `<h3>${o.type === 'window' ? 'WINDOW' : (hung ? 'DOOR' : plainOpening(o) ? 'PLAIN OPENING' : 'CASED OPENING')}</h3>
-      <div class="field"><label>Type</label><select data-type><option value="door" ${o.type === 'door' ? 'selected' : ''}>Door</option><option value="window" ${o.type === 'window' ? 'selected' : ''}>Window</option></select></div>
-      <div class="field-row">
-        <div class="field"><label>Wall opening width</label><input type="text" data-w value="${escapeHtml(fmtLen(o.width))}"></div>
-        <div class="field"><label>Height</label><input type="text" data-hh value="${escapeHtml(fmtLen(o.height))}"></div>
-      </div>
-      ${o.type === 'window' ? `<div class="field"><label>Sill height</label><input type="text" data-s value="${escapeHtml(fmtLen(o.sill || 0))}"></div>` : ''}
-      ${hung ? `<div class="field"><label>Leaf</label>
-        <select data-glass><option value="" ${doorGlass(o) ? '' : 'selected'}>Solid panel</option>
-        <option value="full" ${doorGlass(o) === 'full' ? 'selected' : ''}>Glass</option>
-        <option value="half" ${doorGlass(o) === 'half' ? 'selected' : ''}>Half glass</option></select></div>
+      <div class="stat-line"><span>Wall opening width</span><b>${escapeHtml(fmtLen(o.width))}</b></div>
+      <div class="stat-line"><span>Height</span><b>${escapeHtml(fmtLen(o.height))}</b></div>
+      ${o.type === 'window' ? `<div class="stat-line"><span>Sill height</span><b>${escapeHtml(fmtLen(o.sill || 0))}</b></div>` : ''}
+      ${hung ? `<div class="stat-line"><span>Leaf</span><b>${doorGlass(o) === 'full' ? 'Glass' : doorGlass(o) === 'half' ? 'Half glass' : 'Solid panel'}</b></div>
       <div class="field"><label>Shown</label>
         <select data-door-state><option value="open" ${doorShownOpen(o, interior) ? 'selected' : ''}>Open</option>
         <option value="closed" ${doorShownOpen(o, interior) ? '' : 'selected'}>Closed</option></select></div>` : ''}
-      <div class="empty">PLAN sets a door's leaves: one, a pair, or none (a cased opening, or a plain one with no frame), and moves an opening along its wall by dragging. Left unset, an interior door wider than 4 ft is a cased opening. Interior doors stand ajar so you can see through rooms and exterior doors are shut until you set them here or right-click one.</div>
+      <div class="empty">Sizes, leaves and where an opening sits change in SketchUp (EDIT IN SKETCHUP). Left unset, an interior door wider than 4'-0" is a cased opening. Interior doors stand ajar so you can see through rooms and exterior doors are shut until you set them here or right-click one.</div>
       ${researchButtonHtml(o.id, 'fixture', o.type === 'window' ? 'RESEARCH WINDOW' : 'RESEARCH DOOR / OPENING')}
       ${linkedProductsHtml(o.id)}
-      <button class="btn" data-wall>SELECT WALL</button>
-      <button class="btn danger" data-del>DELETE OPENING</button>`;
-    const num = (sel, fn, min) => { inspEl.querySelector(sel).onchange = e => { const v = parseLen(e.target.value, 'feet'); if (!isNaN(v) && v > (min || 0.05)) { beginGeometryEdit(prop, 'edit opening'); const before={...o}; const result=fn(v); const issues=openingProblems(prop,o); if(result===null || issues.length){Object.assign(o,before);toast(issues.join('; ') || 'Opening change refused: overlapping or invalid geometry.','warn');} touch(); rebuildModel(); } renderInspector(); }; };
-    num('[data-w]', v => resizeOpening(prop,o,{width:v},wallHeightOf(prop,prop.walls.find(w=>w.id===o.wallId))), 0.2);
-    num('[data-hh]', v => resizeOpening(prop,o,{height:v},wallHeightOf(prop,prop.walls.find(w=>w.id===o.wallId))), 0.3);
-    if (o.type === 'window') num('[data-s]', v => o.sill = v, -0.001);
-    inspEl.querySelector('[data-type]').onchange = e => {
-      beginGeometryEdit(prop, 'change opening type');
-      o.type = e.target.value;
-      if (o.type === 'window' && o.sill == null) o.sill = 0.762;
-      touch(); rebuildModel(); renderInspector();
-    };
-    const glassSel = inspEl.querySelector('[data-glass]');
-    if (glassSel) glassSel.onchange = e => {
-      beginGeometryEdit(prop, 'change door leaf');
-      if (e.target.value) o.glass = e.target.value; else delete o.glass;
-      touch(); rebuildModel(); renderInspector();
-    };
+      <button class="btn" data-wall>SELECT WALL</button>`;
     const stateSel = inspEl.querySelector('[data-door-state]');
     if (stateSel) stateSel.onchange = e => setDoorOpen(o.id, e.target.value === 'open');
     inspEl.querySelector('[data-wall]').onclick = () => setSelection({ kind: 'wall', id: o.wallId });
-    inspEl.querySelector('[data-del]').onclick = () => { beginGeometryEdit(prop, 'delete opening'); prop.openings = prop.openings.filter(x => x.id !== o.id); setSelection(null); touch(); rebuildModel(); };
     bindResearchActions(inspEl);
     return;
   }
@@ -5260,7 +5182,7 @@ let activeViewId = null;       // the saved view last gone to, drawn as the curr
 let offScreen = null, offMenu = null;
 function viewState() {
   return {
-    camera: { position: camera.position.toArray(), target: controls.target.toArray(), fov: camera.fov },
+    camera: { position: camera.position.toArray(), target: controls.target.toArray(), fov: camera.fov, parallel },
     mode: mode === 'top' ? 'top' : 'orbit', xray,
     // `height` is the first flat cut, for a version of the app that knows only one cut height.
     section: { on: section.on, height: levelHeightOf(section.planes) ?? 1.2, planes: section.planes.map(s => ({ id: s.id, kind: s.kind, q: [...s.q], pos: [...s.pos] })), active: section.active },
@@ -5305,6 +5227,7 @@ function showView(v, ms = 650) {
   applyTagVisibility();
   applySection();
   adoptFov(v.camera.fov);
+  setParallel(v.camera.parallel === true, v.mode === 'top' && v.camera.parallel === true);
   flyTo(new THREE.Vector3(...v.camera.position), new THREE.Vector3(...v.camera.target), ms);
   const sel = selectedObject();
   if (sel && !isVisibleChain(sel)) setSelection(null);
@@ -5425,6 +5348,7 @@ function menuGroups() {
       { label: 'Orbit', key: 'O', active: mode === 'orbit', run: () => setMode('orbit') },
       { label: 'Walk through', key: 'W', active: mode === 'walk', run: () => setMode('walk') },
       { label: 'Top, north up', key: 'T', active: mode === 'top', run: () => setMode('top') },
+      { label: 'Parallel projection', key: 'Shift+P', active: parallel, keep: true, run: () => setParallel(!parallel) },
       ...LENSES.map(l => ({ label: 'Lens: iPhone ' + l.label + ' (' + Math.round(l.f35) + ' mm)', active: lensPick === l.id, run: () => applyLens(l.id) })),
       { label: 'Lens: default (' + DEFAULT_VFOV + '° tall)', active: !lensPick && camera && Math.abs(camera.fov - DEFAULT_VFOV) < 0.05, run: () => applyLens(null) },
     ]),
@@ -5436,12 +5360,14 @@ function menuGroups() {
       { label: 'Lighting and sun', run: () => { hud.env.hidden = false; hud.env.classList.add('open'); renderEnvPanel(); } },
       { label: 'Photo pins', active: markersShown('pins'), run: () => toggleMarkers('pins') },
       { label: 'Notes', active: markersShown('notes'), run: () => toggleMarkers('notes') },
+      { label: 'Wall dimensions', active: annotShown('dims'), keep: true, run: () => toggleAnnot('dims') },
+      { label: 'Room names and areas', active: annotShown('rooms'), keep: true, run: () => toggleAnnot('rooms') },
+      { label: 'Door and window numbers', active: annotShown('numbers'), keep: true, run: () => toggleAnnot('numbers') },
       { label: allInteriorDoorsClosed() ? 'Open all doors' : 'Close all doors', disabled: !interiorDoors().length, run: toggleAllDoors },
       { label: 'Render a still image', run: openStillDialog },
     ]),
     g('Tools', 'model.tools', false, 'The tools in the left column', [
       { label: 'Select', key: 'V', active: tool === 'select', run: () => setTool('select') },
-      { label: 'Move walls and objects', key: 'M', active: tool === 'move', run: () => setTool(tool === 'move' ? 'select' : 'move') },
       { label: 'Measure', key: 'D', active: tool === 'measure', run: () => setTool(tool === 'measure' ? 'select' : 'measure') },
       { label: 'Field of view: drag up or down', key: 'Z', active: tool === 'fov', run: () => setTool(tool === 'fov' ? 'select' : 'fov') },
       ...(measures.length ? [{ label: 'Clear measures', run: () => { clearMeasures(); renderToolCol(); } }] : []),
@@ -5499,7 +5425,6 @@ function renderToolCol() {
     ${tb('iso', 'model', 'ISO')}`,
     onScreen('model.tools', false) && `<div class="tool-head">TOOLS</div>
     ${tb('select', 'select', 'SELECT', 'V', tool === 'select')}
-    ${tb('move', 'move', 'MOVE', 'M', tool === 'move')}
     ${tb('measure', 'measure', 'MEASURE', 'D', tool === 'measure')}
     ${tb('fov', 'zoom-in', 'FIELD OF VIEW', 'Z', tool === 'fov')}
     ${measures.length ? tb('clearm', 'close', 'CLEAR MEASURES') : ''}
@@ -5528,7 +5453,6 @@ function renderToolCol() {
   on('top', () => setMode('top'));
   on('walk', () => setMode(mode === 'walk' ? 'orbit' : 'walk'));
   on('select', () => setTool('select'));
-  on('move', () => setTool(tool === 'move' ? 'select' : 'move'));
   on('measure', () => setTool(tool === 'measure' ? 'select' : 'measure'));
   on('fov', () => setTool(tool === 'fov' ? 'select' : 'fov'));
   on('clearm', () => { clearMeasures(); renderToolCol(); });
@@ -5564,6 +5488,45 @@ function renderToolCol() {
   on('rebuild', () => { rebuildModel(); rebuildGround(); buildAllPins(); buildAllNotes(); });
 }
 // ---------- field of view ----------
+// The camera the view is drawn with: the perspective camera, or the parallel one following it.
+const _orthoDir = new THREE.Vector3();
+function viewCamera() {
+  if (!parallel || mode === 'walk' || !camera || !controls) return camera;
+  if (!orthoCam) orthoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, PARALLEL_DEPTH);
+  const d = Math.max(0.05, camera.position.distanceTo(controls.target));
+  const halfH = d * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2), halfW = halfH * (camera.aspect || 1);
+  orthoCam.left = -halfW; orthoCam.right = halfW; orthoCam.top = halfH; orthoCam.bottom = -halfH;
+  // Standing back keeps what lies behind the eye in the picture, as a parallel view has no eye.
+  orthoCam.quaternion.copy(camera.quaternion);
+  orthoCam.position.copy(camera.position).addScaledVector(camera.getWorldDirection(_orthoDir), -PARALLEL_BACK);
+  orthoCam.layers.mask = camera.layers.mask;
+  orthoCam.updateProjectionMatrix(); orthoCam.updateMatrixWorld();
+  return orthoCam;
+}
+// The render passes draw with `cam`. The outline masks and the corner shading read depth one
+// way for a perspective camera and another for a parallel one.
+function usePassCamera(cam) {
+  if (!passes.render || passes.render.camera === cam) return;
+  passes.render.camera = cam;
+  passes.gtao.camera = cam;
+  passes.gtao.gtaoMaterial.defines.PERSPECTIVE_CAMERA = cam.isPerspectiveCamera ? 1 : 0;
+  passes.gtao.gtaoMaterial.needsUpdate = true;
+  for (const p of [passes.outline, passes.hover]) {
+    p.renderCamera = cam;
+    const m = p.prepareMaskMaterial;
+    m.fragmentShader = cam.isOrthographicCamera ? m.fragmentShader.replace(/perspectiveDepthToViewZ/g, 'orthographicDepthToViewZ') : m.fragmentShader.replace(/orthographicDepthToViewZ/g, 'perspectiveDepthToViewZ');
+    m.needsUpdate = true;
+  }
+}
+function setParallel(on, fromTop = false) {
+  on = !!on;
+  parallelFromTop = on && fromTop;
+  if (on === parallel) return;
+  parallel = on;
+  markMotion(); requestRender(3);
+  updateFovReadout();
+  renderHud();
+}
 // SketchUp's Field of View: with the FIELD OF VIEW tool on, press and drag up to narrow the view
 // and down to widen it, from where the camera stands. Lens presets frame the view the way the
 // iPhone 17 Pro frames its 0.5x, 1x and 2x pictures and the Polycam keyframes (lens.js).
@@ -5586,6 +5549,7 @@ function adoptFov(vfov) {
 function applyLens(id) {
   if (!camera) return;
   if (match) endMatch();
+  setParallel(false);
   const lens = lensById(id);
   setViewFov(lens ? vfovForLens(lens, camera.aspect || 1) : DEFAULT_VFOV, lens ? lens.id : null);
 }
@@ -5602,6 +5566,7 @@ function placeLensFrame() {
   if (r) Object.assign(box.style, { left: r.x + 'px', top: r.y + 'px', width: r.w + 'px', height: r.h + 'px' });
 }
 function fovFacts() {
+  if (camera && parallel && mode !== 'walk') return { long: '0°', short: '0°', f35: 'none', lens: 'Parallel: no perspective', preset: 'parallel' };
   const d = camera && describeView(camera.fov, camera.aspect || 1);
   return d ? { long: Math.round(d.long) + '°', short: Math.round(d.short) + '°', f35: Math.round(d.f35) + ' mm', lens: d.preset ? 'iPhone 17 Pro ' + d.preset.label : 'Between presets', preset: d.preset ? d.preset.id : null } : null;
 }
@@ -5618,7 +5583,7 @@ function updateFovReadout() {
 function renderFovPanel() {
   const f = fovFacts() || { long: '', short: '', f35: '', lens: '' };
   inspEl.innerHTML = `<h3>FIELD OF VIEW</h3>
-    <div class="empty" style="margin-bottom:10px">Press and drag on the model: up narrows the view, down widens it. The camera stays where it is; scroll still moves it.</div>
+    <div class="empty" style="margin-bottom:10px">Press and drag on the model: up narrows the view, down widens it. Keep going up past the narrowest angle for PARALLEL, where the sides no longer converge. The camera stays where it is; scroll still moves it.</div>
     <div class="stat-line"><span>Lens</span><b data-fov-lens>${escapeHtml(f.lens)}</b></div>
     <div class="stat-line"><span>Across the picture's long side</span><b data-fov-long>${escapeHtml(f.long)}</b></div>
     <div class="stat-line"><span>Across its short side</span><b data-fov-short>${escapeHtml(f.short)}</b></div>
@@ -5627,10 +5592,11 @@ function renderFovPanel() {
       <div class="v-lens-row" role="group" aria-label="Lens presets">
         ${LENSES.map(l => `<button class="btn small" data-lens="${l.id}" title="${escapeHtml(l.name)}: ${Math.round(l.long)}° by ${Math.round(l.short)}°, ${Math.round(l.f35)} mm equivalent">${escapeHtml(l.label)}</button>`).join('')}
         <button class="btn small" data-lens="default" title="Tiksi's usual view: ${DEFAULT_VFOV}° tall">DEFAULT</button>
+        <button class="btn small" data-lens="parallel" title="Parallel projection: the far end of narrowing, where the sides no longer converge. TOP starts in it.">PARALLEL</button>
       </div></div>
     <div class="empty" style="margin:8px 0 12px">The outline is the phone's 4:3 picture: at 1× it frames the model as the Polycam keyframes do. 1× is measured from those keyframes, 2× is the middle half of the same picture, and 0.5× is the 14 mm the phone writes into its ultra wide photos. A saved view keeps the lens.</div>
     <button class="btn" data-fov-done>DONE</button>`;
-  inspEl.querySelectorAll('[data-lens]').forEach(b => b.onclick = () => applyLens(b.dataset.lens === 'default' ? null : b.dataset.lens));
+  inspEl.querySelectorAll('[data-lens]').forEach(b => b.onclick = () => b.dataset.lens === 'parallel' ? setParallel(true) : applyLens(b.dataset.lens === 'default' ? null : b.dataset.lens));
   inspEl.querySelector('[data-fov-done]').onclick = () => setTool('select');
   updateFovReadout();
 }
@@ -5643,7 +5609,6 @@ function setTool(next) {
   if (next !== 'pin') pinBatch = false;
   if (next !== 'note') movingNoteId = null;
   fovDrag = null;
-  reattachGizmo();
   if (nav && nav.refresh) nav.refresh();
   placeLensFrame();
   renderToolCol();
@@ -5659,8 +5624,8 @@ const hasMarkups = () => !!prop && Array.isArray(prop.markups) && prop.markups.s
 function markupParts() {
   const token = mountId;
   return {
-    THREE, wrapEl, canvas: renderer.domElement, camera, controls, nav, markupRoot, prop: () => prop, alive: () => token === mountId && !!scene && !!modelGroup,
-    rayAt: e => { camera.updateMatrixWorld(); raycaster.setFromCamera(ndcFromEvent(e), camera); return { o: raycaster.ray.origin.toArray(), d: raycaster.ray.direction.toArray() }; },
+    THREE, wrapEl, canvas: renderer.domElement, camera, viewCamera, controls, nav, markupRoot, prop: () => prop, alive: () => token === mountId && !!scene && !!modelGroup,
+    rayAt: e => { camera.updateMatrixWorld(); raycaster.setFromCamera(ndcFromEvent(e), viewCamera()); return { o: raycaster.ray.origin.toArray(), d: raycaster.ray.direction.toArray() }; },
     pick, anchorOf, viewState, showView, renderStillBlob, quality, toast, setHint, requestRender, setMode, setTool, endMatch, setSelection, renderToolCol, syncSectionHandles,
     get mode() { return mode; }, get tool() { return tool; }, get match() { return match; }, get selection() { return selection; },
     get tween() { return tween; }, set tween(v) { tween = v; }, set activeViewId(v) { activeViewId = v; },
@@ -5708,10 +5673,9 @@ function onKeyDown(e) {
     case 'KeyO': setMode('orbit'); break;
     case 'KeyW': setMode('walk'); break;
     case 'KeyV': setTool('select'); break;
-    case 'KeyM': setTool(tool === 'move' ? 'select' : 'move'); break;
     case 'KeyD': setTool(tool === 'measure' ? 'select' : 'measure'); break;
     case 'KeyZ': if (e.metaKey || e.ctrlKey || e.altKey) return; setTool(tool === 'fov' ? 'select' : 'fov'); break;
-    case 'KeyP': if (tool === 'pin') setTool('select'); else startPinMode(null); break;
+    case 'KeyP': if (e.shiftKey) { setParallel(!parallel); break; } if (tool === 'pin') setTool('select'); else startPinMode(null); break;
     case 'KeyN': if (tool === 'note') setTool('select'); else startNoteMode(null); break;
     case 'KeyU': toggleMarkup(); break;
     case 'KeyC': toggleSection(); break;
@@ -5753,6 +5717,7 @@ export function mount(root) {
     // Whatever the failed open left half-built must not be torn down twice or drawn.
     if (renderer) { renderer.setAnimationLoop(null); renderer.domElement.remove(); }
     scene = null; camera = null; composer = null; passes = {}; controls = null; modelGroup = null; groundGroup = null; batches = null;
+    annotRoot = null; annotLabels = []; orthoCam = null;
     el = null; wrapEl = null; inspEl = null; hud = {};
     const why = e && e.graphics
       ? 'This browser could not start 3D graphics, so MODEL cannot be shown. Close other tabs or apps that use 3D, then reload. The other pages still work.'
@@ -5799,7 +5764,7 @@ function openModel(root) {
     views: wrapEl.querySelector('.v-views'), compassBox: wrapEl.querySelector('.v-compass'), objects: wrapEl.querySelector('.v-objects'),
   };
   activeViewId = null;
-  mode = 'orbit'; tool = 'select'; selection = null; tagPicks = []; picked = []; lastClick = null; hoverTarget = null; tween = null; measureDraft = null; pinPhotoId = null; match = null;
+  mode = 'orbit'; parallel = false; parallelFromTop = false; tool = 'select'; selection = null; tagPicks = []; picked = []; lastClick = null; hoverTarget = null; tween = null; measureDraft = null; pinPhotoId = null; match = null;
   movingNoteId = null; rightPress = null; ctxMenu = null; noteEditor = null;
   panoNagged = false; panoPending = null; panoMissing = null;
   for (const k of Object.keys(scanState)) delete scanState[k];
@@ -5855,7 +5820,7 @@ function openModel(root) {
   // A rebuild that must not move the picture (keepViewOnNextMount): the camera last shown.
   const kept = keepView && lastView && lastView.propId === prop.id ? lastView : null;
   keepView = false;
-  if (kept && controls && controls.target) { camera.position.fromArray(kept.position); controls.target.fromArray(kept.target); adoptFov(kept.fov); camera.updateProjectionMatrix(); controls.update(); }
+  if (kept && controls && controls.target) { camera.position.fromArray(kept.position); controls.target.fromArray(kept.target); adoptFov(kept.fov); camera.updateProjectionMatrix(); controls.update(); parallel = kept.parallel === true; }
 
   const focus=pendingScanFocus || prop.modelSourceId,token=mountId,focusVersion=selectionVersion;pendingScanFocus=null;
   loadShownScans().then(()=>{if(token===mountId && selectionVersion===focusVersion && !match && !kept && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
@@ -5991,24 +5956,11 @@ export function partCentre(key) {
   return new THREE.Box3().setFromObject(part.object).getCenter(new THREE.Vector3()).toArray();
 }
 
-// For the browser checks: the tag keys of every object of a model with this name, in list
-// order, and how many objects the MOVE handle holds now.
+// For the browser checks: the tag keys of every object of a model with this name, in list order.
 export function objectKeys(scanId, name) {
   const w = scanObjs[scanId];
   return w ? [...modelObjectTree(w).byKey.values()].filter(o => o.name === name).flatMap(o => o.meshKeys) : [];
 }
-// Where the MOVE handle's arrow for one axis can be grabbed, and where the handle's middle is
-// (world metres), or null while the handle holds nothing.
-export function moveHandleGrip(axis = 'X') {
-  if (!moveHandle()) return null;
-  gizmo.getHelper().updateMatrixWorld(true);
-  const arrows = gizmo._gizmo && gizmo._gizmo.picker && gizmo._gizmo.picker.translate;
-  const arrow = arrows && arrows.children.find(c => c.name === axis);
-  if (!arrow) return null;
-  return { grip: new THREE.Box3().setFromObject(arrow).getCenter(new THREE.Vector3()).toArray(), middle: movePivot.position.toArray() };
-}
-export function moveHandle() { return gizmo && movePivot && gizmo.object === movePivot && movePivot.userData.objects ? movePivot.userData.objects.length : 0; }
-
 // The camera the 3D view last showed, per property, so DOCUMENTS can place a 3D view from it.
 let lastView = null, keepView = false;
 export function lastCameraView(propId) { return lastView && lastView.propId === propId ? lastView : null; }
@@ -6020,7 +5972,7 @@ function rememberView() {
   const dir = camera.getWorldDirection(new THREE.Vector3());
   const t = controls && controls.target && controls.enabled !== false ? controls.target.clone() : camera.position.clone().addScaledVector(dir, 5);
   if (t.distanceTo(camera.position) < 1e-3) t.copy(camera.position).addScaledVector(dir, 5);
-  lastView = { propId: prop.id, position: camera.position.toArray(), target: t.toArray(), fov: camera.fov };
+  lastView = { propId: prop.id, position: camera.position.toArray(), target: t.toArray(), fov: camera.fov, parallel };
 }
 
 export function unmount() {
@@ -6060,7 +6012,6 @@ export function unmount() {
   clearTimeout(pmremTimer);
   if (mode === 'walk' && walk) { if (walkLocked) walk.unlock(); }
   if (walk) { walk.dispose(); walk = null; }
-  if (gizmo) { gizmo.detach(); gizmo.dispose(); gizmo = null; }
   // Materials are shared between mounts, so the planes come off them here; the cuts
   // themselves stay with the property and are put back by the next mount.
   if (scene) { const on = section.on; section.on = false; applySection(); section.on = on; }

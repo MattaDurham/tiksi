@@ -21,8 +21,7 @@ import { icon } from './icons.js';
 import { initPaneResize } from './pane-resize.js';
 import { initTiksiMenu, setRestartAction } from './tiksi-menu.js';
 import { restartTiksi } from './restart.js';
-import { initField, fieldRouted, phoneLayout } from './field.js';
-import * as plan2d from './plan2d.js';
+import { initField, fieldRouted } from './field.js';
 import * as viewer3d from './viewer3d.js';
 const materialsview = lazyView(() => import('./materialsview.js'));
 const photos = lazyView(() => import('./photos.js'));
@@ -64,7 +63,6 @@ function lazyView(load) {
 }
 
 const VIEWS = {
-  plan: plan2d,
   model: viewer3d,
   materials: materialsview,
   photos,
@@ -173,7 +171,7 @@ function importFromHash() {
   let raw = params.get('url') || params.get('polycam') || '';
   if (!raw && m[1]) { const slot = decodeURIComponent(m[1]); raw = /^https?:\/\//i.test(slot) ? slot : 'https://poly.cam/capture/' + slot; }
   else if (raw && !/^https?:\/\//i.test(raw)) raw = 'https://poly.cam/capture/' + raw;
-  history.replaceState(null, '', '#/plan');
+  history.replaceState(null, '', '#/model');
   const link = parseCaptureUrl(raw);
   if (link) openNewPropertyDialog({ url: link.url, autoStart: true });
   else openNewPropertyDialog({ url: raw });
@@ -185,9 +183,9 @@ function openFromHash() {
   const m = /^#\/open(?:\?(.*))?$/.exec(location.hash);
   if (!m) return false;
   const url = new URLSearchParams(m[1] || '').get('url') || '';
-  history.replaceState(null, '', '#/plan');
+  history.replaceState(null, '', '#/model');
   if (!url) { openProjectPicker().catch(e => alert(e.message)); return true; }
-  openFromUrl(url).then(() => { location.hash = '#/plan'; remountView(); }).catch(e => alert('Open failed: ' + e.message));
+  openFromUrl(url).then(() => { location.hash = '#/model'; remountView(); }).catch(e => alert('Open failed: ' + e.message));
   return true;
 }
 
@@ -199,14 +197,16 @@ function unmountCurrent() {
 
 function route() {
   // Views may carry a query (#/model?pin=<photoId>); the view reads it from location.hash itself.
-  // Phones open on the model: it is what gets shown on site.
-  const name = (location.hash.replace(/^#\//, '').split('?')[0] || (phoneLayout() ? 'model' : 'plan'));
+  // Every device opens on the model. PLAN is gone; an old #/plan address (a bookmark, a link
+  // from a scope item) opens MODEL with the same query, so #/plan?select=<id> still selects.
+  if (/^#\/plan(?=$|\?)/.test(location.hash)) history.replaceState(null, '', location.hash.replace(/^#\/plan/, '#/model'));
+  const name = (location.hash.replace(/^#\//, '').split('?')[0] || 'model');
   const head = name.split('/')[0];
   if ((head === 'import' || head === 'new') && importFromHash()) { if (!currentView) route(); return; }
   if (head === 'open' && openFromHash()) { if (!currentView) route(); return; }
-  const view = VIEWS[name] || VIEWS.plan;
+  const view = VIEWS[name] || VIEWS.model;
   unmountCurrent();
-  currentName = VIEWS[name] ? name : 'plan';
+  currentName = VIEWS[name] ? name : 'model';
   currentView = view;
   const guideEntry = document.querySelector('.guide-entry');
   if (currentName === 'guide') guideEntry?.setAttribute('aria-current', 'page');
@@ -361,7 +361,7 @@ async function offerStorageCleanup(afterReplace) {
 function refreshHistoryControls() {
   const group = document.getElementById('edit-history');
   if (!group) return;
-  group.hidden = !['plan', 'model', 'measure'].includes(currentName);
+  group.hidden = !['model', 'measure'].includes(currentName);
   const state = editHistoryState(activeProperty());
   for (const direction of ['undo', 'redo']) {
     const button = document.getElementById('btn-' + direction), item = state[direction];
@@ -380,7 +380,7 @@ function bindHistoryControls() {
   }
   onEditHistoryChange(refreshHistoryControls);
   window.addEventListener('keydown', e => {
-    if (!['plan', 'model', 'measure'].includes(currentName) || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+    if (!['model', 'measure'].includes(currentName) || !(e.ctrlKey || e.metaKey) || e.altKey) return;
     if (e.target?.matches('input, textarea, select') || e.target?.isContentEditable || document.querySelector('dialog[open]')) return;
     const key = e.key.toLowerCase();
     if (key !== 'z' && !(e.ctrlKey && key === 'y')) return;

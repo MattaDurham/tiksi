@@ -440,8 +440,7 @@ function finish(prop, result, applied, fixtures) {
     </div>
     <div class="np-actions">
       ${fixtures ? `<button class="btn" data-np-fixtures>${icon('scan')}REVIEW ${fixtures.proposals.length} FIXTURE${fixtures.proposals.length === 1 ? '' : 'S'}</button>` : ''}
-      <button class="btn primary" data-np-go="plan">${icon('plan')}OPEN PLAN</button>
-      <button class="btn" data-np-go="model">${icon('model')}OPEN MODEL</button>
+      <button class="btn primary" data-np-go="model">${icon('model')}OPEN MODEL</button>
       <button class="btn" data-np-onepager-open hidden>${icon('file')}OPEN ONE-PAGER</button>
     </div>`;
   // The first one-pager is part of making the property: version 1, from the scan's cover
