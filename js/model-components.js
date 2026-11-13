@@ -10,7 +10,10 @@
 // survive a reconversion.
 //
 // A component can be linked to a PRODUCTS record (ws.data.products): scan.componentProducts[key]
-// = { productId, brand, model, name } (the shape fixtures use for fixture.product). Pure: no DOM.
+// = { productId, brand, model, name, ...evidence }. Inline evidence stays with the component
+// even when its optional product record is absent; it is not a priced product. Pure: no DOM.
+
+import { safeUrl } from './material-identity.js';
 
 const ID_OK = /^[\w.:-]{1,80}$/;
 const text = (v, n) => typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, n) : '';
@@ -88,7 +91,42 @@ export function modelComponents(root) {
 export function normalizeComponentProduct(p) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
   const out = { productId: typeof p.productId === 'string' && ID_OK.test(p.productId) ? p.productId : null, brand: text(p.brand, 120), model: text(p.model, 120), name: text(p.name, 200) };
-  return out.productId || out.brand || out.model ? out : null;
+  for (const [field, limit] of [['status', 120], ['evidence', 4000], ['uncertainty', 4000]]) {
+    const value = text(p[field], limit);
+    if (value) out[field] = value;
+  }
+  const url = safeUrl(p.url);
+  if (url) out.url = url;
+  if (Array.isArray(p.documents)) {
+    const documents = [...new Set(p.documents.slice(0, 32).map(v => text(v, 500)).filter(Boolean))];
+    if (documents.length) out.documents = documents;
+  }
+  if (typeof p.dims_mm === 'string') {
+    const value = text(p.dims_mm, 1000);
+    if (value) out.dims_mm = value;
+  } else if (p.dims_mm && typeof p.dims_mm === 'object' && !Array.isArray(p.dims_mm)) {
+    const entries = Object.entries(p.dims_mm).slice(0, 32).flatMap(([key, value]) => {
+      const name = text(key, 80);
+      if (!name || ['__proto__', 'constructor', 'prototype'].includes(name)) return [];
+      if (typeof value === 'number' && Number.isFinite(value)) return [[name, value]];
+      const description = text(value, 300);
+      return description ? [[name, description]] : [];
+    });
+    if (entries.length) out.dims_mm = Object.fromEntries(entries);
+  }
+  return out.productId || out.brand || out.model || out.name || out.status || out.evidence || out.uncertainty || out.dims_mm || out.documents || out.url ? out : null;
+}
+
+export function componentProductEvidence(scan, key) {
+  return normalizeComponentProduct(scan && scan.componentProducts && scan.componentProducts[key]);
+}
+
+export function componentIdentityStatus(p) {
+  const status = text(p && p.status, 120);
+  const labels = { identified: 'Identified', likely: 'Likely match', 'proposed-match': 'Proposed match',
+    'as-scanned': 'Observed geometry; product identity unverified', 'observed-type': 'Observed type; maker and model unverified',
+    unidentified: 'Unidentified' };
+  return Object.hasOwn(labels, status) ? labels[status] : status || 'Identification not verified';
 }
 export function componentProductRecord(data, scan, key) {
   const p = scan && scan.componentProducts && scan.componentProducts[key];
@@ -119,8 +157,11 @@ export function linkComponentProduct(data, prop, scan, component, fields, newId)
     }
   }
   if (prop) { record.propertyIds = Array.isArray(record.propertyIds) ? record.propertyIds : []; if (!record.propertyIds.includes(prop.id)) record.propertyIds.push(prop.id); }
+  const previous = componentProductEvidence(scan, component.key);
+  const sameIdentity = previous && (previous.productId === record.id ||
+    (previous.brand && previous.model && same(previous.brand, record.brand) && same(previous.model, record.model)));
   scan.componentProducts = scan.componentProducts || {};
-  scan.componentProducts[component.key] = normalizeComponentProduct({ productId: record.id, brand: record.brand, model: record.model, name: component.name });
+  scan.componentProducts[component.key] = normalizeComponentProduct({ ...(sameIdentity ? previous : {}), productId: record.id, brand: record.brand, model: record.model, name: component.name });
   return { record, created };
 }
 export function unlinkComponentProduct(scan, key) {

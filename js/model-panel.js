@@ -9,7 +9,7 @@
 
 import { ws, uid, touch, escapeHtml, fmtMoney, fmtArea, materialById } from './store.js';
 import { modelTakeoff, createModelEstimate, createComponentEstimate, finishAmount, amountText } from './model-takeoff.js';
-import { modelComponents, instanceOf, instanceChain, componentKeyOf, componentProductRecord, linkComponentProduct, unlinkComponentProduct,
+import { modelComponents, instanceOf, instanceChain, componentKeyOf, componentProductRecord, componentProductEvidence, componentIdentityStatus, linkComponentProduct, unlinkComponentProduct,
   componentSchedule, propertyComponentSchedule, convertedWithComponents } from './model-components.js';
 import { identityLine, colourLine, productLine } from './material-identity.js';
 import { materialTitle } from './materials.js';
@@ -74,13 +74,23 @@ function componentsHtml(scan, obj, comps) {
 }
 function componentRow(scan, c, byKey, r, card = false) {
     const rec = componentProductRecord(ws.data, scan, c.key);
+    const evidence = componentProductEvidence(scan, c.key);
+    const identity = evidence && [evidence.brand, evidence.model].filter(Boolean).join(' · ');
+    const dimensions = evidence && (typeof evidence.dims_mm === 'string' ? evidence.dims_mm : Object.entries(evidence.dims_mm || {}).map(([k, v]) => k + ': ' + v).join('; '));
     const within = c.parents.map(k => byKey.get(k)?.name).filter(Boolean);
     const holds = Object.entries(c.contains).map(([k, n]) => n + ' × ' + (byKey.get(k)?.name || 'component'));
     return `<div class="mp-comp" data-mp-comp="${escapeHtml(c.key)}">
       <div class="mp-comp-head"><b title="${escapeHtml(c.definitionId ? 'SketchUp definition ' + c.definitionId : c.name)}">${escapeHtml(c.name)}</b><span class="mp-count">× ${c.count}</span></div>
       ${within.length || holds.length ? `<div class="mp-facts">${within.length ? `<span>inside ${escapeHtml(within.join(', '))}</span>` : ''}${holds.length ? `<span>each holds ${escapeHtml(holds.join(', '))}</span>` : ''}</div>` : ''}
       ${c.description ? `<div class="mp-facts"><span>${escapeHtml(c.description.slice(0, 200))}</span></div>` : ''}
-      <div class="mp-facts">${rec ? `<span>${escapeHtml(productLine({ product: { productId: rec.id } }, ws.data.products) || rec.name || 'Product')}</span>${r.unitPrice ? `<span>${escapeHtml(fmtMoney(r.unitPrice))} each · ${escapeHtml(fmtMoney(r.extended))}</span>` : `<span class="faint">${escapeHtml(r.priceNote || 'no price yet')}</span>`}` : '<span class="faint">no product linked</span>'}</div>
+      <div class="mp-facts">${rec ? `<span>${escapeHtml(productLine({ product: { productId: rec.id } }, ws.data.products) || rec.name || 'Product')}</span>${r.unitPrice ? `<span>${escapeHtml(fmtMoney(r.unitPrice))} each · ${escapeHtml(fmtMoney(r.extended))}</span>` : `<span class="faint">${escapeHtml(r.priceNote || 'no price yet')}</span>`}` : `${evidence ? `<span>${escapeHtml(identity || evidence.name || 'Recorded component evidence')}</span>` : ''}<span class="faint">no product linked</span>`}</div>
+      ${evidence ? `<div class="mp-facts"><span>Identity: ${escapeHtml(componentIdentityStatus(evidence))}</span></div>
+        ${evidence.uncertainty ? `<div class="mp-facts"><span>Unresolved: ${escapeHtml(evidence.uncertainty)}</span></div>` : ''}
+        ${evidence.evidence || dimensions || evidence.documents?.length || evidence.url ? `<details class="mp-evidence"><summary>EVIDENCE</summary>
+          ${evidence.evidence ? `<p>${escapeHtml(evidence.evidence)}</p>` : ''}
+          ${dimensions ? `<p>Recorded dimensions (mm): ${escapeHtml(dimensions)}</p>` : ''}
+          ${evidence.documents?.length ? `<p>Documents: ${evidence.documents.map(escapeHtml).join('; ')}</p>` : ''}
+          ${evidence.url ? `<a href="${escapeHtml(evidence.url)}" target="_blank" rel="noopener noreferrer">Source</a>` : ''}</details>` : ''}` : ''}
       ${card ? '' : `<div class="mp-actions"><button class="btn" data-mp-select="${escapeHtml(c.key)}" title="Select and outline every instance">SELECT ${c.count}</button></div>`}
       <details class="mp-link"><summary>${rec ? 'CHANGE PRODUCT' : 'LINK PRODUCT'}</summary>
         <div class="field"><label>From the products list</label><select data-mp-product>${productOptions(rec ? rec.id : '')}</select></div>
