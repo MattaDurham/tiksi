@@ -15,7 +15,7 @@ import { lightingSettings, normalizeLighting, lampLevel, kelvinToRgb, matchingPr
 import { classifyFixture, groupFixtures, polygonArea, roomLumens, candela, fixtureSummary, FIXTURE_LABELS, DOWNLIGHT_HALF_ANGLE } from './fixture-lights.js';
 import * as THREE from 'three';
 import { componentCardHtml, modelPanelHtml, bindModelPanel, partComponentName } from './model-panel.js';
-import { beginGeometryEdit, restoreGeometryEdit, revertGeometryEdit } from './edit-history.js';
+import { beginGeometryEdit, restoreGeometryEdit, revertGeometryEdit, endGeometryHold } from './edit-history.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
@@ -35,7 +35,7 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import {
   ws, activeProperty, defaultEnv, uid, touch, units, fmtLen, parseLen, fmtArea, polyArea, countsAsFloor,
   escapeHtml, deleteFile, getFile, itemById, materialById, isoToday, projectLabel, propertyProjects,
-  ensureLevels, wallsOn, roomsOn, wallHeightOf, levelOfWall, levelOfRoom, levelHeight, topOfLevels,
+  ensureLevels, wallsOn, roomsOn, wallHeightOf, levelOfWall, levelOfRoom, levelHeight, topOfLevels, openingsOn,
 } from './store.js';
 import { placeScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import { chooseScanPlacement } from './scanplace.js';
@@ -44,7 +44,7 @@ import { materialSelectHtml } from './materials.js';
 import { pendingTextureJobs, setTextureQuality, setTextureLimits, beginTextureBuild, setTextureUse } from './textures.js';
 import { qualityProfile, stillDimensions, effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, touchDevice, scanTooLarge, megabytes, QUALITY_NAMES } from './render-quality.js';
 import { icon } from './icons.js';
-import { buildPropertyGroup, buildFixtureGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
+import { buildPropertyGroup, buildFixtureGroup, buildTrimGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
 import { wallFaceLabels, wallSides, doorLeaves, doorShownOpen, setDoorShownOpen, doorGlass, plainOpening } from './wall-solids.js';
 import { SECTION_KINDS, SECTION_LABELS, MAX_SECTIONS, TURN_SNAP_DEG, moveSnapStep, snapTo, quatRotate, planeNormal, planeOf, flipped, rangeAlong, movedTo, makeSection, normalizeSections, levelHeightOf } from './section-planes.js';
 import { planWallMove, applyWallMove, normalOffset, movedWallLengths, moveLeavesShortWall } from './wallmove.js';
@@ -67,7 +67,11 @@ import { ModelBatches } from './model-batch.js';
 import { componentKeyOf } from './model-components.js';
 import { modelObjectTree, objectForClick, objectBelow, objectOffset, setObjectOffset, applyPartOffsets, objectBox } from './model-objects.js';
 import { renderObjectList, showListTab, revealInList, objectThing, hiddenState } from './object-list.js';
+import { trimTemplate, swapTrimProduct, setTrimY, setFieldEdge, trimExtent, trimLayout, trimStyle, isField, roomFaces } from './trims.js';
+import { trimPanelHtml, bindTrimPanel, addTrimHtml, bindAddTrim } from './trim-panel.js';
+import { catalogItem } from './trim-catalog.js';
 import { objectPanelHtml, bindObjectPanel, multiPanelHtml, bindMultiPanel, planTagHtml, bindPlanTag } from './object-panel.js';
+import { ensureCanonTag } from './tags.js';
 import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown, setHidden, hiddenKeys, showAllHidden } from './tags.js';
 import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags } from './saved-views.js';
 import { onScreen, setOnScreen, onScreenChange, setMenuProvider } from './tiksi-menu.js';
@@ -577,11 +581,26 @@ function texturesOnScreen() {
   return out;
 }
 
-let lastStructure = null, lastFixtureRecords = new Map();
+let lastStructure = null, lastFixtureRecords = new Map(), lastTrimRecords = new Map();
 function rebuildModel() {
   const structure = JSON.stringify([prop.id, quality(), memoryLimits().textureQuality, prop.levels, prop.walls, prop.openings, prop.rooms, prop.tags, prop.tagOf, prop.hidden, prop.modelSourceId, xray, prop.env.xrayOpacity, [...hiddenLevels()], ws.data.materials]);
   const records = new Map(prop.fixtures.map(f => [f.id, JSON.stringify(f)]));
+  const trimRecords = new Map((prop.trims || []).map(t => [t.id, JSON.stringify(t)]));
   if (modelGroup && lastStructure === structure) {
+    // Wall trim follows its records one by one, so a drag rebuilds only the sections it moves.
+    for (const level of modelGroup.userData.levels || []) {
+      for (const child of [...level.group.children]) if (child.userData.kind === 'trim' && trimRecords.get(child.userData.id) !== lastTrimRecords.get(child.userData.id)) {
+        level.group.remove(child); disposeBuilt(child);
+      }
+      const walls = wallsOn(prop, level.id), byId = new Map(walls.map(w => [w.id, w]));
+      const view = { walls, rooms: roomsOn(prop, level.id), wallHeight: levelHeight(prop, level.id) };
+      let openings = null;
+      for (const t of prop.trims || []) {
+        const wall = byId.get(t.wallId);
+        if (!wall || trimRecords.get(t.id) === lastTrimRecords.get(t.id)) continue;
+        level.group.add(buildTrimGroup(t, wall, view, openings || (openings = openingsOn(prop, level.id)), {}));
+      }
+    }
     for (const level of modelGroup.userData.levels || []) {
       for (const child of [...level.group.children]) if (child.userData.kind === 'fixture' && records.get(child.userData.id) !== lastFixtureRecords.get(child.userData.id)) {
         level.group.remove(child); disposeBuilt(child);
@@ -597,7 +616,7 @@ function rebuildModel() {
     modelGroup = buildPropertyGroup(prop, { xray, xrayOpacity: prop.env.xrayOpacity, hiddenLevels: hiddenLevels() });
     modelGroup.visible = !prop.modelSourceId; scene.add(modelGroup);
   }
-  lastStructure = structure; lastFixtureRecords = records;
+  lastStructure = structure; lastFixtureRecords = records; lastTrimRecords = trimRecords;
   invalidateShadows();
   rebuildNightLights();
   applySection();
@@ -1797,6 +1816,7 @@ function onPointerUp(e) {
   const now = performance.now();
   const again = !!lastClick && now - lastClick.t < 450 && Math.hypot(e.clientX - lastClick.x, e.clientY - lastClick.y) < 6;
   lastClick = { t: now, x: e.clientX, y: e.clientY };
+  if (hit.kind === 'wall') wallFaceClicked = wallSideOfHit(hit);
   pickThing(thingForHit(hit, again && !e.shiftKey), e.shiftKey);
 }
 // What a click on the model picked, as a thing (see `picked`).
@@ -1858,7 +1878,9 @@ function onPointerMove(e) {
     hoverPending = false;
     if (!scene) return;
     const hit = pick(e, { scans: false, ground: false });
-    const next = hit && ['wall', 'room', 'opening', 'ceiling'].includes(hit.kind) ? hit.object : null;
+    const next = hit && ['wall', 'room', 'opening', 'ceiling', 'trim'].includes(hit.kind) ? hit.object : null;
+    const under = trimEdit && hit ? trimUnder(e, hit) : null;
+    if (under) { const g = trimGrab(e, under); renderer.domElement.style.cursor = g && g.mode === 'divider' ? 'ew-resize' : 'ns-resize'; return; }
     if (tool === 'fov') renderer.domElement.style.cursor = 'ns-resize';
     else if (tool === 'measure' || tool === 'pin' || tool === 'note') renderer.domElement.style.cursor = hit ? 'crosshair' : 'default';
     else renderer.domElement.style.cursor = (hit && hit.kind !== 'ground') ? 'pointer' : 'default';
@@ -1878,7 +1900,7 @@ function findGroupFor(kind, id) {
 function objectForKey(key) {
   const m = /^node:([^#]+)#/.exec(key);
   if (m) { const w = scanObjs[m[1]]; const part = w && partOfModel(w, key); return part ? part.object : null; }
-  const k = /^(wall|room|ceiling|opening|fixture):(.+)$/.exec(key);
+  const k = /^(wall|room|ceiling|opening|fixture|trim):(.+)$/.exec(key);
   if (!k || !modelGroup) return null;
   if (k[1] !== 'ceiling') return findGroupFor(k[1], k[2]);
   let found = null;
@@ -1929,8 +1951,9 @@ function setSelection(sel, picks, things) {
   selectionVersion++;
   const was = selection;
   selection = sel;
-  tagPicks = picks || (sel && sel.tagKey ? [sel.tagKey] : sel && ['wall', 'opening', 'fixture', 'room'].includes(sel.kind) ? [planKey(sel.kind, sel.id)] : []);
+  tagPicks = picks || (sel && sel.tagKey ? [sel.tagKey] : sel && ['wall', 'opening', 'fixture', 'room', 'trim'].includes(sel.kind) ? [planKey(sel.kind, sel.id)] : []);
   picked = things || (sel && sel.kind !== 'scan' && tagPicks.length ? [{ key: tagPicks[0], keys: tagPicks.slice(), scanId: null, name: '', sel }] : []);
+  if (trimEdit && !trimIds().length) { trimEdit = false; setHint(''); }
   const shownObject = selectedModelObject();
   if (shownObject) revealInList(shownObject);
   listReveal = true;
@@ -1943,6 +1966,243 @@ function setSelection(sel, picks, things) {
   renderInspector();
   renderToolCol();
   requestRender(2);
+}
+
+// ---------- wall trim ----------
+// Trim sections (trims.js) are picked like any plan element; Shift-click adds more. EDIT BY
+// DRAGGING (E) turns a press on a selected section into a drag in the plane of its wall: up
+// or down moves every selected section; a field's top or bottom edge resizes it; the gap
+// between two boxes moves that divider. One geometry edit per drag, so UNDO takes it back.
+let trimEdit = false;
+let trimDrag = null;           // { mode, start: {x, y}, base: Map(id -> record copy), ... } while dragging
+let wallFaceClicked = 1;       // the face of the last wall clicked, for ADD TRIM TO THIS FACE
+let trimFocusList = false;     // the catalog list keeps the keyboard after a swap
+function trimIds() {
+  const ids = [];
+  for (const t of picked) if (t.sel && t.sel.kind === 'trim') ids.push(t.sel.id); else return [];
+  if (!ids.length && selection && selection.kind === 'trim') ids.push(selection.id);
+  return ids;
+}
+function trimById(id) { return (prop.trims || []).find(t => t.id === id) || null; }
+function trimWall(t) { return prop.walls.find(w => w.id === t.wallId) || null; }
+function trimWallHeight(t) { const w = trimWall(t); return w ? wallHeightOf(prop, w) : 2.44; }
+function selectTrims(ids) {
+  const things = ids.map(id => ({ key: planKey('trim', id), keys: [planKey('trim', id)], scanId: null, name: '', sel: { kind: 'trim', id } }));
+  if (!things.length) { setSelection(null); return; }
+  setSelection(things[things.length - 1].sel, things.map(t => t.key), things);
+}
+function wallSideOfHit(hit) {
+  const w = prop.walls.find(x => x.id === hit.id);
+  if (!w || !hit.point) return 1;
+  const L = Math.hypot(w.bx - w.ax, w.by - w.ay) || 1;
+  const nx = -(w.by - w.ay) / L, ny = (w.bx - w.ax) / L;
+  return (hit.point.x - w.ax) * nx + (hit.point.z - w.ay) * ny >= 0 ? 1 : -1;
+}
+function wallTrimFaces(w) {
+  const names = wallFaceLabels(w, roomsOn(prop, levelOfWall(prop, w).id));
+  return [{ label: names.pos, side: 1 }, { label: names.neg, side: -1 }];
+}
+function roomTrimFaces(r) {
+  const lvl = levelOfRoom(prop, r).id, rooms = roomsOn(prop, lvl);
+  return roomFaces(wallsOn(prop, lvl), r, w => wallSides(w, rooms));
+}
+function roomTrimIds(r) {
+  const faces = roomTrimFaces(r);
+  return (prop.trims || []).filter(t => faces.some(f => f.wall.id === t.wallId && f.side === t.side)).map(t => t.id);
+}
+function trimCountHtml(w) {
+  const n = (prop.trims || []).filter(t => t.wallId === w.id).length;
+  return n ? `<button class="btn" data-wall-trims>SELECT THIS WALL'S TRIM (${n})</button>` : '';
+}
+function roomTrimCountHtml(r) {
+  const n = roomTrimIds(r).length;
+  return n ? `<button class="btn" data-room-trims>SELECT THIS ROOM'S TRIM (${n})</button>` : '';
+}
+// New sections of one catalog entry on these faces, then selected so the catalog can swap them.
+function addTrims(productId, faces) {
+  const p = catalogItem(productId);
+  if (!p || !faces.length) { if (!faces.length) toast('No wall faces look into this room.', 'warn'); return; }
+  beginGeometryEdit(prop, 'add wall trim');
+  const tag = ensureCanonTag(prop, 'trim');
+  prop.tagDefaults = prop.tagDefaults || {};
+  if (!prop.tagDefaults.trim || prop.tagDefaults.trim === UNTAGGED) prop.tagDefaults.trim = tag.id;
+  if (!tagShown(prop, tag.id)) setTagShown(prop, tag.id, true);
+  prop.trims = prop.trims || [];
+  const ids = [];
+  for (const { wall, side } of faces) {
+    const t = trimTemplate(p.style, p.id, wall, side, { wallHeight: wallHeightOf(prop, wall) });
+    t.id = uid('trim');
+    // A field starts above the baseboard already on that face.
+    if (isField(t)) {
+      const base = prop.trims.filter(x => x.wallId === wall.id && x.side === side && trimStyle(x) && trimStyle(x).group === 'Base')
+        .reduce((m, x) => Math.max(m, trimExtent(x, wallHeightOf(prop, wall)).y1), 0);
+      if (base > t.y) { t.h = Math.max(.1, t.h - (base - t.y)); t.y = base; }
+    }
+    prop.trims.push(t); ids.push(t.id);
+  }
+  touch(); rebuildModel(); renderToolCol();
+  selectTrims(ids);
+  toast('Added ' + p.short + ' to ' + ids.length + (ids.length === 1 ? ' wall face.' : ' wall faces.'), 'ok');
+}
+function deleteTrims(ids) {
+  if (!ids.length) return;
+  beginGeometryEdit(prop, ids.length === 1 ? 'delete trim' : 'delete trim sections');
+  const gone = new Set(ids);
+  prop.trims = (prop.trims || []).filter(t => !gone.has(t.id));
+  trimEdit = false;
+  setSelection(null); touch(); rebuildModel();
+}
+// Change every selected section with fn(t), as one undoable edit.
+function editTrims(fn, label) {
+  const list = trimIds().map(trimById).filter(Boolean);
+  if (!list.length) return;
+  beginGeometryEdit(prop, label || 'edit trim');
+  for (const t of list) fn(t);
+  touch(); rebuildModel(); renderInspector();
+}
+function toggleTrimEdit() {
+  trimEdit = !trimEdit && trimIds().length > 0;
+  setHint(trimEdit ? 'EDIT TRIM: drag a selected section up or down. Wainscoting: drag its top or bottom edge, or the gap between two boxes. Esc or E when done.' : '');
+  renderInspector();
+}
+function renderTrimPanel() {
+  const list = trimIds().map(trimById).filter(Boolean);
+  if (!list.length) { selection = null; tagPicks = []; picked = []; return renderInspectorBody(); }
+  const ctx = {
+    trims: list, editing: trimEdit, focusList: trimFocusList,
+    wallHeight: trimWallHeight,
+    wallLength: t => { const w = trimWall(t); return w ? Math.hypot(w.bx - w.ax, w.by - w.ay) : 1; },
+    layoutOf: t => { const w = trimWall(t); return w ? trimLayout(t, w, openingsOn(prop, levelOfWall(prop, w).id), { H: wallHeightOf(prop, w) }) : { boxes: [], rects: [], cols: 0 }; },
+    faceName: t => { const w = trimWall(t); if (!w) return ''; const n = wallFaceLabels(w, roomsOn(prop, levelOfWall(prop, w).id)); return t.side === -1 ? n.neg : n.pos; },
+    setY: (t, v) => setTrimY(t, v, trimWallHeight(t)),
+    set: (fn, label) => editTrims(fn, label),
+    swap: (productId, keepFocus) => { trimFocusList = !!keepFocus; editTrims(t => swapTrimProduct(t, productId, trimWallHeight(t)), 'swap trim'); trimFocusList = false; },
+    toggleEdit: toggleTrimEdit, remove: () => deleteTrims(list.map(t => t.id)),
+    selectWall: () => setSelection({ kind: 'wall', id: list[0].wallId }), rerender: renderInspector,
+  };
+  inspEl.innerHTML = trimPanelHtml(ctx);
+  bindTrimPanel(inspEl, ctx);
+}
+// Where the pointer meets the plane of a section's wall face: x along the wall, y above its level's floor.
+const _plane = new THREE.Plane(), _hitV = new THREE.Vector3();
+function trimFacePoint(e, t) {
+  const w = trimWall(t);
+  if (!w) return null;
+  const L = Math.hypot(w.bx - w.ax, w.by - w.ay) || 1, ux = (w.bx - w.ax) / L, uy = (w.by - w.ay) / L, nx = -uy, ny = ux;
+  const off = t.side * ((w.thickness || 0.114) / 2);
+  const elev = levelOfWall(prop, w).elevation || 0;
+  _plane.setFromNormalAndCoplanarPoint(new THREE.Vector3(nx, 0, ny), new THREE.Vector3(w.ax + nx * off, 0, w.ay + ny * off));
+  raycaster.setFromCamera(ndcFromEvent(e), camera);
+  if (!raycaster.ray.intersectPlane(_plane, _hitV)) return null;
+  return { x: (_hitV.x - w.ax) * ux + (_hitV.z - w.ay) * uy, y: _hitV.y - elev };
+}
+// The selected section under the pointer: one hit itself, or the wall face a selected section
+// covers, inside its area (a box field is mostly wall between thin mouldings) give or take 4 cm.
+function trimUnder(e, hit) {
+  const ids = trimIds();
+  if (hit.kind === 'trim' && ids.includes(hit.id)) return hit;
+  const wallId = hit.kind === 'wall' ? hit.id : hit.kind === 'trim' ? (trimById(hit.id) || {}).wallId : null;
+  if (!wallId) return null;
+  for (const id of ids) {
+    const t = trimById(id);
+    if (!t || t.wallId !== wallId) continue;
+    const at = trimFacePoint(e, t), w = trimWall(t);
+    if (!at || !w) continue;
+    // The click must land on this face, not the wall's other side.
+    if (hit.kind === 'wall' && wallSideOfHit(hit) !== t.side) continue;
+    const L = Math.hypot(w.bx - w.ax, w.by - w.ay), ext = trimExtent(t, trimWallHeight(t)), tol = .04;
+    if (at.x >= t.f0 * L - tol && at.x <= t.f1 * L + tol && at.y >= ext.y0 - tol && at.y <= ext.y1 + tol) return { ...hit, kind: 'trim', id };
+  }
+  return null;
+}
+// What a press on selected trim would drag: the whole selection, a field's edge, or a divider.
+function trimGrab(e, hit) {
+  const t = trimById(hit.id);
+  if (!t) return null;
+  const at = trimFacePoint(e, t);
+  if (!at) return null;
+  const H = trimWallHeight(t), ids = trimIds();
+  if (isField(t) && ids.length === 1) {
+    const tol = Math.max(.02, Math.min(.06, t.h / 6));
+    if (Math.abs(at.y - (t.y + t.h)) < tol) return { mode: 'top', t, at };
+    if (Math.abs(at.y - t.y) < tol) return { mode: 'bottom', t, at };
+    const w = trimWall(t), lay = trimLayout(t, w, openingsOn(prop, levelOfWall(prop, w).id), { H });
+    const full = lay.rects.findIndex(r => r.full);
+    const row = lay.boxes.filter(b => b.rect === full && b.row === 0).sort((a, b) => a.x0 - b.x0);
+    for (let i = 0; i + 1 < row.length; i++) {
+      if (at.x > row[i].x1 - .01 && at.x < row[i + 1].x0 + .01 && at.y > row[i].y0 && at.y < lay.boxes.filter(b => b.rect === full).reduce((m, b) => Math.max(m, b.y1), 0)) {
+        return { mode: 'divider', t, at, i, widths: row.map(b => b.x1 - b.x0) };
+      }
+    }
+  }
+  return { mode: 'move', t, at };
+}
+function onTrimPointerDown(e) {
+  if (!trimEdit || e.button !== 0 || e.ctrlKey || mode === 'walk' || tool !== 'select' || !scene) return;
+  const hit = pick(e, { pins: false, notes: false, scans: false });
+  const ids = trimIds();
+  const under = hit && trimUnder(e, hit);
+  if (!under) return;
+  const grab = trimGrab(e, under);
+  if (!grab) return;
+  // The press is ours: the camera does not orbit, and the click is not a selection.
+  e.stopImmediatePropagation(); e.preventDefault();
+  try { renderer.domElement.setPointerCapture(e.pointerId); } catch (err) { /* moves still reach the window */ }
+  trimDrag = { ...grab, ids, x: e.clientX, y: e.clientY, shift: e.shiftKey, hit: under, moved: false,
+    base: new Map(ids.map(id => [id, JSON.parse(JSON.stringify(trimById(id)))])) };
+  window.addEventListener('pointermove', onTrimDragMove);
+  window.addEventListener('pointerup', onTrimDragEnd);
+  window.addEventListener('pointercancel', onTrimDragEnd);
+}
+// Heights snap to 1/8 in (or 5 mm in metric) as a tape is read.
+function snapHeight(v) { const step = units() === 'metric' ? .005 : .0254 / 8; return Math.round(v / step) * step; }
+function onTrimDragMove(e) {
+  const d = trimDrag;
+  if (!d) return;
+  if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 3) return;
+  if (!d.moved) { d.moved = true; beginGeometryEdit(prop, d.mode === 'move' ? 'move trim' : 'resize trim', { hold: true }); }
+  const at = trimFacePoint(e, d.t);
+  if (!at) return;
+  const dy = at.y - d.at.y, dx = at.x - d.at.x;
+  let note = '';
+  if (d.mode === 'move') {
+    for (const id of d.ids) {
+      const t = trimById(id), b = d.base.get(id);
+      if (!t || !b) continue;
+      setTrimY(t, b.y + snapHeight(dy), trimWallHeight(t));   // every section moves by the same snapped distance
+    }
+    note = 'Bottom edge ' + fmtLen(trimById(d.ids[0]).y) + (d.ids.length > 1 ? ' (' + d.ids.length + ' sections moved together)' : '');
+  } else if (d.mode === 'top' || d.mode === 'bottom') {
+    const t = trimById(d.t.id), b = d.base.get(d.t.id);
+    Object.assign(t, { y: b.y, h: b.h });
+    setFieldEdge(t, d.mode, snapHeight((d.mode === 'top' ? b.y + b.h : b.y) + dy), trimWallHeight(t));
+    note = 'Field ' + fmtLen(t.y) + ' to ' + fmtLen(t.y + t.h) + ' (' + fmtLen(t.h) + ' tall)';
+  } else if (d.mode === 'divider') {
+    const t = trimById(d.t.id), w = d.widths.slice(), min = .05;
+    const move = Math.max(min - w[d.i], Math.min(w[d.i + 1] - min, snapHeight(dx)));
+    w[d.i] += move; w[d.i + 1] -= move;
+    t.widths = w.map(v => Math.round(v * 10000) / 10000); t.cols = w.length;
+    note = 'Boxes ' + fmtLen(w[d.i]) + ' and ' + fmtLen(w[d.i + 1]);
+  }
+  setHint('EDIT TRIM: ' + note);
+  rebuildModel();
+}
+function onTrimDragEnd(e) {
+  const d = trimDrag;
+  trimDrag = null;
+  window.removeEventListener('pointermove', onTrimDragMove);
+  window.removeEventListener('pointerup', onTrimDragEnd);
+  window.removeEventListener('pointercancel', onTrimDragEnd);
+  if (!d) return;
+  if (!d.moved) {
+    // A press that never moved is a click: Shift-click still adds or takes out a section.
+    if (e.type === 'pointerup') { const key = planKey('trim', d.hit.id); pickThing({ key, keys: [key], scanId: null, name: '', sel: { kind: 'trim', id: d.hit.id } }, d.shift); }
+    return;
+  }
+  if (e.type === 'pointercancel') { revertGeometryEdit(prop); rebuildModel(); renderInspector(); return; }
+  endGeometryHold(prop);
+  touch();
+  renderInspector();
 }
 
 // ---------- move walls gizmo ----------
@@ -2078,7 +2338,7 @@ export function redo() { if (markup && markup.isOn()) markup.redo(); else restor
 // Another device changed these fields of the open property (main.js sharedChange; the record
 // itself is the same object). The drawn building is rebuilt from them where that is all it
 // takes: the camera, the mode and the loaded scans stay. False when the page must be rebuilt.
-const REDRAWN_FIELDS = new Set(['walls', 'openings', 'rooms', 'fixtures', 'levels', 'activeLevelId']);
+const REDRAWN_FIELDS = new Set(['walls', 'openings', 'rooms', 'fixtures', 'trims', 'levels', 'activeLevelId']);
 const UNDRAWN_FIELDS = new Set(['name', 'address', 'notes', 'onePager', 'researchSession', 'documents', 'docSets']);
 // Markups are drawn by their own layer, which only has to be told to look again.
 const LAYER_FIELDS = new Set(['markups']);
@@ -4600,6 +4860,7 @@ function renderInspectorBody() {
   if (tool === 'pin') return renderPinPanel();
   if (tool === 'fov' && !match) return renderFovPanel();
   if (match) return renderMatchPanel();
+  if (trimIds().length) return renderTrimPanel();
   if (selection && picked.length > 1) return renderMultiPanel();
   const modelObject = selectedModelObject();
   if (modelObject) return renderObjectPanel(modelObject);
@@ -4677,8 +4938,13 @@ function renderInspectorBody() {
       ${linkedProductsHtml(w.id)}
       ${photoLinksHtml(w.id)}
       <div class="empty" style="margin:8px 0">MOVE: drag the gizmo arrow to slide this wall; the walls, rooms and openings joined to it follow when you release.</div>
+      ${addTrimHtml(wallTrimFaces(w), { face: wallFaceClicked === -1 ? 1 : 0, button: 'ADD TRIM TO THIS FACE' })}
+      ${trimCountHtml(w)}
       <button class="btn" data-walk>WALK HERE</button>
       <button class="btn danger" data-del>DELETE WALL</button>`;
+    bindAddTrim(inspEl, wallTrimFaces(w), (productId, face) => addTrims(productId, [{ wall: w, side: face.side }]));
+    const wt = inspEl.querySelector('[data-wall-trims]');
+    if (wt) wt.onclick = () => selectTrims((prop.trims || []).filter(t => t.wallId === w.id).map(t => t.id));
     inspEl.querySelector('[data-th]').onchange = e => {
       const v = parseLen(e.target.value, 'feet');
       if (!isNaN(v) && v > 0.02 && v < 1) { beginGeometryEdit(prop, 'change wall thickness'); w.thickness = v; touch(); rebuildModel(); }
@@ -4704,6 +4970,7 @@ function renderInspectorBody() {
       beginGeometryEdit(prop, 'delete wall');
       prop.walls = prop.walls.filter(x => x.id !== w.id);
       prop.openings = prop.openings.filter(o => o.wallId !== w.id);
+      prop.trims = (prop.trims || []).filter(t => t.wallId !== w.id);
       setSelection(null);
       touch(); rebuildModel();
     };
@@ -4772,7 +5039,12 @@ function renderInspectorBody() {
       ${scopeAssignHtml(r.id)}
       ${linkedProductsHtml(r.id)}
       ${photoLinksHtml(r.id)}
+      ${addTrimHtml([{ label: 'Every wall of this room' }], { button: 'ADD TRIM AROUND THIS ROOM' })}
+      ${roomTrimCountHtml(r)}
       <button class="btn" data-walk>WALK INTO ROOM</button>`;
+    bindAddTrim(inspEl, [{}], productId => addTrims(productId, roomTrimFaces(r)));
+    const rt = inspEl.querySelector('[data-room-trims]');
+    if (rt) rt.onclick = () => selectTrims(roomTrimIds(r));
     inspEl.querySelector('[data-name]').onchange = e => { beginGeometryEdit(prop, 'rename room'); r.name = e.target.value; touch(); };
     inspEl.querySelector('[data-mat]').onchange = e => { beginGeometryEdit(prop, 'change floor material'); r.material = e.target.value || null; touch(); rebuildModel(); };
     inspEl.querySelector('[data-cmat]').onchange = e => { beginGeometryEdit(prop, 'change ceiling material'); r.ceilingMaterial = e.target.value || null; touch(); rebuildModel(); };
@@ -5448,7 +5720,9 @@ function onKeyDown(e) {
     case 'KeyG': toggleTag(CANON.scan.id); break;
     case 'KeyK': toggleTag(CANON.furniture.id); break;
     case 'KeyH': if (e.shiftKey) showHidden(); else hideSelection(); break;
+    case 'KeyE': if (!trimIds().length) return; toggleTrimEdit(); break;
     case 'Escape':
+      if (trimEdit) { toggleTrimEdit(); break; }
       if (match) endMatch();
       else if (tool !== 'select') setTool('select');
       else setSelection(null);
@@ -5458,6 +5732,7 @@ function onKeyDown(e) {
       else if (selection && selection.kind === 'opening') inspEl.querySelector('[data-del]') && inspEl.querySelector('[data-del]').click();
       else if (selection && selection.kind === 'pin') unpin(selection.id);
       else if (selection && selection.kind === 'note') deleteNote(selection.id);
+      else if (trimIds().length) deleteTrims(trimIds());
       break;
     default: return;
   }
@@ -5558,6 +5833,7 @@ function openModel(root) {
   setHint('');
 
   const c = renderer.domElement;
+  c.addEventListener('pointerdown', onTrimPointerDown, true);
   c.addEventListener('pointerdown', onPointerDown);
   c.addEventListener('pointerup', onPointerUp);
   c.addEventListener('pointermove', onPointerMove);
@@ -5764,6 +6040,7 @@ export function unmount() {
   window.removeEventListener('keyup', onKeyUp);
   if (renderer) {
     const c = renderer.domElement;
+    c.removeEventListener('pointerdown', onTrimPointerDown, true);
     c.removeEventListener('pointerdown', onPointerDown);
     c.removeEventListener('pointerup', onPointerUp);
     c.removeEventListener('pointermove', onPointerMove);

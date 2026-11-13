@@ -29,16 +29,17 @@ export const CANON = {
   openings: { id: 'tag-openings', name: 'Doors and windows', color: '#5b8fb9' },
   builtins: { id: 'tag-builtins', name: 'Cabinets and built-ins', color: '#8f6d9e' },
   furniture: { id: 'tag-furniture', name: 'Furniture and fixtures', color: '#c98a45' },
+  trim: { id: 'tag-trim', name: 'Wall trim and wainscoting', color: '#c9b98f' },
   site: { id: 'tag-site', name: 'Site', color: '#7c9a58' },
   scan: { id: 'tag-scan', name: 'Scan capture', color: '#8a80b8' },
 };
 // Plan element kinds and the tag each starts on.
-export const PLAN_KINDS = { wall: 'walls', room: 'floor', ceiling: 'ceiling', opening: 'openings', fixture: 'builtins', furniture: 'furniture' };
-const PLAN_SEED = ['walls', 'floor', 'ceiling', 'openings', 'builtins', 'furniture'];
+export const PLAN_KINDS = { wall: 'walls', room: 'floor', ceiling: 'ceiling', opening: 'openings', fixture: 'builtins', furniture: 'furniture', trim: 'trim' };
+const PLAN_SEED = ['walls', 'floor', 'ceiling', 'openings', 'builtins', 'furniture', 'trim'];
 const PALETTE = ['#d0743c', '#3f8f8a', '#b04f6f', '#6a7fc4', '#9a9a3a', '#4f9a62', '#a0663c', '#7a5fa8', '#c2a23e', '#5a8fa8'];
 
 const ID_RE = /^[\w.:-]{1,80}$/;
-const PLAN_KEY_RE = /^(wall|room|ceiling|opening|fixture):([\w.:-]{1,80})$/;
+const PLAN_KEY_RE = /^(wall|room|ceiling|opening|fixture|trim):([\w.:-]{1,80})$/;
 const NODE_KEY_RE = /^node:([\w.:-]{1,80})#(\*|\d{1,6}(?:\/\d{1,6}){0,63})$/;
 const COLOR_RE = /^#[0-9a-f]{6}$/i;
 const MAX_TAGS = 500, MAX_ASSIGN = 400000, MAX_NAME = 80;
@@ -113,6 +114,7 @@ export function normalizeTags(p) {
   const live = {
     wall: new Set((p.walls || []).map(w => w && w.id)), room: new Set((p.rooms || []).map(r => r && r.id)),
     opening: new Set((p.openings || []).map(o => o && o.id)), fixture: new Set((p.fixtures || []).map(f => f && f.id)),
+    trim: new Set((p.trims || []).map(t => t && t.id)),
     scan: new Set((p.scans || []).map(s => s && s.id)),
   };
   live.ceiling = live.room;
@@ -256,6 +258,7 @@ export function planKeys(prop) {
   for (const o of prop.openings || []) out.push(planKey('opening', o.id));
   for (const r of prop.rooms || []) { out.push(planKey('room', r.id)); out.push(planKey('ceiling', r.id)); }
   for (const f of prop.fixtures || []) out.push(planKey('fixture', f.id));
+  for (const t of prop.trims || []) out.push(planKey('trim', t.id));
   return out;
 }
 // Object counts: Map tagId|'' -> n, for plan elements and every model mesh assigned so far.

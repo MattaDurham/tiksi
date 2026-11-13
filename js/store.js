@@ -6,6 +6,7 @@ import { normalizeView } from './photo-match.js';
 import { normalizePositions } from './positions.js';
 import { normalizePin, normalizeLens, normalizeCameraSets, normalizeWallAnchor } from './pin-records.js';
 import { normaliseFixtures } from './fixtures.js';
+import { normaliseTrims } from './trims.js';
 import { normalizeDocSets } from './doc-sets.js';
 import { normalizeTags } from './tags.js';
 import { normalizeSavedViews } from './saved-views.js';
@@ -322,6 +323,7 @@ export function projectSlice(propId, data) {
   for (const w of p.walls || []) for (const k of ['material', 'materialIn', 'materialPos', 'materialNeg']) matIds.add(w[k]);
   for (const r of p.rooms || []) { matIds.add(r.material); matIds.add(r.ceilingMaterial); }
   for (const f of p.fixtures || []) { matIds.add(f.material); matIds.add(f.bodyMaterial); }
+  for (const t of p.trims || []) matIds.add(t.material);
   for (const m of d.materials || []) if (m && m.custom && materialOwners(m).includes(propId)) matIds.add(m.id);
   const productIds = referencedProductIds(projects, referencedProductIds(p));
   const collectProduct = link => { if (link && typeof link.productId === 'string') productIds.add(link.productId); };
@@ -492,7 +494,7 @@ export function propertyTemplate(name) {
   return normalizeTags({
     id: uid('prop'), name: name || 'New property', notes: '', wallHeight: 2.44,
     levels: [levelTemplate('lvl-0', 'Main level', 0, 2.44)], activeLevelId: 'lvl-0',
-    walls: [], openings: [], rooms: [], fixtures: [], scans: [], photos: [], notePins: [], videos: [], measurements: [], env: defaultEnv(), source: null,
+    walls: [], openings: [], rooms: [], fixtures: [], trims: [], scans: [], photos: [], notePins: [], videos: [], measurements: [], env: defaultEnv(), source: null,
     photoPositions: [], positionCounter: 0, cameraSets: [], docSets: [], savedViews: [], markups: [], onePager: emptyOnePager(),
   });
 }
@@ -656,6 +658,7 @@ function sanitiseIds(d) {
     for (const ph of p.photos) fix(ph, 'ph');
     for (const n of p.notePins) fix(n, 'note');
     for (const f of p.fixtures || []) fix(f, 'fx');
+    for (const t of p.trims || []) fix(t, 'trim');
     for (const v of p.videos) fix(v, 'vid');
     for (const m of p.measurements) fix(m, 'ms');
     for (const x of p.photoPositions || []) fix(x, 'pos');
@@ -690,7 +693,7 @@ function validateWorkspace(d) {
     if (d[key] != null && !Array.isArray(d[key])) throw new Error(key + ' must be a list');
     for (const rec of d[key] || []) if (!rec || typeof rec !== 'object' || Array.isArray(rec)) throw new Error(key + ' contains an invalid record');
   }
-  for (const p of d.properties || []) for (const key of ['levels','walls','openings','rooms','fixtures','scans','photos','notePins','videos','measurements','photoPositions','cameraSets','markups']) {
+  for (const p of d.properties || []) for (const key of ['levels','walls','openings','rooms','fixtures','trims','scans','photos','notePins','videos','measurements','photoPositions','cameraSets','markups']) {
     if (p[key] != null && !Array.isArray(p[key])) throw new Error('property ' + key + ' must be a list');
     for (const rec of p[key] || []) if (!rec || typeof rec !== 'object' || Array.isArray(rec)) throw new Error('property ' + key + ' contains an invalid record');
   }
@@ -723,6 +726,8 @@ function migrate(d) {
     ensureLevels(p);
     // Fixtures (fixtures.js): counter runs, cabinets, appliances, furniture on a level.
     p.fixtures = normaliseFixtures(p.fixtures, p);
+    // Wall trim (trims.js): baseboards, rails, crown and wainscoting on wall faces.
+    p.trims = normaliseTrims(p.trims, p);
     // v2: photos, environment, richer scan and room records. Merge over whatever is there
     // so partially filled objects from hand-edited or older exports keep their values.
     p.photos = p.photos || [];
