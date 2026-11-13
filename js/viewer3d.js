@@ -40,7 +40,7 @@ import { pendingTextureJobs, setTextureQuality, setTextureLimits, beginTextureBu
 import { qualityProfile, stillDimensions, effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, touchDevice, scanTooLarge, megabytes, QUALITY_NAMES } from './render-quality.js';
 import { icon } from './icons.js';
 import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
-import { wallFaceLabels, wallSides, doorLeaves, doorGlass, plainOpening } from './wall-solids.js';
+import { wallFaceLabels, wallSides, doorLeaves, doorShownOpen, setDoorShownOpen, doorGlass, plainOpening } from './wall-solids.js';
 import { SECTION_KINDS, SECTION_LABELS, MAX_SECTIONS, TURN_SNAP_DEG, moveSnapStep, snapTo, quatRotate, planeNormal, planeOf, flipped, rangeAlong, movedTo, makeSection, normalizeSections, levelHeightOf } from './section-planes.js';
 import { planWallMove, applyWallMove, normalOffset, movedWallLengths, moveLeavesShortWall } from './wallmove.js';
 import { addPhotoFromFile, photoUrl, photoById, revokePhotoUrls, photoBytes, ensureCameraFacts } from './photos-store.js';
@@ -75,7 +75,7 @@ let renderer = null, pmrem = null;
 let el = null, wrapEl = null, inspEl = null, hud = {};
 let scene = null, camera = null, controls = null, nav = null, walk = null, gizmo = null, composer = null, passes = {};
 let sky = null, envSky = null, sun = null, hemi = null, envRT = null, skyScene = null, panoTex = null, panoId = null;
-let modelGroup = null, groundGroup = null, scanRoot = null, pinRoot = null, noteRoot = null, lightRoot = null, measureRoot = null;
+let modelGroup = null, groundGroup = null, scanRoot = null, pinRoot = null, noteRoot = null, lightRoot = null, measureRoot = null, markupRoot = null;
 let cameraRoot = null, positionRoot = null;   // photo cameras and numbered photo positions
 let prop = null;
 let selection = null;          // {kind:'wall'|'room'|'opening'|'scan'|'pin'|'note', id}
@@ -360,6 +360,7 @@ function setupScene() {
   cameraRoot = new THREE.Group(); cameraRoot.name = 'photo cameras'; scene.add(cameraRoot);
   positionRoot = new THREE.Group(); positionRoot.name = 'photo positions'; scene.add(positionRoot);
   measureRoot = new THREE.Group(); measureRoot.name = 'measures'; scene.add(measureRoot);
+  markupRoot = new THREE.Group(); markupRoot.name = 'markup ink'; scene.add(markupRoot);
   sheetRoot = new THREE.Group(); sheetRoot.name = 'section planes'; scene.add(sheetRoot);
   batches = new ModelBatches();
   scene.add(batches.root);
@@ -570,12 +571,7 @@ function texturesOnScreen() {
   return out;
 }
 
-// A slider sends a step for every pixel it moves: the model is rebuilt once, for the frame
-// that will show it, however many steps arrived since the last one.
-let rebuildQueued = false;
-function rebuildModelSoon() { rebuildQueued = true; requestRender(1); }
 function rebuildModel() {
-  rebuildQueued = false;
   frameCounts.modelBuilds++;
   beginTextureBuild();   // the sets asked for from here on are this model's
   if (modelGroup) { scene.remove(modelGroup); disposeBuilt(modelGroup); }
@@ -1368,7 +1364,6 @@ function stepWalk(dt) {
 function tick(time) {
   if (!scene) return;
   if (exportingStill) return;
-  if (rebuildQueued) rebuildModel();
   const dt = Math.min(0.05, (time - (lastT || time)) / 1000);
   lastT = time;
   let active = false;
@@ -1544,8 +1539,13 @@ function resize() {
   camera.updateProjectionMatrix();
   if (match) applyMatchFrame();
   placeLensFrame();
-  for (const m of measures) m.line.material.resolution.set(w * pr, h * pr);
+  lineResolution(w * pr, h * pr);
   requestRender(2);
+}
+// Fat lines (measures, markup ink) are drawn in pixels of the picture they go into.
+function lineResolution(w, h) {
+  for (const m of measures) m.line.material.resolution.set(w, h);
+  if (markupRoot) markupRoot.traverse(o => { if (o.material && o.material.isLineMaterial) o.material.resolution.set(w, h); });
 }
 
 // ---------- still render ----------
@@ -1631,7 +1631,7 @@ async function renderStillBlob(options) {
   const c = composer, r = renderer;
   const savedPasses = [passes.outline, passes.hover].map(p => [p, p.enabled]);
   const handles = new Set([gizmo.getHelper(), ...sectionOverlays()]);   // never in the image
-  const roots = [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, ...handles].map(o => [o, o && o.visible]);
+  const roots = [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, markupRoot, ...handles].map(o => [o, o && o.visible]);
   const oldAspect = camera.aspect, oldFov = camera.fov;
   const oldPos = camera.position.clone(), oldQuat = camera.quaternion.clone();
   const matchEl = match && match.el;
@@ -1647,6 +1647,8 @@ async function renderStillBlob(options) {
     for (const [p] of savedPasses) p.enabled = false;
     // Photo pins and notes hidden with their toggles stay out of the image too.
     for (const [o, visible] of roots) if (o) o.visible = options.annotations && visible && !handles.has(o);
+    // A markup's picture asks for its own ink on the surfaces, without the other annotations.
+    if (markupRoot && options.markupInk !== undefined) markupRoot.visible = !!options.markupInk;
     if (matchEl) matchEl.style.visibility = 'hidden';
     r.setPixelRatio(1); c.setPixelRatio(1);
     r.setSize(width, height, false); c.setSize(width, height);
@@ -1661,7 +1663,7 @@ async function renderStillBlob(options) {
       camera.updateMatrixWorld();
     }
     camera.updateProjectionMatrix();
-    for (const m of measures) m.line.material.resolution.set(width, height);
+    lineResolution(width, height);
     invalidateShadows();
     renderFrame(true);
     // A large still is itself a way to lose the context: what was just drawn is then gone.
@@ -3417,16 +3419,59 @@ function openContextMenu(e) {
     // pointer comes after it.
     items.push(['add-note', 'ADD NOTE HERE', () => openNoteEditor({ hit, at })]);
     if (thing && (thing.keys.length || thing.whole)) items.push(['hide', 'HIDE ' + (thing.name ? thing.name.toUpperCase().slice(0, 40) : 'THIS OBJECT'), () => hideThings([thing], true)]);
+    // A door that hangs a leaf opens or closes here; windows and cased or plain openings have none.
+    const door = hit.kind === 'opening' && !fieldLayout() ? hungDoor(prop.openings.find(o => o.id === hit.id)) : null;
+    if (door) {
+      const open = doorShownOpen(door.o, door.interior);
+      items.push(['door-state', open ? 'CLOSE DOOR' : 'OPEN DOOR', () => setDoorOpen(door.o.id, !open)]);
+    }
   } else {
     items.push(['none', 'Right-click a surface to pin a note', null]);
   }
   const nNotes = prop.notePins.length, nPins = prop.photos.filter(ph => ph.pin).length;
   items.push(null);
   if (hiddenKeys(prop).length) items.push(['show-hidden', 'SHOW ALL HIDDEN OBJECTS', showHidden]);
+  if (interiorDoors().length) items.push(['toggle-doors', allInteriorDoorsClosed() ? 'OPEN ALL DOORS' : 'CLOSE ALL DOORS', toggleAllDoors]);
   items.push(['toggle-notes', (markersShown('notes') ? 'HIDE NOTES' : 'SHOW NOTES') + ' (' + nNotes + ')', () => toggleMarkers('notes')]);
   items.push(['toggle-pins', (markersShown('pins') ? 'HIDE PHOTO PINS' : 'SHOW PHOTO PINS') + ' (' + nPins + ')', () => toggleMarkers('pins')]);
   popupMenu(at, items);
 }
+// ---------- doors open and closed ----------
+// A door that hangs a leaf, with whether it is an interior one (a room on both sides of its
+// wall); null for a window, a cased or plain opening, or an opening whose wall is gone.
+function hungDoor(o) {
+  if (!o || o.type !== 'door') return null;
+  const w = prop.walls.find(x => x.id === o.wallId);
+  if (!w) return null;
+  const sides = wallSides(w, roomsOn(prop, levelOfWall(prop, w).id));
+  const interior = !!(sides.pos && sides.neg);
+  return doorLeaves(o, o.width, interior) > 0 ? { o, interior } : null;
+}
+function interiorDoors() { return prop.openings.map(hungDoor).filter(d => d && d.interior); }
+function allInteriorDoorsClosed() {
+  const doors = interiorDoors();
+  return doors.length > 0 && doors.every(d => !doorShownOpen(d.o, true));
+}
+// One door shown open or closed (o.doorState), as one undo step.
+function setDoorOpen(id, open) {
+  const door = hungDoor(prop.openings.find(o => o.id === id));
+  if (!door || doorShownOpen(door.o, door.interior) === !!open) return;
+  beginGeometryEdit(prop, open ? 'open door' : 'close door');
+  setDoorShownOpen(door.o, door.interior, open);
+  touch(); rebuildModel(); renderInspector();
+}
+// CLOSE ALL DOORS shuts every interior door while any stands open; OPEN ALL DOORS, once they
+// are all shut, stands them ajar again (each back to the default). Exterior doors keep theirs.
+// One undo step either way.
+function toggleAllDoors() {
+  const doors = interiorDoors();
+  if (!doors.length) return;
+  const open = allInteriorDoorsClosed();
+  beginGeometryEdit(prop, open ? 'open all doors' : 'close all doors');
+  for (const d of doors) setDoorShownOpen(d.o, true, open);
+  touch(); rebuildModel(); renderInspector();
+}
+
 // A small menu at a screen point: items are [id, label, run] (no run: a line of text), or null for a rule.
 function popupMenu(at, items) {
   closeContextMenu();
@@ -4593,7 +4638,7 @@ function renderInspectorBody() {
     if (!o) { selection = null; tagPicks = []; picked = []; return renderInspectorBody(); }
     // A door that hangs no leaf (a wide opening between two rooms) is a cased opening.
     const ow = prop.walls.find(w => w.id === o.wallId), osides = ow ? wallSides(ow, roomsOn(prop, levelOfWall(prop, ow).id)) : {};
-    const hung = o.type === 'door' && doorLeaves(o, o.width, !!(osides.pos && osides.neg)) > 0;
+    const interior = !!(osides.pos && osides.neg), hung = o.type === 'door' && doorLeaves(o, o.width, interior) > 0;
     inspEl.innerHTML = `<h3>${o.type === 'window' ? 'WINDOW' : (hung ? 'DOOR' : plainOpening(o) ? 'PLAIN OPENING' : 'CASED OPENING')}</h3>
       <div class="field"><label>Type</label><select data-type><option value="door" ${o.type === 'door' ? 'selected' : ''}>Door</option><option value="window" ${o.type === 'window' ? 'selected' : ''}>Window</option></select></div>
       <div class="field-row">
@@ -4604,9 +4649,11 @@ function renderInspectorBody() {
       ${hung ? `<div class="field"><label>Leaf</label>
         <select data-glass><option value="" ${doorGlass(o) ? '' : 'selected'}>Solid panel</option>
         <option value="full" ${doorGlass(o) === 'full' ? 'selected' : ''}>Glass</option>
-        <option value="half" ${doorGlass(o) === 'half' ? 'selected' : ''}>Half glass</option></select></div>` : ''}
-      <div class="field"><label>Position along wall</label><input type="range" min="0.02" max="0.98" step="0.005" value="${finiteNum(o.t, 0.5)}" data-t></div>
-      <div class="empty">PLAN sets a door's leaves: one, a pair, or none (a cased opening, or a plain one with no frame). Left unset, an interior door wider than 4 ft is a cased opening. Interior doors stand ajar so you can see through rooms.</div>
+        <option value="half" ${doorGlass(o) === 'half' ? 'selected' : ''}>Half glass</option></select></div>
+      <div class="field"><label>Shown</label>
+        <select data-door-state><option value="open" ${doorShownOpen(o, interior) ? 'selected' : ''}>Open</option>
+        <option value="closed" ${doorShownOpen(o, interior) ? '' : 'selected'}>Closed</option></select></div>` : ''}
+      <div class="empty">PLAN sets a door's leaves: one, a pair, or none (a cased opening, or a plain one with no frame), and moves an opening along its wall by dragging. Left unset, an interior door wider than 4 ft is a cased opening. Interior doors stand ajar so you can see through rooms and exterior doors are shut until you set them here or right-click one.</div>
       ${researchButtonHtml(o.id, 'fixture', o.type === 'window' ? 'RESEARCH WINDOW' : 'RESEARCH DOOR / OPENING')}
       ${linkedProductsHtml(o.id)}
       <button class="btn" data-wall>SELECT WALL</button>
@@ -4627,9 +4674,8 @@ function renderInspectorBody() {
       if (e.target.value) o.glass = e.target.value; else delete o.glass;
       touch(); rebuildModel(); renderInspector();
     };
-    let slidingOpening = false;
-    inspEl.querySelector('[data-t]').oninput = e => { if (!slidingOpening) { beginGeometryEdit(prop, 'move opening'); slidingOpening = true; } o.t = parseFloat(e.target.value); rebuildModelSoon(); };
-    inspEl.querySelector('[data-t]').onchange = () => { slidingOpening = false; touch(); };
+    const stateSel = inspEl.querySelector('[data-door-state]');
+    if (stateSel) stateSel.onchange = e => setDoorOpen(o.id, e.target.value === 'open');
     inspEl.querySelector('[data-wall]').onclick = () => setSelection({ kind: 'wall', id: o.wallId });
     inspEl.querySelector('[data-del]').onclick = () => { beginGeometryEdit(prop, 'delete opening'); prop.openings = prop.openings.filter(x => x.id !== o.id); setSelection(null); touch(); rebuildModel(); };
     bindResearchActions(inspEl);
@@ -5041,6 +5087,7 @@ function menuGroups() {
       { label: 'Lighting and sun', run: () => { hud.env.hidden = false; hud.env.classList.add('open'); renderEnvPanel(); } },
       { label: 'Photo pins', active: markersShown('pins'), run: () => toggleMarkers('pins') },
       { label: 'Notes', active: markersShown('notes'), run: () => toggleMarkers('notes') },
+      { label: allInteriorDoorsClosed() ? 'Open all doors' : 'Close all doors', disabled: !interiorDoors().length, run: toggleAllDoors },
       { label: 'Render a still image', run: openStillDialog },
     ]),
     g('Tools', 'model.tools', false, 'The tools in the left column', [
@@ -5263,7 +5310,8 @@ const hasMarkups = () => !!prop && Array.isArray(prop.markups) && prop.markups.s
 function markupParts() {
   const token = mountId;
   return {
-    THREE, wrapEl, canvas: renderer.domElement, camera, controls, nav, prop: () => prop, alive: () => token === mountId && !!scene && !!modelGroup,
+    THREE, wrapEl, canvas: renderer.domElement, camera, controls, nav, markupRoot, prop: () => prop, alive: () => token === mountId && !!scene && !!modelGroup,
+    rayAt: e => { camera.updateMatrixWorld(); raycaster.setFromCamera(ndcFromEvent(e), camera); return { o: raycaster.ray.origin.toArray(), d: raycaster.ray.direction.toArray() }; },
     pick, anchorOf, viewState, showView, renderStillBlob, quality, toast, setHint, requestRender, setMode, setTool, endMatch, setSelection, renderToolCol, syncSectionHandles,
     get mode() { return mode; }, get tool() { return tool; }, get match() { return match; }, get selection() { return selection; },
     get tween() { return tween; }, set tween(v) { tween = v; }, set activeViewId(v) { activeViewId = v; },
@@ -5406,7 +5454,6 @@ function openModel(root) {
   for (const k of Object.keys(notices)) delete notices[k];
   appliedQuality = null; renderFailed = false;
   scanQueue = Promise.resolve();   // this visit's own queue (see loadScans)
-  rebuildQueued = false;
   pinQueue.length = 0;   // pictures the last visit was still waiting to load
   mountId++;
 
@@ -5697,7 +5744,7 @@ export function unmount() {
     renderer.clear();
   }
   scene = null; camera = null; skyScene = null; sun = null; hemi = null;
-  scanRoot = null; pinRoot = null; noteRoot = null; measureRoot = null; cameraRoot = null; positionRoot = null;
+  scanRoot = null; pinRoot = null; noteRoot = null; measureRoot = null; markupRoot = null; cameraRoot = null; positionRoot = null;
   el = null; wrapEl = null; inspEl = null; hud = {};
   selection = null; hoverTarget = null; tween = null; pressed = null; dragLook = null; rightPress = null; movingNoteId = null;
 }

@@ -12,7 +12,7 @@ import {
   addLevel, deleteLevel, levelHeight, wallHeightOf, levelOfWall, fmtDate, isoToday,
 } from './store.js';
 import { openingSchedule, connectsLabel, resizeOpening, MIN_SIZE } from './opening-schedule.js';
-import { doorSwings, wallFaceLabels, doorGlass, plainOpening } from './wall-solids.js';
+import { doorSwings, wallFaceLabels, wallSides, doorLeaves, doorShownOpen, setDoorShownOpen, doorGlass, plainOpening } from './wall-solids.js';
 import { materialSelectHtml } from './materials.js';
 import { safeUrl } from './material-identity.js';
 import { printSheet } from './print-sheet.js';
@@ -2648,6 +2648,9 @@ function renderInspector() {
     const o = prop.openings.find(o => o.id === selection.id);
     if (!o) { selection = null; return renderInspector(); }
     const row = scheduleRow(o.id), ow = prop.walls.find(w => w.id === o.wallId);
+    // How MODEL shows a door that hangs a leaf: open (ajar) or closed.
+    const osides = ow ? wallSides(ow, roomsOn(prop, levelOfWall(prop, ow).id)) : {}, interior = !!(osides.pos && osides.neg);
+    const hung = o.type === 'door' && doorLeaves(o, o.width, interior) > 0, shownOpen = doorShownOpen(o, interior);
     insp.innerHTML = `${head(o.type === 'door' ? 'door' : 'window', (o.type === 'door' ? 'DOOR' : 'WINDOW') + (row ? ' ' + row.number : ''))}
       ${row ? `<div class="stat-line"><span>Connects</span><b>${escapeHtml(connectsLabel(row))}</b></div>` : ''}
       <div class="field"><label>Type</label>
@@ -2667,8 +2670,10 @@ function renderInspector() {
         <select data-glass><option value="" ${doorGlass(o) ? '' : 'selected'}>Solid panel</option>
         <option value="full" ${doorGlass(o) === 'full' ? 'selected' : ''}>Glass</option>
         <option value="half" ${doorGlass(o) === 'half' ? 'selected' : ''}>Half glass</option></select></div>`}` : ''}
-      <div class="field"><label>Position along wall</label>
-        <input type="range" min="0.02" max="0.98" step="0.005" value="${o.t}" data-t></div>
+      ${hung ? `<div class="field"><label>Shown in MODEL</label>
+        <select data-door-state><option value="open" ${shownOpen ? 'selected' : ''}>Open</option>
+        <option value="closed" ${shownOpen ? '' : 'selected'}>Closed</option></select></div>` : ''}
+      <div class="empty">Drag the opening along its wall to move it.</div>
       <button class="btn danger" data-del>${icon('trash')}DELETE</button>`;
     insp.querySelector('[data-type]').onchange = e => {
       pushUndo();
@@ -2704,9 +2709,12 @@ function renderInspector() {
     };
     const glassSel = insp.querySelector('[data-glass]');
     if (glassSel) glassSel.onchange = e => { pushUndo('change door leaf'); if (e.target.value) o.glass = e.target.value; else delete o.glass; touch(); renderInspector(); };
-    let slidingOpening = false;
-    insp.querySelector('[data-t]').oninput = e => { if (!slidingOpening) { pushUndo('move opening'); slidingOpening = true; } o.t = parseFloat(e.target.value); invalidate(); };
-    insp.querySelector('[data-t]').onchange = () => { slidingOpening = false; touch(); };
+    const stateSel = insp.querySelector('[data-door-state]');
+    if (stateSel) stateSel.onchange = e => {
+      pushUndo(e.target.value === 'open' ? 'open door' : 'close door');
+      setDoorShownOpen(o, interior, e.target.value === 'open');
+      touch(); renderInspector();
+    };
     insp.querySelector('[data-del]').onclick = deleteSelection;
     return;
   }

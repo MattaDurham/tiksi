@@ -1,6 +1,7 @@
 {
   "e2e-disk-workspace": 117,
   "e2e-documents": 33,
+  "e2e-door-states": 50,
   "e2e-exchange": 86,
   "e2e-fidelity": 188,
   "e2e-field-view": 154,
@@ -13,6 +14,7 @@
   "e2e-load-budget": 20,
   "e2e-mac-cleanup": 20,
   "e2e-markup": 68,
+  "e2e-markup-surfaces": 40,
   "e2e-measurement-video": 45,
   "e2e-model-batching": 293,
   "e2e-model-notes": 105,

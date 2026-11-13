@@ -92,6 +92,11 @@ try {
     await page.locator('.tool-col [data-act=markup]').click();
     await page.locator('.mk-bar').waitFor();
     assert.equal(await page.locator('.tool-col [data-act=markup]').evaluate(b => b.classList.contains('active')), true);
+    assert.match(await page.locator('.v-hint').innerText(), /^Drag: the pen draws on the model\. The wheel/);
+    assert.equal((await modelState(page)).place, 'surface', 'ink goes onto the surfaces unless asked otherwise');
+    // This part is about ink flat on the screen (e2e-markup-surfaces.mjs has ink on the surfaces).
+    await page.keyboard.press('s');
+    assert.equal((await modelState(page)).place, 'screen');
     assert.match(await page.locator('.v-hint').innerText(), /^Drag: the pen draws\. The wheel/);
     const cam0 = (await modelState(page)).camera;
     const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
@@ -263,6 +268,8 @@ try {
     assert.equal(st.on, true);
     assert.equal(st.fingerDraws, true, 'until a pen is seen, a finger draws');
     assert.equal(await page.locator('.mk-bar [data-act=finger]').getAttribute('aria-pressed'), 'true');
+    await page.locator('.mk-bar [data-act=place]').tap();   // ink flat on the screen, for this part
+    assert.equal((await modelState(page)).place, 'screen');
     const cam0 = st.camera;
 
     // One finger draws and the view holds still.

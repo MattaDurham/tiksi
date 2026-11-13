@@ -18,7 +18,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { materialById, ensureLevels, levelHeight, levelOfRoom, wallsOn, roomsOn, openingsOn } from './store.js';
 import { materialFor } from './textures.js';
-import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, wallFaceMaterialIds, pointInPoly, doorLeaves, doorGlass, leafGlazing, plainOpening } from './wall-solids.js';
+import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, wallFaceMaterialIds, pointInPoly, doorLeaves, doorShownOpen, doorGlass, leafGlazing, plainOpening } from './wall-solids.js';
 import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
 import { applyPlanTagVisibility } from './tags-scene.js';
 import { cutPrism } from './section-planes.js';
@@ -440,12 +440,13 @@ function buildDoor(o, s0, s1, top, th, sides, ctx) {
   const leaves = doorLeaves(o, w, interior);      // 0: wide interior openings are cased, not hung
   if (leaves) {
     // A pair (French doors, a slider drawn as a door): each leaf hangs from its own jamb and
-    // they meet in the middle, closed outside, both ajar to the same side inside.
+    // they meet in the middle, closed outside, both ajar to the same side inside; o.doorState
+    // shuts or opens either kind (doorShownOpen). An open door swings into the room side.
     const pair = leaves === 2;
     const leafW = pair ? (w - JAMB_W * 2 - 0.009) / 2 : w - JAMB_W * 2 - 0.006;
     const leafH = top - JAMB_W - 0.012;
     const swingSide = sides.pos ? 1 : -1;
-    const swing = interior ? -swingSide * THREE.MathUtils.degToRad(25) : 0;
+    const swing = doorShownOpen(o, interior) ? -swingSide * THREE.MathUtils.degToRad(25) : 0;
     g.add(doorLeaf(o, leafW, leafH, s0 + JAMB_W + 0.003, swing, ctx));
     if (pair) g.add(doorLeaf(o, leafW, leafH, s1 - JAMB_W - 0.003, Math.PI - swing, ctx));
   }
