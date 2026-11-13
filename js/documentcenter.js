@@ -155,7 +155,7 @@ function renderLists() {
   el.querySelector('[data-saved]').innerHTML = (docs.length ? docs.map(d => `<button class="dc-row dc-doc ${viewing && viewing.id === d.id ? 'active' : ''}" data-doc="${esc(d.id)}">
         ${d.thumb ? `<img src="${esc(d.thumb)}" alt="">` : `<span class="dc-doc-ic">${icon('file')}</span>`}
         <span><b>${esc(d.name)}</b><span>${d.pageCount > 1 ? d.pageCount + ' pages · ' : ''}${esc(String(d.createdAt || '').slice(0, 10))}</span></span></button>`).join('') : '<p class="dc-empty">No saved documents. Saved drawing sets, uploaded PDFs and drawings appear here.</p>')
-    + (productDocs.length ? `<div class="dc-subh">PRODUCT DOCUMENTS (PROJECT FOLDER)</div>${touchDevice() ? '<p class="dc-empty">These open on the Mac running Tiksi, not on this device.</p>' : ''}` + productDocs.map(({ p, d, i }) => `<button class="dc-row dc-pdoc" data-pdoc="${esc(p.id)}:${i}" ${ready ? '' : 'disabled title="Link this property\'s project folder to open its files"'}>
+    + (productDocs.length ? `<div class="dc-subh">PRODUCT DOCUMENTS (PROJECT FOLDER)</div>${touchDevice() ? '<p class="dc-empty">These open in your browser.</p>' : ''}` + productDocs.map(({ p, d, i }) => `<button class="dc-row dc-pdoc" data-pdoc="${esc(p.id)}:${i}" ${ready ? '' : 'disabled title="Link this property\'s project folder to open its files"'}>
         <b>${esc(d.title || d.path)}</b><span>${esc(p.name)} · ${esc(d.kind || 'file')}</span></button>`).join('') : '');
   el.querySelectorAll('[data-doc]').forEach(b => b.onclick = () => { viewing = { kind: 'doc', id: b.dataset.doc, page: 1 }; selectedId = ''; adjustId = ''; render(); });
   el.querySelectorAll('[data-pdoc]').forEach(b => b.onclick = async () => {

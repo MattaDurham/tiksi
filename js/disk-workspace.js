@@ -47,7 +47,12 @@ function stalled(ms) {
   const error = new Error('The connection to the Mac stopped: nothing moved for ' + Math.round(ms / 1000) + ' seconds');
   error.stalled = true; return error;
 }
-const answer = (status, buffer, headers = { get: () => null }) => ({ status, ok: status >= 200 && status < 300, headers, async arrayBuffer() { return buffer; }, async json() { return JSON.parse(new TextDecoder().decode(buffer)); } });
+const answer = (status, buffer, headers = { get: () => null }) => ({
+  status, ok: status >= 200 && status < 300, headers,
+  async arrayBuffer() { return buffer; },
+  async blob() { return new Blob([buffer], { type: headers.get('Content-Type') || '' }); },
+  async json() { return JSON.parse(new TextDecoder().decode(buffer)); },
+});
 // A request with a body. XMLHttpRequest reports the bytes as they leave, which fetch cannot.
 function sendBody(url, method, headers, body) {
   return new Promise((resolve, reject) => {
@@ -1017,7 +1022,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
         if (popup) { popup.opener = null; popup.location.href = url; }
         else { const a = document.createElement('a'); a.href = url; a.download = path.split('/').pop(); a.click(); }
         setTimeout(() => URL.revokeObjectURL(url), 300000);
-        return { action: 'opened', path };
+        return { action: popup ? 'opened-in-browser' : 'downloaded', path };
       } catch (e) { popup?.close(); throw e; }
     }
     // A product document or the project folder itself, opened in Finder/Preview on this Mac.
