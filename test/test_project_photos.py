@@ -3,9 +3,11 @@ import hashlib
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 import tempfile
 import unittest
+import unittest.mock
 from unittest.mock import Mock
 
 from server import project_photos as photos
@@ -131,6 +133,9 @@ class RouteTests(unittest.TestCase):
         self.folder = self.service.project_folder('prop-a')
         self.service.run = Mock(return_value=Mock(returncode=0, stdout='pixelWidth: 4032\n  pixelHeight: 3024\n', stderr=''))
         photos.SIZES.clear()
+        # The Mac's image tool is replaced by self.service.run; say it is there on machines without it.
+        which = unittest.mock.patch('shutil.which', side_effect=lambda name, real=shutil.which: '/usr/bin/sips' if name == 'sips' else real(name))
+        which.start(); self.addCleanup(which.stop)
 
     def call(self, path, command='GET', body=b'', headers=None):
         service = self.service
