@@ -92,3 +92,27 @@ test('property floor includes internal doorway infill at the floor datum', () =>
   prop.rooms[0].ceilingHeight = 2.07;
   near(roomCentres(prop).find(r => r.id === 'a').top, 2.07);
 });
+
+
+test('an explicit rounded baseboard changes only its observed wall side and stops at doors', () => {
+  const w = { ...wall, baseboardPos: { height: 0.09, depth: 0.012, profile: 'rounded', radius: 0.004 } };
+  const g = buildWallGroup(w, [{ id: 'passage', wallId: 'w', type: 'door', t: 0.5, width: 0.8, height: 2, plain: true }],
+    { walls: [w], rooms, wallHeight: 2.5 }, { glass });
+  g.updateMatrixWorld(true);
+  const firstZ = (x, y, side) => new THREE.Raycaster(new THREE.Vector3(x, y, side), new THREE.Vector3(0, 0, -side))
+    .intersectObject(g, true)[0]?.point.z;
+  near(firstZ(1, 0.05, 1), 0.072);
+  near(firstZ(1, 0.1, 1), 0.06, 1e-6); // observed lower board ends below this ray
+  near(firstZ(1, 0.1, -1), -0.072); // unobserved opposite side keeps prior default
+  assert.ok(firstZ(1, 0.089, 1) < 0.072 && firstZ(1, 0.089, 1) > 0.068, 'rounded top recedes from the face');
+  assert.equal(firstZ(2, 0.05, 1), undefined, 'no baseboard across a plain doorway');
+});
+
+test('an explicit panelled wood leaf keeps modeled relief and its finish', () => {
+  store.ws.data.materials.push({ id: 'synthetic-wood', name: 'Synthetic brown finish', color: '#654321', pattern: 'flat' });
+  const g = opening({ doorState: 'closed', detail: { door: { style: 'six-panel', hardware: 'none', leafMaterial: 'synthetic-wood' } } });
+  const leaf = g.children.find(c => c.isGroup).children[0], positions = leaf.geometry.getAttribute('position');
+  const depths = new Set(Array.from({ length: positions.count }, (_, i) => Math.round(Math.abs(positions.getZ(i)) * 10000)));
+  assert.ok(depths.has(225) && depths.has(185), 'panels are recessed 4 mm below rails/stiles');
+  assert.equal(leaf.material.color.getHexString(), '654321');
+});

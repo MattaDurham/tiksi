@@ -160,6 +160,12 @@ export function doorDetail(o, width, top, interior, sides = {}) {
 }
 
 const gridCount = (v, fallback) => Number.isInteger(v) && v >= 1 && v <= 12 ? v : fallback;
+export function baseboardDetail(wall, side) {
+  const d = wall[side > 0 ? 'baseboardPos' : 'baseboardNeg'] || {};
+  const height = size(d, 'height', 0.14, 0.6), depth = size(d, 'depth', 0.012, 0.1);
+  return { height, depth, profile: d.profile === 'rounded' ? 'rounded' : 'rectangular',
+    radius: size(d, 'radius', Math.min(depth / 2, height / 10), Math.min(depth, height), 0.0001) };
+}
 export function windowDetail(o, width, height) {
   const d = o?.detail?.window || {};
   const type = ['double-hung', 'casement', 'fixed'].includes(d.type) ? d.type : 'legacy';

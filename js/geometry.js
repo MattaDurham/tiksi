@@ -18,7 +18,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { materialById, ensureLevels, levelHeight, levelOfRoom, wallsOn, roomsOn, openingsOn } from './store.js';
 import { materialFor } from './textures.js';
-import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, wallFaceMaterialIds, pointInPoly, doorShownOpen, doorGlass, leafGlazing, plainOpening, doorDetail, windowDetail } from './wall-solids.js';
+import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, wallFaceMaterialIds, pointInPoly, doorShownOpen, doorGlass, leafGlazing, plainOpening, doorDetail, windowDetail, baseboardDetail } from './wall-solids.js';
 import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
 import { applyPlanTagVisibility } from './tags-scene.js';
 import { cutPrism } from './section-planes.js';
@@ -29,7 +29,6 @@ const FALLBACK_FLOOR = '#97999b';
 const FALLBACK_TRIM = '#f3f1ec';
 const FALLBACK_CEILING = '#f1efe9';
 
-const BASEBOARD_H = 0.14, BASEBOARD_D = 0.012;
 // A floor is a slab this thick whose top is the level's own height: the height walls, doors,
 // fixtures and imported models stand at. (It used to sit on top of that height, which buried
 // the foot of every piece of furniture and hid anything thinner, a rug or a hearth.)
@@ -482,6 +481,22 @@ function doorLeaf(o, leafW, leafH, px, rotY, ctx, detail) {
     glass.userData = Object.assign({ glass: true }, userData);
     glass.castShadow = false; glass.receiveShadow = false;
     pivot.add(glass);
+  } else if (!ghost && o.detail?.door && detail.style === 'six-panel') {
+    // Explicit construction uses actual recessed fields, including when the leaf has a
+    // wood finish; a paint-only normal texture must not erase that recorded form.
+    const mx = leafW * 24 / 256, my = leafH * 26 / 512, gx = leafW * 18 / 256, gy = leafH * 20 / 512;
+    const usable = leafH - 2 * my - 2 * gy, half = (leafW - gx) / 2, h = LEAF_T / 2;
+    const parts = [metricBox(0, mx, 0, leafH, -h, h), metricBox(leafW - mx, leafW, 0, leafH, -h, h), metricBox(half, half + gx, 0, leafH, -h, h)];
+    let z = my, previous = 0;
+    for (const proportion of [0.38, 0.38, 0.24]) {
+      const top = z + usable * proportion;
+      parts.push(metricBox(mx, leafW - mx, previous, z, -h, h));
+      for (const [x0, x1] of [[mx, half], [half + gx, leafW - mx]]) parts.push(metricBox(x0, x1, z, top, -h + 0.004, h - 0.004));
+      previous = top; z = top + gy;
+    }
+    parts.push(metricBox(mx, leafW - mx, previous, leafH, -h, h));
+    const leaf = mergedMesh(parts, leafFinish, userData);
+    leaf.userData.leafWidth = leafW; pivot.add(leaf);
   } else {
     const leaf = new THREE.Mesh(new THREE.BoxGeometry(leafW, leafH, LEAF_T), ghost || detail.leafMaterial || detail.style === 'slab' ? leafFinish : leafMaterials());
     leaf.position.set(leafW / 2, leafH / 2, 0);
@@ -495,7 +510,7 @@ function doorLeaf(o, leafW, leafH, px, rotY, ctx, detail) {
     : detail.hardwareFinish === 'dark' ? flatMat('#332e29', 0.4, { metalness: 0.7 }) : metalMat();
   const knobMat = detail.hardwareFinish === 'glass' ? (ctx.glass || glassMat()) : mm;
   for (const sgn of [1, -1]) {
-    const hx = leafW - 0.075, hy = 1.0;
+    const hx = leafW - 0.075, hy = Math.min(1.0, leafH - 0.1);
     const rose = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.01, 24), mm);
     rose.rotation.x = Math.PI / 2;
     rose.position.set(hx, hy, sgn * (LEAF_T / 2 + 0.005));
@@ -629,7 +644,11 @@ export function buildWallGroup(wall, openings, property, ctx) {
   bucket(matOf(faceIds.neg), FACE_NEG);
 
   const baseGeos = [];
-  let baseEnds = null;
+  const baseEnds = new Map();
+  const endsAtDepth = depth => {
+    if (!baseEnds.has(depth)) baseEnds.set(depth, wallEnds(wall, walls, depth));
+    return baseEnds.get(depth);
+  };
   for (const s of solids) {
     const fp = solidFootprint(s, L, h, ends);
     const y1 = s.v1 >= H - 0.001 ? H + lift : s.v1;
@@ -637,13 +656,34 @@ export function buildWallGroup(wall, openings, property, ctx) {
     if (s.v0 < 0.001) {
       // Baseboard on every face that borders a room, only on floor-touching pieces, its
       // ends mitred like the face it sits on so it meets the neighbour's baseboard.
-      baseEnds = baseEnds || wallEnds(wall, walls, BASEBOARD_D);
       for (const sgn of [1, -1]) {
         if (!(sgn > 0 ? sides.pos : sides.neg)) continue;
-        const [i0, i1] = faceSpan(s, L, ends, sgn), [o0, o1] = faceSpan(s, L, baseEnds, sgn);
-        const zi = sgn * h, zo = sgn * (h + BASEBOARD_D);
-        const bfp = sgn > 0 ? [[o0, zo], [o1, zo], [i1, zi], [i0, zi]] : [[i0, zi], [i1, zi], [o1, zo], [o0, zo]];
-        baseGeos.push(metricPrism(bfp, 0, BASEBOARD_H));
+        const detail = baseboardDetail(wall, sgn);
+        detail.height = Math.min(detail.height, s.v1);
+        detail.radius = Math.min(detail.radius, detail.height);
+        if (!detail.height || !detail.depth) continue;
+        const [i0, i1] = faceSpan(s, L, ends, sgn), zi = sgn * h;
+        const footprint = depth => {
+          const [o0, o1] = faceSpan(s, L, endsAtDepth(depth), sgn), zo = sgn * (h + depth);
+          return sgn > 0 ? [[o0, zo], [o1, zo], [i1, zi], [i0, zi]] : [[i0, zi], [i1, zi], [o1, zo], [o0, zo]];
+        };
+        if (detail.profile === 'rectangular') baseGeos.push(metricPrism(footprint(detail.depth), 0, detail.height));
+        else {
+          const { height, depth, radius } = detail;
+          baseGeos.push(metricPrism(footprint(depth), 0, height - radius));
+          for (let band = 0; band < 4; band++) {
+            const a = band * Math.PI / 8, b = (band + 1) * Math.PI / 8;
+            const low = footprint(depth - radius + radius * Math.cos(a)), high = footprint(depth - radius + radius * Math.cos(b));
+            const y0 = height - radius + radius * Math.sin(a), y1 = height - radius + radius * Math.sin(b);
+            const geo = metricPrism(low, y0, y1), pos = geo.getAttribute('position');
+            // Loft matching footprints so the outside top edge rounds back toward the wall.
+            for (let v = 0; v < pos.count; v++) if (Math.abs(pos.getY(v) - y1) < 1e-6) {
+              const k = low.findIndex(([x, z]) => pos.getX(v) === Math.fround(x) && pos.getZ(v) === Math.fround(z));
+              if (k >= 0) pos.setXYZ(v, high[k][0], y1, high[k][1]);
+            }
+            geo.computeVertexNormals(); baseGeos.push(geo);
+          }
+        }
       }
     }
   }
