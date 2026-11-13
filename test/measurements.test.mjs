@@ -29,17 +29,20 @@ test('readings parse tape notation; bare numbers are inches; stray text is refus
   assert.equal(ms.fmtReading(33.5 * IN), '33 1/2"'); assert.equal(ms.fmtReading(0.5 * IN), '1/2"');
   assert.equal(ms.fmtReading(36 * IN), '36"'); assert.equal(ms.fmtReading(130.25 * IN), "10'-10 1/4\"");
   store.ws.data.settings.units = 'metric';
-  assert.ok(Math.abs(ms.parseReading('0.85') - 0.85) < 1e-12, 'metric bare numbers are metres, as everywhere');
-  assert.equal(ms.fmtReading(0.851), '85.1 cm');
+  assert.ok(Math.abs(ms.parseReading('850') - 0.85) < 1e-12, 'metric bare numbers are millimetres, as everywhere');
+  assert.equal(ms.fmtReading(0.851), '851 mm');
+  store.ws.data.settings.units = 'imperial'; store.ws.data.settings.inchPrecision = 8;
+  assert.equal(ms.fmtReading((33 + 15 / 32) * IN), '33 1/2"', 'readings follow the chosen precision');
+  store.ws.data.settings.inchPrecision = 16;
 });
 
 test('a reading attached to an opening applies through history; undo shows the model no longer matches', () => {
   const p = kitchen();
   const targets = ms.elementTargets(p);
   const door = targets.find(t => t.kind === 'opening' && t.dim === 'width');
-  assert.match(door.label, /^Door 1 \(Kitchen\) on wall 3 · width$/);
+  assert.match(door.label, /^Door 1 \(Kitchen\) on wall 3 · wall opening width$/);
   assert.ok(targets.some(t => t.kind === 'wall' && t.label === 'Wall 1 (Kitchen) · centre-line length'), 'a wall length says it is on the centre line');
-  const m = ms.addMeasurement(p, { videoId: 'vid-walk', seconds: 12.4, input: '33 1/2', text: 'pantry door leaf', direction: 'width', confidence: 'clear', element: door, frameAssetId: 'mf-1', crop: [0.2, 0.3, 0.4, 0.1] });
+  const m = ms.addMeasurement(p, { videoId: 'vid-walk', seconds: 12.4, input: '33 1/2', text: 'pantry wall opening', direction: 'width', confidence: 'clear', element: door, frameAssetId: 'mf-1', crop: [0.2, 0.3, 0.4, 0.1] });
   assert.equal(m.status, 'assigned'); assert.ok(Math.abs(m.value - 33.5 * IN) < 1e-12); assert.deepEqual(m.crop, [0.2, 0.3, 0.4, 0.1]);
   assert.equal(ms.readingState(p, m), 'assigned');
   const result = ms.applyMeasurement(p, m.id);
@@ -106,4 +109,16 @@ test('videos and saved frames are project files; damaged records are normalised 
   assert.deepEqual([junk.seconds, junk.value, junk.element, junk.status, junk.confidence, junk.crop, junk.text], [0, null, null, 'unassigned', 'probable', null, '']);
   assert.deepEqual([vid.analysis, vid.thumb, vid.name], [null, '', 'Video']);
   assert.throws(() => store.replaceWorkspace({ properties: [{ id: 'p', measurements: {} }] }), /measurements must be a list/);
+});
+
+
+test('door slab readings retain their dimension type and convert through jambs and leaf count', () => {
+  const p=kitchen();p.openings[0].leaves=2;
+  const target=ms.elementTargets(p).find(t=>t.dim==='slabWidth');
+  const reading=ms.addMeasurement(p,{input:'0.75 m',text:'one leaf width',confidence:'clear',element:target});
+  assert.equal(reading.element.dim,'slabWidth');assert.equal(ms.canApply(p,reading),'');
+  ms.applyMeasurement(p,reading.id);
+  assert.ok(Math.abs(p.openings[0].width-1.609)<1e-9);assert.equal(reading.value,.75);
+  assert.equal(ms.readingState(p,reading),'applied');
+  p.openings[0].profile={jambWidth:.04};assert.equal(ms.needsOwner(p,reading),true);
 });

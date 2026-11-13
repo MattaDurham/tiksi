@@ -18,7 +18,7 @@ export function openExchangeDialog(prop, { selected, imported, changed, hooks, h
   const captures = prop.scans || [];
   const meshes = (prop.scans || []).filter(s => s.kind === 'mesh');
   dialog.innerHTML = `<form method="dialog"><h3>Edit in your modeling app</h3>
-    <p>Build here, edit in Blender or SketchUp, then bring the exported model back. Keep a .tiksi project for your editable plan, scope and photos.</p>
+    <p>Build here, edit in Blender or SketchUp, then bring the exported model back. Keep a .tiksi project for your editable plan, scope and photos.</p><p>GLB includes evidence references and recorded product specifications. Other formats offer a separate evidence manifest to keep beside the model.</p>
     <label>Export source <select data-source><option value="design">Tiksi floorplan — all levels</option>${captures.map(s => `<option value="${escapeHtml(s.id)}" ${s.id === (selected || prop.modelSourceId) ? 'selected' : ''}>${escapeHtml(s.name)}</option>`).join('')}</select></label>
     <label>Format <select data-format>${EXCHANGE_FORMATS.map(([id,name])=>`<option value="${id}">${name}</option>`).join('')}</select></label>
     <p data-format-note></p><p data-engines role="status">Checking native engines…</p>
@@ -56,7 +56,9 @@ export function openExchangeDialog(prop, { selected, imported, changed, hooks, h
   dialog.querySelector('[data-save-model]').onclick=()=>run(async()=>{
     status.textContent='Packing geometry and textures…';
     const out=await exportModel(prop,{format:format.value,source:source.value==='design'?'design':'model',scanId:source.value,includeModels:dialog.querySelector('[data-include]').checked});
-    downloadModel(out.blob,out.name);status.textContent='Saved '+out.name+(out.warnings?.length?' · '+out.warnings.join(' '):'');
+    downloadModel(out.blob,out.name);
+    if(out.evidence) { dialog.querySelector('[data-evidence-download]')?.remove(); const b=document.createElement('button'); b.type='button'; b.dataset.evidenceDownload=''; b.className='btn'; b.textContent='SAVE EVIDENCE MANIFEST'; b.onclick=()=>downloadModel(out.evidence.blob,out.evidence.name); status.after(b); }
+    status.textContent='Saved '+out.name+(out.warnings?.length?' · '+out.warnings.join(' '):'');
   });
   const file = dialog.querySelector('[data-return-file]');
   dialog.querySelector('[data-import-model]').onclick=()=>file.click();

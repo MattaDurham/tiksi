@@ -197,6 +197,7 @@ function render() {
   root.innerHTML = `<div class="view-scroll research-view">
     <div class="view-head"><span class="view-title">MATERIAL & FIXTURE RESEARCH</span><span class="view-sub">Find products, compare evidence and save selections to your digital twin.</span></div>
     <div class="research-layout"><form class="card research-brief">
+      <button type="button" class="btn" data-history>RESEARCH HISTORY</button>
       <h3 class="kicker">${context.name ? 'RESEARCH THIS SELECTION' : 'RESEARCH BRIEF'}</h3>
       ${context.name ? `<div class="research-context">${esc(context.name)}<span class="faint">${esc(context.elementKind || context.kind)}</span></div>` : ''}
       <div class="field"><label for="research-query">What are you looking for?</label><textarea id="research-query" data-brief="query" maxlength="2000" required placeholder="Describe a material, fixture or product, or ask for alternatives">${esc(draft.query)}</textarea></div>
@@ -213,6 +214,7 @@ function render() {
       <button class="btn primary" data-start type="submit">START RESEARCH</button>
     </form><section class="research-results" aria-label="Research progress and results" data-results></section></div>
   </div>`;
+  root.querySelector('[data-history]').onclick = showHistory;
   root.querySelector('form').onsubmit = e => { e.preventDefault(); start(); };
   root.querySelectorAll('[data-brief], [data-scope]').forEach(input => input.addEventListener('input', captureDraft));
   renderAvailability(); renderResults();
@@ -312,4 +314,40 @@ function scopeUnitWarnings(candidate, itemIds) {
   const unit = canonical(candidate.unit);
   return allScopeItems().filter(({ item }) => itemIds.includes(item.id) && (!unit || canonical(item.unit) !== unit)).map(({ item }) =>
     `Price unit ${candidate.unit || 'unverified'} differs from ${item.name}'s scope unit ${item.unit || 'unverified'}. Confirm coverage and conversion before estimating.`);
+}
+
+async function showHistory() {
+  const dialog = document.createElement('dialog'); dialog.className = 'dialog';
+  document.body.append(dialog); dialog.showModal(); dialog.onclose = () => dialog.remove();
+  const draw = async () => {
+    dialog.innerHTML = '<p>Loading research history…</p>';
+    try {
+      const data = await request('');
+      dialog.innerHTML = `<h2>Research history · ${data.jobs.length} / ${data.limit}</h2><p>Research linked to saved products is kept. Removing an unused finished record frees capacity.</p>${data.jobs.map(j => {
+        const used = ws.data.products.some(p => p.research?.jobId === j.id || p.priceCheck?.jobId === j.id);
+        return `<p>${esc(j.createdAt)} · ${esc(j.request?.query || j.id)} · ${esc(j.status)} <button class="btn" data-open-job="${esc(j.id)}">OPEN</button> <button class="btn" data-delete-job="${esc(j.id)}" ${used || !TERMINAL.has(j.status) ? 'disabled' : ''}>${used ? 'USED BY PRODUCTS' : 'REMOVE'}</button></p>`;
+      }).join('')}<p role="status"></p><button class="btn" data-close>CLOSE</button>`;
+      dialog.querySelector('[data-close]').onclick = () => dialog.close();
+      dialog.querySelectorAll('[data-open-job]').forEach(b => b.onclick = async () => {
+        try {
+          const data = await request('/'+encodeURIComponent(b.dataset.openJob));
+          job=data.job; clearTimeout(timer); selected.clear(); saved.clear(); error=''; notice='';
+          // Server requests deliberately exclude private scope IDs. Recover only links
+          // saved with this job's product evidence, never the previously open brief.
+          const linked=ws.data.products.filter(p=>p.research?.jobId===job.id);
+          jobContext=cleanContext(linked[0]?.research?.context || {});
+          jobItemIds=[...new Set(linked.flatMap(p=>p.itemIds || []))].filter(id=>itemById(id));
+          context=cleanContext(jobContext);
+          draft={query:job.request?.query || '',mode:job.request?.mode || 'team',budget:'',region:'',finish:'',dimensions:'',specifications:'',...job.request?.constraints,itemIds:[...jobItemIds]};
+          persist(); dialog.close(); render(); if(!TERMINAL.has(job.status))schedulePoll(0);
+        } catch(e) {dialog.querySelector('[role=status]').textContent=e.message;}
+      });
+      dialog.querySelectorAll('[data-delete-job]').forEach(b => b.onclick = async () => {
+        if (!confirm('Remove this unused research record? Saved product evidence stays with its product.')) return;
+        try { await request('/'+encodeURIComponent(b.dataset.deleteJob), {method:'DELETE'}); await draw(); }
+        catch(e) { dialog.querySelector('[role=status]').textContent=e.message; }
+      });
+    } catch(e) { dialog.textContent=e.message; const close=document.createElement('button'); close.textContent='Close'; close.onclick=()=>dialog.close(); dialog.append(close); }
+  };
+  await draw();
 }

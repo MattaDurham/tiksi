@@ -22,6 +22,16 @@ Keep product identity and specification evidence whether the geometry is importe
 or custom-built; distinguish documented facts from inferred details. Preserve
 custom build code and keep downloads and project sourcing records private.
 
+Quote every length, height, width, depth, clearance and other dimension to the owner
+in feet and inches, to the nearest 1/16": 2'-9 1/2", 8'-0", 3/4". Below 1 ft, inches
+alone (33 1/2" may also stay in inches when a tape would read it that way). Areas are
+square feet. This covers chat, reports, pages, drawings' notes, PR text and product
+specifications: convert a metric source (a spec sheet in mm, a scan in metres) and
+give feet and inches first, keeping the source's own figure in parentheses only as
+evidence, e.g. 2'-11 7/16" (900 mm). Code, stored data and file formats keep metres.
+In the app, lengths show in inches to 1/16" by default; FILE > Settings switches to
+millimetres and sets the precision.
+
 Before changing code, read `AGENTS.local.md`. If it is missing, seed a private
 copy from `AGENTS.local.example.md` with `python3 scripts/agents-local.py seed`.
 Instructions live in these AGENTS files; do not add model-specific rule files.

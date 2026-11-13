@@ -15,6 +15,7 @@ values it was written from. The browser decides what changed on which side.
 Each call is a separate process working on files in one job folder (see model_conversion).
 """
 import ctypes as C
+import hashlib
 import json
 import math
 import os
@@ -22,9 +23,9 @@ from pathlib import Path
 import sys
 
 if __package__:
-    from .sketchup_convert import API, Ref, Point, Transform, Color
+    from .sketchup_convert import API, Ref, Point, Transform, Color, get_data, set_data, to_ref
 else:
-    from sketchup_convert import API, Ref, Point, Transform, Color
+    from sketchup_convert import API, Ref, Point, Transform, Color, get_data, set_data, to_ref
 
 FORMAT = 'tiksi-sketchup-mirror'
 VERSION = 1
@@ -38,10 +39,6 @@ class Box(C.Structure): _fields_ = [('min', Point), ('max', Point)]
 
 
 # ---------- small helpers ----------
-
-def to_ref(api, name, ref):
-    fn = getattr(api.lib, name); fn.restype = Ref; fn.argtypes = [Ref]
-    return fn(ref)
 
 
 def matrix(t):
@@ -82,42 +79,6 @@ def skp_to_plan(p):
 def r6(v):
     return round(float(v), 6)
 
-
-def get_data(api, entity):
-    """The JSON stored in the entity's "tiksi" dictionary, or None when it has none."""
-    count = C.c_size_t()
-    api.call('SUEntityGetNumAttributeDictionaries', entity, C.byref(count))
-    if not count.value:
-        return None
-    dicts = (Ref * count.value)()
-    api.call('SUEntityGetAttributeDictionaries', entity, count, dicts, C.byref(count))
-    for d in dicts[:count.value]:
-        if api.text('SUAttributeDictionaryGetName', d) != DICT.decode():
-            continue
-        value = api.ref('SUTypedValueCreate')
-        try:
-            if api.call('SUAttributeDictionaryGetValue', d, KEY, C.byref(value), optional=True):
-                return {}
-            try:
-                parsed = json.loads(api.text('SUTypedValueGetString', value))
-            except ValueError:
-                return {}
-            return parsed if isinstance(parsed, dict) else {}
-        finally:
-            api.call('SUTypedValueRelease', C.byref(value))
-    return None
-
-
-def set_data(api, entity, data):
-    d = Ref()
-    api.call('SUAttributeDictionaryCreate', C.byref(d), DICT)
-    value = api.ref('SUTypedValueCreate')
-    try:
-        api.call('SUTypedValueSetString', value, json.dumps(data, separators=(',', ':')).encode('utf-8'))
-        api.call('SUAttributeDictionarySetValue', d, KEY, value)
-    finally:
-        api.call('SUTypedValueRelease', C.byref(value))
-    api.call('SUEntityAddAttributeDictionary', entity, d)
 
 
 def set_model_data(api, model, data):
@@ -544,6 +505,25 @@ def write_underlay(api, entities, underlay, image_path, layer):
     set_data(api, to_ref(api, 'SUImageToEntity', image), {'kind': 'underlay', 'level': underlay['level'], 'sig': underlay['sig']})
 
 
+def face_fingerprint(api, group):
+    """Local face coordinates; moving the whole group remains a supported edit."""
+    inner = api.ref('SUGroupGetEntities', group)
+    rings = []
+    for face in api.collection(inner, 'Faces'):
+        # All vertices include holes; the outer boundary alone misses cutouts.
+        count = C.c_size_t()
+        api.call('SUFaceGetNumVertices', face, C.byref(count))
+        vertices = (Ref * count.value)()
+        api.call('SUFaceGetVertices', face, count, vertices, C.byref(count))
+        points = []
+        for vertex in vertices[:count.value]:
+            point = Point()
+            api.call('SUVertexGetPosition', vertex, C.byref(point))
+            points.append(tuple(round(v, 5) for v in (point.x, point.y, point.z)))
+        rings.append(sorted(points))
+    return hashlib.sha256(json.dumps(sorted(rings)).encode()).hexdigest()
+
+
 def write_mirror(folder):
     folder = Path(folder)
     spec = json.loads((folder / 'mirror.json').read_text(encoding='utf-8'))
@@ -562,9 +542,17 @@ def write_mirror(folder):
         entities = api.ref('SUModelGetEntities', model)
         underlays = {u['level']: u for u in spec.get('underlays', [])}
         kept_underlays, erase = set(), []
+        def check_faces(groups):
+            for group in groups:
+                data = get_data(api, to_ref(api, 'SUGroupToEntity', group))
+                if data and data.get('faceFingerprint') and data['faceFingerprint'] != face_fingerprint(api, group):
+                    raise ValueError('Local SketchUp face edits need review; the existing mirror was preserved')
+                check_faces(api.collection(api.ref('SUGroupGetEntities', group), 'Groups'))
+        check_faces(api.collection(entities, 'Groups'))
         for group in api.collection(entities, 'Groups'):
             entity = to_ref(api, 'SUGroupToEntity', group)
-            if get_data(api, entity) is not None:
+            old_data = get_data(api, entity)
+            if old_data is not None:
                 erase.append(entity)
         for image in api.collection(entities, 'Images'):
             entity = to_ref(api, 'SUImageToEntity', image)
@@ -601,6 +589,15 @@ def write_mirror(folder):
             if not path.is_relative_to(folder.resolve()) or not path.is_file():
                 raise ValueError('Underlay image is missing from the mirror package')
             write_underlay(api, entities, underlay, path, layers.get(level))
+        def stamp(groups):
+            for group in groups:
+                entity = to_ref(api, 'SUGroupToEntity', group)
+                data = get_data(api, entity)
+                if data is not None:
+                    data['faceFingerprint'] = face_fingerprint(api, group)
+                    set_data(api, entity, data)
+                stamp(api.collection(api.ref('SUGroupGetEntities', group), 'Groups'))
+        stamp(api.collection(entities, 'Groups'))
         elements = spec.get('elements')
         if not isinstance(elements, dict):
             elements = {e['id']: {'kind': e['kind']} for e in spec_elements(spec)}
@@ -789,6 +786,15 @@ def read_mirror(folder):
         api.call('SUModelCreateFromFile', C.byref(model), os.fsencode(folder / 'source.skp'))
         info = get_model_data(api, model)
         entities = api.ref('SUModelGetEntities', model)
+        unsupported_geometry = []
+        def inspect(groups):
+            for group in groups:
+                data = get_data(api, to_ref(api, 'SUGroupToEntity', group)) or {}
+                if data.get('faceFingerprint') and data['faceFingerprint'] != face_fingerprint(api, group):
+                    unsupported_geometry.append(data.get('id', 'unknown'))
+                    warnings.append('Local face edits in ' + str(data.get('id')) + ' need review; automatic rewriting is blocked.')
+                inspect(api.collection(api.ref('SUGroupGetEntities', group), 'Groups'))
+        inspect(api.collection(entities, 'Groups'))
         walls, rooms, fixtures, untagged_groups, stray = [], [], [], 0, 0
         for group in api.collection(entities, 'Groups'):
             data = get_data(api, to_ref(api, 'SUGroupToEntity', group))
@@ -819,7 +825,7 @@ def read_mirror(folder):
         instances = C.c_size_t()
         api.call('SUEntitiesGetNumInstances', entities, C.byref(instances))
         return {'format': FORMAT, 'version': VERSION, 'model': info, 'walls': walls, 'rooms': rooms, 'fixtures': fixtures, 'underlays': underlays,
-                'untagged': {'faces': count.value, 'groups': untagged_groups, 'instances': instances.value}, 'warnings': warnings}
+                'unsupportedGeometry': unsupported_geometry, 'untagged': {'faces': count.value, 'groups': untagged_groups, 'instances': instances.value}, 'warnings': warnings}
     finally:
         if model.ptr:
             api.call('SUModelRelease', C.byref(model))

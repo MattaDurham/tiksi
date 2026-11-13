@@ -1,3 +1,5 @@
+// Network fault injection uses Playwright routing, which service workers bypass.
+// The real service-worker/offline journey is covered in e2e-audit-repairs.mjs.
 // MODEL notes, marker toggles and EDIT IN SKETCHUP, in a real browser on a synthetic property.
 // A right-click pins a note where it lands (room-linked), the menu edits and deletes it, a
 // right-drag still pans, and PHOTOS / NOTES hide the pins and notes and keep that per property.
@@ -37,7 +39,7 @@ const state = page => page.evaluate(async () => {
 const menuItems = page => page.locator('.v-ctx button').allInnerTexts();
 
 try {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+  const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto(url); await page.locator('[data-prop-name]').waitFor();

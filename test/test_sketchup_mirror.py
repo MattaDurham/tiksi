@@ -47,7 +47,8 @@ GLASS = {'id': 'mat-glass', 'name': 'Glass, clear', 'color': '#d2e7ee'}
 def finished(sage=SAGE):
     spec = copy.deepcopy(SPEC)
     for w in spec['walls']:
-        w['materials'] = {'pos': dict(sage if w['id'] == 'w-s' else DRYWALL), 'neg': dict(BRICK), 'other': dict(BRICK)}
+        inside = sage if w['id'] == 'w-s' else DRYWALL
+        w['materials'] = {'pos': dict(inside), 'neg': dict(BRICK), 'other': dict(inside)}
         for h in w['holes']:
             h['material'] = dict(GLASS if h['type'] == 'window' else TRIM)
     spec['rooms'][0]['material'] = dict(OAK)
@@ -147,7 +148,7 @@ class NativeMirrorTests(unittest.TestCase):
         self.assertEqual(sorted(map(tuple, room['now']['pts'])), sorted(map(tuple, room['base']['pts'])))
         self.assertEqual(got['untagged'], {'faces': 0, 'groups': 0, 'instances': 0})
 
-    def test_sketchup_edits_are_read_and_rewrite_keeps_sketchup_geometry(self):
+    def test_sketchup_edits_are_read_and_changed_local_faces_block_rewrite(self):
         skp = self.write(SPEC)
         edited = self.root / 'edited.skp'
         edit_like_sketchup(skp, edited)
@@ -162,11 +163,18 @@ class NativeMirrorTests(unittest.TestCase):
         self.assertAlmostEqual(north['now']['height'], 3.0, places=4)
         self.assertEqual(got['rooms'], [], 'the room group was deleted in SketchUp')
         self.assertEqual(got['untagged']['faces'], 1)
-        # Writing Tiksi's state over the edited file replaces Tiksi groups and keeps the face.
-        again = self.read(self.write(SPEC, existing=edited))
-        self.assertEqual(sorted(w['id'] for w in again['walls']), ['w-e', 'w-n', 'w-s', 'w-w'])
-        self.assertEqual(len(again['rooms']), 1)
-        self.assertEqual(again['untagged']['faces'], 1)
+        # The helper's copied wall is a single face, not the original wall solid.
+        # Its inherited evidence must flag that difference rather than overwrite it.
+        self.assertIn('w-e', got['unsupportedGeometry'])
+        job = self.root / 'refused'; job.mkdir()
+        (job / 'mirror.json').write_text(json.dumps(SPEC))
+        shutil.copy(edited, job / 'existing.skp')
+        before = (job / 'existing.skp').read_bytes()
+        result = subprocess.run([sys.executable, str(WORKER), 'write', str(job)], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Local SketchUp face edits need review', result.stderr)
+        self.assertEqual((job / 'existing.skp').read_bytes(), before)
+        self.assertFalse((job / 'model.skp').exists())
 
     @unittest.skipUnless(shutil.which('node'), 'Node not installed')
     def test_browser_spec_and_merge_agree_with_native_files(self):
@@ -215,13 +223,13 @@ else {
     def test_written_faces_wear_their_finishes(self):
         faces = painted_faces(self.write(finished()))
         south = [f for f in faces if f['id'] == 'w-s']
-        sage, = [f for f in south if 'Tiksi: Sage paint' in (f['front'][0], f['back'][0])]
+        sage, = [f for f in south if 'Tiksi: Sage paint' in (f['front'][0], f['back'][0]) and abs(abs(f['plan'][1]) - 0.05) < 1e-3]
         self.assertAlmostEqual(sage['plan'][1], 0.05, places=3, msg='the pos face is the one inside the room')
         self.assertEqual(sage['seen from'](0, 1), ('Tiksi: Sage paint', rgb(SAGE['color'])), 'painted on the side that faces the room')
         brick, = [f for f in south if abs(f['plan'][1] + 0.05) < 1e-3]
         self.assertEqual(brick['seen from'](0, -1), ('Tiksi: Brick, red', rgb(BRICK['color'])))
         ends = [f for f in south if abs(abs(f['plan'][1]) - 0.05) > 1e-3]
-        self.assertTrue(ends and all(f['front'][0] == f['back'][0] == 'Tiksi: Brick, red' for f in ends), 'ends, top and reveals')
+        self.assertTrue(ends and all(f['front'][0] == f['back'][0] == 'Tiksi: Sage paint' for f in ends), 'ends, top and reveals wear the interior finish')
         north_inside, = [f for f in faces if f['id'] == 'w-n' and abs(f['plan'][1] - 2.95) < 1e-3]
         self.assertEqual(north_inside['seen from'](0, -1)[0], 'Tiksi: Drywall, painted')
         floor, = [f for f in faces if f['id'] == 'r-1']

@@ -50,9 +50,28 @@ export async function sha256Here(buffer, { stretch = 4 * 1024 * 1024, pause = ()
 
 // The sum from the browser where it offers one, worked out here where it does not.
 export async function sha256(buffer) {
+  if (typeof Blob !== 'undefined' && buffer instanceof Blob) return sha256Blob(buffer);
   if (globalThis.crypto && globalThis.crypto.subtle) {
     try { return Array.from(new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', buffer)), b => b.toString(16).padStart(2, '0')).join(''); }
     catch (error) { /* worked out here instead */ }
   }
   return sha256Here(buffer);
+}
+
+// Fixed-size slices bound hashing memory even for large original videos on HTTP phones.
+export async function sha256Blob(blob, chunkSize = 4 * 1024 * 1024) {
+  if (!Number.isInteger(chunkSize) || chunkSize < 64 || chunkSize % 64) throw new Error('Hash chunk must be a multiple of 64 bytes');
+  const h = new Uint32Array([0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19]), w = new Uint32Array(64);
+  const whole = blob.size - blob.size % 64;
+  for (let at=0; at<whole; at+=chunkSize) {
+    const bytes = new Uint8Array(await blob.slice(at, Math.min(whole,at+chunkSize)).arrayBuffer());
+    blocks(h,bytes,0,bytes.length/64,w);
+    await new Promise(resolve => setTimeout(resolve,0));
+  }
+  const rest = blob.size-whole, tail = new Uint8Array(rest+9 > 64 ? 128 : 64);
+  tail.set(new Uint8Array(await blob.slice(whole).arrayBuffer())); tail[rest]=0x80;
+  const bits=blob.size*8, view=new DataView(tail.buffer);
+  view.setUint32(tail.length-8,Math.floor(bits/2**32)); view.setUint32(tail.length-4,bits>>>0);
+  blocks(h,tail,0,tail.length/64,w);
+  return Array.from(h,x=>x.toString(16).padStart(8,'0')).join('');
 }

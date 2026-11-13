@@ -28,7 +28,7 @@ LOG_READS = os.environ.get('TIKSI_LOG_READS') == '1'
 if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
 from server.peers import refusal, this_mac_tailscale_address, trusted_peer
 from server.ranges import Part, byte_range
-PUBLIC_FILES = {'index.html', 'manifest.webmanifest', 'app-icon.svg'}
+PUBLIC_FILES = {'index.html', 'manifest.webmanifest', 'app-icon.svg', 'service-worker.js'}
 PUBLIC_DIRS = {'css', 'js', 'vendor'}
 # Text the browser accepts compressed; pictures, video and models are compressed already.
 COMPRESSIBLE = {'text/javascript', 'text/css', 'text/html', 'text/plain', 'application/json', 'application/manifest+json', 'image/svg+xml'}

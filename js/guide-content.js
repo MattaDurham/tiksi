@@ -248,7 +248,7 @@ export const chapters = [
       'With the local Tiksi server and ffmpeg on the Mac, the video is analysed once: a strip of one thumbnail per second appears under the frame, and seconds where a long yellow strip (a tape blade) is visible are outlined in yellow.',
       'Use TAPE ▶ (Shift+→) to jump between those seconds. Each jump looks at the frames around that moment and shows the sharpest one in which the blade is still visible. → and ← step one second; . and , step a tenth; B looks for the sharpest frame near any moment.',
       'Scroll to zoom and drag to pan. Shift+drag (or CROP) draws a box around the numbers; the box is kept with the reading.',
-      'Type the value as the tape shows it: 33 1/2, 33-1/2", 2\'-9 1/2" or 85 cm. In imperial units a bare number means inches; the field shows how it was read. Add what was measured, the direction (width, height, depth) and how sure you are (clear, probable, unreadable).',
+      'Type the value as the tape shows it: 33 1/2, 33-1/2", 2\'-9 1/2" or 850 mm. A bare number means inches, or millimetres when Settings shows millimetres; the field shows how it was read. Add what was measured, the direction (width, height, depth) and how sure you are (clear, probable, unreadable).',
       'Attach the reading to a door or window width or height or a wall length, or keep it as a note. SAVE READING stores it with its frame. APPLY changes the model the same way a typed edit in PLAN does, so UNDO in the top bar reverts it.',
       'Readings nobody has explained yet (no element, nothing said about what was measured, or unreadable numbers) collect in ASK THE OWNER with their frames. COPY LIST copies the questions as text to send.',
     ],
@@ -451,7 +451,7 @@ export const chapters = [
     intro: 'Display units, model environment, project folders and workspace maintenance live in the same File panel. Most everyday work needs only project saves.',
     caption: 'Settings groups display, model environment and workspace maintenance. This synthetic screenshot shows the static edition’s folder controls; the local server displays the canonical Mac file path instead.',
     steps: [
-      'Open FILE → Settings to choose feet/square feet or metres/square metres.',
+      'Open FILE → Settings and choose INCHES (feet and inches, square feet) or MILLIMETRES (square metres). Precision sets how finely lengths show: 1/16" and 1 mm unless you change it. Stored lengths are never rounded.',
       'For rendering, open MODEL first, then FILE → Settings → Model environment. Adjust quality, lighting and the offered view settings.',
       'With the local server, Where this project is kept shows its canonical .tiksi path on the Mac. Desktop and Tailscale clients share those files and originals.',
       'In the static edition, CHOOSE FOLDER links the open project to a folder. OPEN FROM FOLDER reopens a saved copy, and KEEP THEM IN ONE FOLDER links projects without a folder of their own. These controls depend on browser folder permission.',

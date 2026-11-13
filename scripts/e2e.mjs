@@ -11,10 +11,19 @@
 // run page too, so a flaky suite stays visible. A suite that runs past SUITE_LIMIT_MS is
 // stopped and counts as a failed try. Each run writes what happened to every suite to
 // test-results/e2e-<group>.json, which CI keeps with the run.
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import net from 'node:net';
+import { existsSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
 import { groupSuites, parseGroup, WEBKIT_SUITES } from './e2e-groups.mjs';
+
+// Discover the same optional runtimes as the unit runner, including an isolated worktree.
+let mainRoot = process.cwd();
+try { mainRoot = dirname(execFileSync('git',['rev-parse','--path-format=absolute','--git-common-dir'],{encoding:'utf8'}).trim()); } catch { /* a source archive has no main checkout */ }
+for (const [name,path] of Object.entries({TIKSI_CAD_PYTHON:'.tiksi-state/converters/venv/bin/python',TIKSI_PHOTO_PLACEMENT_PYTHON:'.tiksi-state/photo-placement/venv/bin/python'})) {
+  if (!process.env[name]) { const found=[resolve(path),resolve(mainRoot,path)].find(existsSync); if(found)process.env[name]=found; }
+}
 
 const SUITE_LIMIT_MS = Number(process.env.E2E_SUITE_LIMIT_MS) || 12 * 60 * 1000;
 const onCI = process.env.GITHUB_ACTIONS === 'true';
@@ -36,8 +45,9 @@ process.on('SIGINT', () => stopAll('SIGINT'));
 process.on('SIGTERM', () => stopAll('SIGTERM'));
 
 // Runs one tool in its own process group, so a stopped suite takes its browser and servers with it.
-async function runTool(file, env = process.env, limitMs = 0) {
-  const child = spawn(process.execPath, [file], { env, stdio: 'inherit', detached: process.platform !== 'win32' });
+async function runTool(file, env = process.env, limitMs = 0, output = null) {
+  const child = spawn(process.execPath, [file], { env, stdio: output ? ['ignore','pipe','pipe'] : 'inherit', detached: process.platform !== 'win32' });
+  if(output) for(const [stream,target] of [[child.stdout,process.stdout],[child.stderr,process.stderr]])stream.on('data',chunk=>{target.write(chunk);output(String(chunk));});
   running.add(child);
   let timedOut = false;
   const timer = limitMs ? setTimeout(() => {
@@ -59,9 +69,12 @@ async function runSuite(file, extraEnv = {}) {
     const label = attempt === 1 ? '' : ' (second try)';
     console.log(`Running tools/${file}${label} on temporary ports ${env.E2E_APP_PORT}/${env.E2E_MOCK_PORT}`);
     const started = Date.now();
-    const code = await runTool(`tools/${file}`, env, SUITE_LIMIT_MS);
+    let output='';
+    const code = await runTool(`tools/${file}`, env, SUITE_LIMIT_MS, text=>{output=(output+text).slice(-2*1024*1024);});
+    const capabilitySkips=output.split(/\r?\n/).filter(line=>/\bSKIP\b|no SketchUp SDK/.test(line));
     const seconds = Math.round((Date.now() - started) / 1000);
-    tries.push({ code, seconds });
+    tries.push({ code, seconds, capabilitySkips });
+    if(capabilitySkips.length)console.log('Capability coverage omissions in '+file+': '+capabilitySkips.join(' | '));
     if (code === 0) return { file, attempts: attempt, seconds, tries };
     console.log(`tools/${file} failed on try ${attempt} after ${seconds}s (exit ${code}).`);
   }

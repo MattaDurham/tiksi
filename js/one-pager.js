@@ -15,7 +15,7 @@
 // settings.onePagerPrompt says when closing Tiksi asks to update it: 'changed' (the project
 // changed since the newest version, or there is none), 'always' or 'never'.
 
-import { fmtMoney, fmtArea, fmtDate, roomsFloorArea, projectTotals, itemPriced, isoToday } from './store.js';
+import { fmtMoney, fmtArea, fmtDate, projectSlice, roomsFloorArea, projectTotals, itemPriced, isoToday } from './store.js';
 import { programProjects, programTotals, programSchedule, selectedProjects } from './program.js';
 import { normalizeOnePager, emptyOnePager, latestVersion, SHOW_KEYS, MAX_HIGHLIGHTS, MAX_TEXT, cleanLine } from './one-pager-record.js';
 
@@ -63,8 +63,7 @@ export function onePagerFacts(prop, data) {
   const program = projects.filter(p => p.selected).concat(own.filter(pr => pr.parentId && chosen.has(pr.id) && !chosen.has(pr.parentId))
     .map(pr => { const t = projectTotals(pr); return { id: pr.id, name: pr.name || 'Project', likely: t.likely }; }).sort((a, b) => b.likely - a.likely));
   const budget = programTotals(own);
-  const itemIds = new Set(own.flatMap(pr => (pr.items || []).map(it => it.id)));
-  const products = (d.products || []).filter(pr => pr && ((pr.itemIds || []).some(id => itemIds.has(id)) || (pr.propertyIds || []).includes(prop.id)))
+  const products = (projectSlice(prop.id, { ...d, properties:d.properties || [prop], materials:d.materials || [] })?.products || [])
     .map(pr => ({ id: pr.id, name: pr.name || 'Product', brand: pr.brand || '', model: pr.model || '', category: pr.category || '', price: Number(pr.price) > 0 ? Number(pr.price) : 0 }));
   const photos = (prop.photos || []).filter(ph => ph && ph.kind === 'photo' && ph.source !== 'rendering' && ph.source !== 'polycam-keyframe');
   const renderings = (prop.photos || []).filter(ph => ph && ph.kind === 'photo' && ph.source === 'rendering');
@@ -90,19 +89,18 @@ export function draftText(facts) {
   const f = facts;
   const headline = f.name;
   const parts = [];
-  if (f.rooms.length) parts.push(plural(f.rooms.length, 'room'));
+  if (f.rooms.length) parts.push(plural(f.rooms.length, 'modeled floor region'));
   if (f.floorArea > 0) parts.push(fmtArea(f.floorArea));
   if (f.levels > 1) parts.push(plural(f.levels, 'level'));
   const tagline = ['Renovation proposal'].concat(parts.length ? [parts.join(', ')] : []).join(' · ');
   const s = [];
-  if (f.rooms.length) s.push(f.name + ' is a ' + f.rooms.length + '-room' + (f.floorArea > 0 ? ', ' + fmtArea(f.floorArea) : '') + ' property' + (f.levels > 1 ? ' on ' + plural(f.levels, 'level') : '') + (f.scans ? ', measured from a 3D scan' : '') + '.');
-  else s.push('A renovation at ' + f.name + (f.scans ? ', measured from a 3D scan' : '') + '.');
+  s.push('The modeled portion of ' + f.name + (f.floorArea > 0 ? ' covers ' + fmtArea(f.floorArea) : '') + '. Floor regions may include closets and other surfaces; model dimensions are not independently verified site measurements.');
   if (f.program.length) s.push('The proposed work covers ' + list(f.program.map(p => p.name)) + (f.scopeItems ? ', ' + plural(f.scopeItems, 'scope item') + ' in all' : '') + '.');
   else if (f.projects.length) s.push(plural(f.projects.length, 'project') + ' ' + (f.projects.length === 1 ? 'is' : 'are') + ' under consideration: ' + list(f.projects.map(p => p.name)) + '.');
   else s.push('Scope, budget and schedule will fill in as the design takes shape.');
   if (f.budget.priced) s.push('The likely cost is ' + fmtMoney(f.budget.likely) + (f.budget.low !== f.budget.high ? ', within a range of ' + fmtMoney(f.budget.low) + ' to ' + fmtMoney(f.budget.high) : '') + '.');
   if (f.days > 0) s.push('The work takes about ' + plural(f.days, 'calendar day') + (f.start ? workDates(f) : '') + '.');
-  if (f.products.length) s.push(plural(f.products.length, 'product') + ' ' + (f.products.length === 1 ? 'is' : 'are') + ' specified, such as ' + list(f.products.slice(0, 2).map(p => [p.brand, p.name].filter(Boolean).join(' ')), 2) + '.');
+  if (f.products.length) s.push(plural(f.products.length, 'product') + ' ' + (f.products.length === 1 ? 'is' : 'are') + ' recorded for review, such as ' + list(f.products.slice(0, 2).map(p => [p.brand, p.name].filter(Boolean).join(' ')), 2) + '.');
   const highlights = [];
   for (const p of f.projects.slice(0, MAX_HIGHLIGHTS)) highlights.push(p.name + (p.priced ? ': ' + fmtMoney(p.likely) + ' likely' : p.items ? ': ' + plural(p.items, 'scope item') : ''));
   if (!highlights.length) for (const r of f.rooms.slice(0, MAX_HIGHLIGHTS)) {

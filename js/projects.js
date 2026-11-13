@@ -1,3 +1,5 @@
+import { keepRemoved, openRecovery } from './recovery.js';
+import { takeoffState } from './source-revision.js';
 // Projects view: capture ideas, scope them into line items with budget ranges,
 // durations and dependencies. The budget and schedule views read from this data.
 // A project can hold subprojects (one level deep): small pieces of work such as a punch list,
@@ -186,7 +188,7 @@ function render() {
   el.innerHTML = `
     <div class="view-scroll">
       <div class="view-head">
-        <span class="view-title">PROJECTS</span>
+        <span class="view-title">PROJECTS</span><button class="btn" data-recovery>REMOVED RECORDS</button>
         <span class="view-sub" id="proj-count"></span>
         <span class="sp" style="flex:1"></span>
         <button class="btn primary" id="new-project">${icon('plus')}NEW PROJECT</button>
@@ -218,6 +220,7 @@ function render() {
       </div>
     </div>`;
 
+  el.querySelector('[data-recovery]').onclick = () => openRecovery(render);
   el.querySelector('#new-project').onclick = () => {
     const p = newProject('New project');
     ws.data.projects.push(p);
@@ -442,6 +445,7 @@ function renderDetail(p) {
 
   det.innerHTML = `
     <div class="card">
+      ${takeoffState(p, activeProperty()) ? `<p role="status">Takeoff: ${escapeHtml(takeoffState(p, activeProperty()))}. Saved quantities and manual edits are retained.</p>` : ''}
       ${parent ? `<div class="sub-crumb">SUBPROJECT OF <button class="btn small ghost" data-open="${escapeHtml(parent.id)}">${escapeHtml(parent.name)}</button></div>` : ''}
       ${summaryHtml(p, subs)}
       <div class="field-row">
@@ -537,6 +541,7 @@ function renderDetail(p) {
     const what = (parent ? 'subproject "' : 'project "') + p.name + '" and all its scope items' + (subs.length ? ', with its ' + subs.length + ' subprojects' : '');
     if (!confirm('Delete ' + what + '?')) return;
     const gone = new Set([p.id, ...subs.map(s => s.id)]);
+    keepRemoved(activeProperty(), 'projects', ws.data.projects.filter(x => gone.has(x.id)));
     ws.data.projects = ws.data.projects.filter(x => !gone.has(x.id));
     activeProjectId = parent ? parent.id : null;
     touch(); render();
@@ -766,7 +771,8 @@ function bindItemRows(p) {
     const id = x.dataset.delItem, it = p.items.find(i => i.id === id);
     if (!it) return;
     const linked = (it.elementIds || []).length + productsFor(it).length + sitePhotosFor(it).length;
-    if (!confirm('Remove "' + (it.name || 'this item') + '" from ' + (p.name || 'this project') + '?' + (linked ? ' Its links to ' + linkSummary(p, it) + ' go with it.' : '') + ' This cannot be undone.')) return;
+    if (!confirm('Remove "' + (it.name || 'this item') + '" from ' + (p.name || 'this project') + '?' + (linked ? ' Its links to ' + linkSummary(p, it) + ' go with it.' : '') + ' It can be restored from Removed records.')) return;
+    keepRemoved(activeProperty(), 'item', [it], p.id);
     p.items = p.items.filter(i => i.id !== id);
     for (const i of p.items) i.deps = (i.deps || []).filter(d => d !== id);
     openItems.delete(id);

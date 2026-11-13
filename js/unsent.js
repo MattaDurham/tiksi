@@ -74,7 +74,7 @@ export function unsentStore(factory = globalThis.indexedDB) {
     },
     // One original, under the name of the page that adds it. False when it was not kept.
     keepFile(space, id, record) {
-      if (!record || !record.buffer || record.buffer.byteLength > keptLimits.maxFileBytes) return Promise.resolve(false);
+      if (!record || !record.buffer || (record.buffer.size ?? record.buffer.byteLength) > keptLimits.maxFileBytes) return Promise.resolve(false);
       return inOrder(async () => { const tx = (await open()).transaction('files', 'readwrite'); tx.objectStore('files').put({ owner: space, id, record }); return done(tx); });
     },
     // Remove a page's state and the named originals ([space, id]) in one step. With `at`,

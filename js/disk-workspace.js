@@ -489,7 +489,9 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   }
   function showFailure() {
     const { refused, error } = failure;
-    const here = pending && keptHere ? (onlyHere().length ? ' The records changed here are kept on this device until the Mac has them.' : ' What changed here is kept on this device until the Mac has it.') : '';
+    // An earlier local copy is not confirmation of the edit currently on screen.
+    // A failed network request can finish before the deferred IndexedDB write does.
+    const here = pending && keptHere && keptMark === markNow() ? (onlyHere().length ? ' The records changed here are kept on this device until the Mac has them.' : ' What changed here is kept on this device until the Mac has it.') : '';
     const said = String(error.message || '').replace(/[.\s]+$/, '') + '.';
     if (refused) status((pending ? 'NOT SAVED: ' : 'PROJECT FILES: ') + brief(error.message), true, 'refused', said + (pending ? ' Sending the same save again cannot help, so it is not retried until something changes here.' : '') + here);
     else {
@@ -523,7 +525,13 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
   }
   async function read(id, local) {
     const remote = assets[id];
-    if (!remote || changedFiles.has(id)) return local;
+    if (changedFiles.has(id)) return local;
+    if (!remote) {
+      // A download may have filled the cache while a move/removal was being saved.
+      // Once the Mac acknowledges removal, that old shared copy is no longer current.
+      if (local?.sharedHash) { heldOriginals.delete(id); await deleteFiles([id]); return null; }
+      return local;
+    }
     if (local?.sharedHash === remote.hash) { if (heldOriginals.has(id)) holdOriginal(id, heldOriginals.get(id)); return local; }
     const meta = { id, name: remote.name, format: remote.format, kind: remote.kind, mime: remote.mime, sharedHash: remote.hash };
     // Too large to hold: the bytes go straight to whoever asked, uncopied, and are not kept.
@@ -566,11 +574,11 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     429: 'The Mac has too many unfinished uploads; this original is sent when there is room',
     507: 'The Mac’s disk is nearly full; this original was not accepted. Make room on the Mac and it is sent again' };
   async function sendInPieces(hash, local, secondTry = false) {
-    const buffer = local.buffer, size = buffer.byteLength;
+    const buffer = local.buffer, size = buffer.size ?? buffer.byteLength;
     let state = await (await request('/uploads/' + hash)).json();
     let at = state.done ? size : state.size === size ? Number(state.received) || 0 : 0;
     for (let corrections = 0; !state.done;) {
-      const piece = new Uint8Array(buffer, at, Math.min(uploadLimits.pieceBytes, size - at));
+      const piece = buffer instanceof Blob ? buffer.slice(at, Math.min(size, at + uploadLimits.pieceBytes)) : new Uint8Array(buffer, at, Math.min(uploadLimits.pieceBytes, size - at));
       try { state = await (await request('/uploads/' + hash, { method: 'PUT', body: piece, headers: { 'X-Upload-Size': String(size), 'X-Upload-Offset': String(at) } })).json(); }
       catch (error) {
         // The Mac has a different amount than this page thought: go on from what it has.
@@ -592,9 +600,9 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       const local = await getCachedFile(id);
       if (starting[id] && !changedFiles.has(id) && (!migration || !local?.buffer)) { out[id] = starting[id]; continue; }
       if (!local?.buffer) { if (starting[id]) out[id] = starting[id]; continue; }
-      if (local.buffer.byteLength > MAX_FILE_BYTES) {
+      if ((local.buffer.size ?? local.buffer.byteLength) > MAX_FILE_BYTES) {
         // Said here, in words, instead of as an upload the Mac cuts off again and again.
-        const error = new Error((local.name || 'A file') + ' is ' + Math.round(local.buffer.byteLength / 1048576) + ' MB; the Mac accepts files up to ' + MAX_FILE_BYTES / 1048576 + ' MB');
+        const error = new Error((local.name || 'A file') + ' is ' + Math.round((local.buffer.size ?? local.buffer.byteLength) / 1048576) + ' MB; the Mac accepts files up to ' + MAX_FILE_BYTES / 1048576 + ' MB');
         error.status = 413; throw error;
       }
       toSend.push({ id, local });
@@ -603,7 +611,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     const unknown = toSend.filter(({ id, local }) => heldByMac.get(id)?.buffer !== local.buffer);
     const holds = unknown.length ? await heldOnMac(unknown.map(({ local }) => local.buffer)) : null;
     for (const { id, local } of toSend) {
-      const held = heldByMac.get(id), size = local.buffer.byteLength;
+      const held = heldByMac.get(id), size = (local.buffer.size ?? local.buffer.byteLength);
       let uploaded = held && held.buffer === local.buffer ? held.entry : null;
       if (uploaded && held.round !== round) reusedEarlier = true;
       if (!uploaded && holds) {
@@ -845,7 +853,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
       for (const [id, buffer] of uploadedFiles) if ((await getCachedFile(id))?.buffer === buffer) {
         changedFiles.delete(id); heldByMac.delete(id);
         // The Mac has it now: it counts toward what page memory holds, or is let go when too large.
-        if (buffer.byteLength > originalLimits.fileBytes) deleteFiles([id]); else holdOriginal(id, buffer.byteLength);
+        if ((buffer.size ?? buffer.byteLength) > originalLimits.fileBytes) deleteFiles([id]); else holdOriginal(id, buffer.size ?? buffer.byteLength);
       }
       await fetchPictures(accepted.data, accepted.assets);
       // (Only when this round merged a copy from elsewhere: a drag over a plain save goes on.)
@@ -921,6 +929,7 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     if (!entry.mirror && legacyFolderMap[prop.id]?.mirror) entry.mirror = legacyFolderMap[prop.id].mirror;
     let version = info.mtime;
     const folder = {
+      preservesMirrorVersions: true, // the server keeps the previous bytes atomically with PUT
       async getFileHandle(name, options) {
         const now = await (await request(endpoint + '/info')).json(); version = now.mtime;
         if (!now.exists && !options?.create) throw new DOMException('Mirror not found', 'NotFoundError');
@@ -988,7 +997,29 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     while (mirrorRunning) { if (Date.now() > deadline) throw new Error('SketchUp sync is still busy; try again after it finishes.'); await new Promise(r => setTimeout(r, 100)); }
     await mirror(prop);
     return (await request('/mirror/' + encodeURIComponent(prop.id) + '/open', { method: 'POST' })).json();
+  },
+  async recoveryCopies() { return (await request('/recovery')).json(); },
+  async recoverySummary(name) { return (await request('/recovery/' + encodeURIComponent(name) + '?summary=1')).json(); },
+  async restoreRecovery(name) {
+    await sync();
+    const data = savedFormNow();
+    await request('/recovery', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({data,assets:await fileManifest(data, assets)})});
+    const blob = await (await request('/recovery/' + encodeURIComponent(name))).blob();
+    const { importProject } = await import('./store.js');
+    await importProject(new File([blob], name));
+    await sync();
   }, async openProjectPath(prop, path = '') {
+    if (path) {
+      const popup = window.open('about:blank', '_blank');
+      try {
+        const response = await request('/document/' + encodeURIComponent(prop.id) + '?path=' + encodeURIComponent(path));
+        const url = URL.createObjectURL(await response.blob());
+        if (popup) { popup.opener = null; popup.location.href = url; }
+        else { const a = document.createElement('a'); a.href = url; a.download = path.split('/').pop(); a.click(); }
+        setTimeout(() => URL.revokeObjectURL(url), 300000);
+        return { action: 'opened', path };
+      } catch (e) { popup?.close(); throw e; }
+    }
     // A product document or the project folder itself, opened in Finder/Preview on this Mac.
     return (await request('/open/' + encodeURIComponent(prop.id), { method: 'POST', body: JSON.stringify({ path }), headers: { 'Content-Type': 'application/json' } })).json();
   },

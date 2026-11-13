@@ -1,3 +1,4 @@
+import { productEvidence } from './evidence.js';
 // What a library material is in the real world, apart from how it renders (materials.js).
 // SketchUp keeps a material's colour and texture; Tiksi also says what the thing is:
 //
@@ -94,7 +95,7 @@ export function safeUrl(v) {
 // A product field in shape, or null when it names nothing.
 export function normalizeProduct(p) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
-  const out = { brand: text(p.brand, 120), name: text(p.name, 200), model: text(p.model, 120), url: safeUrl(p.url),
+  const out = { ...productEvidence(p), brand: text(p.brand, 120), name: text(p.name, 200), model: text(p.model, 120), url: safeUrl(p.url),
     productId: typeof p.productId === 'string' && ID_OK.test(p.productId) ? p.productId : null };
   return out.brand || out.name || out.model || out.url || out.productId ? out : null;
 }
@@ -194,7 +195,7 @@ export function linkMaterialProduct(data, m, { productId, propertyId } = {}, new
   record.materialIds = Array.isArray(record.materialIds) ? record.materialIds : [];
   if (!record.materialIds.includes(m.id)) record.materialIds.push(m.id);
   const typed = m.product || {};
-  m.product = normalizeProduct({ brand: record.brand || typed.brand, name: record.name || typed.name, model: record.model || typed.model,
+  m.product = normalizeProduct({ ...typed, brand: record.brand || typed.brand, name: record.name || typed.name, model: record.model || typed.model,
     url: record.manufacturerUrl || record.url || typed.url, productId: record.id });
   return { record, created };
 }

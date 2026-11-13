@@ -1,3 +1,4 @@
+import { doorDimensions } from './opening-dimensions.js';
 // Model -> three.js scene generation.
 // Plan coordinates are meters, x east / y south (canvas convention).
 // World mapping: plan (x, y) -> world (x, z); height is world y.
@@ -411,8 +412,11 @@ function solidFootprint(s, L, h, ends) {
 // Spans and solid pieces live in wall-solids.js (shared with the SketchUp mirror).
 export { wallSolids };
 
+function profileSize(o, key, fallback, max = .3) { const v = o.profile?.[key]; return Number.isFinite(v) && v > 0 && v <= max ? v : fallback; }
+
 // ---------- doors ----------
 function buildDoor(o, s0, s1, top, th, sides, ctx) {
+  const JAMB_W = profileSize(o, 'jambWidth', .05), CASING_W = profileSize(o, 'casingWidth', .07), CASING_D = profileSize(o, 'casingDepth', .016);
   const g = new THREE.Group();
   g.userData = { kind: 'opening', id: o.id, wallId: ctx.wall.id };
   // A plain opening has no frame: the wall's own returns and the header above are all there is.
@@ -443,8 +447,8 @@ function buildDoor(o, s0, s1, top, th, sides, ctx) {
     // they meet in the middle, closed outside, both ajar to the same side inside; o.doorState
     // shuts or opens either kind (doorShownOpen). An open door swings into the room side.
     const pair = leaves === 2;
-    const leafW = pair ? (w - JAMB_W * 2 - 0.009) / 2 : w - JAMB_W * 2 - 0.006;
-    const leafH = top - JAMB_W - 0.012;
+    const dims = doorDimensions({ ...o, leaves, height:top }, w);
+    const leafW = dims.slabWidth, leafH = dims.slabHeight;
     const swingSide = sides.pos ? 1 : -1;
     const swing = doorShownOpen(o, interior) ? -swingSide * THREE.MathUtils.degToRad(25) : 0;
     g.add(doorLeaf(o, leafW, leafH, s0 + JAMB_W + 0.003, swing, ctx));
@@ -456,6 +460,7 @@ function buildDoor(o, s0, s1, top, th, sides, ctx) {
 // One leaf on its hinge pivot: rotation 0 is closed, spanning +x from the pivot; Math.PI
 // hangs it from the opposite jamb. In x-ray the leaf is a ghost slab with no hardware.
 function doorLeaf(o, leafW, leafH, px, rotY, ctx) {
+  const LEAF_T = profileSize(o, 'leafThickness', .045);
   const pivot = new THREE.Group();
   pivot.position.set(px, 0.01, 0);
   pivot.rotation.y = rotY;
@@ -480,26 +485,26 @@ function doorLeaf(o, leafW, leafH, px, rotY, ctx) {
     glass.castShadow = false; glass.receiveShadow = false;
     pivot.add(glass);
   } else {
-    const leaf = new THREE.Mesh(new THREE.BoxGeometry(leafW, leafH, LEAF_T), ghost ? flatMat('#f1eee7', 0.45, ctx.matOpts) : leafMaterials());
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(leafW, leafH, LEAF_T), ghost ? flatMat('#f1eee7', 0.45, ctx.matOpts) : o.profile?.panels === 'six' ? leafMaterials() : flatMat('#f1eee7', .45));
     leaf.position.set(leafW / 2, leafH / 2, 0);
     leaf.castShadow = true; leaf.receiveShadow = true;
     leaf.userData = userData;
     pivot.add(leaf);
   }
-  if (ghost) return pivot;
+  if (ghost || o.profile?.hardware === 'none') return pivot;
   // Lever handles, both faces, by the free edge.
   const mm = metalMat();
   for (const sgn of [1, -1]) {
-    const hx = leafW - 0.075, hy = 1.0;
+    const hx = leafW - profileSize(o, 'handleBackset', .075), hy = profileSize(o, 'handleHeight', 1.0, 2);
     const rose = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.01, 24), mm);
     rose.rotation.x = Math.PI / 2;
     rose.position.set(hx, hy, sgn * (LEAF_T / 2 + 0.005));
     const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.05, 16), mm);
     stem.rotation.x = Math.PI / 2;
     stem.position.set(hx, hy, sgn * (LEAF_T / 2 + 0.03));
-    const lever = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.007, 0.12, 16), mm);
+    const lever = new THREE.Mesh(o.profile?.hardware === 'knob' ? new THREE.SphereGeometry(profileSize(o, 'knobRadius', .025), 24, 16) : new THREE.CylinderGeometry(0.008, 0.007, 0.12, 16), mm);
     lever.rotation.z = Math.PI / 2;
-    lever.position.set(hx - 0.055, hy, sgn * (LEAF_T / 2 + 0.05));
+    lever.position.set(hx - (o.profile?.hardware === 'knob' ? 0 : .055), hy, sgn * (LEAF_T / 2 + 0.05));
     for (const p of [rose, stem, lever]) { p.castShadow = true; p.userData = userData; pivot.add(p); }
   }
   return pivot;
@@ -507,6 +512,7 @@ function doorLeaf(o, leafW, leafH, px, rotY, ctx) {
 
 // ---------- windows ----------
 function buildWindow(o, s0, s1, v0, v1, th, sides, ctx) {
+  const FRAME_W = profileSize(o, 'frameWidth', .045), SASH_W = profileSize(o, 'sashWidth', .035), MULLION_W = profileSize(o, 'muntinWidth', .022), CASING_W = profileSize(o, 'casingWidth', .07), CASING_D = profileSize(o, 'casingDepth', .016);
   const g = new THREE.Group();
   g.userData = { kind: 'opening', id: o.id, wallId: ctx.wall.id };
   const trim = [];
@@ -527,7 +533,7 @@ function buildWindow(o, s0, s1, v0, v1, th, sides, ctx) {
   trim.push(metricBox(sx0 + SASH_W, sx1 - SASH_W, sy0, sy0 + SASH_W, sz0, sz1));
   // Mullion grid: 2 columns up to ~1.1 m wide, 3 beyond; always 2 rows.
   const gx0 = sx0 + SASH_W, gx1 = sx1 - SASH_W, gy0 = sy0 + SASH_W, gy1 = sy1 - SASH_W;
-  const cols = w >= 1.1 ? 3 : 2, rows = h >= 0.7 ? 2 : 1;
+  const cols = Math.max(1, Math.min(12, Math.round(o.profile?.columns || 1))), rows = Math.max(1, Math.min(12, Math.round(o.profile?.rows || 1)));
   for (let c = 1; c < cols; c++) {
     const x = gx0 + (gx1 - gx0) * c / cols;
     trim.push(metricBox(x - MULLION_W / 2, x + MULLION_W / 2, gy0, gy1, -0.016, 0.016));
@@ -568,6 +574,7 @@ function buildWindow(o, s0, s1, v0, v1, th, sides, ctx) {
 // (buildPropertyGroup makes one per level), so joints and room faces only consider neighbours
 // on the same storey. Local y runs from the level's floor; the level group carries the elevation.
 export function buildWallGroup(wall, openings, property, ctx) {
+  const BASEBOARD_H = profileSize(wall, 'baseboardHeight', .14), BASEBOARD_D = profileSize(wall, 'baseboardDepth', .012);
   ctx = ctx || {};
   const { solids, L, H } = wallSolids(wall, openings, property.wallHeight || 2.44);
   const group = new THREE.Group();
@@ -589,7 +596,7 @@ export function buildWallGroup(wall, openings, property, ctx) {
 
   // Each face's finish (wall-solids.js wallFaceMaterialIds, shared with the SketchUp mirror):
   // its own if set, else the interior finish where it looks into a room, the exterior grey on an
-  // exterior wall's unrecorded outside, and the wall's own finish on ends, top and reveals.
+  // exterior wall's unrecorded outside, and the interior finish on ends, top and reveals.
   const faceIds = wallFaceMaterialIds(wall, rooms);
   const mats = new Map();
   const matOf = id => {
@@ -664,11 +671,30 @@ export function buildRoomFloor(room, ctx) {
   const mat = matFor(materialById(room.material), FALLBACK_FLOOR, 0.85, ctx && ctx.matOpts);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true; mesh.castShadow = true;
-  mesh.userData = { kind: 'room', id: room.id };
+  mesh.userData = { kind: 'room', id: room.id, ...(room.thresholdOf ? { inferredThreshold: true } : {}) };
   const group = new THREE.Group();
   group.userData = { kind: 'room', id: room.id };
   group.add(mesh);
   return group;
+}
+
+// Fill only an interior doorway with finished floor on both sides. Never bridge a
+// stair void, an exterior opening or a missing room. Each half keeps its room finish.
+export function thresholdFloors(walls, openings, rooms) {
+  const floors = [];
+  for (const o of openings) {
+    if (o.type === 'window' || o.floorContinuity === false) continue;
+    const w = walls.find(w => w.id === o.wallId); if (!w) continue;
+    const L = Math.hypot(w.bx-w.ax,w.by-w.ay); if (!L) continue;
+    const ux=(w.bx-w.ax)/L, uy=(w.by-w.ay)/L, half=(w.thickness || .114)/2;
+    const point=(along,across)=>[w.ax+ux*along-uy*across,w.ay+uy*along+ux*across];
+    const center=o.t*L, left=center-o.width/2, right=center+o.width/2;
+    const side = sign => rooms.find(r => r.kind !== 'unscanned' && r.kind !== 'void' && r.floorContinuity !== false &&
+      [left+.005,center,right-.005].every(x => pointInPoly(...point(x,sign*(half+.002)),r.pts || [])));
+    const pos=side(1), neg=side(-1); if (!pos || !neg || pos.id === neg.id) continue;
+    for (const [r,sign] of [[pos,1],[neg,-1]]) floors.push({ ...r, pts:[point(left,0),point(right,0),point(right,sign*(half+.003)),point(left,sign*(half+.003))], thresholdOf:o.id });
+  }
+  return floors;
 }
 
 export function buildRoomCeiling(room, H, ctx) {
@@ -676,7 +702,7 @@ export function buildRoomCeiling(room, H, ctx) {
   const geo = new THREE.ExtrudeGeometry(roomShape(room), { depth: 0.027, bevelEnabled: false });
   geo.rotateX(Math.PI / 2);
   const mesh = new THREE.Mesh(geo, ceilingMat(room.ceilingMaterial, ctx && ctx.matOpts));
-  mesh.position.y = H - 0.003;                    // slab hangs just under the wall tops
+  mesh.position.y = H + 0.027;                    // H is the finished underside; slab extends upward
   mesh.receiveShadow = true; mesh.castShadow = true;
   mesh.userData = { kind: 'ceiling', id: room.id };
   return mesh;
@@ -760,7 +786,7 @@ export function buildPropertyGroup(property, opts) {
     lg.position.y = lvl.elevation;
     lg.visible = !(hidden && hidden.has(lvl.id));
 
-    for (const room of view.rooms) {
+    for (const room of [...view.rooms, ...thresholdFloors(view.walls, openings, view.rooms)]) {
       const g = buildRoomFloor(room, ctx);
       if (g) lg.add(g);
     }

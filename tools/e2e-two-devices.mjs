@@ -1,3 +1,5 @@
+// Network fault injection uses Playwright routing, which service workers bypass.
+// The real service-worker/offline journey is covered in e2e-audit-repairs.mjs.
 // Two devices side by side on the Mac's project files: what one of them does must reach the
 // other without moving what the other is looking at, without rebuilding the page under a
 // cursor, and without losing what either of them saved.
@@ -57,7 +59,7 @@ async function until(page, check, arg, what = 'what the check waits for', ms = 2
   }
 }
 async function device({ hash = '#/plan', ready = SAVED, before, viewport = { width: 1280, height: 900 }, context } = {}) {
-  context = context || await browser.newContext({ viewport });
+  context = context || await browser.newContext({ serviceWorkers: 'block', viewport });
   const page = await context.newPage();
   page.on('pageerror', e => errors.push(e.message));
   if (before) await before(page);
@@ -281,7 +283,7 @@ async function anOlderTabDoesNotSaveOverANewerCopy() {
   step('older');
   const [first] = await makeProperties('older');
   // A narrow window, which keeps what it has not sent.
-  const context = await browser.newContext({ viewport: { width: 390, height: 800 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 390, height: 800 } });
   // To this browser, the copy on the Mac looks saved by a later Tiksi, with a kind of photo
   // this code does not know.
   await context.route(url + '/api/workspace', async route => {
@@ -398,7 +400,7 @@ async function aProjectWithAMissingFileIsShown() {
   assert.match(questions[0], /drive that is not connected/); assert.match(questions[0], /kept anywhere else has to be opened again by hand/);
   await page.context().close();
   // A file that is there but cannot be read is not offered for removal: the Mac would refuse.
-  const other = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const other = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   await other.route(url + '/api/workspace', async route => {
     if (route.request().method() !== 'GET') return route.continue();
     const answer = await route.fetch(), body = await answer.json();
@@ -477,7 +479,7 @@ async function aProjectFileAsksBeforeItReplaces() {
 // saving go on working, and it is not reported as the Mac's project files being unavailable.
 async function aPageThatFailsToOpenSaysSo() {
   step('error');
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   await context.route('**/js/budget.js*', async route => {
     const answer = await route.fetch(), text = await answer.text();
     return route.fulfill({ response: answer, body: text.replace('export function mount(', 'export function mount() { throw new Error("Synthetic: this page cannot open"); }\nfunction mountAsWritten(') });
@@ -503,7 +505,7 @@ async function aKeptCopyTheMacAlreadyHasIsNotSentAgain() {
   step('saveid');
   const [first] = await makeProperties('saveid');
   // A narrow window keeps what it has not sent, as a phone does.
-  const context = await browser.newContext({ viewport: { width: 390, height: 800 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 390, height: 800 } });
   let page = await device({ context });
   await look(page, first);
   let lostId = null;
@@ -621,7 +623,7 @@ async function theFirstScreenDoesNotWaitForEveryPicture() {
   assert.match(reference, /^tiksi-picture:image\/png:pic-[0-9a-f]{64}$/, 'the picture is a file on the Mac');
   const otherHash = reference.slice(-64);
   // This device last had the first property open. The other property's picture is held back.
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   await context.addInitScript(id => { try { if (!localStorage.getItem('tiksi.device.view.v1')) localStorage.setItem('tiksi.device.view.v1', JSON.stringify({ property: id, levels: {}, tags: {} })); } catch {} }, first);
   let release, wanted = false; const go = new Promise(r => { release = r; });
   await context.route('**/api/workspace/blobs/' + otherHash, async route => { wanted = true; await go; return route.continue(); });
@@ -657,7 +659,7 @@ async function anUnreadableStoredWorkspaceIsLeftAsItIs() {
   await new Promise(r => plain.listen(0, '127.0.0.1', r));
   const site = 'http://127.0.0.1:' + plain.address().port;
   try {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     page.on('pageerror', e => errors.push(e.message));
     await page.goto(site + '/app-icon.svg');
@@ -748,7 +750,7 @@ async function theOnePagerEditorKeepsWhatIsTyped() {
 async function recordsThatEqualAnEarlierSaveAreStillSent() {
   step('undone');
   const [first] = await makeProperties('undone');
-  const context = await browser.newContext({ viewport: { width: 390, height: 800 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 390, height: 800 } });
   const sentIds = new Set();
   context.on('request', r => { if (r.method() === 'PUT' && new URL(r.url()).pathname === '/api/workspace') { try { sentIds.add(JSON.parse(r.postData()).saveId); } catch {} } });
   let page = await device({ context });
@@ -777,7 +779,7 @@ async function recordsThatEqualAnEarlierSaveAreStillSent() {
   // The same when neither reply ever arrived: both saves reached the Mac, the page heard of
   // neither, and the second is undone out of reach. The kept copy must not be dropped as
   // "the Mac has it" on the strength of the first save: the Mac holds the second.
-  const lost = await browser.newContext({ viewport: { width: 390, height: 800 } });
+  const lost = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 390, height: 800 } });
   const committed = new Set();
   let text = null;
   await lost.route(url + '/api/workspace', async route => {
@@ -825,7 +827,7 @@ async function recordsThatEqualAnEarlierSaveAreStillSent() {
 async function aPageOnOlderCodeReloadsOrStopsSaving() {
   step('code');
   const [first] = await makeProperties('code');
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   let served = 'aaaaaaaaaaaaaaaa';
   await context.route(url + '/api/workspace/head', async route => {
     const answer = await route.fetch(), body = await answer.json();
@@ -945,7 +947,7 @@ async function undoAfterAnInterruptedDragKeepsTheOtherDevicesChange() {
 async function aCodeChangeWaitsForTheFieldInUse() {
   step('codetyping');
   const [first] = await makeProperties('codetyping');
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   let served = 'aaaaaaaaaaaaaaaa';
   await context.route(url + '/api/workspace/head', async route => {
     const answer = await route.fetch(), body = await answer.json();
@@ -999,7 +1001,7 @@ async function aCodeChangeWaitsForTheFieldInUse() {
 async function anOlderPageDoesNotSaveOnceAfterTheCodeChanged() {
   step('coderace');
   const [first] = await makeProperties('coderace');
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   let served = 'aaaaaaaaaaaaaaaa';
   await context.route(url + '/api/workspace/head', async route => {
     const answer = await route.fetch(), body = await answer.json();
@@ -1046,7 +1048,7 @@ async function anOlderPageDoesNotSaveOnceAfterTheCodeChanged() {
 async function aPhotoOnItsWayInHoldsTheReloadOff() {
   step('camera');
   const [first] = await makeProperties('camera');
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   let served = 'aaaaaaaaaaaaaaaa';
   await context.route(url + '/api/workspace/head', async route => {
     const answer = await route.fetch(), body = await answer.json();
@@ -1093,7 +1095,7 @@ async function aPhotoOnItsWayInHoldsTheReloadOff() {
 async function aNewerCopyWaitsForTheFieldInUse() {
   step('olderfield');
   const [first] = await makeProperties('olderfield');
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   let future = false, reads = 0;
   await context.route(url + '/api/workspace', async route => {
     if (route.request().method() !== 'GET') return route.continue();
@@ -1184,7 +1186,7 @@ async function aDragBegunDuringASaveIsPutBack() {
 async function anOriginalAddedBeforeARefusalIsKept() {
   step('codeoriginal');
   const [first] = await makeProperties('codeoriginal');
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   let served = 'aaaaaaaaaaaaaaaa';
   await context.route(url + '/api/workspace/head', async route => {
     const answer = await route.fetch(), body = await answer.json();

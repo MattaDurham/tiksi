@@ -2,9 +2,8 @@
 // and the SketchUp mirror both cut walls from these spans and paint the same sides, so
 // they always agree.
 
-// The openings on one wall as spans along it: clamped to the wall, never overlapping an
-// earlier opening (the later one gives way), too-narrow leftovers dropped. Solids and trim
-// are both cut from these so they always agree.
+// Wall-local spans, bounded by the host wall. Overlapping openings retain their full
+// widths; opening-validation.js reports conflicts instead of hiding them by shortening.
 export function openingSpans(wall, openings, L) {
   const spans = openings
     .filter(o => o.wallId === wall.id)
@@ -14,15 +13,8 @@ export function openingSpans(wall, openings, L) {
       return { s0: Math.max(0, c - w / 2), s1: Math.min(L, c + w / 2), o };
     })
     .sort((a, b) => a.s0 - b.s0);
-  const out = [];
-  let cursor = 0;
-  for (const sp of spans) {
-    sp.s0 = Math.max(sp.s0, cursor);
-    if (sp.s1 - sp.s0 < 0.05) continue;
-    out.push(sp);
-    cursor = sp.s1;
-  }
-  return out;
+  return spans; // never silently shorten a later opening to hide an overlap
+
 }
 
 // Solid pieces of one wall in local coords: s along wall [0..L], v vertical [0..H].
@@ -31,18 +23,16 @@ export function wallSolids(wall, openings, defaultHeight) {
   const H = wall.height || defaultHeight;
   if (L < 0.01) return { solids: [], glass: [], L, H };
 
-  const solids = [];
-  const glass = [];
-  let cursor = 0;
-  for (const { s0, s1, o } of openingSpans(wall, openings, L)) {
-    if (s0 > cursor + 0.005) solids.push({ s0: cursor, s1: s0, v0: 0, v1: H });
-    const top = Math.min((o.type === 'window' ? (o.sill || 0) + o.height : o.height), H);
-    if (top < H - 0.01) solids.push({ s0, s1, v0: top, v1: H });          // header
-    if (o.type === 'window' && (o.sill || 0) > 0.01) solids.push({ s0, s1, v0: 0, v1: o.sill }); // sill wall below
-    if (o.type === 'window') glass.push({ s0, s1, v0: (o.sill || 0), v1: top, id: o.id });
-    cursor = s1;
+  const solids = [], glass = [], spans = openingSpans(wall, openings, L);
+  const cuts = [...new Set([0, L, ...spans.flatMap(s => [s.s0, s.s1])])].sort((a,b) => a-b);
+  for (let i = 1; i < cuts.length; i++) {
+    const s0 = cuts[i-1], s1 = cuts[i], mid = (s0+s1)/2;
+    const holes = spans.filter(s => s.s0 <= mid && s.s1 >= mid).map(({o}) => [o.type === 'window' ? Math.max(0, o.sill || 0) : 0, Math.min(H, (o.type === 'window' ? o.sill || 0 : 0) + o.height)]).sort((a,b) => a[0]-b[0]);
+    let cursor = 0;
+    for (const [lo,hi] of holes) { if (lo > cursor) solids.push({s0,s1,v0:cursor,v1:lo}); cursor=Math.max(cursor,hi); }
+    if (cursor < H) solids.push({s0,s1,v0:cursor,v1:H});
   }
-  if (cursor < L - 0.005) solids.push({ s0: cursor, s1: L, v0: 0, v1: H });
+  for (const {s0,s1,o} of spans) if (o.type === 'window') glass.push({s0,s1,v0:o.sill || 0,v1:Math.min(H,(o.sill || 0)+o.height),id:o.id});
   return { solids, glass, L, H };
 }
 
@@ -92,13 +82,16 @@ export const EXTERIOR_UNKNOWN = 'mat-exterior-unknown';
 // - the outside face of an exterior wall (a room on one side only) takes the wall's own finish
 //   only when that says something the interior does not: a wall whose own finish is unset or the
 //   same as its interior shows EXTERIOR_UNKNOWN there, never a copy of the room's paint;
-// - every other face (ends, top, reveals, a free-standing wall's sides) the wall's own finish.
+// - every other face (ends, top, reveals) takes the interior finish when the wall borders a room:
+//   they are the drywall returns and the cut top seen from inside, never the outside cladding;
+//   a free-standing wall (no room either side) wears its own finish everywhere.
 export function wallFaceMaterialIds(wall, rooms) {
   const sides = wallSides(wall, rooms), inId = wallInteriorMaterialId(wall, rooms);
   const exterior = !!sides.pos !== !!sides.neg;
   const outside = exterior && !(wall.material && wall.material !== inId) ? EXTERIOR_UNKNOWN : wall.material;
   const face = (own, room) => own || (room ? inId : outside);
-  return { pos: face(wall.materialPos, sides.pos), neg: face(wall.materialNeg, sides.neg), other: wall.material };
+  const other = sides.pos || sides.neg ? inId : wall.material;
+  return { pos: face(wall.materialPos, sides.pos), neg: face(wall.materialNeg, sides.neg), other };
 }
 
 // Names for the two long faces, for inspectors: the compass side each looks toward and what
