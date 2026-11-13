@@ -439,7 +439,7 @@ export function mergeMirror(prop, read, synced, seenBefore) {
 }
 
 function applyWall(prop, w, now) {
-  for (const key of ['baseboardPos', 'baseboardNeg']) {
+  for (const key of ['profile', 'baseboardPos', 'baseboardNeg']) {
     if (now[key] && typeof now[key] === 'object') w[key] = JSON.parse(JSON.stringify(now[key]));
     else if (Object.hasOwn(now, key) && now[key] === null) delete w[key];
   }

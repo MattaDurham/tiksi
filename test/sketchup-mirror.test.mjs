@@ -655,3 +655,19 @@ test('wall profile baseboards and profile leaf materials remain usable through e
   assert.equal(spec.walls[0].holes[0].leafMaterial.id, material.id);
   assert.deepEqual(mergeMirror(p, readOf(spec), syncedState(p)).applied, []);
 });
+
+
+test('a native wall scale updates its profile dimensions with its wall geometry', () => {
+  const p = room(), wall = p.walls[0];
+  wall.height = 2.5;
+  wall.profile = { baseboardHeight: .09, baseboardDepth: .012 };
+  const spec = mirrorSpec(p), read = readOf(spec), synced = syncedState(p);
+  read.walls[0].now.height = 5;
+  read.walls[0].now.profile = { baseboardHeight: .18, baseboardDepth: .012 };
+  const result = mergeMirror(p, read, synced);
+  assert.deepEqual(result.applied, ['w-s']);
+  assert.equal(wall.height, 5);
+  assert.deepEqual(wall.profile, { baseboardHeight: .18, baseboardDepth: .012 });
+  assert.deepEqual(read.walls[0].base.profile, { baseboardHeight: .09, baseboardDepth: .012 }, 'the written source dimensions stay unchanged');
+  assert.ok(mirrorSpec(p).walls[0].baseboards.every(part => part.height === .18));
+});
