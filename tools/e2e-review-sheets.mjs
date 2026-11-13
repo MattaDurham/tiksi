@@ -90,12 +90,12 @@ try {
   await width('o-front').fill('40\''); await width('o-front').press('Tab');
   p = await prop(); const front = p.openings.find(o => o.id === 'o-front');
   assert.ok(Math.abs(front.width - 6.96) < 1e-6 && Math.abs(front.t - 0.5) < 1e-6, 'a too-wide door is held to its wall');
-  await page.locator('#btn-undo').click();
+  await page.keyboard.press('ControlOrMeta+z');
   assert.equal((await prop()).openings.find(o => o.id === 'o-front').width, 0.9, 'undo reverts the clamped edit');
   assert.equal(await width('o-front').inputValue(), '2\'-11 7/16"', 'the panel follows undo');
-  await page.locator('#btn-undo').click(); await page.locator('#btn-undo').click();
+  await page.keyboard.press('ControlOrMeta+z'); await page.keyboard.press('ControlOrMeta+z');
   assert.equal(JSON.stringify((await prop()).openings), before, 'each schedule edit is one undo step');
-  await page.locator('#btn-redo').click();
+  await page.keyboard.press('ControlOrMeta+Shift+z');
   assert.ok(Math.abs((await prop()).openings.find(o => o.id === 'o-mid').width - 32 * IN) < 1e-6, 'redo replays it');
   await panel.locator('.ps-row[data-id=o-back] .ps-what').click();
   assert.match(await page.locator('.inspector h3').textContent(), /DOOR D3/);

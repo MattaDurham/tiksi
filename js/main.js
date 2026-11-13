@@ -211,6 +211,12 @@ function route() {
   else guideEntry?.removeAttribute('aria-current');
   document.querySelectorAll('#rail a[data-view]').forEach(a =>
     a.classList.toggle('active', a.dataset.view === currentName));
+  // Page tabs wider than the window scroll; the current one is kept in sight.
+  const tab = document.querySelector('#rail a.active'), rail = tab && tab.parentElement;
+  if (tab && rail.scrollWidth > rail.clientWidth) {
+    const left = tab.offsetLeft - rail.offsetLeft;   // both measured from the top bar
+    rail.scrollLeft = Math.max(0, Math.min(rail.scrollLeft, left - 8), left + tab.offsetWidth - rail.clientWidth + 8);
+  }
   openPage();
 }
 

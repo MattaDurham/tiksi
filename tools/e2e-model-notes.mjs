@@ -112,7 +112,7 @@ try {
   await page.keyboard.type('Outlet moves 30 cm left');
   await page.keyboard.press('Enter');
   assert.deepEqual((await state(page)).notes.map(n => n.text), ['Order 45 sq ft of tile (10% waste)', 'Outlet moves 30 cm left']);
-  assert.equal(await page.locator('.tool-col [data-act=select]').getAttribute('class').then(c => c.includes('active')), true);
+  assert.equal(await page.locator('#side [data-act=select]').getAttribute('class').then(c => c.includes('active')), true);
 
   // Notes and the toggles travel in the project file.
   const saved = await page.evaluate(async () => {
@@ -144,12 +144,12 @@ try {
   // EDIT IN SKETCHUP where the server cannot open SketchUp for this browser says why.
   let caps = { token: 'synthetic', sketchup: true, mirror: true, openSketchUp: false };
   await page.route('**/api/model-conversion/capabilities', r => r.fulfill({ json: caps }));
-  await page.locator('.tool-col [data-act=sketchup]').click();
+  await page.locator('#side [data-act=sketchup]').click();
   await waitUntil(async () => /use Tiksi at localhost on that Mac/.test(await page.locator('.toast.error').innerText().catch(() => '')), 'the not-this-Mac toast');
 
   // Without a folder: Settings opens where the folder is chosen.
   caps = { ...caps, openSketchUp: true };
-  await page.locator('.tool-col [data-act=sketchup]').click();
+  await page.locator('#side [data-act=sketchup]').click();
   await page.locator('[data-file-dialog] [data-file-panel=settings]:not([hidden])').waitFor();
   assert.match(await page.locator('[data-file-dialog] [data-file-status]').innerText(), /Choose a folder for Notes check first/);
   await page.locator('[data-close-file]').click();
@@ -189,7 +189,7 @@ try {
     };
     const st = files.filesState(); st.folder = folder; st.folderName = folder.name; st.folderMap = {};
   });
-  await page.locator('.tool-col [data-act=sketchup]').click();
+  await page.locator('#side [data-act=sketchup]').click();
   await waitUntil(async () => /Opened Notes check\.skp in SketchUp/.test(await page.locator('.toast').innerText().catch(() => '')), 'the open confirmation');
   const folder = await page.evaluate(() => Object.fromEntries([...window.__folder].map(([k, v]) => [k, { size: v.bytes.length, mtime: v.mtime }])));
   assert.deepEqual(Object.keys(folder).sort(), ['Notes check.skp', 'Notes check.tiksi'], 'the project and its SketchUp model are in the folder');
@@ -202,7 +202,7 @@ try {
   openReply = { status: 404, json: { error: 'Could not find Notes check.skp on this Mac.' } };
   await page.locator('.v-modes [data-mode=orbit]').click();   // the PLAN button does the same
   await page.locator('#rail a[data-view="plan"]').click({ noWaitAfter: true });
-  await page.locator('.tool-col [data-act=sketchup]').click();
+  await page.locator('#side [data-act=sketchup]').click();
   await waitUntil(async () => /Could not find Notes check\.skp on this Mac/.test(await page.locator('.toast.error').innerText().catch(() => '')), 'the failure toast');
   assert.equal(asked.length, 2);
   assert.equal(asked[1].body.hint, '/Synthetic projects/Notes check.skp');

@@ -89,9 +89,9 @@ try {
     assert.deepEqual([(await modelState(page)).on, (await modelState(page)).loaded], [false, false]);
     assert.equal(await page.locator('.mk-bar').count(), 0);
     assert.deepEqual(await page.evaluate(() => performance.getEntriesByType('resource').map(r => r.name).filter(n => /markup/.test(n))), [], 'none of its files is fetched');
-    await page.locator('.tool-col [data-act=markup]').click();
+    await page.locator('#side [data-act=markup]').click();
     await page.locator('.mk-bar').waitFor();
-    assert.equal(await page.locator('.tool-col [data-act=markup]').evaluate(b => b.classList.contains('active')), true);
+    assert.equal(await page.locator('#side [data-act=markup]').evaluate(b => b.classList.contains('active')), true);
     assert.match(await page.locator('.v-hint').innerText(), /^Drag: the pen draws on the model\. The wheel/);
     assert.equal((await modelState(page)).place, 'surface', 'ink goes onto the surfaces unless asked otherwise');
     // This part is about ink flat on the screen (e2e-markup-surfaces.mjs has ink on the surfaces).

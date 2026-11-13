@@ -393,3 +393,9 @@ html.phone .v-objects { display: none !important; }
 @container (max-width: 760px) { .v-objects, .v-modes, .v-sections, .v-toast, .v-progress { --list-w: 228px; } }
 /* A panel opened on purpose (lighting and sun) sits over the list. */
 .v-env.open { z-index: 7; }
+
+/* DONE: a clean section. Only EDIT CUTS stays, small and faint in the bottom right corner
+   (after the component-list rules above, which would centre it). */
+.v-sections .v-sec-done-btn { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); font-weight: 700; }
+.v-wrap .v-sections.v-sec-done { left: auto; right: 14px; max-width: none; transform: none; padding: 2px; opacity: 0.55; transition: opacity var(--dur) var(--ease); }
+.v-wrap .v-sections.v-sec-done:hover, .v-wrap .v-sections.v-sec-done:focus-within { opacity: 1; }

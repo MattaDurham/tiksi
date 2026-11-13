@@ -5,7 +5,7 @@ const lines = [
   '# Tiksi user guide', '',
   'A screenshot walkthrough of capture, design, materials and project work.', '',
   '[Open the interactive guide](https://mattadurham.github.io/tiksi/#/guide) · [Download the PDF](js/guide-assets/tiksi-user-guide.pdf)', '',
-  'Open **GUIDE** at the top of Tiksi for chapter search, expandable screenshots and short recordings. The screenshots use a synthetic sample property with drawn reference images and fictional products/prices. They contain no owner project data.', '',
+  'Open **GUIDE** in the Tiksi menu (the logo at the top left) for chapter search, expandable screenshots and short recordings. The screenshots use a synthetic sample property with drawn reference images and fictional products/prices. They contain no owner project data.', '',
   '## Contents', '',
   ...chapters.map(chapter => `- [${chapter.title}](#${chapter.id})`), '',
 ];

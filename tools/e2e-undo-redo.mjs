@@ -60,19 +60,19 @@ try {
   const moved = await page.evaluate(() => window.undoStore.activeProperty().walls[0].ay);
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   assert.equal(await page.locator('#btn-undo').isEnabled(), true, 'self-save keeps history');
-  await page.locator('#btn-undo').click();
+  await page.keyboard.press('ControlOrMeta+z');
   assert.equal(await page.evaluate(() => window.undoStore.activeProperty().walls[0].ay), 0);
   assert.equal(await page.locator('#btn-undo').isDisabled(), true, 'one gesture is one undo');
   await page.locator('#rail [data-view=plan]').click();
-  await page.locator('#btn-redo').click();
+  await page.keyboard.press('ControlOrMeta+Shift+z');
   assert.equal(await page.evaluate(() => window.undoStore.activeProperty().walls[0].ay), moved, 'PLAN redoes the MODEL move');
-  await page.selectOption('#property-select', 'other-house'); assert.equal(await page.locator('#btn-undo').isDisabled(), true);
-  await page.selectOption('#property-select', 'undo-house'); assert.equal(await page.locator('#btn-undo').isEnabled(), true);
+  await page.click('#tiksi-menu'); await page.selectOption('#property-select', 'other-house'); assert.equal(await page.locator('#btn-undo').isDisabled(), true);
+  await page.click('#tiksi-menu'); await page.selectOption('#property-select', 'undo-house'); assert.equal(await page.locator('#btn-undo').isEnabled(), true);
   await page.keyboard.press('ControlOrMeta+z');
   assert.equal(await page.evaluate(() => window.undoStore.activeProperty().walls[0].ay), 0);
   await page.keyboard.press('ControlOrMeta+Shift+z');
   assert.equal(await page.evaluate(() => window.undoStore.activeProperty().walls[0].ay), moved);
-  await page.locator('#btn-undo').click();
+  await page.keyboard.press('ControlOrMeta+z');
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
 
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
@@ -95,14 +95,22 @@ try {
   await phone.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   await page.waitForFunction(() => window.undoStore.activeProperty().walls[0].thickness === .2032);
   assert.equal(await page.locator('#btn-redo').isEnabled(), true, 'independent remote material/width edits preserve redo');
-  await page.locator('#btn-redo').click();
+  await page.keyboard.press('ControlOrMeta+Shift+z');
   assert.equal(await page.evaluate(() => window.undoStore.activeProperty().walls[0].thickness), .2032);
   assert.equal(await page.evaluate(() => window.undoStore.activeProperty().walls[0].ay), moved);
   await page.evaluate(async () => { const s = window.undoStore; s.mergeWorkspace(JSON.parse(JSON.stringify(s.ws.data))); });
   assert.equal(await page.locator('#btn-undo').isDisabled(), true, 'opening/reimporting a project clears its previous session history');
+  // On the desktop UNDO and REDO are in the Tiksi menu, beside FILE, not on the top bar.
+  assert.equal(await page.locator('#btn-undo').isVisible(), false, 'no UNDO button on the top bar');
+  await page.locator('#rail [data-view=plan]').click();
+  await page.locator('[data-tool=wall]').first().waitFor();
+  await page.click('#tiksi-menu');
+  assert.equal(await page.locator('.tk-menu #btn-undo').isVisible(), true, 'UNDO is in the Tiksi menu');
+  assert.equal(await page.locator('.tk-menu #btn-file').isVisible(), true, 'beside FILE');
+  await page.keyboard.press('Escape');
   for (const width of [320, 800, 1280]) {
     await page.setViewportSize({ width, height: 900 });
-    assert.equal(await page.locator('#topbar').evaluate(el => el.scrollWidth <= el.clientWidth), true, 'history controls fit header at ' + width);
+    assert.equal(await page.locator('#topbar').evaluate(el => el.scrollWidth <= el.clientWidth), true, 'the top bar fits at ' + width);
   }
   assert.deepEqual(errors, []);
   console.log('ok   MODEL wall gesture, PLAN/MODEL shared undo, disk saves, independent shared edits, project isolation, mobile Undo/Redo and shortcuts');

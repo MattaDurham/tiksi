@@ -48,7 +48,7 @@ try {
   // very middle) until the door's LEAF choice shows.
   async function pickDoor(canvas, inspector) {
     const box = await canvas.boundingBox(), leaf = page.locator(inspector + ' [data-glass]');
-    for (let dy = 0; dy <= 150; dy = dy > 0 ? -dy : -dy + 6) {
+    for (let dy = 0; dy <= Math.min(320, box.height / 2 - 12); dy = dy > 0 ? -dy : -dy + 6) {
       await page.mouse.click(box.x + box.width / 2 + 25, box.y + box.height / 2 + dy);
       await page.waitForTimeout(150);
       if (await leaf.count()) return leaf;
@@ -90,10 +90,10 @@ try {
   await idle();
   assert.equal(await page.locator('.inspector [data-glass]').inputValue(), 'full', 'the inspector shows the choice after the model is rebuilt');
   await waitUntil(async () => !(await page.locator('#btn-undo').isDisabled()), 'UNDO is offered');
-  await page.locator('#btn-undo').click();
+  await page.keyboard.press('ControlOrMeta+z');
   await waitUntil(async () => !(await door()).has, 'UNDO takes the glass away');
   assert.equal((await built()).panes, 0, 'and the leaves are solid again');
-  await page.locator('#btn-redo').click();
+  await page.keyboard.press('ControlOrMeta+Shift+z');
   await waitUntil(async () => (await door()).glass === 'full', 'REDO brings it back');
 
   await idle();

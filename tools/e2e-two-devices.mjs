@@ -125,7 +125,7 @@ async function eachDeviceKeepsItsOwnView() {
   const saves = []; for (const page of [one, two]) page.on('request', r => { if (r.method() === 'PUT' && new URL(r.url()).pathname === '/api/workspace') saves.push(page === one ? 'one' : 'two'); });
   assert.equal((await open(two)).property, first);
   // Device one looks at the other property, its upper level, and switches a tag off.
-  await one.selectOption('#property-select', second);
+  await one.click('#tiksi-menu'); await one.selectOption('#property-select', second);
   await one.evaluate(async () => { const s = await import('/js/store.js'), p = s.activeProperty(); p.activeLevelId = 'lvl-upper'; p.tags[0].visible = false; s.touch(); });
   await one.waitForFunction(SAVED);
   await one.waitForTimeout(6000);   // two of the other device's looks at the Mac
@@ -141,7 +141,7 @@ async function eachDeviceKeepsItsOwnView() {
   assert.equal(saved.activeLevelId, 'lvl-0'); assert.notEqual(saved.tags[0].visible, false, 'the level and tags one device looks at are not saved over the Mac\'s');
   // Both devices change what they look at before either hears from the Mac, then both edit:
   // looking at different things is not a conflict.
-  await two.selectOption('#property-select', second);
+  await two.click('#tiksi-menu'); await two.selectOption('#property-select', second);
   await two.evaluate(async () => { const s = await import('/js/store.js'); s.activeProperty().activeLevelId = 'lvl-upper'; s.touch(); });
   await one.evaluate(async () => { const s = await import('/js/store.js'); s.activeProperty().activeLevelId = 'lvl-0'; s.touch(); });
   await edit(one, first, { notes: 'From device one' }); await edit(two, second, { notes: 'From device two' });
@@ -378,7 +378,7 @@ async function aProjectWithAMissingFileIsShown() {
   assert.match(await row.getAttribute('title'), /Garden flat/);
   await until(page, async id => !(await import('/js/store.js')).ws.data.properties.some(p => p.id === id), second, 'the project leaving the open records');
   // FILE, Settings gives the Mac's message and the control to take it off the list.
-  await page.locator('#btn-file').click();
+  await page.locator('#tiksi-menu').click().then(() => page.locator('#btn-file').click());
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const line = page.locator('[data-file-dialog] p[data-unavailable]');
   assert.match(await line.textContent(), /Garden flat.*project file is not at/s);
@@ -408,7 +408,7 @@ async function aProjectWithAMissingFileIsShown() {
     return route.fulfill({ response: answer, json: body });
   });
   const second2 = await device({ context: other });
-  await second2.locator('#btn-file').click();
+  await second2.locator('#tiksi-menu').click().then(() => second2.locator('#btn-file').click());
   await second2.getByRole('button', { name: 'Settings', exact: true }).click();
   const unreadable = second2.locator('[data-file-dialog] p[data-unavailable]');
   assert.match(await unreadable.textContent(), /cannot be read/);
@@ -430,7 +430,7 @@ async function aProjectFileAsksBeforeItReplaces() {
   const asked = []; let answer = 'dismiss';
   page.on('dialog', d => { asked.push(d.message()); return answer === 'accept' ? d.accept() : d.dismiss(); });
   const openFile = async () => {
-    await page.locator('#btn-file').click();
+    await page.locator('#tiksi-menu').click().then(() => page.locator('#btn-file').click());
     await page.locator('[data-file-dialog] [data-any-file]').setInputFiles(file);
     await page.locator('[data-file-dialog]').waitFor({ state: 'detached', timeout: 20000 });
   };
@@ -460,7 +460,7 @@ async function aProjectFileAsksBeforeItReplaces() {
   assert.equal((await mac()).data.projects.find(p => p.id === 'proj-import').items[0].cost, 5500);
   // The demo, twice.
   const addDemo = async () => {
-    await page.locator('#btn-file').click();
+    await page.locator('#tiksi-menu').click().then(() => page.locator('#btn-file').click());
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.locator('[data-file-dialog] summary', { hasText: 'Workspace backup' }).click();
     await page.locator('[data-file-dialog] [data-demo]').click();
@@ -899,7 +899,7 @@ async function undoAfterAnInterruptedDragKeepsTheOtherDevicesChange() {
   // The next edit on device two, then UNDO if it is offered.
   await two.evaluate(async id => { const s = await import('/js/store.js'); s.ws.data.properties.find(p => p.id === id).walls.find(w => w.id === 'w-s').thickness = 0.2; s.touch(); }, first);
   await two.waitForTimeout(300);
-  if (await two.locator('#btn-undo').isEnabled()) await two.locator('#btn-undo').click();
+  if (await two.locator('#btn-undo').isEnabled()) await two.keyboard.press('ControlOrMeta+z');
   await saveNow(two); await two.waitForFunction(SAVED);
   await two.waitForTimeout(500);
   assert.deepEqual((await wall(two, 'w-n')).filter((v, i) => i % 2), [4, 4], 'UNDO on device two leaves the other device\'s wall where it was put');

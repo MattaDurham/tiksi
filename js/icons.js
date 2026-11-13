@@ -109,8 +109,10 @@ export function decorate(elm, name) {
 // Boot-time decoration of the static chrome in index.html. Every id and data-view is kept; the
 // text becomes a label span next to the glyph.
 function decorateChrome() {
-  document.querySelectorAll('#rail a[data-view]').forEach(a => decorate(a, a.dataset.view));
-  document.querySelectorAll('#rail .rail-foot a').forEach(a => decorate(a, 'github'));
+  // Every page tab carries a glyph: with the words hidden (right-click the tabs) it is all
+  // that shows. Pages without a glyph of their own name borrow the nearest one.
+  const glyph = { reconstruct: 'camera', research: 'search', documents: 'file' };
+  document.querySelectorAll('#rail a[data-view]').forEach(a => decorate(a, glyph[a.dataset.view] || a.dataset.view));
   decorate(document.getElementById('btn-save'), 'save');
   decorate(document.getElementById('btn-file'), 'file');
   const add = document.getElementById('property-new');

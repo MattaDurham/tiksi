@@ -4,7 +4,7 @@ A screenshot walkthrough of capture, design, materials and project work.
 
 [Open the interactive guide](https://mattadurham.github.io/tiksi/#/guide) · [Download the PDF](js/guide-assets/tiksi-user-guide.pdf)
 
-Open **GUIDE** at the top of Tiksi for chapter search, expandable screenshots and short recordings. The screenshots use a synthetic sample property with drawn reference images and fictional products/prices. They contain no owner project data.
+Open **GUIDE** in the Tiksi menu (the logo at the top left) for chapter search, expandable screenshots and short recordings. The screenshots use a synthetic sample property with drawn reference images and fictional products/prices. They contain no owner project data.
 
 ## Contents
 
@@ -13,7 +13,7 @@ Open **GUIDE** at the top of Tiksi for chapter search, expandable screenshots an
 - [Bring in a scan or Polycam capture](#capture)
 - [Draw and correct a floorplan](#plan)
 - [Inspect and edit the 3D model](#model)
-- [Components, tags, saved views and the Tiksi menu](#tags)
+- [Components, tags, saved views and the left pane](#tags)
 - [Edit elsewhere and compare before/after](#exchange)
 - [Choose and customize finishes](#materials)
 - [Keep photos attached to the room](#photos)
@@ -37,9 +37,9 @@ Open **GUIDE** at the top of Tiksi for chapter search, expandable screenshots an
 
 Tiksi connects a property, its design, reference photos and project work. Start with one room and follow it all the way to a scope and a specification sheet.
 
-![The same sample property appears throughout this guide. The left rail changes views; FILE holds saving, importing and settings.](js/guide-assets/start.png)
+![The same sample property appears throughout this guide. The tabs across the top change pages; the Tiksi menu (the logo) holds the project list, FILE (saving, importing and settings), GUIDE, UNDO and REDO.](js/guide-assets/start.png)
 
-The same sample property appears throughout this guide. The left rail changes views; FILE holds saving, importing and settings.
+The same sample property appears throughout this guide. The tabs across the top change pages; the Tiksi menu (the logo) holds the project list, FILE (saving, importing and settings), GUIDE, UNDO and REDO.
 
 ### Where everything lives
 
@@ -210,29 +210,31 @@ In PLAN, use SELECT and click a wall. Edit the wall height in the inspector to e
 
 The 3D view combines the plan-generated building, imported captures and photo pins. It is also a place to edit model elements and inspect imported materials.
 
-![Here every group is ON SCREEN (Tiksi menu); by default the tools live in the menu under the Tiksi logo. The inspector follows the selected wall, room surface or imported model.](js/guide-assets/model.png)
+![The left pane holds MODEL's views, tools and switches, in groups that fold to their headers; here every bar is shown over the model too. The inspector follows the selected wall, room surface or imported model.](js/guide-assets/model.png)
 
-Here every group is ON SCREEN (Tiksi menu); by default the tools live in the menu under the Tiksi logo. The inspector follows the selected wall, room surface or imported model.
+The left pane holds MODEL's views, tools and switches, in groups that fold to their headers; here every bar is shown over the model too. The inspector follows the selected wall, room surface or imported model.
 
 ### Try it
 
-1. Open MODEL and use FRAME if the room is outside the camera. Drag or middle-drag to orbit about the point under the cursor, hold Shift to pan (even mid-drag), scroll to zoom, or use the TOP control for a plan-like view. On a trackpad, pinch also zooms.
+1. Open MODEL and use FRAME if the room is outside the camera. Drag or middle-drag to orbit about the point under the cursor, hold Shift to pan (even mid-drag), scroll to zoom, or use the TOP control for a plan-like view. On a trackpad, pinch also zooms. STANDARD VIEWS in the left pane look at the model from the top, bottom, front, back, left, right or a corner (ISO).
 2. Click a wall, floor or ceiling to inspect it. Change the offered dimensions or material in the inspector.
 3. Choose MOVE, select a native wall and drag its gizmo. Joined walls and room corners follow. Return to PLAN for exact outlines; imported mesh surfaces do not expose native wall controls.
-4. Use SECTION to cut through the building and reveal interiors: the cut floats in the view as a see-through plane. Drag its arrow to slide it and a ring to turn it. Use X-RAY to inspect overlapping references.
+4. Use SECTION to cut through the building and reveal interiors: the cut floats in the view as a see-through plane. Drag its arrow to slide it and a ring to turn it. Choose DONE when the cuts are placed: the planes, their handles and the strip go away and a clean section is left. Use X-RAY to inspect overlapping references.
 5. For lighting, choose LIGHT (or FILE → Settings → Model environment, which also holds render quality). For an image export, use FILE → 3D exchange → SAVE VIEW IMAGE while MODEL is open.
 
 ### Other features here
 
-**Undo and redo.** Use the top-bar buttons or Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (Ctrl+Y also redoes). PLAN and MODEL share up to 80 geometry edits per project during this session, including moves and geometry inspector changes. Disk saves and view switches retain history; a reload or file import starts fresh. Unrelated shared edits are kept; a conflicting geometry change disables restoration rather than overwriting it. Photos, notes, imported references and underlay placement are outside geometry undo.
+**Undo and redo.** Press Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (Ctrl+Y also redoes), or choose UNDO and REDO in the Tiksi menu (on a phone, in the top bar). PLAN and MODEL share up to 80 geometry edits per project during this session, including moves and geometry inspector changes. Disk saves and view switches retain history; a reload or file import starts fresh. Unrelated shared edits are kept; a conflicting geometry change disables restoration rather than overwriting it. Photos, notes, imported references and underlay placement are outside geometry undo.
 
 **Walk mode.** Choose WALK, then use W/A/S/D or the arrow keys to move and Shift to move faster. Drag to look or click the canvas to capture the mouse. Escape releases it or exits walk mode.
 
 **Measure surfaces.** Choose MEASURE and click two surface points to display a distance. CLEAR MEASURES removes temporary measurements; image export can include them.
 
-**Field of view.** Choose FIELD OF VIEW (Z), as in SketchUp, then press and drag on the model: up narrows the view and down widens it, while the camera stays where it stands (the middle button still orbits and scroll still moves the camera). The panel shows the angle across the picture's long and short sides and its 35 mm equivalent, and has the iPhone 17 Pro lenses: 0.5× (14 mm, the ultra wide), 1× (24 mm, the lens Polycam keyframes come from) and 2× (48 mm), plus DEFAULT. An outline shows the phone's 4:3 picture, fitted in the window, so the model lines up with keyframes and photos taken at that lens. The lenses are also under View in the Tiksi menu and in the phone's view panel. A saved view keeps its lens.
+**Field of view.** Choose FIELD OF VIEW (Z), as in SketchUp, then press and drag on the model: up narrows the view and down widens it, while the camera stays where it stands (the middle button still orbits and scroll still moves the camera). The panel shows the angle across the picture's long and short sides and its 35 mm equivalent, and has the iPhone 17 Pro lenses: 0.5× (14 mm, the ultra wide), 1× (24 mm, the lens Polycam keyframes come from) and 2× (48 mm), plus DEFAULT. An outline shows the phone's 4:3 picture, fitted in the window, so the model lines up with keyframes and photos taken at that lens. The lenses are also under CAMERA in the left pane and in the phone's view panel. A saved view keeps its lens.
 
-**Section cuts.** SECTION starts with one flat cut that slides up and down. The strip at the bottom of the view adds more: UP AND DOWN, SIDE TO SIDE, FRONT TO BACK, or CUSTOM, an upright cut facing you that the rings turn to any angle. Up to six cuts work at once; click a numbered cut to move its handles there. SNAP holds turns to 15° and slides to 5 cm (1 inch in feet and inches); switch it off to move freely. FLIP cuts away the other side, PLANES hides the floating planes while the cut stays, and REMOVE deletes the cut. A saved view keeps its cuts.
+**Section cuts.** SECTION starts with one flat cut that slides up and down. The strip at the bottom of the view adds more: UP AND DOWN, SIDE TO SIDE, FRONT TO BACK, or CUSTOM, an upright cut facing you that the rings turn to any angle. Up to six cuts work at once; click a numbered cut to move its handles there. SNAP holds turns to 15° and slides to 5 cm (1 inch in feet and inches); switch it off to move freely. FLIP cuts away the other side, PLANES hides the floating planes while the cut stays, and REMOVE deletes the cut. DONE puts away the planes, their handles and the strip and leaves a clean section; EDIT CUTS, faint in the bottom right corner, brings them back. A saved view keeps its cuts, and whether they were done.
+
+**Standard views.** STANDARD VIEWS in the left pane go to TOP, BOTTOM, FRONT, BACK, LEFT, RIGHT and ISO, as SketchUp has them. FRONT looks from the plan's bottom edge toward its top; the four sides keep a slight lift so floors and sills read. TOP looks straight down, north up the screen. BOTTOM looks straight up from under the model; the ground is put away while the camera is below it, and any other view puts it back.
 
 **Lighting.** LIGHT opens the lighting panel, saved with the property. The sun always casts shadows and reaches a room only through its windows and doors, even with the ceilings hidden or a section cut; inside, light comes from the sky's soft fill and from the light fixtures. Each fixture found in an imported model by its name (downlight, pendant, sconce, ceiling light, chandelier, lamp, LED strip, a fan with a light) shines at the output a fixture of its kind puts out, in lumens, or at the lumens and colour its name states; a traced room with no fixture gets one ceiling light at 150 lm per square metre. The panel lists them. NATURAL, OVERCAST and BRIGHT WORK LIGHT set everything at once. BRIGHTNESS is the camera exposure, SUN and FILL LIGHT set the direct sun and the sky light, CORNERS sets how dark corners get (0 turns that shading off), and CAMERA LIGHT is a lamp that moves with you. ROOM LIGHTS come on after dark, always or never; LAMP LEVEL dims every fixture and LAMP COLOR colours those whose name gives none.
 
@@ -266,15 +268,15 @@ Here every group is ON SCREEN (Tiksi menu); by default the tools live in the men
 
 <a id="tags"></a>
 
-## Components, tags, saved views and the Tiksi menu
+## Components, tags, saved views and the left pane
 
 **Where:** MODEL → COMPONENTS
 
-MODEL lists every object, the way SketchUp does: each chair, cabinet and other component of an imported model, and each wall, floor, ceiling, door, window and fixture of the plan. Click one object to see only that object in the panel on the right, where you change its tag, hide it or move it. Every object also sits on a tag; hide a tag to look inside, save the view as a tab, and keep the screen clear by leaving the tools in the Tiksi menu.
+MODEL lists every object, the way SketchUp does: each chair, cabinet and other component of an imported model, and each wall, floor, ceiling, door, window and fixture of the plan. Click one object to see only that object in the panel on the right, where you change its tag, hide it or move it. Every object also sits on a tag; hide a tag to look inside, save the view as a tab, and fold the left pane's groups to keep it short.
 
-![The Tiksi menu is open over MODEL. Roof is hidden in the TAGS tab of the component list, so the room under the roof shows. The saved views are tabs at the top left of the model.](js/guide-assets/tags.png)
+![MODEL as it starts: its views, tools and tags in the left pane. Roof is hidden in the TAGS tab of the component list, so the room under the roof shows. The saved views are tabs at the top left of the model and the first group of the pane.](js/guide-assets/tags.png)
 
-The Tiksi menu is open over MODEL. Roof is hidden in the TAGS tab of the component list, so the room under the roof shows. The saved views are tabs at the top left of the model.
+MODEL as it starts: its views, tools and tags in the left pane. Roof is hidden in the TAGS tab of the component list, so the room under the roof shows. The saved views are tabs at the top left of the model and the first group of the pane.
 
 ### Try it
 
@@ -284,8 +286,8 @@ The Tiksi menu is open over MODEL. Roof is hidden in the TAGS tab of the compone
 4. Choose HIDE (or press H, or click the eye beside the object in the list) to hide only that object. Its tag and everything else on that tag stay as they are. SHOW ALL HIDDEN in the list (Shift+H) brings back everything hidden this way.
 5. To move an object of an imported model, type how far under MOVE, or choose MOVE IT IN THE VIEW (M) and drag an arrow. PUT IT BACK returns it to where the model file has it.
 6. Open the TAGS tab of the list for the tags themselves, with how many objects each holds. Click an eye to hide or show a whole tag. Rename a tag by typing over its name, change its colour with the swatch, add one with ADD TAG, or delete one with the X: its objects move to Untagged.
-7. Choose the + at the top left of the model to save the current camera, with the tags shown now, as a view. Click a tab to go back to it; double-click to rename; right-click to update it, move it or delete it. Page Up and Page Down step through the tabs.
-8. Click the Tiksi logo for every tool and view. Tick ON SCREEN on a group to keep it beside the model; untick it to put it back in the menu.
+7. Choose the + at the top left of the model (or SAVE THIS VIEW in the left pane) to save the current camera as a view, with everything that decides what shows: the tags, the section cuts and whether they were done, x-ray, hidden levels, objects hidden one by one, which imported models show, BEFORE or AFTER, photo pins and notes. Click a tab to go back to it; double-click to rename; right-click to update it to what shows now, move it or delete it. Page Up and Page Down step through the tabs.
+8. Every view, tool and switch of MODEL is in the left pane. Click a group's header to fold it to the header, and again to open it. The eye beside SAVED VIEWS, DISPLAY and COMPONENTS shows or hides that bar over the model.
 
 ### Other features here
 
@@ -303,7 +305,7 @@ The Tiksi menu is open over MODEL. Roof is hidden in the TAGS tab of the compone
 
 **SketchUp.** Exports to SketchUp, and the SketchUp mirror beside a project file, put each object on a SketchUp tag with the same name and visibility.
 
-**What stays on the screen.** The ON SCREEN choices belong to this browser and apply to every project. Keyboard shortcuts work whether or not a group is on the screen.
+**What stays on the screen.** Folded groups, the eyes, the left pane itself (Tiksi menu → Left pane) and whether the page tabs show their words (right-click the tabs: Icon only, or Icon and word) belong to this browser and apply to every project. Keyboard shortcuts work whether or not a group is open.
 
 > **Good to know:** Tags and HIDE only change what is shown. Hidden objects are still in the project, still counted in takeoffs, and still exported. A moved object is exported where it now stands.
 
@@ -840,7 +842,7 @@ Use the visible tooltips and inspector labels when you forget a control. These a
 
 **Mark up.** U: mark up on or off, in MODEL and PLAN. While it is on, P: pen. H: highlighter. E: eraser. N: numbered note. V: move the view. 1, 2, 3: line width. Space-drag: move the view. Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z: undo and redo a mark. Esc: leave.
 
-**Geometry undo.** Top-bar UNDO / REDO work in PLAN, MODEL and MEASURE (applied tape readings). Cmd/Ctrl+Z: undo. Cmd/Ctrl+Shift+Z or Ctrl+Y: redo. History is per project for the current session. Escape ends an active tool action.
+**Geometry undo.** UNDO / REDO in the Tiksi menu work in PLAN, MODEL and MEASURE (applied tape readings). Cmd/Ctrl+Z: undo. Cmd/Ctrl+Shift+Z or Ctrl+Y: redo. History is per project for the current session. Escape ends an active tool action.
 
 **Move one wall.** Alt/Option while dragging isolates that wall from the normal connected-wall behavior; floors stay where they are.
 

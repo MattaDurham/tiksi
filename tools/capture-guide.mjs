@@ -42,7 +42,7 @@ async function shot(name) {
   console.log('Screenshot:', name);
 }
 async function fileTab(tab) {
-  if (!await page.locator('[data-file-dialog]').count()) await page.locator('#btn-file').click();
+  if (!await page.locator('[data-file-dialog]').count()) await page.locator('#tiksi-menu').click().then(() => page.locator('#btn-file').click());
   await page.locator(`[data-file-tab="${tab}"]`).click();
   if (tab === 'exchange') await page.locator('[data-engines]').filter({ hasText: 'Local engines' }).waitFor();
   await settle(250);
@@ -106,8 +106,8 @@ async function clip(name, actions) {
   console.log('Demo:', name, frames.length, 'actual UI states');
 }
 
-// Tags chapter: the screen as it starts (tools in the Tiksi menu), a synthetic roof model over
-// the sample kitchen with Roof hidden, two saved views, and the menu open.
+// Tags chapter: the screen as it starts (the tools in the left pane), a synthetic roof model over
+// the sample kitchen with Roof hidden, and two saved views.
 async function tagsShot() {
   await page.evaluate(async () => {
     const s = await import('/js/store.js'), THREE = await import('three');
@@ -130,9 +130,7 @@ async function tagsShot() {
   await page.locator('[data-view-add]').click(); await settle(200);
   await page.evaluate(async () => { const s = await import('/js/store.js'); const p = s.activeProperty(); p.savedViews[1].name = 'Roof off'; s.touch(); });
   await go('model'); await page.locator('.v-view-tab').nth(1).click(); await settle(1200);
-  await page.locator('#tiksi-menu').click(); await settle(300);
   await shot('tags');
-  await page.keyboard.press('Escape');
   // Back to the sample as the other chapters show it.
   await page.evaluate(async () => {
     const s = await import('/js/store.js'); const p = s.activeProperty();

@@ -464,7 +464,7 @@ async function computerChecks(browser, say) {
 
   // Showing a hidden scan loads it, once, and it appears.
   const withoutTower = await picture(desk);
-  await desk.locator('.tool-col [data-scan="scan-hidden"]').click();
+  await desk.locator('#side [data-scan="scan-hidden"]').click();
   assert.match(await desk.locator('.inspector').innerText(), /not loaded while hidden/, 'the inspector says why a hidden scan has no numbers');
   await desk.locator('.inspector [data-vis]').check();
   await waitUntil(async () => (await viewer(desk, 'return v.scanStates()'))['scan-hidden'].state === 'ready', 'the scan loads when shown');
@@ -484,7 +484,7 @@ async function computerChecks(browser, say) {
     try {
       await s.getFile('scan-points');
       const read = n; n = 0;
-      document.querySelector('.tool-col [data-scan="scan-points"]').click();
+      document.querySelector('#side [data-scan="scan-points"]').click();
       document.querySelector('.inspector [data-vis]').click();
       const end = Date.now() + 60000;
       while (v.scanStates()['scan-points'].state !== 'ready' && Date.now() < end) await new Promise(r => setTimeout(r, 50));
@@ -507,7 +507,7 @@ async function computerChecks(browser, say) {
   say('a scan loads when first shown; no extra copy of a point cloud\'s file; a line-up loads the scans it needs');
 
   // A still cannot be made from a lost context: nothing blank is filed, and it says what is left.
-  await desk.locator('.tool-col [data-scan="scan-points"]').click();   // any selection, then none: the positions list
+  await desk.locator('#side [data-scan="scan-points"]').click();   // any selection, then none: the positions list
   await desk.keyboard.press('Escape');
   const renderings = () => desk.evaluate(async () => (await import('/js/store.js')).activeProperty().photos.filter(p => p.role === 'rendering').map(p => p.thumb || ''));
   await viewer(desk, 'v.fieldAction("camera", "frame")');

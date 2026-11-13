@@ -99,9 +99,9 @@ try {
   await waitUntil(async () => (await doorState('inner')) === 'closed', 'CLOSE DOOR is saved on the door');
   assert.deepEqual(await turn('inner'), [0], 'and the leaf is shut');
   await waitUntil(async () => !(await page.locator('#btn-undo').isDisabled()), 'UNDO is offered');
-  await page.locator('#btn-undo').click();
+  await page.keyboard.press('ControlOrMeta+z');
   await waitUntil(async () => (await doorState('inner')) === null, 'one UNDO stands it ajar again');
-  await page.locator('#btn-redo').click();
+  await page.keyboard.press('ControlOrMeta+Shift+z');
   await waitUntil(async () => (await doorState('inner')) === 'closed', 'REDO shuts it');
   await idle();
   item = await rightClickDoor(-1);
@@ -129,18 +129,15 @@ try {
   assert.equal(await all.innerText(), 'OPEN ALL DOORS', 'with every interior door shut it offers to open them');
   await all.click();
   await waitUntil(async () => (await doorState('inner')) === null, 'OPEN ALL DOORS stands them ajar again');
-  await page.locator('#btn-undo').click();
+  await page.keyboard.press('ControlOrMeta+z');
   await waitUntil(async () => (await doorState('inner')) === 'closed', 'one UNDO takes OPEN ALL DOORS back');
-  // The Tiksi menu's Display group has the same switch.
+  // The left pane's Display group has the same switch.
   await idle();
-  await page.locator('#tiksi-menu').click();
-  const display = page.locator('.tk-group', { hasText: 'DISPLAY' }).locator('.tk-item', { hasText: /all doors/ });
+  const display = page.locator('#side .sd-group[data-group="Display"] .sd-item', { hasText: /all doors/ });
   assert.equal(await display.innerText(), 'Open all doors');
   await display.click();
-  await waitUntil(async () => (await doorState('inner')) === null, 'Open all doors in the Tiksi menu opens them');
-  await page.locator('#tiksi-menu').click();
-  assert.equal(await page.locator('.tk-group', { hasText: 'DISPLAY' }).locator('.tk-item', { hasText: /all doors/ }).innerText(), 'Close all doors');
-  await page.keyboard.press('Escape');
+  await waitUntil(async () => (await doorState('inner')) === null, 'Open all doors in the left pane opens them');
+  await waitUntil(async () => (await display.innerText()) === 'Close all doors', 'the pane then offers to close them');
 
   // ---------- the inspectors ----------
   await idle();
