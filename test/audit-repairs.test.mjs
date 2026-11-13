@@ -112,3 +112,15 @@ test('takeoff source changes are flagged without rewriting manually edited quant
   assert.match(takeoffState(scope,prop),/^stale/);assert.equal(scope.items[0].quantity,123);
   prop.scans=[];assert.equal(takeoffState(scope,prop),'missing source');
 });
+
+test('slab dimensions agree with rendered automatic pairs and cased openings', async () => {
+  const {openingDimensions}=await import('../js/opening-dimensions.js');
+  const wall={id:'w',ax:0,ay:0,bx:4,by:0,thickness:.2},opening={wallId:'w',type:'door',width:1.6,height:2,t:.5};
+  const prop={walls:[wall],rooms:[],levels:[]};
+  assert.equal(openingDimensions(prop,opening).leaves,2);
+  assert.ok(Math.abs(openingDimensions(prop,opening).slabWidth-.7455)<1e-9);
+  prop.rooms=[{pts:[[0,.1],[4,.1],[4,3],[0,3]]},{pts:[[0,-.1],[0,-3],[4,-3],[4,-.1]]}];
+  assert.equal(openingDimensions(prop,opening).slabWidth,null);
+  assert.equal(openingDimensions(prop,{...opening,leaves:1}).leaves,1);
+  assert.equal(openingDimensions(prop,{...opening,plain:true}).slabWidth,null);
+});

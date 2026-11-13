@@ -55,6 +55,9 @@ function lazyView(load) {
         .catch(error => { if (own === token) root.textContent = 'Could not open this page: ' + error.message; });
     },
     unmount() { token++; if (mounted) module?.unmount?.(); mounted = false; },
+    undo() { if (mounted) module?.undo?.(); },
+    redo() { if (mounted) module?.redo?.(); },
+    sharedChange(keys) { return mounted && module?.sharedChange?.(keys); },
   };
 }
 

@@ -4,7 +4,7 @@ export const EVIDENCE_STATES = ['observed', 'inferred', 'unknown'];
 export const EVIDENCE_COLORS = { observed: '#35bca5', inferred: '#edae39', unknown: '#a889d8', stale: '#ed6570' };
 export const IDENTITY_STATES = ['unknown', 'observed', 'proposed'];
 export function evidenceSignature(record) {
-  const fields = ['ax','ay','bx','by','thickness','height','pts','width','sill','t','wallId','level','x','y','rot','w','d','h','y0','depth','subtype','offsets','scale','rotation','position','componentTransforms','hiddenParts','profile','sourceVersion','assetRevision','pos','rot','rotY','bytes','convertedAgainAt'];
+  const fields = ['ax','ay','bx','by','thickness','height','pts','width','sill','t','wallId','level','x','y','rot','w','d','h','y0','depth','subtype','offsets','scale','rotation','position','componentTransforms','hiddenParts','profile','sourceVersion','assetRevision','pos','rot','rotY','bytes','convertedAgainAt','leaves','plain','glass','side','seat','counterT','toeKick','toeDepth','overhang','partOffsets'];
   return JSON.stringify(fields.map(k => [k, record?.[k] ?? null]));
 }
 export function evidenceState(record, aspect = 'geometry') {
@@ -42,5 +42,6 @@ export function elementEvidenceRecord(prop, kind, record) {
   return { ...record, evidenceContext: {
     level: level ? [level.id, level.elevation, level.height] : null,
     host: wall ? [wall.ax,wall.ay,wall.bx,wall.by,wall.thickness,wall.height] : null,
+    openings: kind === 'wall' ? (prop.openings || []).filter(o=>o.wallId===record.id).map(evidenceSignature) : null,
   } };
 }

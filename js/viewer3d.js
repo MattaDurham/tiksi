@@ -1,6 +1,6 @@
 import { openingProblems } from './opening-validation.js';
 import { resizeOpening } from './opening-schedule.js';
-import { doorDimensions, wallWidthFromSlab } from './opening-dimensions.js';
+import { openingDimensions, wallWidthFromSlab } from './opening-dimensions.js';
 import { EVIDENCE_STATES, EVIDENCE_COLORS, evidenceState, setEvidence, elementEvidenceRecord } from './evidence.js';
 import { withUncertainty } from './uncertainty-view.js';
 // 3D model view: a rendering, not a debug scene.
@@ -4383,11 +4383,11 @@ function renderEvidenceInspector() {
     <div class="field"><label>Notes</label><input type="text" data-evidence-note value="${escapeHtml(e.note || '')}"></div>
     <button class="btn" data-evidence-save>REVIEW EVIDENCE</button><p data-evidence-error role="status"></p>`;
   if (selection.kind === 'opening') {
-    const issues = openingProblems(prop, record), dimensions=doorDimensions(record);
+    const issues = openingProblems(prop, record), dimensions=openingDimensions(prop,record);
     const profile = document.createElement('section');
     const sizes=record.type==='window'?['frameWidth','sashWidth','muntinWidth','casingWidth','casingDepth']:['jambWidth','leafThickness','casingWidth','casingDepth','handleHeight','handleBackset'];
     profile.innerHTML=`<h3>OPENING CONFIGURATION</h3><p class="empty">Stored width and height are the hole in the wall. Profiles and hardware remain provisional until documented.</p>${issues.length?`<p role="alert">${issues.map(escapeHtml).join('; ')}</p>`:''}
-      ${record.type!=='window'?`<div class="field"><label>Slab width per leaf (bare numbers are inches; metric mode uses metres)</label><input data-slab-width value="${escapeHtml(fmtLen(dimensions.slabWidth))}"></div>`:''}
+      ${record.type!=='window' && dimensions.leaves ?`<div class="field"><label>Slab width per leaf (bare numbers are inches; metric mode uses metres)</label><input data-slab-width value="${escapeHtml(fmtLen(dimensions.slabWidth))}"></div>`:''}
       ${sizes.map(k=>`<div class="field"><label>${escapeHtml(k.replace(/[A-Z]/g,c=>' '+c.toLowerCase()))} (metres; blank uses provisional default)</label><input type="number" step=".001" min="0.001" max="${k==='handleHeight'?2:.3}" data-profile="${k}" value="${escapeHtml(record.profile?.[k] ?? '')}"></div>`).join('')}
       ${record.type==='window'?['columns','rows'].map(k=>`<div class="field"><label>Observed grid ${k}</label><input type="number" min="1" max="12" step="1" data-profile="${k}" value="${escapeHtml(record.profile?.[k] || 1)}"></div>`).join(''):`<div class="field"><label>Hardware</label><select data-profile-choice="hardware">${['lever','knob','none'].map(k=>`<option ${record.profile?.hardware===k?'selected':''}>${k}</option>`).join('')}</select></div><div class="field"><label>Door face</label><select data-profile-choice="panels"><option value="flat">Flat / unresolved</option><option value="six" ${record.profile?.panels==='six'?'selected':''}>Six panel</option></select></div>`}`;
     inspEl.append(profile);
@@ -4399,7 +4399,7 @@ function renderEvidenceInspector() {
       touch();rebuildModel();renderInspector();
     });
     const slab=profile.querySelector('[data-slab-width]');
-    if(slab)slab.onchange=()=>{const width=wallWidthFromSlab(record,parseLen(slab.value, 'inches'));if(width){beginGeometryEdit(prop,'edit slab width'); if(!resizeOpening(prop,native || record,{width}))toast('That slab would overlap another opening.','warn');touch();rebuildModel();renderInspector();}};
+    if(slab)slab.onchange=()=>{const width=wallWidthFromSlab(record,parseLen(slab.value, 'inches'),dimensions.leaves);if(width){beginGeometryEdit(prop,'edit slab width'); if(!resizeOpening(prop,native || record,{width}))toast('That slab would overlap another opening.','warn');else (native || record).leaves=dimensions.leaves;touch();rebuildModel();renderInspector();}};
   }
   inspEl.append(section);
   section.querySelector('[data-evidence-save]').onclick = () => {

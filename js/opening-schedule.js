@@ -1,4 +1,4 @@
-import { doorDimensions } from './opening-dimensions.js';
+import { openingDimensions } from './opening-dimensions.js';
 // Opening schedule: every door and window numbered (D1.., W1..) with the rooms it joins and
 // its size, for an owner to correct by number. Pure data, no DOM; PLAN draws the tags.
 //
@@ -79,7 +79,7 @@ export function openingSchedule(prop, levelId = null) {
     // Inside first, so a door reads "Kitchen / Exterior" rather than the other way round.
     if (sides[0].name === 'Exterior' && sides[1].name !== 'Exterior') sides.reverse();
     rows.push({ id: o.id, number, type, levelId: level.id, levelName: level.name || '', wallId: f.w.id,
-      width: o.width, height: o.height, dimensionType: 'wall-opening', slabWidth: type === 'door' ? doorDimensions(o).slabWidth : null, problems: openingProblems(prop, o), sill: type === 'window' ? (o.sill ?? null) : null,
+      width: o.width, height: o.height, dimensionType: 'wall-opening', slabWidth: type === 'door' ? openingDimensions(prop,o).slabWidth : null, problems: openingProblems(prop, o), sill: type === 'window' ? (o.sill ?? null) : null,
       cx: f.cx, cy: f.cy, ux: f.ux, uy: f.uy, sides });
   }
   return rows;

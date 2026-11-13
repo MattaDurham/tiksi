@@ -37,8 +37,9 @@ retained. Defaulted or adjusted dimensions remain reviewable.
   across the doorway. Explicit voids and `floorContinuity: false` prevent bridging. This is
   not a substitute for reviewing steps, exterior thresholds and actual finish transitions.
 - Opening `width` and `height` describe the wall opening. Door slab width is derived
-  separately, including jambs, gaps and leaf count. The inspector can accept a slab width
-  and convert it to the wall opening. It is not a measurement of usable passage clearance.
+  separately, including jambs, gaps and leaf count. The inspector and tape-reading targets can accept a slab width per leaf
+  and convert it to the wall opening. Existing `width` readings remain wall-opening readings;
+  they are never silently reinterpreted from their free-text description. It is not a measurement of usable passage clearance.
 - Overlapping stored openings remain represented at their stored width and are reported.
   Wall solids use the union of their cuts. Manual resizing refuses overlap atomically.
 - Opening profiles expose jamb, casing, sash, frame, muntin and leaf sizes, grid counts,
