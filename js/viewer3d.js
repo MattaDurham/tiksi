@@ -5246,7 +5246,7 @@ function menuGroups() {
       ...(cut ? [section.done
         ? { label: 'Edit the section cuts', icon: 'edit', act: 'cut-edit', run: () => setSectionDone(false) }
         : { label: 'Done placing section cuts', icon: 'check', act: 'cut-done', run: () => setSectionDone(true) }] : []),
-      ...SECTION_KINDS.map(k => ({ label: 'Add a cut: ' + SECTION_LABELS[k].toLowerCase(), icon: 'plus', data: { cutAdd: k }, run: () => addSection(k) })),
+      ...SECTION_KINDS.map(k => ({ label: 'Add a cut: ' + SECTION_LABELS[k].toLowerCase(), icon: 'plus', data: { paneCut: k }, run: () => addSection(k) })),
       { label: 'Snap section cuts', icon: 'snap', active: sectionSnap, run: () => setSectionSnap(!sectionSnap) },
       { label: 'X-ray', key: 'X', icon: 'xray', act: 'xray', active: xray, run: toggleXray },
       { label: 'Lighting and sun', icon: 'sun', act: 'light', run: () => { hud.env.hidden = false; hud.env.classList.add('open'); renderEnvPanel(); } },

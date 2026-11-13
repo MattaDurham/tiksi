@@ -23,7 +23,7 @@
   --sel: #4f8fd0;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --side-w: 216px;
+  --pane-w: 216px;
   --top-h: 48px;
   --radius: 6px;
   --radius-lg: 10px;
@@ -60,7 +60,7 @@ svg.ic { flex: none; vertical-align: -3px; }
 
 #app {
   display: grid;
-  grid-template: var(--top-h) minmax(0, 1fr) / var(--side-w) minmax(0, 1fr);
+  grid-template: var(--top-h) minmax(0, 1fr) / var(--pane-w) minmax(0, 1fr);
   grid-template-areas: "top top" "side view";
   height: 100vh;
   background: var(--bg);

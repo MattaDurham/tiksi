@@ -148,7 +148,7 @@ try {
   await settle();
   if (!demosOnly && (!only || only === 'tags')) await tagsShot();
   if (!demosOnly && !only) {
-  await selectWall(); await shot('plan');
+  await go('plan'); await selectWall(); await shot('plan');
   await go('model'); await page.locator('[data-act="iso"]').click(); await settle(1500);
   await shot('start'); await shot('model');
   await fileTab('exchange'); await shot('exchange');

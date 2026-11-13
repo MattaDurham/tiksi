@@ -202,7 +202,7 @@ try {
   openReply = { status: 404, json: { error: 'Could not find Notes check.skp on this Mac.' } };
   await page.locator('.v-modes [data-mode=orbit]').click();   // the PLAN button does the same
   await page.locator('#rail a[data-view="plan"]').click({ noWaitAfter: true });
-  await page.locator('#side [data-act=sketchup]').click();
+  await page.locator('.tool-col [data-act=sketchup]').click();
   await waitUntil(async () => /Could not find Notes check\.skp on this Mac/.test(await page.locator('.toast.error').innerText().catch(() => '')), 'the failure toast');
   assert.equal(asked.length, 2);
   assert.equal(asked[1].body.hint, '/Synthetic projects/Notes check.skp');

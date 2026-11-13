@@ -374,7 +374,7 @@ async function aProjectWithAMissingFileIsShown() {
   const row = page.locator('#property-select option[data-unavailable]');
   await row.waitFor({ state: 'attached', timeout: 20000 });
   assert.match(await row.textContent(), /Garden flat \(file missing\)/);
-  assert.equal(await row.isDisabled(), true, 'it cannot be opened while its file is missing');
+  assert.equal(await row.evaluate(o => o.disabled), true, 'it cannot be opened while its file is missing');   // the list is in the Tiksi menu, shut here
   assert.match(await row.getAttribute('title'), /Garden flat/);
   await until(page, async id => !(await import('/js/store.js')).ws.data.properties.some(p => p.id === id), second, 'the project leaving the open records');
   // FILE, Settings gives the Mac's message and the control to take it off the list.
