@@ -6087,7 +6087,8 @@ export function fieldState() {
     mode,
     cameras: [{ id: 'frame', label: 'Overview' }, { id: 'front', label: 'Front' }, { id: 'iso', label: 'Corner' }],
     // The iPhone 17 Pro lens the view is framed with (lens.js), or the default.
-    lenses: [...LENSES.map(l => ({ id: l.id, label: l.label, on: lensPick === l.id })), { id: 'default', label: 'Default', on: !lensPick && !!camera && Math.abs(camera.fov - DEFAULT_VFOV) < 0.05 }],
+    lenses: [...LENSES.map(l => ({ id: l.id, label: l.label, on: !parallel && lensPick === l.id })), { id: 'default', label: 'Default', on: !parallel && !lensPick && !!camera && Math.abs(camera.fov - DEFAULT_VFOV) < 0.05 },
+      { id: 'parallel', label: 'Parallel', on: parallel }],
     views: (prop.savedViews || []).map(v => ({ id: v.id, label: v.name, on: v.id === activeViewId })),
     positions: (prop.photoPositions || []).map(p => ({ id: p.id, label: positionLabel(p) })),
     show: [
@@ -6095,6 +6096,9 @@ export function fieldState() {
       { id: 'xray', label: 'X-ray', on: xray },
       { id: 'pins', label: 'Photos', on: markersShown('pins'), count: prop.photos.filter(ph => ph.pin).length },
       { id: 'notes', label: 'Notes', on: markersShown('notes'), count: prop.notePins.length },
+      { id: 'dims', label: 'Dimensions', on: annotShown('dims') },
+      { id: 'rooms', label: 'Rooms', on: annotShown('rooms') },
+      { id: 'numbers', label: 'Door and window numbers', on: annotShown('numbers') },
     ],
     section: (() => {
       const s = section.on && activeSection();
@@ -6132,7 +6136,7 @@ export function fieldAction(kind, id, value) {
     flyTo(new THREE.Vector3(...pos.view.position), new THREE.Vector3(...pos.view.target), 700);
   }
   else if (kind === 'view') goToView(id);
-  else if (kind === 'lens') applyLens(id === 'default' ? null : id);
+  else if (kind === 'lens') { if (id === 'parallel') setParallel(!parallel); else applyLens(id === 'default' ? null : id); }
   else if (kind === 'save-view') addView();
   // Saved-view editing for the panel: `value` is the new name.
   else if (kind === 'view-rename') { if (String(value || '').trim() && renameSavedView(prop, id, String(value).trim())) { touch(); renderViews(); } }
@@ -6164,6 +6168,7 @@ export function fieldAction(kind, id, value) {
     if (id === 'section') toggleSection();
     else if (id === 'xray') toggleXray();
     else if (id === 'pins' || id === 'notes') toggleMarkers(id);
+    else if (id in ANNOT_KEYS) toggleAnnot(id);
   }
 }
 // The section cuts as plain data: every plane's cut-away direction and where it sits.
