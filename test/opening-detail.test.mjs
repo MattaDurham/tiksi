@@ -68,7 +68,7 @@ test('double-hung upper grille and clear lower sash have separate rails and glaz
   assert.equal(blocked(2, 1.5), true, 'meeting rail remains even without lower grille');
   const clear = windowDetail({ detail: { window: { type: 'casement', columns: 1, rows: 1 } } }, 1.4, 1.2);
   assert.equal(clear.columns, 1); assert.equal(clear.rows, 1);
-  assert.equal(windowDetail({}, 1.4, 1.2).columns, 3, 'unspecified legacy windows unchanged');
+  assert.equal(windowDetail({}, 1.4, 1.2).columns, 1, 'unknown windows have no invented grille');
 });
 
 test('ceiling datum is its finished underside, including a room-specific soffit', () => {
@@ -115,4 +115,20 @@ test('an explicit panelled wood leaf keeps modeled relief and its finish', () =>
   const depths = new Set(Array.from({ length: positions.count }, (_, i) => Math.round(Math.abs(positions.getZ(i)) * 10000)));
   assert.ok(depths.has(225) && depths.has(185), 'panels are recessed 4 mm below rails/stiles');
   assert.equal(leaf.material.color.getHexString(), '654321');
+});
+
+test('profile fallback and explicit detail share the same physical and measured dimensions', async () => {
+  const { doorDimensions, wallWidthFromSlab } = await import('../js/opening-dimensions.js');
+  const o = { width: 0.742, height: 2.05, profile: { jambWidth: 0.02, panels: 'six', hardware: 'knob', handleHeight: 0.9, handleBackset: 0.06, knobRadius: 0.021 },
+    detail: { door: { jambWidth: 0.018, leafWidth: 0.7, style: 'slab' } } };
+  const d = doorDetail(o, o.width, o.height, true);
+  near(d.jambWidth, 0.018); near(d.leafWidth, 0.7); assert.equal(d.style, 'slab'); assert.equal(d.hardware, 'knob');
+  near(doorDimensions(o).slabWidth, 0.7); near(wallWidthFromSlab(o, 0.7), o.width);
+  const g = opening(o), pivot = g.children.find(c => c.isGroup), leaf = pivot.children[0];
+  near(leaf.geometry.parameters.width, 0.7);
+  const knob = pivot.children.find(c => c.userData.hardware === 'knob');
+  near(knob.position.x, 0.64); near(knob.position.y, 0.9); near(knob.geometry.parameters.radius, 0.021);
+  assert.equal(doorDetail({}, 0.8, 2, false).style, 'slab', 'unknown faces stay neutral');
+  const window = windowDetail({ profile: { columns: 2, rows: 3, casingWidth: 0.05 }, detail: { window: { columns: 1 } } }, 1, 1.4);
+  assert.equal(window.columns, 1); assert.equal(window.rows, 3); near(window.casingWidth, 0.05);
 });

@@ -21,6 +21,9 @@ if args not in ([], ['--fast']):
     sys.exit(2)
 fast = args == ['--fast']
 failed = False
+for path in sorted(ROOT.glob('*.js')):
+    result = subprocess.run(['node', '--check', str(path)])
+    failed = failed or bool(result.returncode)
 for folder in ['js', 'scripts', 'tools', 'test', 'tests']:
     for path in sorted((ROOT / folder).glob('*.js')) + sorted((ROOT / folder).glob('*.mjs')):
         result = subprocess.run(['node', '--check', str(path)])

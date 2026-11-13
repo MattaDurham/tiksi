@@ -2,9 +2,8 @@
 // and the SketchUp mirror both cut walls from these spans and paint the same sides, so
 // they always agree.
 
-// The openings on one wall as spans along it: clamped to the wall, never overlapping an
-// earlier opening (the later one gives way), too-narrow leftovers dropped. Solids and trim
-// are both cut from these so they always agree.
+// Wall-local spans, bounded by the host wall. Overlapping openings retain their full
+// widths; opening-validation.js reports conflicts instead of hiding them by shortening.
 export function openingSpans(wall, openings, L) {
   const spans = openings
     .filter(o => o.wallId === wall.id)
@@ -14,15 +13,8 @@ export function openingSpans(wall, openings, L) {
       return { s0: Math.max(0, c - w / 2), s1: Math.min(L, c + w / 2), o };
     })
     .sort((a, b) => a.s0 - b.s0);
-  const out = [];
-  let cursor = 0;
-  for (const sp of spans) {
-    sp.s0 = Math.max(sp.s0, cursor);
-    if (sp.s1 - sp.s0 < 0.05) continue;
-    out.push(sp);
-    cursor = sp.s1;
-  }
-  return out;
+  return spans; // never silently shorten a later opening to hide an overlap
+
 }
 
 // Solid pieces of one wall in local coords: s along wall [0..L], v vertical [0..H].
@@ -31,18 +23,16 @@ export function wallSolids(wall, openings, defaultHeight) {
   const H = wall.height || defaultHeight;
   if (L < 0.01) return { solids: [], glass: [], L, H };
 
-  const solids = [];
-  const glass = [];
-  let cursor = 0;
-  for (const { s0, s1, o } of openingSpans(wall, openings, L)) {
-    if (s0 > cursor + 0.005) solids.push({ s0: cursor, s1: s0, v0: 0, v1: H });
-    const top = Math.min((o.type === 'window' ? (o.sill || 0) + o.height : o.height), H);
-    if (top < H - 0.01) solids.push({ s0, s1, v0: top, v1: H });          // header
-    if (o.type === 'window' && (o.sill || 0) > 0.01) solids.push({ s0, s1, v0: 0, v1: o.sill }); // sill wall below
-    if (o.type === 'window') glass.push({ s0, s1, v0: (o.sill || 0), v1: top, id: o.id });
-    cursor = s1;
+  const solids = [], glass = [], spans = openingSpans(wall, openings, L);
+  const cuts = [...new Set([0, L, ...spans.flatMap(s => [s.s0, s.s1])])].sort((a,b) => a-b);
+  for (let i = 1; i < cuts.length; i++) {
+    const s0 = cuts[i-1], s1 = cuts[i], mid = (s0+s1)/2;
+    const holes = spans.filter(s => s.s0 <= mid && s.s1 >= mid).map(({o}) => [o.type === 'window' ? Math.max(0, o.sill || 0) : 0, Math.min(H, (o.type === 'window' ? o.sill || 0 : 0) + o.height)]).sort((a,b) => a[0]-b[0]);
+    let cursor = 0;
+    for (const [lo,hi] of holes) { if (lo > cursor) solids.push({s0,s1,v0:cursor,v1:lo}); cursor=Math.max(cursor,hi); }
+    if (cursor < H) solids.push({s0,s1,v0:cursor,v1:H});
   }
-  if (cursor < L - 0.005) solids.push({ s0: cursor, s1: L, v0: 0, v1: H });
+  for (const {s0,s1,o} of spans) if (o.type === 'window') glass.push({s0,s1,v0:o.sill || 0,v1:Math.min(H,(o.sill || 0)+o.height),id:o.id});
   return { solids, glass, L, H };
 }
 
@@ -132,11 +122,15 @@ export function doorLeaves(o, width, interior) {
 
 // Optional measured construction details. Opening width/height continue to describe the
 // wall cut; leaf sizes describe the slab itself, not that cut or the clear passage. Missing
-// details retain the old appearance, so an existing drawing is not silently re-specified.
+// detail takes precedence over the older profile interface. Unrecorded panel/grille
+// patterns stay neutral instead of inventing identifying decoration.
 const size = (d, key, fallback, max = Infinity, min = 0) => Number.isFinite(d[key]) && d[key] >= min && d[key] <= max ? d[key] : fallback;
 export function doorDetail(o, width, top, interior, sides = {}) {
-  const d = o?.detail?.door || {}, leaves = doorLeaves(o, width, interior);
-  const jambWidth = size(d, 'jambWidth', 0.05, Math.min(width / 4, top / 4));
+  const profile = o?.profile || {};
+  const d = { ...profile, ...(profile.panels === 'six' ? { style: 'six-panel' } : {}), ...o?.detail?.door };
+  const leaves = doorLeaves(o, width, interior);
+  const maxJamb = Math.max(0, Math.min(0.3, width / 2 - 0.003, top - 0.012));
+  const jambWidth = size(d, 'jambWidth', Math.min(0.05, maxJamb), maxJamb);
   const gap = leaves === 2 ? 0.009 : 0.006;
   const availableWidth = Math.max(0.01, (width - jambWidth * 2 - gap) / (leaves === 2 ? 2 : 1));
   const availableHeight = Math.max(0.01, top - jambWidth - 0.012);
@@ -150,27 +144,30 @@ export function doorDetail(o, width, top, interior, sides = {}) {
     casingWidth: size(d, 'casingWidth', 0.07, 0.4), casingDepth: size(d, 'casingDepth', 0.016, 0.1),
     hinge: d.hinge === 'end' ? 'end' : 'start',
     swingSide: d.swingSide === 'negative' ? -1 : d.swingSide === 'positive' ? 1 : sides.pos ? 1 : -1,
-    style: d.style === 'slab' ? 'slab' : 'six-panel',
+    style: d.style === 'six-panel' ? 'six-panel' : 'slab',
     hardware: ['knob', 'none'].includes(d.hardware) ? d.hardware : 'lever',
     hardwareFinish: ['brass', 'dark', 'glass'].includes(d.hardwareFinish) ? d.hardwareFinish : 'chrome',
     knobShape: d.knobShape === 'faceted' ? 'faceted' : 'round',
     leafMaterial: typeof d.leafMaterial === 'string' ? d.leafMaterial : null,
+    handleBackset: size(d, 'handleBackset', 0.075, 0.3, 0.001),
+    handleHeight: size(d, 'handleHeight', 1, 2, 0.001),
+    knobRadius: size(d, 'knobRadius', o?.detail?.door ? 0.027 : 0.025, 0.3, 0.001),
     warnings,
   };
 }
 
 const gridCount = (v, fallback) => Number.isInteger(v) && v >= 1 && v <= 12 ? v : fallback;
 export function baseboardDetail(wall, side) {
-  const d = wall[side > 0 ? 'baseboardPos' : 'baseboardNeg'] || {};
+  const d = { height: wall.profile?.baseboardHeight, depth: wall.profile?.baseboardDepth, ...(wall[side > 0 ? 'baseboardPos' : 'baseboardNeg'] || {}) };
   const height = size(d, 'height', 0.14, 0.6), depth = size(d, 'depth', 0.012, 0.1);
   return { height, depth, profile: d.profile === 'rounded' ? 'rounded' : 'rectangular',
     radius: size(d, 'radius', Math.min(depth / 2, height / 10), Math.min(depth, height), 0.0001) };
 }
 export function windowDetail(o, width, height) {
-  const d = o?.detail?.window || {};
+  const d = { ...o?.profile, ...o?.detail?.window };
   const type = ['double-hung', 'casement', 'fixed'].includes(d.type) ? d.type : 'legacy';
-  const columns = gridCount(d.columns, type === 'legacy' ? (width >= 1.1 ? 3 : 2) : 1);
-  const rows = gridCount(d.rows, type === 'legacy' ? (height >= 0.7 ? 2 : 1) : 1);
+  const columns = gridCount(d.columns, 1);
+  const rows = gridCount(d.rows, 1);
   return {
     type, columns, rows,
     upper: { columns: gridCount(d.upperColumns, columns), rows: gridCount(d.upperRows, rows) },
@@ -178,6 +175,7 @@ export function windowDetail(o, width, height) {
     frameWidth: size(d, 'frameWidth', 0.045, Math.min(width, height) / 5, 0.005),
     sashWidth: size(d, 'sashWidth', 0.035, Math.min(width, height) / 5, 0.005),
     muntinWidth: size(d, 'muntinWidth', 0.022, Math.min(width, height) / 8, 0.002),
+    casingWidth: size(d, 'casingWidth', 0.07, 0.4), casingDepth: size(d, 'casingDepth', 0.016, 0.1),
   };
 }
 
@@ -234,7 +232,7 @@ export function doorGlassBand(o, v0, v1) {
 export function doorSwings(o) {
   const half = o.width / 2;
   if (o.leaves === 0 || plainOpening(o)) return [];
-  const d = o.detail?.door;
+  const d = o.detail?.door || o.profile;
   // Keep legacy plan symbols exactly as before when no construction record exists.
   if (!d) return o.leaves === 2 ? [{ s: -half, r: half, dir: 1 }, { s: half, r: half, dir: -1 }] : [{ s: -half, r: o.width, dir: 1 }];
   const q = doorDetail(o, o.width, o.height || 2.03, false, { pos: true });

@@ -55,6 +55,61 @@ class API:
         if count.value: self.call('SUEntitiesGet' + kind, ref, count, values, C.byref(count))
         return values
 
+DICT = b'tiksi'
+KEY = b'data'
+
+def to_ref(api, name, ref):
+    fn = getattr(api.lib, name); fn.restype = Ref; fn.argtypes = [Ref]
+    return fn(ref)
+
+
+def get_data(api, entity):
+    """The JSON stored in the entity's "tiksi" dictionary, or None when it has none."""
+    count = C.c_size_t()
+    api.call('SUEntityGetNumAttributeDictionaries', entity, C.byref(count))
+    if not count.value:
+        return None
+    dicts = (Ref * count.value)()
+    api.call('SUEntityGetAttributeDictionaries', entity, count, dicts, C.byref(count))
+    for d in dicts[:count.value]:
+        if api.text('SUAttributeDictionaryGetName', d) != DICT.decode():
+            continue
+        value = api.ref('SUTypedValueCreate')
+        try:
+            if api.call('SUAttributeDictionaryGetValue', d, KEY, C.byref(value), optional=True):
+                return {}
+            try:
+                parsed = json.loads(api.text('SUTypedValueGetString', value))
+            except ValueError:
+                return {}
+            return parsed if isinstance(parsed, dict) else {}
+        finally:
+            api.call('SUTypedValueRelease', C.byref(value))
+    return None
+
+
+def set_data(api, entity, data):
+    count = C.c_size_t()
+    api.call('SUEntityGetNumAttributeDictionaries', entity, C.byref(count))
+    dictionaries = (Ref * count.value)()
+    if count.value:
+        api.call('SUEntityGetAttributeDictionaries', entity, count, dictionaries, C.byref(count))
+    d = next((item for item in dictionaries[:count.value]
+              if api.text('SUAttributeDictionaryGetName', item) == DICT.decode()), None)
+    created = d is None
+    if created:
+        d = Ref()
+        api.call('SUAttributeDictionaryCreate', C.byref(d), DICT)
+    value = api.ref('SUTypedValueCreate')
+    try:
+        api.call('SUTypedValueSetString', value, json.dumps(data, separators=(',', ':')).encode('utf-8'))
+        api.call('SUAttributeDictionarySetValue', d, KEY, value)
+    finally:
+        api.call('SUTypedValueRelease', C.byref(value))
+    if created:
+        api.call('SUEntityAddAttributeDictionary', entity, d)
+
+
 IDENTITY = [1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]
 def multiply(a,b): return [sum(a[k*4+r]*b[c*4+k] for k in range(4)) for c in range(4) for r in range(4)]
 def transform(p,m): return [sum(m[k*4+r]*v for k,v in enumerate([p.x,p.y,p.z,1])) for r in range(3)]
@@ -179,7 +234,10 @@ def read_skp(source, output):
             if key not in templates:
                 name=api.text('SUComponentDefinitionGetName',definition) or 'Component'
                 nodes=[]
-                templates[key]={'name':name,'guid':optional_text('SUComponentDefinitionGetGuid',definition),
+                identity = get_data(api, to_ref(api, 'SUComponentDefinitionToEntity', definition)) or {}
+                source_guid = identity.get('sourceDefinitionId')
+                if not isinstance(source_guid, str) or len(source_guid) > 200: source_guid = None
+                templates[key]={'name':name,'guid':source_guid or optional_text('SUComponentDefinitionGetGuid',definition),
                                 'description':optional_text('SUComponentDefinitionGetDescription',definition)[:2000],'nodes':nodes}
                 collect(api.ref('SUComponentDefinitionGetEntities',definition),IDENTITY,name,inherited,depth,None,nodes)
                 if not templates[key]['guid']:
@@ -281,6 +339,8 @@ def write_skp(source, output):
             api.call('SUComponentDefinitionSetName',definition,str(component.get('name') or 'Component')[:200].encode('utf-8'))
             if component.get('description'):api.call('SUComponentDefinitionSetDescription',definition,str(component['description'])[:2000].encode('utf-8'),optional=True)
             api.call('SUModelAddComponentDefinitions',model,C.c_size_t(1),(Ref*1)(definition))
+            if component.get('sourceDefinitionId'):
+                set_data(api, to_ref(api, 'SUComponentDefinitionToEntity', definition), {'sourceDefinitionId': str(component['sourceDefinitionId'])[:200]})
             definitions[component.get('id')]=definition
         def place(target, placement, depth=0):
             definition=definitions.get(placement.get('component'))

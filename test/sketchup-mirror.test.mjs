@@ -27,12 +27,12 @@ function readOf(spec) {
     model: { propertyId: spec.property.id, elements: spec.elements },
     walls: spec.walls.map(w => {
       const base = { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by, thickness: w.thickness, height: w.height, elevation: w.elevation };
-      for (const key of ['baseboardPos', 'baseboardNeg']) if (w[key]) base[key] = structuredClone(w[key]);
+      for (const key of ['profile', 'baseboardPos', 'baseboardNeg']) if (w[key]) base[key] = structuredClone(w[key]);
       return {
         id: w.id, level: w.level, base, now: { ...base },
         openings: w.holes.map(h => {
           const ob = { wallId: w.id, t: h.t, width: h.width, height: h.height, sill: h.sill };
-          if (h.detail) ob.detail = structuredClone(h.detail);
+          for (const key of ['profile', 'detail']) if (h[key]) ob[key] = structuredClone(h[key]);
           if (h.configuration) ob.configuration = structuredClone(h.configuration);
           if (h.floorContinuity === false) ob.floorContinuity = false;
           return { id: h.id, type: h.type, base: ob, now: { ...ob } };
@@ -558,8 +558,9 @@ test('explicit baseboards mirror only room-facing floor solids and preserve prof
   p.openings.find(o => o.type === 'window').sill = .003;
   // A sill below the board top clips both its height and radius; it cannot cover glass.
   const low = mirrorSpec(p).walls[0].baseboards.find(b => b.s0 >= win.s0 && b.s1 <= win.s1);
-  // wallSolids omits sill walls thinner than 10 mm, so no baseboard belongs below that pane.
-  assert.equal(low, undefined);
+  // Thin sill solids remain explicit; the rail never rises into the glazing.
+  assert.equal(low.height, .003);
+  assert.ok(low.radius <= .003);
   p.openings.find(o => o.type === 'window').sill = .02;
   const short = mirrorSpec(p).walls[0].baseboards.find(b => b.s0 >= win.s0 && b.s1 <= win.s1);
   assert.equal(short.height, .02);
@@ -598,4 +599,52 @@ test('reflected native trim replaces its former side and a second reflection res
   assert.deepEqual(mergeMirror(p, read, synced).applied, ['w-s']);
   assert.equal(Object.hasOwn(p.walls[0], 'baseboardNeg'), false);
   assert.deepEqual(p.walls[0].baseboardPos, profile);
+});
+
+
+test('profile-only openings generate detailed native shapes and retain profile metadata', () => {
+  const p = room();
+  p.openings[0].profile = { jambWidth: .025, leafThickness: .035, panels: 'six', hardware: 'knob', handleHeight: .92, handleBackset: .065, knobRadius: .021 };
+  p.openings[1].profile = { frameWidth: .04, sashWidth: .03, muntinWidth: .018, columns: 3, rows: 2 };
+  const native = mirrorSpec(p).walls[0].holes;
+  assert.deepEqual(native[0].profile, p.openings[0].profile);
+  assert.equal(native[0].detail, undefined);
+  assert.equal(native[0].resolved.jambWidth, .025);
+  assert.equal(native[0].resolved.style, 'six-panel');
+  assert.equal(native[0].resolved.handleHeight, .92);
+  assert.equal(native[0].resolved.handleBackset, .065);
+  assert.equal(native[0].resolved.knobRadius, .021);
+  assert.deepEqual([native[1].resolved.columns, native[1].resolved.rows], [3, 2]);
+  const spec = mirrorSpec(p), read = readOf(spec), before = structuredClone(p);
+  assert.deepEqual(mergeMirror(p, read, syncedState(p)).applied, []);
+  assert.deepEqual(p, before);
+});
+
+test('explicit details override profile fallback without destroying either record', () => {
+  const p = room();
+  p.openings[0].profile = { jambWidth: .02, leafThickness: .035, panels: 'six', hardware: 'knob', handleHeight: .95 };
+  p.openings[0].detail = { door: { jambWidth: .03, style: 'slab', hardware: 'lever' } };
+  const spec = mirrorSpec(p), native = spec.walls[0].holes[0];
+  assert.deepEqual([native.resolved.jambWidth, native.resolved.style, native.resolved.hardware, native.resolved.leafThickness, native.resolved.handleHeight], [.03, 'slab', 'lever', .035, .95]);
+  const read = readOf(spec); read.model = {};
+  const target = room(); target.openings = [];
+  mergeMirror(target, read, {});
+  const got = target.openings.find(o => o.id === 'o-door');
+  assert.deepEqual(got.detail, p.openings[0].detail);
+  assert.deepEqual(got.profile, p.openings[0].profile);
+});
+
+
+test('wall profile baseboards and profile leaf materials remain usable through export and mirror', () => {
+  const p = room(); p.walls[0].profile = { baseboardHeight: .085, baseboardDepth: .01 };
+  p.openings[0].profile = { leafMaterial: 'mat-profile-wood' };
+  const material = { id: 'mat-profile-wood', name: 'Profile wood', color: '#8a6734', custom: true };
+  const slice = store.projectSlice(p.id, { ...store.emptyWorkspace(), properties: [p], materials: [material] });
+  assert.deepEqual(slice.materials, [material]);
+  const spec = mirrorSpec(p, [material]);
+  assert.ok(spec.walls[0].baseboards.length);
+  assert.ok(spec.walls[0].baseboards.every(b => b.height === .085 && b.depth === .01));
+  assert.deepEqual(spec.walls[0].profile, p.walls[0].profile);
+  assert.equal(spec.walls[0].holes[0].leafMaterial.id, material.id);
+  assert.deepEqual(mergeMirror(p, readOf(spec), syncedState(p)).applied, []);
 });

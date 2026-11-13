@@ -90,3 +90,12 @@ test('a room edge receding beyond the wall neighborhood does not create speculat
   close(total(result), 0.1118);
   assert.ok(result.flatMap(r => r.pts).every(q => q[0] <= 2.52 + 1e-8));
 });
+
+test('overlapping door cuts do not duplicate threshold floor area', () => {
+  const wall = { id: 'overlap-wall', ax: 0, ay: 0, bx: 4, by: 0, thickness: 0.2 };
+  const rooms = [{ id: 'a', pts: [[0, 0.1], [4, 0.1], [4, 2], [0, 2]] }, { id: 'b', pts: [[0, -2], [4, -2], [4, -0.1], [0, -0.1]] }];
+  const doors = [{ id: 'one', wallId: wall.id, type: 'door', t: 0.5, width: 1, height: 2 }, { id: 'two', wallId: wall.id, type: 'door', t: 0.55, width: 1, height: 2 }];
+  const patches = thresholdFloors({ walls: [wall], openings: doors, rooms });
+  const area = pts => Math.abs(pts.reduce((sum, p, i) => { const q = pts[(i + 1) % pts.length]; return sum + p[0] * q[1] - q[0] * p[1]; }, 0)) / 2;
+  assert.ok(Math.abs(patches.reduce((sum, p) => sum + area(p.pts), 0) - 0.24) < 1e-8);
+});

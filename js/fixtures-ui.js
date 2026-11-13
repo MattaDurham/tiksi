@@ -152,7 +152,7 @@ export function fixtureInspectorHtml(prop, f) {
   const room = (prop.rooms || []).find(r => r.id === roomOfFixture(prop.rooms, f));
   const pv = f.provenance || {};
   const fields = box ? [
-    k.subtypes.length > 1 ? `<div class="field"><label>Type</label><select data-fx-subtype>${k.subtypes.map(s => `<option value="${s}" ${s === f.subtype ? 'selected' : ''}>${escapeHtml(fixtureLabel({ kind: f.kind, subtype: s }))}</option>`).join('')}</select></div>` : '',
+    k.subtypes.length > 1 ? `<div class="field"><label>Type</label><select data-fx-subtype>${!k.subtypes.includes(f.subtype) ? `<option value="${escapeHtml(f.subtype || '')}" selected>Unresolved: ${escapeHtml(f.subtype || 'unknown')}</option>` : ''}${k.subtypes.map(s => `<option value="${s}" ${s === f.subtype ? 'selected' : ''}>${escapeHtml(fixtureLabel({ kind: f.kind, subtype: s }))}</option>`).join('')}</select></div>` : '',
     `<div class="field-row">${len('X', 'x', f.x)}${len('Y', 'y', f.y)}</div>`,
     `<div class="field"><label>Rotation (degrees)</label><input type="number" step="5" data-fx-rot value="${Math.round((f.rot || 0) * 10) / 10}"></div>`,
     `<div class="field-row">${len(f.subtype === 'table-round' ? 'Diameter' : 'Width', 'w', f.w)}${f.subtype === 'table-round' ? '' : len('Depth', 'd', f.d)}</div>`,
@@ -176,8 +176,11 @@ export function fixtureInspectorHtml(prop, f) {
     ${room ? `<div class="stat-line"><span>Room</span><b>${escapeHtml(room.name || '')}</b></div>` : ''}
     ${fields.join('')}
     ${mats}
-    <div class="field"><label>Source</label><select data-fx-source>${[['scan', 'Read from the scan'], ['user', 'Drawn or edited'], ['tape', 'Tape measured']].map(([v, l]) => `<option value="${v}" ${pv.source === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="field"><label>Source</label><select data-fx-source>${[['unknown', 'Unknown'], ['scan', 'Read from the scan'], ['user', 'Drawn or edited'], ['tape', 'Tape measured']].map(([v, l]) => `<option value="${v}" ${pv.source === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     ${pv.source === 'scan' && Number.isFinite(pv.confidence) ? `<div class="stat-line"><span>Scan confidence</span><b>${pct(pv.confidence)}</b></div>` : ''}
+    ${pv.adjustedFields ? `<p class="empty">Imported values adjusted for display: ${escapeHtml(Object.keys(pv.adjustedFields).join(', '))}. Original values are retained for review.</p>` : ''}
+    ${pv.stale ? '<p class="empty">Geometry changed after the source claim; review the measurement.</p>' : ''}
+    ${pv.defaultedFields?.length ? `<p class="empty">Unverified defaults: ${escapeHtml(pv.defaultedFields.join(', '))}</p>` : ''}
     ${pv.evidence ? `<p class="empty">${escapeHtml(pv.evidence)}</p>` : ''}
     <button class="btn danger" data-fx-del>DELETE FIXTURE</button>`;
 }
@@ -187,8 +190,7 @@ export function bindFixtureInspector(root, prop, f, on) {
   const edit = (label, fn, keepSource) => {
     beginGeometryEdit(prop, label);
     fn();
-    // A scan reading someone corrected is theirs now; a tape measurement stays one.
-    if (!keepSource && f.provenance && f.provenance.source === 'scan') f.provenance = Object.assign({}, f.provenance, { source: 'user' });
+    if (!keepSource && f.provenance) f.provenance = { ...f.provenance, stale: true }; // retain the original claim for review
     normaliseFixture(f, new Set(prop.levels.map(l => l.id)));
     f.roomId = roomOfFixture(prop.rooms, f);
     touch(); on.changed();
@@ -209,7 +211,11 @@ export function bindFixtureInspector(root, prop, f, on) {
   if (flip) flip.onclick = () => edit('flip fixture', () => { f.side = -f.side; });
   root.querySelectorAll('[data-fx-mat]').forEach(s => s.onchange = () => edit('change fixture finish', () => { f[s.dataset.fxMat] = s.value || null; }, true));
   const src = root.querySelector('[data-fx-source]');
-  if (src) src.onchange = () => edit('mark fixture source', () => { f.provenance = Object.assign({}, f.provenance, { source: src.value }); }, true);
+  if (src) src.onchange = () => {
+    const evidence = src.value === 'tape' ? prompt('Measurement reference (reading, photo or document):', f.provenance?.evidence || '') : f.provenance?.evidence || '';
+    if (src.value === 'tape' && !evidence?.trim()) { on.changed(); return; }
+    edit('mark fixture source', () => { f.provenance = { ...f.provenance, source: src.value, evidence, stale: false }; }, true);
+  };
   root.querySelector('[data-fx-del]').onclick = () => {
     beginGeometryEdit(prop, 'delete fixture');
     prop.fixtures = prop.fixtures.filter(x => x.id !== f.id);

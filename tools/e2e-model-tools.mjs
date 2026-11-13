@@ -1,3 +1,5 @@
+// Network fault injection uses Playwright routing, which service workers bypass.
+// The real service-worker/offline journey is covered in e2e-audit-repairs.mjs.
 // MODEL's tools and speed: marking up by tap in the phone layout, navigation with fingers, what a
 // tap tests, room lights, repeated work, texture making, pinned photos and scan limits.
 // Synthetic houses and scans, a touch profile and a computer profile, isolated browser storage
@@ -223,7 +225,7 @@ const MB = 1024 * 1024;
 
 // ---------- the phone layout: marking up by tap, and fingers ----------
 async function phoneChecks(browser, say) {
-  const context = await browser.newContext(iphone);
+  const context = await browser.newContext({ ...iphone, serviceWorkers: 'block' });
   await context.addInitScript(PROBE);
   const page = await context.newPage();
   const errors = []; page.on('pageerror', e => errors.push(e.message));
@@ -381,7 +383,7 @@ async function phoneChecks(browser, say) {
 
 // ---------- a touch device's limits: lights, scan size, points, before / after ----------
 async function touchLimitChecks(browser, say) {
-  const context = await browser.newContext(iphone);
+  const context = await browser.newContext({ ...iphone, serviceWorkers: 'block' });
   await context.addInitScript(PROBE);
   const page = await context.newPage();
   const errors = []; page.on('pageerror', e => errors.push(e.message));
@@ -477,7 +479,7 @@ async function touchLimitChecks(browser, say) {
 
 // ---------- a computer ----------
 async function computerChecks(browser, say) {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 800 } });
   await context.addInitScript(PROBE);
   const desk = await context.newPage();
   const errors = [], requested = [];
@@ -576,7 +578,7 @@ async function textureChecks(browser, say) {
     return ['mat-oak', 'mat-drywall'].map(id => { const m = t.materialFor(s.materialById(id)); return [id, hash(m.map.image.data), hash(m.normalMap.image.data), hash(m.roughnessMap.image.data)].join(' '); });
   });
   const shot = async (withHelper) => {
-    const context = await browser.newContext({ viewport: { width: 900, height: 600 } });
+    const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 900, height: 600 } });
     await context.addInitScript(PROBE);
     if (!withHelper) await context.addInitScript(() => { window.Worker = undefined; });
     const page = await context.newPage();
@@ -648,7 +650,7 @@ async function textureChecks(browser, say) {
 
 // ---------- room lights on a computer ----------
 async function computerLightChecks(browser, say) {
-  const context = await browser.newContext({ viewport: { width: 1000, height: 700 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1000, height: 700 } });
   await context.addInitScript(PROBE);
   const page = await context.newPage();
   await openModel(page, 'low', { rooms: 10 });
@@ -661,7 +663,7 @@ async function computerLightChecks(browser, say) {
 
 // ---------- the picking files: a fetch that fails is tried again on the next click ----------
 async function pickRetryChecks(browser, say) {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 800 } });
   await context.addInitScript(PROBE);
   const page = await context.newPage();
   const asked = [];
@@ -696,7 +698,7 @@ async function reducedChecks(browser, say) {
   const mac = 'http://127.0.0.1:' + port;
   try {
     for (let i = 0; i < 100; i++) { try { if ((await fetch(mac)).ok) break; } catch {} await delay(50); }
-    const context = await browser.newContext(iphone);
+    const context = await browser.newContext({ ...iphone, serviceWorkers: 'block' });
     await context.addInitScript(PROBE);
     const saved = async page => { await page.locator('#save-status').waitFor({ state: 'attached' }); await page.waitForFunction(() => document.querySelector('#save-status')?.textContent === 'SAVED TO DISK', null, { timeout: 120000 }); };
     // A house with three photos pinned on its back wall, the second stored on its side, saved to the Mac.
@@ -779,7 +781,7 @@ async function reducedChecks(browser, say) {
 
     // No reduced picture to be had: the cards are still drawn, from the originals, as before.
     // (Another phone: this one's browser now keeps the original it opened.)
-    const other = await browser.newContext(iphone);
+    const other = await browser.newContext({ ...iphone, serviceWorkers: 'block' });
     await other.addInitScript(PROBE);
     const fallback = await open('refuses', other);
     assert.deepEqual(reads(fallback.hashes, false), [1, 1, 1], 'with no reduced picture each card falls back to its original');

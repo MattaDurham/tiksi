@@ -100,7 +100,7 @@ try {
     await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.6, { steps: 4 }); await page.mouse.up(); await page.keyboard.up('Shift');
     await page.fill('[data-f=input]', '33 1/2');
     assert.equal(await page.textContent('[data-echo]'), '= 33 1/2" (bare numbers are inches)');
-    await record(page, { value: '33 1/2', text: 'pantry door leaf width', attach: 'Door 1 (Kitchen)' });
+    await record(page, { value: '33 1/2', text: 'pantry wall opening width', attach: 'Door 1 (Kitchen)' });
     let p = await prop(page);
     const reading = p.measurements[0];
     assert.equal(reading.status, 'assigned'); assert.ok(Math.abs(reading.value - 0.8509) < 1e-4); assert.ok(reading.crop && reading.crop[2] > 0.15);
@@ -117,9 +117,9 @@ try {
     await page.locator('.ms-stage').focus(); await page.keyboard.press('ArrowRight'); await page.waitForTimeout(400);
     await record(page, { value: '24' });
     await record(page, { value: '', text: 'range width', confidence: 'unreadable', attach: 'Note only' });
-    await page.waitForFunction(() => document.querySelectorAll('.ms-ask-row').length === 2 && document.querySelectorAll('.ms-ask-frame img').length === 2);
+    await page.waitForFunction(() => document.querySelectorAll('.ms-ask-row').length === 3 && document.querySelectorAll('.ms-ask-frame img').length === 3);
     const ask = await page.locator('.ms-ask-row b').allTextContents();
-    assert.deepEqual(ask.sort(), ['Numbers not readable', 'What was measured?']);
+    assert.deepEqual(ask.sort(), ['Model changed since this reading', 'Numbers not readable', 'What was measured?']);
 
     // A file that starts like MP4 but is cut short: kept (bytes retained), reported unreadable.
     await page.setInputFiles('.ms-actions [data-file]', { name: 'cut-short.mp4', mimeType: 'video/mp4', buffer: bytes.subarray(0, Math.floor(bytes.length / 3)) });

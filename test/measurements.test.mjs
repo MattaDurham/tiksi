@@ -37,9 +37,9 @@ test('a reading attached to an opening applies through history; undo shows the m
   const p = kitchen();
   const targets = ms.elementTargets(p);
   const door = targets.find(t => t.kind === 'opening' && t.dim === 'width');
-  assert.match(door.label, /^Door 1 \(Kitchen\) on wall 3 · width$/);
+  assert.match(door.label, /^Door 1 \(Kitchen\) on wall 3 · wall opening width$/);
   assert.ok(targets.some(t => t.kind === 'wall' && t.label === 'Wall 1 (Kitchen) · centre-line length'), 'a wall length says it is on the centre line');
-  const m = ms.addMeasurement(p, { videoId: 'vid-walk', seconds: 12.4, input: '33 1/2', text: 'pantry door leaf', direction: 'width', confidence: 'clear', element: door, frameAssetId: 'mf-1', crop: [0.2, 0.3, 0.4, 0.1] });
+  const m = ms.addMeasurement(p, { videoId: 'vid-walk', seconds: 12.4, input: '33 1/2', text: 'pantry wall opening', direction: 'width', confidence: 'clear', element: door, frameAssetId: 'mf-1', crop: [0.2, 0.3, 0.4, 0.1] });
   assert.equal(m.status, 'assigned'); assert.ok(Math.abs(m.value - 33.5 * IN) < 1e-12); assert.deepEqual(m.crop, [0.2, 0.3, 0.4, 0.1]);
   assert.equal(ms.readingState(p, m), 'assigned');
   const result = ms.applyMeasurement(p, m.id);
@@ -106,4 +106,30 @@ test('videos and saved frames are project files; damaged records are normalised 
   assert.deepEqual([junk.seconds, junk.value, junk.element, junk.status, junk.confidence, junk.crop, junk.text], [0, null, null, 'unassigned', 'probable', null, '']);
   assert.deepEqual([vid.analysis, vid.thumb, vid.name], [null, '', 'Video']);
   assert.throws(() => store.replaceWorkspace({ properties: [{ id: 'p', measurements: {} }] }), /measurements must be a list/);
+});
+
+
+test('door slab readings retain their dimension type and convert through jambs and leaf count', () => {
+  const p=kitchen();p.openings[0].leaves=2;
+  const target=ms.elementTargets(p).find(t=>t.dim==='slabWidth');
+  const reading=ms.addMeasurement(p,{input:'0.75 m',text:'one leaf width',confidence:'clear',element:target});
+  assert.equal(reading.element.dim,'slabWidth');assert.equal(ms.canApply(p,reading),'');
+  ms.applyMeasurement(p,reading.id);
+  assert.ok(Math.abs(p.openings[0].width-1.609)<1e-9);assert.equal(reading.value,.75);
+  assert.equal(ms.readingState(p,reading),'applied');
+  p.openings[0].profile={jambWidth:.04};assert.equal(ms.needsOwner(p,reading),true);
+});
+
+test('slab readings replace explicit leaf dimensions atomically and undo retains both interfaces', () => {
+  const p=kitchen(),o=p.openings[0];o.width=.694;o.profile={jambWidth:.04};o.detail={door:{jambWidth:.019,leafWidth:.65,style:'slab',hinge:'end'}};
+  const target=ms.elementTargets(p).find(t=>t.dim==='slabWidth');assert.equal(target.current,.65);
+  const reading=ms.addMeasurement(p,{input:'0.7 m',text:'measured slab',confidence:'clear',element:target});
+  const before=structuredClone(o);
+  assert.equal(ms.canApply(p,reading),'');assert.deepEqual(o,before,'validation must not mutate nested source details');
+  ms.applyMeasurement(p,reading.id);assert.equal(o.detail.door.leafWidth,.7);assert.ok(Math.abs(o.width-.744)<1e-9);assert.equal(ms.readingState(p,reading),'applied');
+  assert.equal(restoreGeometryEdit(p,'undo'),true);assert.equal(p.openings[0].detail.door.leafWidth,.65);assert.equal(p.openings[0].width,.694);
+  assert.equal(restoreGeometryEdit(p,'redo'),true);assert.equal(p.openings[0].detail.door.leafWidth,.7);assert.equal(ms.readingState(p,reading),'applied');
+  const huge=ms.addMeasurement(p,{input:'9 m',text:'oversized slab',confidence:'clear',element:target});
+  const unchanged=structuredClone(p.openings[0]);assert.notEqual(ms.canApply(p,huge),'');assert.deepEqual(p.openings[0],unchanged);
+  assert.throws(()=>ms.applyMeasurement(p,huge.id),/wider|overlap|invalid/);assert.deepEqual(p.openings[0],unchanged);
 });

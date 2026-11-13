@@ -531,7 +531,7 @@ class MaterialResearchManager:
                 # Finished research is the owner's record: nothing is removed to make room.
                 size = sum(p.stat().st_size for p in self.root.glob("*.json") if p.is_file())
                 raise ResearchError(f"Research history is full: {len(self.jobs)} records, {size / 2 ** 20:.1f} MB on this Mac. "
-                                    "Nothing was removed. Finished records can be removed one at a time, which the page cannot do yet; "
+                                    "Nothing was removed. Use Research history to remove finished records one at a time; "
                                     "new research can start once there is room", 507)
             job_id, stamp = str(uuid.uuid4()), utc_now()
             roles = ["focused"] if request["mode"] == "focused" else ["specifications", "vendors", "alternatives"]
@@ -658,6 +658,12 @@ class MaterialResearchHTTPMixin:
                     raise ResearchError("Research requests must come from this Tiksi instance", 403)
                 if self.headers.get("Sec-Fetch-Site") == "cross-site":
                     raise ResearchError("Cross-site research requests are forbidden", 403)
+            if method == "GET" and path == prefix:
+                with self.research_manager.lock:
+                    jobs = sorted(self.research_manager.jobs.values(), key=lambda j: j.get('createdAt', ''), reverse=True)
+                    history = [{k: j.get(k) for k in ('id', 'status', 'createdAt', 'updatedAt', 'request')} for j in jobs]
+                self._research_response(200, {"jobs": history, "limit": self.research_manager.max_records})
+                return True
             if method == "POST" and path == prefix:
                 if self.headers.get_content_type() != "application/json":
                     raise ResearchError("Research requests require JSON", 415)

@@ -96,8 +96,14 @@ try {
   await page.waitForFunction(() => document.querySelector('#save-status')?.textContent === 'SAVED TO DISK');
   await page.evaluate(async () => (await import('/js/disk-workspace.js')).diskWorkspace.sync());
   check(!(await snapshot()).assets['ph-held'], 'the project file no longer holds the photo');
+  // A read that finished during the move can leave the old shared bytes in memory.
+  // Reproduce that cache state after acknowledgment: it must not resurrect the old asset.
+  await page.evaluate(async ({hash, bytes}) => {
+    const store = await import('/js/store.js');
+    await store.cacheFile('ph-held', new Uint8Array(bytes).buffer, {sharedHash:hash, kind:'photo'});
+  }, {hash:before.assets['ph-held'].hash, bytes:[...held]});
   const stored = await page.evaluate(async () => !!(await (await import('/js/store.js')).getFile('ph-held')));
-  check(!record.original && !stored, 'Tiksi let go of its own copy');
+  check(!record.original && !stored, 'Tiksi let go of its own copy (original flag ' + record.original + ', cached file ' + stored + ')');
 
   const groups = await page.locator('[data-group]').evaluateAll(buttons => Object.fromEntries(buttons.map(b => [b.dataset.group, b.querySelector('.mono').textContent])));
   check(groups.photo === '2' && groups.scan === '2' && groups.rendering === '1', 'the group buttons count photos, scan frames and renderings');
@@ -115,10 +121,21 @@ try {
 
   // Select a scan frame from its card and another with S in the viewer.
   const frame = page.locator('.ph-card', { hasText: 'frame-1.png' });
+  await page.waitForFunction(() => {
+    const img = [...document.querySelectorAll('.ph-card')].find(c => c.textContent.includes('frame-1.png'))?.querySelector('.ph-thumb img');
+    return img?.complete && img.naturalWidth > 0;
+  });
+  const frameImage = await frame.locator('.ph-thumb img').elementHandle();
   await frame.locator('.ph-pick').click();
   await page.waitForFunction(() => [...document.querySelectorAll('.ph-card')].find(c => c.textContent.includes('frame-1.png'))?.textContent.includes('SELECTED'));
-  check(await frame.locator('.ph-thumb img').evaluate(img => img.complete && img.naturalWidth > 0), 'a selected card keeps showing its picture');
-  await page.locator('.ph-card', { hasText: 'frame-2.png' }).dblclick();
+  check(await frame.locator('.ph-thumb img').evaluate((img, original) => img === original && img.complete && img.naturalWidth > 0, frameImage), 'a selected card keeps the same loaded picture');
+  // Cards overlap in the desktop deck: point at the exposed strip before opening it.
+  const secondFrame = page.locator('.ph-card', { hasText: 'frame-2.png' });
+  await secondFrame.scrollIntoViewIfNeeded();
+  const strip = await secondFrame.boundingBox(), secondId = await secondFrame.getAttribute('data-id');
+  await page.mouse.move(strip.x + 30, strip.y + 20);
+  await page.waitForFunction(id => document.querySelector('.ph-card.lift')?.dataset.id === id, secondId);
+  await page.mouse.dblclick(strip.x + 30, strip.y + 20);
   await page.locator('.ph-lightbox').waitFor();
   await page.keyboard.press('s');
   await page.waitForFunction(() => /SELECTED/.test(document.querySelector('.ph-lb-cap')?.textContent || ''));

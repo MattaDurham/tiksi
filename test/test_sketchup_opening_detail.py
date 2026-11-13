@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 from server.sketchup_convert import API, Ref, Transform, library_path
-from server.sketchup_mirror import opening_detail_parts, scaled_opening_detail, get_data, to_ref, face_bounds, face_ring, group_transform, multiply, apply, baseboard_part, scaled_baseboard, IN
+from server.sketchup_mirror import opening_detail_parts, scaled_opening_detail, get_data, to_ref, face_bounds, face_ring, group_transform, multiply, apply, baseboard_part, scaled_baseboard, wall_loops, fill, IN
 
 ROOT = Path(__file__).resolve().parent.parent
 TRIM = {'id': 'trim', 'name': 'Trim', 'color': '#eeeeee'}
@@ -117,6 +117,28 @@ class OpeningDetailGeometryTests(unittest.TestCase):
             h = door(); h['resolved'][key] = 0
             self.assertFalse(any('casing' in p['name'] for p in opening_detail_parts(h, .1)))
 
+    def test_profile_only_opening_uses_resolved_hardware_dimensions(self):
+        h = door(shown=False)
+        h['profile'] = {'jambWidth': .022, 'handleHeight': .85, 'handleBackset': .065, 'knobRadius': .022}
+        del h['detail']
+        h['resolved'].update(handleHeight=.85, handleBackset=.065, knobRadius=.022)
+        parts = opening_detail_parts(h, .1)
+        knob = next(p for p in parts if p['name'] == 'Door knob')
+        self.assertAlmostEqual((min(p[0] for p in knob['points'])+max(p[0] for p in knob['points']))/2, .025+.75-.065)
+        self.assertAlmostEqual((min(p[2] for p in knob['points'])+max(p[2] for p in knob['points']))/2, .01+.85)
+        self.assertAlmostEqual(max(p[0] for p in knob['points'])-min(p[0] for p in knob['points']), .044)
+        scaled = scaled_opening_detail({'door': h['profile']}, 2, 3, 4)['door']
+        self.assertEqual((scaled['handleHeight'], scaled['handleBackset'], scaled['knobRadius']), (3.4, .13, .044))
+
+    def test_window_casing_uses_resolved_width_and_depth(self):
+        h = window(); h['resolved'].update(casingWidth=.08, casingDepth=.02)
+        casing = [p for p in opening_detail_parts(h, .1) if p['name'] == 'Window casing']
+        self.assertAlmostEqual(min(v[0] for p in casing for v in p['points']), -.08)
+        self.assertAlmostEqual(max(v[0] for p in casing for v in p['points']), 1.08)
+        self.assertAlmostEqual(min(v[1] for p in casing for v in p['points']), -.07)
+        h['resolved']['casingWidth'] = 0
+        self.assertFalse(any(p['name'] == 'Window casing' for p in opening_detail_parts(h, .1)))
+
     def test_detail_scale_preserves_unedited_precision_and_does_not_mutate_source(self):
         detail = {'door': {'leafWidth': .750123456, 'leafHeight': 1.95, 'leafThickness': .034925,
                            'hinge': 'end', 'hardware': 'knob'}, 'window': {'upperColumns': 3}}
@@ -134,6 +156,21 @@ class OpeningDetailGeometryTests(unittest.TestCase):
         h = door(); h['plain'] = True
         self.assertEqual(opening_detail_parts(h, .1), [])
 
+
+
+
+class OverlappingOpeningTests(unittest.TestCase):
+    def test_cut_union_area_does_not_shorten_either_opening(self):
+        holes = [{'s0': .5, 's1': 2, 'v0': 0, 'v1': 2}, {'s0': 1.5, 's1': 3, 'v0': .8, 'v1': 2.4}]
+        loops = wall_loops(4, 3, holes)
+        def area(ring):
+            return abs(sum(a[0]*b[1]-b[0]*a[1] for a,b in zip(ring, ring[1:]+ring[:1])))/2
+        got = sum(area(outer)-sum(area(inner) for inner in inners) for outer, inners in loops)
+        expected = 4*3-(1.5*2+1.5*1.6-.5*1.2)
+        self.assertAlmostEqual(got, expected)
+        self.assertTrue(all(not inner for _, inner in loops))
+        self.assertEqual(holes[0]['s1']-holes[0]['s0'], 1.5)
+        self.assertEqual(holes[1]['s1']-holes[1]['s0'], 1.5)
 
 
 class BaseboardGeometryTests(unittest.TestCase):
@@ -272,6 +309,59 @@ class NativeOpeningDetailTests(unittest.TestCase):
             self.assertEqual(inspect_groups(root/'model.skp')['wall']['children'].count('Baseboard pos'), 2)
             self.assertEqual(named_world_points(root/'model.skp', 'Baseboard neg'), [])
 
+    def test_profile_only_and_overlapping_openings_roundtrip_at_full_width(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); source = spec(); wall = source['walls'][0]
+            wall['profile'] = {'baseboardHeight': .12, 'baseboardDepth': .015}
+            first = door(shown=False)
+            first.update(s0=.5, s1=2, width=1.5, t=1.25/4)
+            first['profile'] = {'jambWidth': .022, 'handleHeight': .85, 'handleBackset': .065, 'knobRadius': .022}
+            del first['detail']
+            first['resolved'].update(handleHeight=.85, handleBackset=.065, knobRadius=.022)
+            second = window(); second.update(s0=1.5, s1=3, width=1.5, t=2.25/4, v0=.8, v1=2.4, height=1.6)
+            wall['holes'] = [first, second]
+            (root/'mirror.json').write_text(json.dumps(source))
+            for operation in ('write', 'read'):
+                if operation == 'read':
+                    shutil.copy(root/'model.skp', root/'source.skp')
+                result = subprocess.run([sys.executable, str(ROOT/'server/sketchup_mirror.py'), operation, str(root)],
+                                        capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            read = json.loads((root/'mirror-read.json').read_text())
+            self.assertEqual(read['warnings'], [])
+            self.assertEqual(read['walls'][0]['now'], read['walls'][0]['base'])
+            for opening in read['walls'][0]['openings']:
+                self.assertEqual(opening['now'], opening['base'])
+                self.assertEqual(opening['now']['width'], 1.5)
+            observed = inspect_groups(root/'model.skp')
+            self.assertTrue(observed['door']['hidden'])
+            self.assertIn('Slab leaf', observed['door']['children'])
+
+    def test_generated_child_edits_moves_and_deletions_block_rewrite(self):
+        for action, name, owner in (('move', 'Door knob', 'door'), ('delete', 'Slab leaf', 'door'), ('face', 'Upper sash glass', 'window')):
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp); source = spec()
+                (root/'mirror.json').write_text(json.dumps(source))
+                result = subprocess.run([sys.executable, str(ROOT/'server/sketchup_mirror.py'), 'write', str(root)],
+                                        capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                edit_generated_child(root/'model.skp', root/'source.skp', name, action)
+                result = subprocess.run([sys.executable, str(ROOT/'server/sketchup_mirror.py'), 'read', str(root)],
+                                        capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                read = json.loads((root/'mirror-read.json').read_text())
+                self.assertIn(owner, read['unsupportedGeometry'])
+                blocked = root/'blocked'; blocked.mkdir()
+                (blocked/'mirror.json').write_text(json.dumps(source))
+                shutil.copy(root/'source.skp', blocked/'existing.skp')
+                before = (blocked/'existing.skp').read_bytes()
+                result = subprocess.run([sys.executable, str(ROOT/'server/sketchup_mirror.py'), 'write', str(blocked)],
+                                        capture_output=True, text=True, timeout=60)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Local SketchUp face edits need review', result.stderr)
+                self.assertFalse((blocked/'model.skp').exists())
+                self.assertEqual((blocked/'existing.skp').read_bytes(), before)
+
     def test_detailed_model_roundtrip_keeps_opening_and_room_dimensions(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); source = spec()
@@ -327,6 +417,39 @@ def reflect_native(source, destination, wall_flips, opening_x, opening_y):
         api.call('SUModelSaveToFile', model, str(destination).encode())
     finally:
         if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
+
+
+
+def edit_generated_child(source, output, name, action):
+    api, model = API(), Ref(); changed = False
+    def walk(entities):
+        nonlocal changed
+        for group in api.collection(entities, 'Groups'):
+            if changed:
+                return
+            inner = api.ref('SUGroupGetEntities', group)
+            if api.text('SUGroupGetName', group) == name:
+                if action == 'move':
+                    transform = Transform(); api.call('SUGroupGetTransform', group, C.byref(transform))
+                    transform.values[12] += 1
+                    api.call('SUGroupSetTransform', group, C.byref(transform))
+                elif action == 'delete':
+                    api.call('SUEntitiesErase', entities, C.c_size_t(1), (Ref*1)(to_ref(api, 'SUGroupToEntity', group)))
+                else:
+                    fill(api, inner, [[100,0,0],[101,0,0],[101,0,1],[100,0,1]], [([0,1,2,3],[])])
+                changed = True
+                return
+            walk(inner)
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
+        walk(api.ref('SUModelGetEntities', model))
+        if not changed:
+            raise AssertionError('Generated child not found')
+        api.call('SUModelSaveToFile', model, str(output).encode())
+    finally:
+        if model.ptr:
+            api.call('SUModelRelease', C.byref(model))
         api.lib.SUTerminate()
 
 

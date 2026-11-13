@@ -22,7 +22,7 @@ import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, wallFaceMa
 import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
 import { applyPlanTagVisibility } from './tags-scene.js';
 import { cutPrism } from './section-planes.js';
-import { thresholdFloors } from './threshold-floors.js';
+import { thresholdFloors as derivedThresholdFloors } from './threshold-floors.js';
 
 const FALLBACK_WALL = '#d8d4cc';
 const FALLBACK_FLOOR = '#97999b';
@@ -33,7 +33,6 @@ const FALLBACK_CEILING = '#f1efe9';
 // fixtures and imported models stand at. (It used to sit on top of that height, which buried
 // the foot of every piece of furniture and hid anything thinner, a rug or a hearth.)
 export const FLOOR_T = 0.06;
-const CASING_W = 0.07, CASING_D = 0.016;
 export const CEILING_T = 0.027;
 const EPS = 0.0005;               // buried-face margin so joined solids never share a plane
 const JOIN_TOL = 0.012;           // wall endpoints closer than this meet at one joint
@@ -481,7 +480,7 @@ function doorLeaf(o, leafW, leafH, px, rotY, ctx, detail) {
     glass.userData = Object.assign({ glass: true }, userData);
     glass.castShadow = false; glass.receiveShadow = false;
     pivot.add(glass);
-  } else if (!ghost && o.detail?.door && detail.style === 'six-panel') {
+  } else if (!ghost && (o.detail?.door || o.profile) && detail.style === 'six-panel') {
     // Explicit construction uses actual recessed fields, including when the leaf has a
     // wood finish; a paint-only normal texture must not erase that recorded form.
     const mx = leafW * 24 / 256, my = leafH * 26 / 512, gx = leafW * 18 / 256, gy = leafH * 20 / 512;
@@ -510,7 +509,7 @@ function doorLeaf(o, leafW, leafH, px, rotY, ctx, detail) {
     : detail.hardwareFinish === 'dark' ? flatMat('#332e29', 0.4, { metalness: 0.7 }) : metalMat();
   const knobMat = detail.hardwareFinish === 'glass' ? (ctx.glass || glassMat()) : mm;
   for (const sgn of [1, -1]) {
-    const hx = leafW - 0.075, hy = Math.min(1.0, leafH - 0.1);
+    const hx = leafW - detail.handleBackset, hy = Math.min(detail.handleHeight, leafH - 0.1);
     const rose = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.01, 24), mm);
     rose.rotation.x = Math.PI / 2;
     rose.position.set(hx, hy, sgn * (LEAF_T / 2 + 0.005));
@@ -518,7 +517,7 @@ function doorLeaf(o, leafW, leafH, px, rotY, ctx, detail) {
     stem.rotation.x = Math.PI / 2;
     stem.position.set(hx, hy, sgn * (LEAF_T / 2 + 0.03));
     const handle = detail.hardware === 'knob'
-      ? new THREE.Mesh(detail.knobShape === 'faceted' ? new THREE.IcosahedronGeometry(0.027, 1) : new THREE.SphereGeometry(0.027, 20, 12), knobMat)
+      ? new THREE.Mesh(detail.knobShape === 'faceted' ? new THREE.IcosahedronGeometry(detail.knobRadius, 1) : new THREE.SphereGeometry(detail.knobRadius, 20, 12), knobMat)
       : new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.007, 0.12, 16), mm);
     if (detail.hardware === 'knob') handle.scale.z = 0.85; else handle.rotation.z = Math.PI / 2;
     handle.position.set(hx - (detail.hardware === 'knob' ? 0 : 0.055), hy, sgn * (LEAF_T / 2 + 0.05));
@@ -536,7 +535,7 @@ function buildWindow(o, s0, s1, v0, v1, th, sides, ctx) {
   const tm = trimMat(ctx.matOpts);
   const w = s1 - s0, h = v1 - v0;
   const detail = windowDetail(o, w, h);
-  const { frameWidth: FRAME_W, sashWidth: SASH_W, muntinWidth: MULLION_W } = detail;
+  const { frameWidth: FRAME_W, sashWidth: SASH_W, muntinWidth: MULLION_W, casingWidth: CASING_W, casingDepth: CASING_D } = detail;
   const fz0 = -th / 2 - 0.005, fz1 = th / 2 + 0.005;
   // Outer frame.
   trim.push(metricBox(s0, s0 + FRAME_W, v0, v1, fz0, fz1));
@@ -725,11 +724,20 @@ export function buildRoomFloor(room, ctx) {
   const mat = matFor(materialById(room.material), FALLBACK_FLOOR, 0.85, ctx && ctx.matOpts);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true; mesh.castShadow = true;
-  mesh.userData = { kind: 'room', id: room.id };
+  mesh.userData = { kind: 'room', id: room.id, ...(room.thresholdOf ? { inferredThreshold: true } : {}) };
   const group = new THREE.Group();
   group.userData = { kind: 'room', id: room.id };
   group.add(mesh);
   return group;
+}
+
+// Backward-compatible public signature for callers using three arrays; all consumers
+// use the same exact gap subtraction, so an already continuous floor is never doubled.
+export function thresholdFloors(walls, openings, rooms) {
+  if (!Array.isArray(walls)) return derivedThresholdFloors(walls);
+  return derivedThresholdFloors({ walls, openings, rooms })
+    .sort((a, b) => rooms.findIndex(r => r.id === a.roomId) - rooms.findIndex(r => r.id === b.roomId))
+    .map(patch => ({ ...patch, id: patch.roomId, thresholdOf: patch.openingId }));
 }
 
 export function buildRoomCeiling(room, H, ctx) {
@@ -826,8 +834,8 @@ export function buildPropertyGroup(property, opts) {
       const g = buildRoomFloor(room, ctx);
       if (g) lg.add(g);
     }
-    for (const patch of thresholdFloors({ ...view, openings })) {
-      const floor = buildRoomFloor({ ...patch, id: patch.roomId }, ctx);
+    for (const patch of derivedThresholdFloors({ ...view, openings })) {
+      const floor = buildRoomFloor({ ...patch, id: patch.roomId, thresholdOf: patch.openingId }, ctx);
       if (floor) { floor.userData.threshold = patch.openingId; lg.add(floor); }
     }
     view.walls.forEach((wall, index) => {

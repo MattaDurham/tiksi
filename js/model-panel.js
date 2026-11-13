@@ -9,7 +9,7 @@
 
 import { ws, uid, touch, escapeHtml, fmtMoney, fmtArea, materialById } from './store.js';
 import { modelTakeoff, createModelEstimate, createComponentEstimate, finishAmount, amountText } from './model-takeoff.js';
-import { modelComponents, instanceOf, instanceChain, componentKeyOf, componentProductRecord, componentProductEvidence, componentIdentityStatus, linkComponentProduct, unlinkComponentProduct,
+import { modelComponents, instanceOf, instanceChain, componentKeyOf, componentProductRecord, componentProductEvidence, componentIdentityStatus, normalizeComponentProduct, linkComponentProduct, unlinkComponentProduct,
   componentSchedule, propertyComponentSchedule, convertedWithComponents } from './model-components.js';
 import { identityLine, colourLine, productLine } from './material-identity.js';
 import { materialTitle } from './materials.js';
@@ -72,11 +72,30 @@ function componentsHtml(scan, obj, comps) {
   }).join('');
   return componentsFoot(comps, rows, priced, total);
 }
+function componentEvidenceHtml(evidence, label = 'Identity') {
+  if (!evidence) return '';
+  const dimensions = typeof evidence.dims_mm === 'string' ? evidence.dims_mm : Object.entries(evidence.dims_mm || {}).map(([k, v]) => k + ': ' + v).join('; ');
+  const sources = typeof evidence.evidence === 'string' ? [evidence.evidence] : Object.entries(evidence.evidence || {}).flatMap(([aspect, claim]) => {
+    if (!claim || typeof claim !== 'object') return [];
+    const words = [claim.source, claim.note].filter(v => typeof v === 'string' && v.trim());
+    return words.length ? [aspect + ': ' + words.join(' — ')] : [];
+  });
+  if (evidence.evidenceText) sources.unshift(evidence.evidenceText);
+  return `<div class="mp-facts"><span>${escapeHtml(label)}: ${escapeHtml(componentIdentityStatus(evidence))}</span></div>
+    ${evidence.uncertainty ? `<div class="mp-facts"><span>Unresolved: ${escapeHtml(evidence.uncertainty)}</span></div>` : ''}
+    ${sources.length || dimensions || evidence.documents?.length || evidence.url ? `<details class="mp-evidence"><summary>EVIDENCE</summary>
+      ${sources.map(source => `<p>${escapeHtml(source)}</p>`).join('')}
+      ${dimensions ? `<p>Recorded dimensions (mm): ${escapeHtml(dimensions)}</p>` : ''}
+      ${evidence.documents?.length ? `<p>Documents: ${evidence.documents.map(escapeHtml).join('; ')}</p>` : ''}
+      ${evidence.url ? `<a href="${escapeHtml(evidence.url)}" target="_blank" rel="noopener noreferrer">Source</a>` : ''}</details>` : ''}`;
+}
 function componentRow(scan, c, byKey, r, card = false) {
     const rec = componentProductRecord(ws.data, scan, c.key);
     const evidence = componentProductEvidence(scan, c.key);
     const identity = evidence && [evidence.brand, evidence.model].filter(Boolean).join(' · ');
-    const dimensions = evidence && (typeof evidence.dims_mm === 'string' ? evidence.dims_mm : Object.entries(evidence.dims_mm || {}).map(([k, v]) => k + ': ' + v).join('; '));
+    const installed = evidence || {}, proposal = normalizeComponentProduct(installed.proposedProduct);
+    const activeProposal = proposal && !proposal.unlinked, editingLink = activeProposal ? proposal : installed;
+
     const within = c.parents.map(k => byKey.get(k)?.name).filter(Boolean);
     const holds = Object.entries(c.contains).map(([k, n]) => n + ' × ' + (byKey.get(k)?.name || 'component'));
     return `<div class="mp-comp" data-mp-comp="${escapeHtml(c.key)}">
@@ -84,20 +103,18 @@ function componentRow(scan, c, byKey, r, card = false) {
       ${within.length || holds.length ? `<div class="mp-facts">${within.length ? `<span>inside ${escapeHtml(within.join(', '))}</span>` : ''}${holds.length ? `<span>each holds ${escapeHtml(holds.join(', '))}</span>` : ''}</div>` : ''}
       ${c.description ? `<div class="mp-facts"><span>${escapeHtml(c.description.slice(0, 200))}</span></div>` : ''}
       <div class="mp-facts">${rec ? `<span>${escapeHtml(productLine({ product: { productId: rec.id } }, ws.data.products) || rec.name || 'Product')}</span>${r.unitPrice ? `<span>${escapeHtml(fmtMoney(r.unitPrice))} each · ${escapeHtml(fmtMoney(r.extended))}</span>` : `<span class="faint">${escapeHtml(r.priceNote || 'no price yet')}</span>`}` : `${evidence ? `<span>${escapeHtml(identity || evidence.name || 'Recorded component evidence')}</span>` : ''}<span class="faint">no product linked</span>`}</div>
-      ${evidence ? `<div class="mp-facts"><span>Identity: ${escapeHtml(componentIdentityStatus(evidence))}</span></div>
-        ${evidence.uncertainty ? `<div class="mp-facts"><span>Unresolved: ${escapeHtml(evidence.uncertainty)}</span></div>` : ''}
-        ${evidence.evidence || dimensions || evidence.documents?.length || evidence.url ? `<details class="mp-evidence"><summary>EVIDENCE</summary>
-          ${evidence.evidence ? `<p>${escapeHtml(evidence.evidence)}</p>` : ''}
-          ${dimensions ? `<p>Recorded dimensions (mm): ${escapeHtml(dimensions)}</p>` : ''}
-          ${evidence.documents?.length ? `<p>Documents: ${evidence.documents.map(escapeHtml).join('; ')}</p>` : ''}
-          ${evidence.url ? `<a href="${escapeHtml(evidence.url)}" target="_blank" rel="noopener noreferrer">Source</a>` : ''}</details>` : ''}` : ''}
+      ${componentEvidenceHtml(evidence)}
+      ${proposal ? componentEvidenceHtml(proposal, proposal.unlinked ? 'Previous proposed match' : 'Proposed match') : ''}
       ${card ? '' : `<div class="mp-actions"><button class="btn" data-mp-select="${escapeHtml(c.key)}" title="Select and outline every instance">SELECT ${c.count}</button></div>`}
+      <p class="empty">Installed identity: ${escapeHtml(productLine({ product: installed }, ws.data.products) || 'unidentified')} (${escapeHtml(componentIdentityStatus(installed))}). Linking a product does not change the geometry.${activeProposal ? ' A separate proposed purchasable match is linked below.' : ''}</p>
       <details class="mp-link"><summary>${rec ? 'CHANGE PRODUCT' : 'LINK PRODUCT'}</summary>
         <div class="field"><label>From the products list</label><select data-mp-product>${productOptions(rec ? rec.id : '')}</select></div>
         <div class="field-row"><div class="field"><label>Maker</label><input type="text" data-mp-brand value="${escapeHtml(rec ? rec.brand || '' : '')}" placeholder="e.g. Kohler"></div>
           <div class="field"><label>Model number</label><input type="text" data-mp-model value="${escapeHtml(rec ? rec.model || '' : '')}" placeholder="e.g. K-7505-BN"></div></div>
         <div class="field"><label>Product name</label><input type="text" data-mp-name value="${escapeHtml(rec ? rec.name || '' : '')}" placeholder="optional"></div>
-        <button class="btn" data-mp-link="${escapeHtml(c.key)}">LINK</button>${rec ? `<button class="btn" data-mp-unlink="${escapeHtml(c.key)}">UNLINK</button>` : ''}
+        <div class="field"><label>Identity status</label><select data-mp-identity>${['unknown','observed','proposed'].map(k => `<option value="${k}" ${editingLink.identityStatus === k ? 'selected' : ''}>${k === 'proposed' ? 'Proposed purchasable match' : k}</option>`).join('')}</select></div>
+        <div class="field"><label>Identity evidence reference</label><input type="text" data-mp-evidence value="${escapeHtml(editingLink.evidence?.identity?.source || '')}"></div>
+        <button class="btn" data-mp-link="${escapeHtml(c.key)}">LINK</button>${rec ? `<button class="btn" data-mp-unlink="${escapeHtml(c.key)}">${activeProposal ? 'UNLINK PROPOSED MATCH' : 'UNLINK'}</button>` : ''}
       </details>
     </div>`;
 }
@@ -199,12 +216,12 @@ export function bindModelPanel(root, ctx) {
       const c = modelComponents(inner(obj)).find(x => x.key === key);
       try {
         const { record, created } = linkComponentProduct(ws.data, prop, scan, c, { productId: pick.value || null, brand: row.querySelector('[data-mp-brand]').value,
-          model: row.querySelector('[data-mp-model]').value, name: row.querySelector('[data-mp-name]').value }, uid);
+          identityStatus: row.querySelector('[data-mp-identity]').value, evidence: { identity: { source: row.querySelector('[data-mp-evidence]').value } }, model: row.querySelector('[data-mp-model]').value, name: row.querySelector('[data-mp-name]').value }, uid);
         touch(); ctx.rerender();
-        say(c.name + ' × ' + c.count + ' is now ' + (record.name || record.model) + (created ? ' (added to Products; add its price there)' : '') + '.');
+        say(c.name + ' × ' + c.count + ' is linked to ' + (record.name || record.model) + (created ? ' (added to Products; add its price there)' : '') + '.');
       } catch (e) { say(e.message, 'warn'); }
     };
-    if (unlink) unlink.onclick = () => { unlinkComponentProduct(scan, key); touch(); ctx.rerender(); };
+    if (unlink) unlink.onclick = () => { unlinkComponentProduct(scan, key, scan.componentProducts?.[key]?.proposedProduct && !scan.componentProducts[key].proposedProduct.unlinked ? 'proposed' : 'all'); touch(); ctx.rerender(); };
   });
   const again = panel.querySelector('[data-mp-reconvert]');
   if (again) again.onclick = async () => {

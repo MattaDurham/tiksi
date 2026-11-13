@@ -61,13 +61,17 @@ export function thresholdFloors({ walls = [], openings = [], rooms = [] } = {}) 
     const ux = dx / L, uy = dy / L, nx = -uy, ny = ux;
     const toLocal = ([x, y]) => [(x - wall.ax) * ux + (y - wall.ay) * uy, (x - wall.ax) * nx + (y - wall.ay) * ny];
     const toPlan = ([s, t]) => [wall.ax + ux * s + nx * t, wall.ay + uy * s + ny * t];
-    const localRooms = rooms.filter(r => r.pts?.length >= 3 && !(wall.level && r.level && wall.level !== r.level)).map(room => {
+    const localRooms = rooms.filter(r => r.kind !== 'unscanned' && r.kind !== 'void' && r.floorContinuity !== false && r.pts?.length >= 3 && !(wall.level && r.level && wall.level !== r.level)).map(room => {
       const pts = room.pts.map(toLocal);
       return { room, edges: pts.map((a, i) => ({ a, b: pts[(i + 1) % pts.length] })) };
     });
     const reach = (wall.thickness || 0.114) / 2 + NEAR_FACE;
-    for (const { o, s0, s1 } of openingSpans(wall, openings, L)) {
+    let coveredTo = -Infinity;
+    for (const span of openingSpans(wall, openings, L)) {
+      const { o, s1 } = span;
       if (o.type === 'window' || o.floorContinuity === false) continue;
+      const s0 = Math.max(span.s0, coveredTo); coveredTo = Math.max(coveredTo, s1);
+      if (s1 - s0 < EPS) continue;
       const relevant = localRooms.filter(r => r.edges.some(e => Math.max(e.a[0], e.b[0]) >= s0 && Math.min(e.a[0], e.b[0]) <= s1));
       const edges = relevant.flatMap(r => r.edges).filter(e =>
         Math.max(e.a[0], e.b[0]) >= s0 && Math.min(e.a[0], e.b[0]) <= s1 &&

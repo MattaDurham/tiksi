@@ -147,22 +147,25 @@ async function importBytes(buffer, name, prop, hooks, extra) {
     progress('Validating ' + name, 0.2);
     info = await validateScan(buffer, e, kind, name, hooks);
     cancelled();
-  } catch (err) { progress(null); const error = new Error(name + ': ' + errMsg(err)); error.jobId=err.jobId; throw error; }
+  } catch (err) { if (info?.object) disposeScanObject(info.object); progress(null); const error = new Error(name + ': ' + errMsg(err)); error.jobId=err.jobId; throw error; }
   const id = uid('scan');
   progress('Storing ' + name, 0.3);
-  await putFile(id, buffer, { name, format: e, kind });
   let originalFileId = id;
-  if (buffer !== originalBuffer || name !== originalName) {
-    originalFileId = uid('source');
-    try { await putFile(originalFileId, originalBuffer, { name: originalName, format: ext(originalName), kind: 'source' }); }
-    catch (err) { await deleteFile(id); throw err; }
-  }
+  try {
+    await putFile(id, buffer, { name, format: e, kind });
+    if (buffer !== originalBuffer || name !== originalName) {
+      originalFileId = uid('source');
+      try { await putFile(originalFileId, originalBuffer, { name: originalName, format: ext(originalName), kind: 'source' }); }
+      catch (err) { await deleteFile(id); throw err; }
+    }
+  } catch (err) { if (info?.object) disposeScanObject(info.object); throw err; }
   const scan = Object.assign({
-    id, name, bytes: buffer.byteLength, originalName, originalFileId, importWarnings: prepared.warnings || [], conversionJobId: prepared.conversionJobId || null, materialIdentities: info?.materialIdentities || {}, format: e, kind, pos: [0, 0, 0], rotY: 0, rot: [0, 0, 0], scale: 1, visible: true,
+    id, name, bytes: buffer.byteLength, originalName, originalFileId, importWarnings: prepared.warnings || [], conversionJobId: prepared.conversionJobId || null, materialIdentities: info?.materialIdentities || {}, importedEvidence: info?.importedEvidence || null, format: e, kind, pos: [0, 0, 0], rotY: 0, rot: [0, 0, 0], scale: 1, visible: true,
     pointSize: 0.02, pointColor: 'rgb', budget: DEFAULT_BUDGET, flip: kind === 'splat',
   }, extra || {});
   prop.scans = prop.scans || [];
   prop.scans.push(scan);
+  if (info?.object) keepPreparedMesh(id, info.object);
   touch();
   return scan;
 }
@@ -249,6 +252,14 @@ async function parsePoints(buffer, e, name, hooks, handOver = false, again = nul
   }
 }
 
+// Keep one validated mesh until its first display, avoiding a second parse on import.
+let preparedMesh = null;
+function keepPreparedMesh(id, object) {
+  if (preparedMesh) { clearTimeout(preparedMesh.timer); disposeScanObject(preparedMesh.object); }
+  const entry = { id, object, timer: null }; preparedMesh = entry;
+  entry.timer = setTimeout(() => { if (preparedMesh === entry) { disposeScanObject(entry.object); preparedMesh = null; } }, 60000);
+}
+
 export async function loadMesh(buffer, e) {
   let obj;
   if (e === 'ply') {
@@ -328,8 +339,9 @@ async function validateScan(buffer, format, kind, name, hooks) {
       const record=id && materialById(id) || (exact.length===1?exact[0]:null);
       if(record)materialIdentities[slot.key]=record.id;
     }
-    return {materialIdentities};
-  } finally { disposeScanObject(obj); }
+    let importedEvidence = null; obj.traverse(o => { if (o.userData?.tiksiEvidenceManifest?.format === 'tiksi-model-evidence') importedEvidence = structuredClone(o.userData.tiksiEvidenceManifest); });
+    return {materialIdentities, object:obj, importedEvidence};
+  } catch (e) { disposeScanObject(obj); throw e; }
 }
 
 // ---------- scene objects ----------
@@ -354,7 +366,9 @@ async function buildPoints(buffer, e, scan, inner, wrapper, hooks) {
 }
 async function buildMesh(buffer, e, scan, inner, hooks) {
   hooks && hooks.progress && hooks.progress('Loading ' + scan.name, 0.5);
-  const obj = await loadMesh(buffer, e);
+  let obj;
+  if (preparedMesh?.id === scan.id) { obj = preparedMesh.object; clearTimeout(preparedMesh.timer); preparedMesh = null; }
+  else obj = await loadMesh(buffer, e);
   // Before anything reaches the graphics card: the file's own pictures, no larger than this
   // device takes (hooks.textureLimit, from render-quality.js deviceLimits).
   const limit = hooks && hooks.textureLimit;

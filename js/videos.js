@@ -1,3 +1,4 @@
+import { sha256 } from './sha256.js';
 // Walk-through videos (MEASURE): originals kept byte for byte like photos, plus a client for
 // the local frame service (server/video_frames.py). Without the service, frames come from
 // the browser's own player, so static hosting can still review a video it can decode.
@@ -30,15 +31,16 @@ async function addVideo(prop, file) {
   if (!MIME_BY_EXT[kind] && !['video/mp4', 'video/quicktime', 'video/x-m4v'].includes(file.type)) throw new Error(file.name + ': only MP4 and MOV videos are supported (convert it to MP4 first)');
   if (file.size > MAX_VIDEO_BYTES) throw new Error(file.name + ': videos over 600 MB cannot be kept in a project; trim it or export it at a lower resolution');
   if (!file.size) throw new Error(file.name + ': the file is empty');
-  const buffer = await file.arrayBuffer();
-  const box = new TextDecoder('latin1').decode(new Uint8Array(buffer, 4, Math.min(4, Math.max(0, buffer.byteLength - 4))));
+  const header = await file.slice(0, 8).arrayBuffer();
+  const buffer = file;
+  const box = new TextDecoder('latin1').decode(new Uint8Array(header, Math.min(4, header.byteLength), Math.min(4, Math.max(0, header.byteLength - 4))));
   if (!BOXES.has(box)) throw new Error(file.name + ': not an MP4/MOV video (the file does not start like one; it may be damaged)');
   const mime = MIME_BY_EXT[kind] || file.type;
-  const meta = await browserMetadata(new Blob([buffer], { type: mime }));
+  const meta = await browserMetadata(file);
   const id = uid('vid');
   await putFile(id, buffer, { name: file.name || 'video', mime, kind: 'video', original: true });
   const rec = {
-    id, name: file.name || 'Video', mime, byteLength: buffer.byteLength, hash: await sha256(buffer), createdAt: new Date().toISOString(),
+    id, name: file.name || 'Video', mime, byteLength: file.size, hash: await sha256(buffer), createdAt: new Date().toISOString(),
     duration: meta.duration, width: meta.width, height: meta.height, thumb: meta.thumb, playable: meta.playable, notes: '', analysis: null,
   };
   // A disk save may have replaced the property object while the file was read.
@@ -63,12 +65,6 @@ export async function deleteVideo(prop, id) {
   // Readings keep their saved frames; the video's server cache is derived and can go.
   try { await deleteFile(id); } catch (e) { console.error('could not delete the video file', e); }
   if (v?.hash) deleteJob(v.hash).catch(() => {});
-}
-
-async function sha256(buffer) {
-  // Insecure origins (a Tailscale IP over http) have no SubtleCrypto; the server hashes the upload then.
-  try { return crypto?.subtle ? [...new Uint8Array(await crypto.subtle.digest('SHA-256', buffer))].map(b => b.toString(16).padStart(2, '0')).join('') : ''; }
-  catch (e) { return ''; }
 }
 
 function withTimeout(promise, ms, fallback) { return Promise.race([promise, new Promise(r => setTimeout(() => r(fallback), ms))]); }

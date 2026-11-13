@@ -1,3 +1,9 @@
+import { openingProblems } from './opening-validation.js';
+import { resizeOpening } from './opening-schedule.js';
+import { openingDimensions, wallWidthFromSlab } from './opening-dimensions.js';
+import { openingProfileValue, setOpeningProfileValue, openingGridFields, setExplicitSlabWidth } from './opening-profile-edit.js';
+import { EVIDENCE_STATES, EVIDENCE_COLORS, evidenceState, setEvidence, elementEvidenceRecord } from './evidence.js';
+import { withUncertainty } from './uncertainty-view.js';
 // 3D model view: a rendering, not a debug scene.
 // Physically based sun + sky with soft shadows, image-based lighting, ambient occlusion,
 // bloom and SMAA through one persistent WebGL context; orbit / walk / top / section camera
@@ -39,7 +45,7 @@ import { materialSelectHtml } from './materials.js';
 import { pendingTextureJobs, setTextureQuality, setTextureLimits, beginTextureBuild, setTextureUse } from './textures.js';
 import { qualityProfile, stillDimensions, effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, touchDevice, scanTooLarge, megabytes, QUALITY_NAMES } from './render-quality.js';
 import { icon } from './icons.js';
-import { buildPropertyGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
+import { buildPropertyGroup, buildFixtureGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
 import { wallFaceLabels, wallSides, doorLeaves, doorShownOpen, setDoorShownOpen, doorGlass, plainOpening } from './wall-solids.js';
 import { SECTION_KINDS, SECTION_LABELS, MAX_SECTIONS, TURN_SNAP_DEG, moveSnapStep, snapTo, quatRotate, planeNormal, planeOf, flipped, rangeAlong, movedTo, makeSection, normalizeSections, levelHeightOf } from './section-planes.js';
 import { planWallMove, applyWallMove, normalOffset, movedWallLengths, moveLeavesShortWall } from './wallmove.js';
@@ -70,6 +76,7 @@ import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility, partK
 
 // ---------- persistent GPU state (one context for the life of the page) ----------
 let renderer = null, pmrem = null;
+let uncertaintyShown = false;
 
 // ---------- per-mount state ----------
 let el = null, wrapEl = null, inspEl = null, hud = {};
@@ -571,13 +578,27 @@ function texturesOnScreen() {
   return out;
 }
 
+let lastStructure = null, lastFixtureRecords = new Map();
 function rebuildModel() {
-  frameCounts.modelBuilds++;
-  beginTextureBuild();   // the sets asked for from here on are this model's
-  if (modelGroup) { scene.remove(modelGroup); disposeBuilt(modelGroup); }
-  modelGroup = buildPropertyGroup(prop, { xray, xrayOpacity: prop.env.xrayOpacity, hiddenLevels: hiddenLevels() });
-  modelGroup.visible = !prop.modelSourceId;
-  scene.add(modelGroup);
+  const structure = JSON.stringify([prop.id, quality(), memoryLimits().textureQuality, prop.levels, prop.walls, prop.openings, prop.rooms, prop.tags, prop.tagOf, prop.hidden, prop.modelSourceId, xray, prop.env.xrayOpacity, [...hiddenLevels()], ws.data.materials]);
+  const records = new Map(prop.fixtures.map(f => [f.id, JSON.stringify(f)]));
+  if (modelGroup && lastStructure === structure) {
+    for (const level of modelGroup.userData.levels || []) {
+      for (const child of [...level.group.children]) if (child.userData.kind === 'fixture' && records.get(child.userData.id) !== lastFixtureRecords.get(child.userData.id)) {
+        level.group.remove(child); disposeBuilt(child);
+      }
+      for (const fixture of prop.fixtures) if (fixture.level === level.id && records.get(fixture.id) !== lastFixtureRecords.get(fixture.id)) level.group.add(buildFixtureGroup(fixture, {}));
+    }
+    applyPlanTagVisibility(prop, modelGroup);
+    if (xray) setModelXray(modelGroup, prop.env.xrayOpacity);
+  } else {
+    frameCounts.modelBuilds++;
+    beginTextureBuild();
+    if (modelGroup) { scene.remove(modelGroup); disposeBuilt(modelGroup); }
+    modelGroup = buildPropertyGroup(prop, { xray, xrayOpacity: prop.env.xrayOpacity, hiddenLevels: hiddenLevels() });
+    modelGroup.visible = !prop.modelSourceId; scene.add(modelGroup);
+  }
+  lastStructure = structure; lastFixtureRecords = records;
   invalidateShadows();
   rebuildNightLights();
   applySection();
@@ -622,7 +643,7 @@ function findScanFixtures(scan, obj) {
   try {
     for (const part of modelParts(obj)) {
       const name = partName(part);
-      if (!classifyFixture(name)) continue;
+      if (!classifyFixture(name) || !isVisibleChain(part.object)) continue;
       box.setFromObject(part.object);
       if (!box.isEmpty()) parts.push({ name, min: box.min.toArray(), max: box.max.toArray() });
     }
@@ -637,7 +658,9 @@ function findScanFixtures(scan, obj) {
 function collectLampSources() {
   const out = [];
   for (const scan of prop.scans) {
-    const obj = scanObjs[scan.id], list = scanFixtures[scan.id];
+    const obj = scanObjs[scan.id];
+    if (obj) findScanFixtures(scan, obj); // internal transforms and hidden parts can change after load
+    const list = scanFixtures[scan.id];
     if (!obj || !list || scan.visible === false || !obj.visible) continue;
     obj.updateMatrixWorld(true);
     list.forEach((f, i) => out.push({ ...f, id: scan.id + ':' + i, pos: new THREE.Vector3(...f.at).applyMatrix4(obj.matrixWorld) }));
@@ -657,19 +680,7 @@ function rebuildNightLights() {
   lampsDirty = false;
   while (lightRoot.children.length) { const c = lightRoot.children.pop(); disposeBuilt(c); }
   lampSources = collectLampSources();
-  // A traced room's estimated light shows as a glowing disc under its ceiling; a fixture in a
-  // model is its own drawing.
-  const discGeo = new THREE.CircleGeometry(0.11, 24);
-  discGeo.rotateX(Math.PI / 2);
-  const discMat = new THREE.MeshStandardMaterial({ color: 0xfff1dc, emissive: new THREE.Color(0xffd9a8), emissiveIntensity: 5, roughness: 0.6 });
-  discMat.userData.disposable = true;
-  for (const s of lampSources) {
-    if (!s.disc) continue;
-    const disc = new THREE.Mesh(discGeo, discMat);
-    disc.position.copy(s.disc);
-    disc.userData = { kind: 'ceiling', id: s.id };
-    lightRoot.add(disc);
-  }
+  // Fallback illumination is illustrative; it must not invent visible fixtures.
   const limit = memoryLimits().roomLights;
   const angle = THREE.MathUtils.degToRad(DOWNLIGHT_HALF_ANGLE);
   lampPools = { point: [], cone: [] };
@@ -1466,10 +1477,10 @@ function renderFrame(still = false) {
   passes.smaa.enabled = !(fast && composer.renderTarget1.samples > 0);
   lastFrameFast = fast;
   frameCounts[fast ? 'fastFrames' : 'fullFrames']++;
-  if (batches.beginFrame(scanObjs)) invalidateShadows();
+  if (batches.beginFrame(scanObjs, uncertaintyShown)) invalidateShadows();
   if (renderer.shadowMap.needsUpdate) frameCounts.shadowRefreshes++;
   if (renderer.shadowMap.needsUpdate) sunThroughOpenings();
-  try { composer.render(); }
+  try { if (uncertaintyShown) withUncertainty([modelGroup, scanRoot], uncertaintyRecord, () => composer.render()); else composer.render(); }
   finally { batches.endFrame(); }
 }
 
@@ -1509,7 +1520,7 @@ function sunThroughOpenings() {
   batches.endFrame();
   if (tagsHidden) showTags();
   try {
-    batches.beginFrame(scanObjs);
+    batches.beginFrame(scanObjs, uncertaintyShown);
     try { renderer.setRenderTarget(sunOnlyTarget); renderer.render(scene, sunOnlyCamera); }
     finally { batches.endFrame(); }
   } finally {
@@ -1520,7 +1531,7 @@ function sunThroughOpenings() {
     helpers.forEach(h => { h.visible = true; });
     // Back to what the view shows. The map is drawn: what this pass reports changed is only
     // what was put back.
-    batches.beginFrame(scanObjs);
+    batches.beginFrame(scanObjs, uncertaintyShown);
     renderer.shadowMap.needsUpdate = false;
   }
 }
@@ -3851,11 +3862,14 @@ function renderHud() {
     <button class="v-pill ${xray ? 'active' : ''}" data-xray aria-pressed="${xray}" title="X-ray (X)">X-RAY</button>
     ${xray ? `<label class="v-xray-control">TRANSPARENCY<input type="range" class="v-xray-range" min="0" max="100" step="1" value="${Math.round((1 - prop.env.xrayOpacity) * 100)}" aria-label="X-ray transparency"><output>${Math.round((1 - prop.env.xrayOpacity) * 100)}%</output></label>` : ''}
     <span class="v-pill-sep"></span>
+    <button class="v-pill ${uncertaintyShown ? 'active' : ''}" data-uncertainty aria-pressed="${uncertaintyShown}">UNCERTAINTY</button>
+    ${uncertaintyShown ? `<span role="note" aria-label="Geometry uncertainty legend">${Object.entries(EVIDENCE_COLORS).map(([k,c]) => `<span style="border-bottom:3px solid ${c};margin-right:8px">${k}</span>`).join('')} · geometry evidence; identity is separate</span>` : ''}
     <button class="v-pill" data-environment title="Lighting, sun and environment">LIGHT</button>
     <button class="v-pill ${markersShown('pins') ? 'active' : ''}" data-show="pins" aria-pressed="${markersShown('pins')}" title="${markersShown('pins') ? 'Hide' : 'Show'} photo pins (${prop.photos.filter(ph => ph.pin).length})">PHOTOS</button>
     <button class="v-pill ${markersShown('notes') ? 'active' : ''}" data-show="notes" aria-pressed="${markersShown('notes')}" title="${markersShown('notes') ? 'Hide' : 'Show'} notes (${prop.notePins.length}); right-click the model to pin one">NOTES</button>`;
   bar.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => setMode(b.dataset.mode));
   bar.querySelectorAll('[data-show]').forEach(b => b.onclick = () => toggleMarkers(b.dataset.show));
+  bar.querySelector('[data-uncertainty]').onclick = () => { uncertaintyShown = !uncertaintyShown; renderHud(); requestRender(2); };
   bar.querySelector('[data-section]').onclick = toggleSection;
   bar.querySelector('[data-xray]').onclick = toggleXray;
   bar.querySelector('[data-environment]').onclick = () => { hud.env.hidden = !hud.env.hidden; hud.env.classList.add('open'); renderEnvPanel(); };
@@ -4027,7 +4041,7 @@ function lightingHtml(env) {
     ? `<details class="v-light-list"><summary>${lampSources.length} light fixture${lampSources.length === 1 ? '' : 's'} &middot; ${total.toLocaleString()} lm estimated</summary><ul>${sources.map(e => `<li><span>${e.count} &times; ${escapeHtml(e.label)}</span><em>${e.lumens.toLocaleString()} lm${e.count > 1 ? ' each' : ''}</em></li>`).join('')}</ul><p>Output estimated from each fixture's kind (a name that states lumens or a colour keeps it). Traced rooms with no fixture drawn get one ceiling light at 150 lm per m&sup2;.</p></details>`
     : '<p class="v-env-help">No light fixtures found: name fixtures in the model (downlight, pendant, sconce, ceiling light, lamp, LED strip) or trace rooms. Until then use CAMERA LIGHT or FILL LIGHT inside.</p>';
   return `
-      <div class="v-light-presets" role="group" aria-label="Lighting presets">${Object.keys(LIGHTING_PRESETS).map(k => `<button type="button" class="v-pill ${chosen === k ? 'active' : ''}" data-light-preset="${k}" aria-pressed="${chosen === k}">${escapeHtml(PRESET_LABELS[k].toUpperCase())}</button>`).join('')}</div>
+      <p class="empty">Illustrative lighting. Estimated sources and exposure are for viewing, not a validated lighting simulation.</p><div class="v-light-presets" role="group" aria-label="Lighting presets">${Object.keys(LIGHTING_PRESETS).map(k => `<button type="button" class="v-pill ${chosen === k ? 'active' : ''}" data-light-preset="${k}" aria-pressed="${chosen === k}">${escapeHtml(PRESET_LABELS[k].toUpperCase())}</button>`).join('')}</div>
       ${lightRow('BRIGHTNESS', 'exposure', lit.exposure, 'Brightness of the whole picture (camera exposure)')}
       ${lightRow('SUN', 'sunStrength', lit.sunStrength, 'Strength of the sun, or the moon at night')}
       ${lightRow('FILL LIGHT', 'fill', lit.fill, 'Soft light from the sky and ground: lifts shadows and the inside of closed models')}
@@ -4336,8 +4350,81 @@ function renderPinPanel() {
   inspEl.querySelector('[data-cancel]').onclick = () => { tool = 'select'; pinBatch = false; renderToolCol(); renderInspector(); setHint(''); };
 }
 
+function modelObjectEvidence(scan, object) {
+  const saved = scan.objectEvidence?.[object.key] || {};
+  return { ...saved, position: objectOffset(scan, object), scale: scan.scale, rotation: scan.rot, sourceVersion:[scan.originalFileId,scan.bytes,scan.convertedAgainAt,scan.assetRevision] };
+}
+function uncertaintyRecord(mesh) {
+  for (let o = mesh; o; o = o.parent) {
+    const u = o.userData || {};
+    if (u.inferredThreshold) return { evidence: { geometry: { status: 'inferred' } } };
+    if (u.kind === 'scan') {
+      const scan = prop.scans.find(s => s.id === u.id);
+      if (scan?.kind !== 'mesh') return scan;
+      const object = modelObjectTree(o).ofMesh.get(mesh);
+      return object && scan ? modelObjectEvidence(scan, object) : scan;
+    }
+    const collection = { wall: 'walls', opening: 'openings', fixture: 'fixtures', room: 'rooms', ceiling: 'rooms' }[u.kind];
+    if (collection) { const record=prop[collection]?.find(r => r.id === u.id); if(record) return elementEvidenceRecord(prop, u.kind, record); }
+  }
+  return null;
+}
+function renderEvidenceInspector() {
+  if (!inspEl || !selection || picked.length > 1 || tool === 'pin' || match) return;
+  const object = selectedModelObject();
+  const scan = selection.kind === 'scan' && prop.scans.find(s => s.id === selection.id);
+  const collection = { wall:'walls', opening:'openings', fixture:'fixtures', room:'rooms', ceiling:'rooms' }[selection.kind];
+  const native = prop[collection]?.find(r => r.id === selection.id);
+  const record = object ? modelObjectEvidence(scan, object) : scan || elementEvidenceRecord(prop, selection.kind, native);
+  if (!record) return;
+  const e = record.evidence?.geometry || {}, section = document.createElement('section');
+  section.innerHTML = `<h3>GEOMETRY EVIDENCE</h3><p class="empty">${escapeHtml(evidenceState(record))}. Brand identity does not determine appearance.</p>
+    <div class="field"><label>Status</label><select data-evidence-status>${EVIDENCE_STATES.map(k => `<option value="${k}" ${e.status === k ? 'selected' : !e.status && k === 'unknown' ? 'selected' : ''}>${k}</option>`).join('')}</select></div>
+    <div class="field"><label>Photo, document or measurement reference</label><input type="text" data-evidence-source value="${escapeHtml(e.source || '')}"></div>
+    <div class="field"><label>Notes</label><input type="text" data-evidence-note value="${escapeHtml(e.note || '')}"></div>
+    <button class="btn" data-evidence-save>REVIEW EVIDENCE</button><p data-evidence-error role="status"></p>`;
+  if (selection.kind === 'opening') {
+    const issues = openingProblems(prop, record), dimensions=openingDimensions(prop,record);
+    const profile = document.createElement('section');
+    const sizes=record.type==='window'?['frameWidth','sashWidth','muntinWidth','casingWidth','casingDepth']:['jambWidth','leafThickness','casingWidth','casingDepth','handleHeight','handleBackset'];
+    profile.innerHTML=`<h3>OPENING CONFIGURATION</h3><p class="empty">Stored width and height are the hole in the wall. Profiles and hardware remain provisional until documented.</p>${issues.length?`<p role="alert">${issues.map(escapeHtml).join('; ')}</p>`:''}
+      ${record.type!=='window' && dimensions.leaves ?`<div class="field"><label>Slab width per leaf (bare numbers are inches; metric mode uses metres)</label><input data-slab-width value="${escapeHtml(fmtLen(dimensions.slabWidth))}"></div>`:''}
+      ${sizes.map(k=>`<div class="field"><label>${escapeHtml(k.replace(/[A-Z]/g,c=>' '+c.toLowerCase()))} (metres; blank uses provisional default)</label><input type="number" step=".001" min="0.001" max="${k==='handleHeight'?2:.3}" data-profile="${k}" value="${escapeHtml(openingProfileValue(record,k) ?? '')}"></div>`).join('')}
+      ${record.type==='window'?openingGridFields(record).map(k=>`<div class="field"><label>Observed grid ${escapeHtml(k.replace(/[A-Z]/g,c=>' '+c.toLowerCase()))}</label><input type="number" min="1" max="12" step="1" data-profile="${k}" value="${escapeHtml(openingProfileValue(record,k) || 1)}"></div>`).join(''):`<div class="field"><label>Hardware</label><select data-profile-choice="hardware">${['lever','knob','none'].map(k=>`<option ${openingProfileValue(record,'hardware')===k?'selected':''}>${k}</option>`).join('')}</select></div><div class="field"><label>Door face</label><select data-profile-choice="panels"><option value="flat">Flat / unresolved</option><option value="six" ${openingProfileValue(record,'panels')==='six'?'selected':''}>Six panel</option></select></div>`}`;
+    inspEl.append(profile);
+    profile.querySelectorAll('[data-profile],[data-profile-choice]').forEach(input=>input.onchange=()=>{
+      const key=input.dataset.profile || input.dataset.profileChoice;
+      if(input.dataset.profile && input.value && !input.checkValidity())return;
+      beginGeometryEdit(prop,'edit opening profile');
+      setOpeningProfileValue(native || record,key,input.value === '' ? '' : input.dataset.profile ? Number(input.value) : input.value);
+      touch();rebuildModel();renderInspector();
+    });
+    const slab=profile.querySelector('[data-slab-width]');
+    if(slab)slab.onchange=()=>{
+      const value=parseLen(slab.value,'inches'),width=wallWidthFromSlab(record,value,dimensions.leaves);
+      if(!width)return;
+      const target=native || record,trial=structuredClone(target);
+      trial.leaves=dimensions.leaves;setExplicitSlabWidth(trial,value);
+      if(!resizeOpening(prop,trial,{width}) || Math.abs(openingDimensions(prop,trial).slabWidth-value)>1e-6) {
+        toast('That slab would overlap another opening or exceed its wall.','warn');renderInspector();return;
+      }
+      beginGeometryEdit(prop,'edit slab width');Object.assign(target,trial);touch();rebuildModel();renderInspector();
+    };
+  }
+  inspEl.append(section);
+  section.querySelector('[data-evidence-save]').onclick = () => {
+    try {
+      setEvidence(record, 'geometry', section.querySelector('[data-evidence-status]').value, section.querySelector('[data-evidence-source]').value, section.querySelector('[data-evidence-note]').value);
+      if (native) native.evidence = record.evidence;
+      if (object) { scan.objectEvidence ||= {}; scan.objectEvidence[object.key] = { evidence: record.evidence }; }
+      touch(); renderInspector(); requestRender(2);
+    } catch (e) { section.querySelector('[data-evidence-error]').textContent = e.message; }
+  };
+}
+
 function renderInspector() {
   renderInspectorBody();
+  renderEvidenceInspector();
   renderObjects();
   if (!inspEl || tool === 'pin' || match) return;
   // One object of a model, and several objects, draw their own tag line (object-panel.js).
@@ -4642,7 +4729,7 @@ function renderInspectorBody() {
     inspEl.innerHTML = `<h3>${o.type === 'window' ? 'WINDOW' : (hung ? 'DOOR' : plainOpening(o) ? 'PLAIN OPENING' : 'CASED OPENING')}</h3>
       <div class="field"><label>Type</label><select data-type><option value="door" ${o.type === 'door' ? 'selected' : ''}>Door</option><option value="window" ${o.type === 'window' ? 'selected' : ''}>Window</option></select></div>
       <div class="field-row">
-        <div class="field"><label>Width</label><input type="text" data-w value="${escapeHtml(fmtLen(o.width))}"></div>
+        <div class="field"><label>Wall opening width</label><input type="text" data-w value="${escapeHtml(fmtLen(o.width))}"></div>
         <div class="field"><label>Height</label><input type="text" data-hh value="${escapeHtml(fmtLen(o.height))}"></div>
       </div>
       ${o.type === 'window' ? `<div class="field"><label>Sill height</label><input type="text" data-s value="${escapeHtml(fmtLen(o.sill || 0))}"></div>` : ''}
@@ -4658,9 +4745,9 @@ function renderInspectorBody() {
       ${linkedProductsHtml(o.id)}
       <button class="btn" data-wall>SELECT WALL</button>
       <button class="btn danger" data-del>DELETE OPENING</button>`;
-    const num = (sel, fn, min) => { inspEl.querySelector(sel).onchange = e => { const v = parseLen(e.target.value, 'feet'); if (!isNaN(v) && v > (min || 0.05)) { beginGeometryEdit(prop, 'edit opening'); fn(v); touch(); rebuildModel(); } renderInspector(); }; };
-    num('[data-w]', v => o.width = v, 0.2);
-    num('[data-hh]', v => o.height = v, 0.3);
+    const num = (sel, fn, min) => { inspEl.querySelector(sel).onchange = e => { const v = parseLen(e.target.value, 'feet'); if (!isNaN(v) && v > (min || 0.05)) { beginGeometryEdit(prop, 'edit opening'); const before={...o}; const result=fn(v); const issues=openingProblems(prop,o); if(result===null || issues.length){Object.assign(o,before);toast(issues.join('; ') || 'Opening change refused: overlapping or invalid geometry.','warn');} touch(); rebuildModel(); } renderInspector(); }; };
+    num('[data-w]', v => resizeOpening(prop,o,{width:v},wallHeightOf(prop,prop.walls.find(w=>w.id===o.wallId))), 0.2);
+    num('[data-hh]', v => resizeOpening(prop,o,{height:v},wallHeightOf(prop,prop.walls.find(w=>w.id===o.wallId))), 0.3);
     if (o.type === 'window') num('[data-s]', v => o.sill = v, -0.001);
     inspEl.querySelector('[data-type]').onchange = e => {
       beginGeometryEdit(prop, 'change opening type');

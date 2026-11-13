@@ -44,8 +44,8 @@ function openingParams(o, s0, s1, L, H) {
   const v0 = o.type === 'window' ? Math.max(0, o.sill || 0) : 0;
   const v1 = Math.min(v0 + (o.height || 0), H);
   const p = { wallId: o.wallId, t: (s0 + s1) / 2 / L, width: s1 - s0, height: v1 - v0, sill: v0, s0, s1, v0, v1 };
-  if (o.detail && typeof o.detail === 'object') {
-    p.detail = JSON.parse(JSON.stringify(o.detail));
+  for (const key of ['profile', 'detail']) if (o[key] && typeof o[key] === 'object') p[key] = JSON.parse(JSON.stringify(o[key]));
+  if (p.profile || p.detail) {
     p.configuration = Object.fromEntries(['leaves', 'glass', 'doorState', 'plain'].filter(k => o[k] !== undefined).map(k => [k, o[k]]));
   }
   if (o.floorContinuity === false) p.floorContinuity = false;
@@ -54,7 +54,7 @@ function openingParams(o, s0, s1, L, H) {
 
 function wallParams(prop, w) {
   const p = { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by, thickness: w.thickness || 0.114, height: wallHeightOf(prop, w) };
-  for (const key of ['baseboardPos', 'baseboardNeg']) if (w[key] && typeof w[key] === 'object') p[key] = JSON.parse(JSON.stringify(w[key]));
+  for (const key of ['profile', 'baseboardPos', 'baseboardNeg']) if (w[key] && typeof w[key] === 'object') p[key] = JSON.parse(JSON.stringify(w[key]));
   return p;
 }
 
@@ -91,7 +91,7 @@ export function elementState(prop, legacy = false) {
 export function wallSig(p) { return wallSigNow(p); }
 function wallSigNow(p) {
   let sig = ['wall', tenth(p.ax), tenth(p.ay), tenth(p.bx), tenth(p.by), tenth(p.thickness), tenth(p.height)].join(',');
-  for (const key of ['baseboardPos', 'baseboardNeg']) if (p[key] && typeof p[key] === 'object') sig += '|' + key + ':' + JSON.stringify(stableDetail(p[key]));
+  for (const key of ['profile', 'baseboardPos', 'baseboardNeg']) if (p[key] && typeof p[key] === 'object') sig += '|' + key + ':' + JSON.stringify(stableDetail(p[key]));
   return sig + SIG_TAIL;
 }
 export function openingSig(p) { return openingSigNow(p); }
@@ -105,6 +105,7 @@ function stableDetail(value) {
 function openingSigNow(p) {
   const sig = ['opening', p.wallId, along(p.t), tenth(p.width), tenth(p.height), tenth(p.sill)].join(',');
   return sig + (p.detail && typeof p.detail === 'object' ? '|detail:' + JSON.stringify(stableDetail(p.detail)) : '')
+    + (p.profile && typeof p.profile === 'object' ? '|profile:' + JSON.stringify(stableDetail(p.profile)) : '')
     + (p.configuration ? '|configuration:' + JSON.stringify(stableDetail(p.configuration)) : '')
     + (p.floorContinuity === false ? '|floor:false' : '') + SIG_TAIL;
 }
@@ -194,8 +195,8 @@ export function mirrorSpec(prop, materials, legacy = false) {
       const band = open ? null : doorGlassBand(o, p.v0, p.v1);
       if (band) hole.glass = { v0: band[0], v1: band[1], material: finish(OPENING_MATERIAL.window, 'window', 'opening ' + o.id) };
       if (p.floorContinuity === false) hole.floorContinuity = false;
-      if (p.detail) {
-        hole.detail = JSON.parse(JSON.stringify(p.detail));
+      if (p.profile || p.detail) {
+        for (const key of ['profile', 'detail']) if (p[key]) hole[key] = JSON.parse(JSON.stringify(p[key]));
         hole.configuration = JSON.parse(JSON.stringify(p.configuration));
         const observedSides = wallSides(w, roomsOn(prop, lvl.id));
         hole.sides = { pos: !!observedSides.pos, neg: !!observedSides.neg };
@@ -225,7 +226,8 @@ export function mirrorSpec(prop, materials, legacy = false) {
     const wall = Object.assign({ id: w.id, level: lvl.id, elevation: lvl.elevation, name: 'Wall ' + w.id, holes, materials: faces, tag: tag('wall:' + w.id) }, st.params);
     const sides = wallSides(w, roomsOn(prop, lvl.id));
     for (const [side, key, sign] of [['pos', 'baseboardPos', 1], ['neg', 'baseboardNeg', -1]]) {
-      if (!w[key] || typeof w[key] !== 'object' || !sides[side]) continue;
+      const specified = w[key] && typeof w[key] === 'object' || Number.isFinite(w.profile?.baseboardHeight) || Number.isFinite(w.profile?.baseboardDepth);
+      if (!specified || !sides[side]) continue;
       const detail = baseboardDetail(w, sign);
       if (!(detail.height > 0) || !(detail.depth > 0)) continue;
       for (const s of wallSolids(w, prop.openings || [], st.params.height).solids) {
@@ -323,7 +325,7 @@ export function mergeMirror(prop, read, synced, seenBefore) {
   synced = synced || {};
   seenBefore = seenBefore || {};
   const written = (read.model && read.model.elements && typeof read.model.elements === 'object') ? read.model.elements : {};
-  const report = { applied: [], added: [], deleted: [], conflicts: [], warnings: (read.warnings || []).slice(), untagged: read.untagged || null, seen: {} };
+  const report = { ...(read.unsupportedGeometry?.length ? { blockWrite: true } : {}), applied: [], added: [], deleted: [], conflicts: [], warnings: (read.warnings || []).slice(), untagged: read.untagged || null, seen: {} };
   const before = elementState(prop);
   // A millimetre signature saved before SIG_TAIL stands for `sigNow` (the value's signature
   // today) when it is the millimetre signature of that same value; otherwise it differs from it.
@@ -333,6 +335,10 @@ export function mergeMirror(prop, read, synced, seenBefore) {
     return upgrade(synced[id], kind, cur && cur.params, cur && cur.sig) || upgrade(written[id] && written[id].sig, kind, cur && cur.params, cur && cur.sig); };
   const seen = new Set();
   const decide = (id, kind, now, base) => {
+    if (['wall', 'room'].includes(kind) && Number.isFinite(now.elevation) && Number.isFinite(base?.elevation) && Math.abs(now.elevation-base.elevation) > .0001) {
+      report.conflicts.push({ id, kind, reason: 'Vertical move is unsupported by the limited bridge; SketchUp copy preserved.' });
+      report.blockWrite = true; return 'keep';
+    }
     const nowSig = readSig[kind](now), fileBase = readSig[kind](base || {}), cur = before.get(id);
     report.seen[id] = nowSig;
     const agreed = agreedOf(id, kind) || fileBase;
@@ -452,7 +458,7 @@ function applyOpening(o, now, wallId) {
   if (now.width > 0.05) o.width = round(now.width);
   if (now.height > 0.05) o.height = round(now.height);
   if (o.type === 'window') o.sill = round(Math.max(0, now.sill));
-  if (now.detail && typeof now.detail === 'object') o.detail = JSON.parse(JSON.stringify(now.detail));
+  for (const key of ['profile', 'detail']) if (now[key] && typeof now[key] === 'object') o[key] = JSON.parse(JSON.stringify(now[key]));
   if (now.floorContinuity === false) o.floorContinuity = false;
   if (now.configuration && typeof now.configuration === 'object') {
     for (const key of ['leaves', 'glass', 'doorState', 'plain']) {
@@ -623,7 +629,9 @@ export async function syncMirror(folder, prop, entry, write, materials) {
     ms.mtime = got.file.lastModified; ms.size = got.file.size;
     ms.synced = syncedState(prop);
     ms.report = summarise(report);
+    ms.blockWrite = report.blockWrite;
   }
+  if (ms.blockWrite) return { changed, report: report || ms.report };
   const spec = mirrorSpec(prop, materials), sig = specSignature(spec);
   const underlayChanged = spec.underlays.some(u => (ms.underlays || {})[u.level] !== u.sig);
   // A mirror saved before SIG_TAIL whose signature is that of today's project, built the old
@@ -642,6 +650,8 @@ export async function syncMirror(folder, prop, entry, write, materials) {
       files[u.file] = data.bytes;
     }
     const bytes = await writeMirror(spec, got ? await got.file.arrayBuffer() : null, files);
+    // Retain the entire prior SketchUp file, including edits the limited reader cannot represent.
+    if (got && !folder.preservesMirrorVersions) await write(await folder.getFileHandle(name.replace(/\.skp$/i, '') + '.before-sync-' + Date.now() + '.skp', { create: true }), new Blob([await got.file.arrayBuffer()]));
     const handle = got ? got.handle : await folder.getFileHandle(name, { create: true });
     await write(handle, new Blob([bytes]));
     const f = await handle.getFile();

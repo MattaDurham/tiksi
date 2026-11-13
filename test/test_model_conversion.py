@@ -243,7 +243,7 @@ api.call('SUModelRelease', C.byref(model)); api.lib.SUTerminate()
         instances[299]['matrix']=[-1,0,0,0,0,1,0,0,0,0,1,0,5,0,5,1]
         source=self.root/'rack.json';source.write_text(json.dumps({
             'meshes':[{'name':'Rack shelf','tag':'Furniture','positions':[0,0,0,3,0,0,0,0,1],'material':oak}],
-            'components':[{'id':'bottle','name':'Wine bottle','description':'750 ml Bordeaux bottle','meshes':[
+            'components':[{'id':'bottle','sourceDefinitionId':'synthetic-original-definition','name':'Wine bottle','description':'750 ml Bordeaux bottle','meshes':[
                 {'name':'Wine bottle','positions':body,'material':glass},{'name':'Cork','tag':'Corks','positions':cork,'material':oak}]}],
             'instances':instances}))
         worker=Path(__file__).resolve().parent.parent/'server/sketchup_convert.py'
@@ -254,7 +254,7 @@ api.call('SUModelRelease', C.byref(model)); api.lib.SUTerminate()
         placed=[node for node in top if (node.get('extras') or {}).get('sketchupComponent')=='Wine bottle']
         self.assertEqual(len(placed),300)
         self.assertEqual(len({p['extras'].get('sketchupDefinitionId') for p in placed}),1)
-        self.assertTrue(placed[0]['extras'].get('sketchupDefinitionId'))
+        self.assertEqual(placed[0]['extras'].get('sketchupDefinitionId'), 'synthetic-original-definition')
         self.assertEqual(placed[0]['extras'].get('sketchupDescription'),'750 ml Bordeaux bottle')
         self.assertEqual(sum(1 for p in placed if p['extras'].get('sketchupInstanceName')=='First bottle'),1)
         # Each instance's children draw the same two glTF meshes: glass body and cork.

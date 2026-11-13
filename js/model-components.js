@@ -1,3 +1,4 @@
+import { productEvidence } from './evidence.js';
 // An imported model's components, the SketchUp way. server/sketchup_convert.py writes each
 // component definition's geometry once and each instance as a glTF node whose extras name the
 // definition (sketchupComponent, sketchupDefinitionId, sketchupInstance...). Nested instances are
@@ -90,9 +91,9 @@ export function modelComponents(root) {
 // ---------- products ----------
 export function normalizeComponentProduct(p) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
-  const out = { productId: typeof p.productId === 'string' && ID_OK.test(p.productId) ? p.productId : null, brand: text(p.brand, 120), model: text(p.model, 120), name: text(p.name, 200) };
+  const out = { ...productEvidence(p), productId: typeof p.productId === 'string' && ID_OK.test(p.productId) ? p.productId : null, brand: text(p.brand, 120), model: text(p.model, 120), name: text(p.name, 200) };
   if (p.unlinked === true) { out.productId = null; out.unlinked = true; }
-  for (const [field, limit] of [['status', 120], ['evidence', 4000], ['uncertainty', 4000]]) {
+  for (const [field, limit] of [['status', 120], ['evidence', 4000], ['evidenceText', 4000], ['uncertainty', 4000]]) {
     const value = text(p[field], limit);
     if (value) out[field] = value;
   }
@@ -115,7 +116,7 @@ export function normalizeComponentProduct(p) {
     });
     if (entries.length) out.dims_mm = Object.fromEntries(entries);
   }
-  return out.productId || out.brand || out.model || out.name || out.status || out.evidence || out.uncertainty || out.dims_mm || out.documents || out.url ? out : null;
+  return out.productId || out.brand || out.model || out.name || out.status || out.identityStatus || out.proposedProduct || out.evidence || out.evidenceText || out.uncertainty || out.dims_mm || out.documents || out.url ? out : null;
 }
 
 export function componentProductEvidence(scan, key) {
@@ -123,6 +124,10 @@ export function componentProductEvidence(scan, key) {
 }
 
 export function componentIdentityStatus(p) {
+  if (p?.identityStatus) {
+    const state = productEvidence(p).identityStatus;
+    return state === 'observed' ? 'Observed identity with source' : state === 'proposed' ? 'Proposed purchasable match' : 'Identification not verified';
+  }
   const status = text(p && p.status, 120);
   const labels = { identified: 'Identified', likely: 'Likely match', 'proposed-match': 'Proposed match',
     'as-scanned': 'Observed geometry; product identity unverified', 'observed-type': 'Observed type; maker and model unverified',
@@ -130,8 +135,10 @@ export function componentIdentityStatus(p) {
   return Object.hasOwn(labels, status) ? labels[status] : status || 'Identification not verified';
 }
 export function componentProductRecord(data, scan, key) {
-  const p = scan && scan.componentProducts && scan.componentProducts[key];
+  const link = scan && scan.componentProducts && scan.componentProducts[key];
+  const p = link?.proposedProduct && !link.proposedProduct.unlinked ? link.proposedProduct : link;
   if (!p || p.unlinked === true || !data || !Array.isArray(data.products)) return null;
+
   if (p.productId) { const r = data.products.find(x => x.id === p.productId); if (r) return r; }
   if (!p.brand || !p.model) return null;
   return data.products.find(r => same(r.brand, p.brand) && same(r.model, p.model)) || null;
@@ -141,6 +148,7 @@ export function componentProductRecord(data, scan, key) {
 // maker and model number name (found, else made). The record is kept with the property, so it
 // travels in the project file. Returns { record, created }.
 export function linkComponentProduct(data, prop, scan, component, fields, newId) {
+  if (fields.identityStatus === 'observed' && !fields.evidence?.identity?.source?.trim()) throw new Error('An observed identity needs a source reference.');
   let record = null, created = false;
   if (fields.productId) {
     record = data.products.find(r => r.id === fields.productId) || null;
@@ -158,21 +166,45 @@ export function linkComponentProduct(data, prop, scan, component, fields, newId)
     }
   }
   if (prop) { record.propertyIds = Array.isArray(record.propertyIds) ? record.propertyIds : []; if (!record.propertyIds.includes(prop.id)) record.propertyIds.push(prop.id); }
-  const previous = componentProductEvidence(scan, component.key);
-  const sameIdentity = previous && (previous.productId === record.id ||
-    (previous.brand && previous.model && same(previous.brand, record.brand) && same(previous.model, record.model)));
+  const previous = componentProductEvidence(scan, component.key) || {};
+  const proposed = fields.identityStatus === 'proposed';
+  const prior = proposed ? normalizeComponentProduct(previous.proposedProduct) : previous;
+  const sameIdentity = prior && (prior.productId === record.id ||
+    (prior.brand && prior.model && same(prior.brand, record.brand) && same(prior.model, record.model)));
+  const merged = { ...(sameIdentity ? prior : {}), ...fields };
+  if (sameIdentity && fields.evidence && typeof fields.evidence === 'object') {
+    // Legacy observations are prose; identity review is structured. Keep both when the
+    // new identity form adds a source reference to the same recorded candidate.
+    if (typeof prior.evidence === 'string') merged.evidenceText = [prior.evidenceText, prior.evidence].filter(Boolean).join(' ');
+    else if (prior.evidence && typeof prior.evidence === 'object') merged.evidence = { ...prior.evidence, ...fields.evidence };
+  }
+  const link = normalizeComponentProduct({ ...merged, unlinked: false, productId: record.id, brand: record.brand, model: record.model, name: component.name });
   scan.componentProducts = scan.componentProducts || {};
-  scan.componentProducts[component.key] = normalizeComponentProduct({ ...(sameIdentity ? previous : {}), unlinked: false, productId: record.id, brand: record.brand, model: record.model, name: component.name });
+  scan.componentProducts[component.key] = proposed ? { ...previous, proposedProduct: link }
+    : { ...link, ...(previous.proposedProduct ? { proposedProduct: previous.proposedProduct } : {}) };
   return { record, created };
 }
-export function unlinkComponentProduct(scan, key) {
+function detachedComponentEvidence(previous) {
+  return previous && (previous.status || previous.evidence || previous.evidenceText || previous.uncertainty || previous.dims_mm || previous.documents || previous.url)
+    ? { ...previous, productId: null, unlinked: true } : null;
+}
+export function unlinkComponentProduct(scan, key, aspect = 'all') {
   if (!scan || !scan.componentProducts) return;
   const previous = componentProductEvidence(scan, key);
-  if (previous && (previous.status || previous.evidence || previous.uncertainty || previous.dims_mm || previous.documents || previous.url)) {
-    // Removing a product association does not erase observations of the component. The explicit
-    // flag also prevents the maker/model fallback from immediately restoring the association.
-    scan.componentProducts[key] = { ...previous, productId: null, unlinked: true };
-  } else delete scan.componentProducts[key];
+  if (aspect === 'proposed') {
+    if (!previous) return;
+    const proposal = detachedComponentEvidence(normalizeComponentProduct(previous.proposedProduct));
+    if (proposal) previous.proposedProduct = proposal; else delete previous.proposedProduct;
+    scan.componentProducts[key] = previous;
+  } else {
+    // Removing associations keeps observations and prevents the maker/model fallback
+    // from silently restoring either installed or proposed product pricing.
+    const retained = detachedComponentEvidence(previous);
+    if (retained) delete retained.proposedProduct;
+    const proposal = detachedComponentEvidence(normalizeComponentProduct(previous?.proposedProduct));
+    if (retained || proposal) scan.componentProducts[key] = { ...(retained || {}), ...(proposal ? { proposedProduct: proposal } : {}) };
+    else delete scan.componentProducts[key];
+  }
 }
 
 // ---------- schedule ----------

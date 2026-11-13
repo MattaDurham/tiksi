@@ -15,6 +15,7 @@ values it was written from. The browser decides what changed on which side.
 Each call is a separate process working on files in one job folder (see model_conversion).
 """
 import ctypes as C
+import hashlib
 import json
 import math
 import os
@@ -22,9 +23,9 @@ from pathlib import Path
 import sys
 
 if __package__:
-    from .sketchup_convert import API, Ref, Point, Transform, Color
+    from .sketchup_convert import API, Ref, Point, Transform, Color, get_data, set_data, to_ref
 else:
-    from sketchup_convert import API, Ref, Point, Transform, Color
+    from sketchup_convert import API, Ref, Point, Transform, Color, get_data, set_data, to_ref
 
 FORMAT = 'tiksi-sketchup-mirror'
 VERSION = 1
@@ -38,10 +39,6 @@ class Box(C.Structure): _fields_ = [('min', Point), ('max', Point)]
 
 
 # ---------- small helpers ----------
-
-def to_ref(api, name, ref):
-    fn = getattr(api.lib, name); fn.restype = Ref; fn.argtypes = [Ref]
-    return fn(ref)
 
 
 def matrix(t):
@@ -82,42 +79,6 @@ def skp_to_plan(p):
 def r6(v):
     return round(float(v), 6)
 
-
-def get_data(api, entity):
-    """The JSON stored in the entity's "tiksi" dictionary, or None when it has none."""
-    count = C.c_size_t()
-    api.call('SUEntityGetNumAttributeDictionaries', entity, C.byref(count))
-    if not count.value:
-        return None
-    dicts = (Ref * count.value)()
-    api.call('SUEntityGetAttributeDictionaries', entity, count, dicts, C.byref(count))
-    for d in dicts[:count.value]:
-        if api.text('SUAttributeDictionaryGetName', d) != DICT.decode():
-            continue
-        value = api.ref('SUTypedValueCreate')
-        try:
-            if api.call('SUAttributeDictionaryGetValue', d, KEY, C.byref(value), optional=True):
-                return {}
-            try:
-                parsed = json.loads(api.text('SUTypedValueGetString', value))
-            except ValueError:
-                return {}
-            return parsed if isinstance(parsed, dict) else {}
-        finally:
-            api.call('SUTypedValueRelease', C.byref(value))
-    return None
-
-
-def set_data(api, entity, data):
-    d = Ref()
-    api.call('SUAttributeDictionaryCreate', C.byref(d), DICT)
-    value = api.ref('SUTypedValueCreate')
-    try:
-        api.call('SUTypedValueSetString', value, json.dumps(data, separators=(',', ':')).encode('utf-8'))
-        api.call('SUAttributeDictionarySetValue', d, KEY, value)
-    finally:
-        api.call('SUTypedValueRelease', C.byref(value))
-    api.call('SUEntityAddAttributeDictionary', entity, d)
 
 
 def set_model_data(api, model, data):
@@ -292,10 +253,29 @@ def wall_loops(L, H, holes):
 
     Returns [(outer, [inner, ...]), ...]; outer counter-clockwise seen from local -y,
     inner loops clockwise. Holes are {s0, s1, v0, v1} rectangles, already clamped and
-    non-overlapping (Tiksi's openingSpans)."""
+    clamped to the wall. Overlapping cuts are subtracted as a union without changing
+    either opening's own width or placement."""
     tol = 1e-4
     holes = sorted(({'s0': max(0.0, h['s0']), 's1': min(L, h['s1']), 'v0': max(0.0, h['v0']), 'v1': min(H, h['v1'])} for h in holes), key=lambda h: h['s0'])
     holes = [h for h in holes if h['s1'] - h['s0'] > tol and h['v1'] - h['v0'] > tol]
+    if any(min(a['s1'], b['s1'])-max(a['s0'], b['s0']) > tol and min(a['v1'], b['v1'])-max(a['v0'], b['v0']) > tol
+           for i, a in enumerate(holes) for b in holes[i+1:]):
+        # Boundary tracing assumes disjoint holes. At overlaps use vertical strips,
+        # unioning the removed height intervals before emitting the remaining solids.
+        cuts = sorted({0.0, L, *(h['s0'] for h in holes), *(h['s1'] for h in holes)})
+        out = []
+        for a, b in zip(cuts, cuts[1:]):
+            if b-a <= tol:
+                continue
+            intervals = sorted((h['v0'], h['v1']) for h in holes if h['s0'] < b-tol and h['s1'] > a+tol)
+            y = 0.0
+            for low, high in intervals:
+                if low-y > tol:
+                    out.append(([(a, y), (b, y), (b, low), (a, low)], []))
+                y = max(y, high)
+            if H-y > tol:
+                out.append(([(a, y), (b, y), (b, H), (a, H)], []))
+        return out
     segments, start = [], 0.0
     for h in holes:
         if h['v0'] <= tol and h['v1'] >= H - tol:
@@ -429,7 +409,7 @@ def opening_detail_parts(hole, thickness):
     projecting trim cannot change the opening's read-back dimensions.
     """
     d = hole.get('resolved')
-    if not isinstance(d, dict) or not isinstance(hole.get('detail'), dict):
+    if not isinstance(d, dict) or not any(isinstance(hole.get(key), dict) for key in ('detail', 'profile')):
         return []
     w, h = hole['s1'] - hole['s0'], hole['v1'] - hole['v0']
     parts = []
@@ -559,12 +539,12 @@ def opening_detail_parts(hole, thickness):
             else:
                 box('Slab leaf', 0, lw, -lt/2, lt/2, 0, lh, pivot=pivot)
             if d.get('hardware') != 'none':
-                hx, hz = lw-.075, min(1.0, lh-.1)
+                hx, hz = lw-d.get('handleBackset', .075), d.get('handleHeight', min(1.0, lh-.1))
                 for sign in (1, -1):
                     cylinder('Handle rose', hx, sign*(lt/2+.005), hz, .028, .01, 1, pivot)
                     cylinder('Handle stem', hx, sign*(lt/2+.03), hz, .009, .05, 1, pivot)
                     if d.get('hardware') == 'knob':
-                        knob('Door knob', hx, sign*(lt/2+.05), hz, .027, pivot)
+                        knob('Door knob', hx, sign*(lt/2+.05), hz, d.get('knobRadius', .027), pivot)
                     else:
                         cylinder('Door lever', hx-.055, sign*(lt/2+.05), hz, .008, .12, 0, pivot)
         return parts
@@ -598,15 +578,17 @@ def opening_detail_parts(hole, thickness):
         sash('Sash', fw, h-fw, d['columns'], d['rows'])
     inside = 1 if sides.get('pos') else -1 if sides.get('neg') else 1
     room_sides = (1, -1) if sides.get('pos') and sides.get('neg') else (inside,)
+    cw, cd = d.get('casingWidth', .07), d.get('casingDepth', .016)
     for sign in room_sides:
-        face, outer = -sign*thickness/2, -sign*(thickness/2+.016)
+        face, outer = -sign*thickness/2, -sign*(thickness/2+cd)
         a, b = sorted((face, outer))
         stool = -sign*(thickness/2+.06)
         box('Window stool', -.06, w+.06, min(0, stool), max(0, stool), -.028, 0)
-        box('Window apron', -.07, w+.07, a, b, -.11, -.028)
-        box('Window casing', -.07, .01, a, b, 0, h+.07)
-        box('Window casing', w-.01, w+.07, a, b, 0, h+.07)
-        box('Window casing', -.07, w+.07, a, b, h-.01, h+.07)
+        if cw > 0 and cd > 0:
+            box('Window apron', -cw, w+cw, a, b, -.11, -.028)
+            box('Window casing', -cw, .01, a, b, 0, h+cw)
+            box('Window casing', w-.01, w+cw, a, b, 0, h+cw)
+            box('Window casing', -cw, w+cw, a, b, h-.01, h+cw)
     if len(room_sides) == 1:
         outer = inside*(thickness/2+.045)
         box('Exterior sill', -.03, w+.03, min(0, outer), max(0, outer), -.04, 0)
@@ -628,7 +610,8 @@ def scaled_opening_detail(detail, sx, sy, sz, flip_x=False, flip_y=False, orient
     """Dimensions and handing follow a native opening's signed local transform."""
     result = json.loads(json.dumps(detail))
     axes = {'leafWidth': sx, 'leafHeight': sz, 'leafThickness': sy, 'jambWidth': sx,
-            'casingWidth': sx, 'casingDepth': sy, 'frameWidth': sx, 'sashWidth': sx, 'muntinWidth': sx}
+            'casingWidth': sx, 'casingDepth': sy, 'frameWidth': sx, 'sashWidth': sx, 'muntinWidth': sx,
+            'handleHeight': sz, 'handleBackset': sx, 'knobRadius': min(sx, sy, sz)}
     for kind in ('door', 'window'):
         values = result.get(kind)
         if not isinstance(values, dict):
@@ -731,6 +714,8 @@ def write_wall(api, entities, wall, layer, materials, tags=None):
     for key in ('baseboardPos', 'baseboardNeg'):
         if isinstance(wall.get(key), dict):
             base[key] = json.loads(json.dumps(wall[key]))
+    if isinstance(wall.get('profile'), dict):
+        base['profile'] = json.loads(json.dumps(wall['profile']))
     write_baseboards(api, inner, wall, layer, materials)
     set_data(api, to_ref(api, 'SUGroupToEntity', group), {'kind': 'wall', 'id': wall['id'], 'level': wall['level'], 'base': base,
                                                           'local': {'x0': 0, 'x1': r6(L * IN), 'y0': r6(-th / 2 * IN), 'y1': r6(th / 2 * IN), 'z0': 0, 'z1': r6(H * IN)}})
@@ -751,7 +736,7 @@ def write_wall(api, entities, wall, layer, materials, tags=None):
             zs = [p[2] / IN for p in face_ring(api, face)]
             mid = (min(zs) + max(zs)) / 2
             paint(api, face, materials.get(next((b[2] for b in bands if b[0] <= mid <= b[1]), h.get('material'))))
-        if isinstance(h.get('detail'), dict) and isinstance(h.get('resolved'), dict):
+        if any(isinstance(h.get(key), dict) for key in ('detail', 'profile')) and isinstance(h.get('resolved'), dict):
             # The direct pane is only a read-back anchor. Hide its edges as well as faces.
             for item in api.collection(pane, 'Faces'):
                 api.call('SUDrawingElementSetHidden', to_ref(api, 'SUFaceToDrawingElement', item), C.c_bool(True))
@@ -763,8 +748,9 @@ def write_wall(api, entities, wall, layer, materials, tags=None):
                     api.call('SUDrawingElementSetHidden', to_ref(api, 'SUEdgeToDrawingElement', edge), C.c_bool(True))
             write_opening_detail(api, pane, h, th, (tags or {}).get(h.get('tag')) or layer, materials)
         obase = {'wallId': wall['id'], 't': r6(h['t']), 'width': r6(h['width']), 'height': r6(h['height']), 'sill': r6(h.get('sill') or 0)}
-        if isinstance(h.get('detail'), dict):
-            obase['detail'] = h['detail']
+        for key in ('detail', 'profile'):
+            if isinstance(h.get(key), dict):
+                obase[key] = json.loads(json.dumps(h[key]))
         if isinstance(h.get('configuration'), dict):
             obase['configuration'] = h['configuration']
         if 'floorContinuity' in h:
@@ -883,6 +869,75 @@ def write_underlay(api, entities, underlay, image_path, layer):
     set_data(api, to_ref(api, 'SUImageToEntity', image), {'kind': 'underlay', 'level': underlay['level'], 'sig': underlay['sig']})
 
 
+def face_fingerprint(api, group):
+    """Local face coordinates; moving the whole group remains a supported edit."""
+    inner = api.ref('SUGroupGetEntities', group)
+    rings = []
+    for face in api.collection(inner, 'Faces'):
+        # All vertices include holes; the outer boundary alone misses cutouts.
+        count = C.c_size_t()
+        api.call('SUFaceGetNumVertices', face, C.byref(count))
+        vertices = (Ref * count.value)()
+        api.call('SUFaceGetVertices', face, count, vertices, C.byref(count))
+        points = []
+        for vertex in vertices[:count.value]:
+            point = Point()
+            api.call('SUVertexGetPosition', vertex, C.byref(point))
+            points.append(tuple(round(v, 5) for v in (point.x, point.y, point.z)))
+        rings.append(sorted(points))
+    return hashlib.sha256(json.dumps(sorted(rings)).encode()).hexdigest()
+
+
+
+def generated_detail_fingerprint(api, group):
+    """Generated descendants in their parent's frame, excluding separately managed pieces.
+
+    Moving a whole wall/opening/fixture remains representable. Editing, moving, deleting or
+    adding its nested detail cannot be reduced to that parent's dimensions and must block a
+    rewrite. A wall's independently managed openings are checked against their own record.
+    """
+    managed = {'wall', 'opening', 'room', 'fixture'}
+    def records(entities, depth=0):
+        if depth > 64:
+            raise ValueError('SketchUp detail nesting is too deep to verify safely')
+        children = []
+        for child in api.collection(entities, 'Groups'):
+            data = get_data(api, to_ref(api, 'SUGroupToEntity', child)) or {}
+            if data.get('kind') in managed and data.get('id'):
+                continue
+            inner = api.ref('SUGroupGetEntities', child)
+            children.append({'type': 'group', 'transform': [round(v, 8) for v in group_transform(api, child)],
+                             'faces': face_fingerprint(api, child), 'children': records(inner, depth+1)})
+        for instance in api.collection(entities, 'Instances'):
+            definition = api.ref('SUComponentInstanceGetDefinition', instance)
+            transform = Transform(); api.call('SUComponentInstanceGetTransform', instance, C.byref(transform))
+            inner = api.ref('SUComponentDefinitionGetEntities', definition)
+            # Geometry inside an inserted component must be checked too, not only its ID.
+            rings = []
+            for face in api.collection(inner, 'Faces'):
+                count = C.c_size_t(); api.call('SUFaceGetNumVertices', face, C.byref(count))
+                vertices = (Ref * count.value)(); api.call('SUFaceGetVertices', face, count, vertices, C.byref(count))
+                points = []
+                for vertex in vertices[:count.value]:
+                    point = Point(); api.call('SUVertexGetPosition', vertex, C.byref(point))
+                    points.append(tuple(round(v, 5) for v in (point.x, point.y, point.z)))
+                rings.append(sorted(points))
+            children.append({'type': 'instance', 'transform': [round(v, 8) for v in transform.values],
+                             'faces': sorted(rings), 'children': records(inner, depth+1)})
+        for kind in ('Images', 'Texts', 'Dimensions', 'SectionPlanes'):
+            count = C.c_size_t(); api.call('SUEntitiesGetNum'+kind, entities, C.byref(count))
+            if count.value:
+                children.append({'type': kind, 'count': count.value})
+        return sorted(children, key=lambda value: json.dumps(value, sort_keys=True))
+    payload = records(api.ref('SUGroupGetEntities', group))
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def unsupported_group_geometry(api, group, data):
+    return bool(data and ((data.get('faceFingerprint') and data['faceFingerprint'] != face_fingerprint(api, group))
+                         or (data.get('generatedDetailFingerprint') and data['generatedDetailFingerprint'] != generated_detail_fingerprint(api, group))))
+
+
 def write_mirror(folder):
     folder = Path(folder)
     spec = json.loads((folder / 'mirror.json').read_text(encoding='utf-8'))
@@ -901,9 +956,17 @@ def write_mirror(folder):
         entities = api.ref('SUModelGetEntities', model)
         underlays = {u['level']: u for u in spec.get('underlays', [])}
         kept_underlays, erase = set(), []
+        def check_faces(groups):
+            for group in groups:
+                data = get_data(api, to_ref(api, 'SUGroupToEntity', group))
+                if unsupported_group_geometry(api, group, data):
+                    raise ValueError('Local SketchUp face edits need review; the existing mirror was preserved')
+                check_faces(api.collection(api.ref('SUGroupGetEntities', group), 'Groups'))
+        check_faces(api.collection(entities, 'Groups'))
         for group in api.collection(entities, 'Groups'):
             entity = to_ref(api, 'SUGroupToEntity', group)
-            if get_data(api, entity) is not None:
+            old_data = get_data(api, entity)
+            if old_data is not None:
                 erase.append(entity)
         for image in api.collection(entities, 'Images'):
             entity = to_ref(api, 'SUImageToEntity', image)
@@ -940,6 +1003,17 @@ def write_mirror(folder):
             if not path.is_relative_to(folder.resolve()) or not path.is_file():
                 raise ValueError('Underlay image is missing from the mirror package')
             write_underlay(api, entities, underlay, path, layers.get(level))
+        def stamp(groups):
+            for group in groups:
+                entity = to_ref(api, 'SUGroupToEntity', group)
+                data = get_data(api, entity)
+                if data is not None:
+                    data['faceFingerprint'] = face_fingerprint(api, group)
+                    if data.get('kind') in ('wall', 'opening', 'room', 'fixture'):
+                        data['generatedDetailFingerprint'] = generated_detail_fingerprint(api, group)
+                    set_data(api, entity, data)
+                stamp(api.collection(api.ref('SUGroupGetEntities', group), 'Groups'))
+        stamp(api.collection(entities, 'Groups'))
         elements = spec.get('elements')
         if not isinstance(elements, dict):
             elements = {e['id']: {'kind': e['kind']} for e in spec_elements(spec)}
@@ -1026,6 +1100,13 @@ def read_wall(api, group, data, warnings):
             now[key] = scaled_baseboard(value, axis_scale(m, 1), axis_scale(m, 2))
         elif across_reflected and isinstance(base.get(key), dict):
             now[key] = None   # explicitly remove the old side during the merge
+    if isinstance(base.get('profile'), dict):
+        now['profile'] = json.loads(json.dumps(base['profile']))
+        for key, scale in (('baseboardHeight', axis_scale(m, 2)), ('baseboardDepth', axis_scale(m, 1)),
+                           ('baseboardRadius', min(axis_scale(m, 1), axis_scale(m, 2)))):
+            value = now['profile'].get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+                now['profile'][key] = value if abs(scale-1) < 1e-10 else r6(value*scale)
     if across_reflected:
         warnings.append('Wall ' + str(data.get('id')) + ' was reflected; geometry details follow the reflection, but wall face finishes remain from Tiksi and need review.')
     openings = []
@@ -1057,6 +1138,12 @@ def read_wall(api, group, data, warnings):
             # compose: reflecting both parent and opening cancels the swing flip.
             onow['detail'] = scaled_opening_detail(detail, axis_scale(combined, 0), axis_scale(combined, 1), axis_scale(combined, 2),
                                                    om[0] < 0, across_reflected != (om[5] < 0), odata.get('orientation'))
+        profile = (odata.get('base') or {}).get('profile')
+        if isinstance(profile, dict):
+            combined = multiply(m, om)
+            kind = 'window' if odata.get('type') == 'window' else 'door'
+            onow['profile'] = scaled_opening_detail({kind: profile}, axis_scale(combined, 0), axis_scale(combined, 1), axis_scale(combined, 2),
+                                                    om[0] < 0, across_reflected != (om[5] < 0), odata.get('orientation'))[kind]
         openings.append({'id': odata.get('id'), 'type': odata.get('type'), 'base': odata.get('base') or {}, 'now': onow})
     return {'id': data.get('id'), 'level': data.get('level'), 'name': api.text('SUGroupGetName', group), 'base': data.get('base') or {}, 'now': now, 'openings': openings}
 
@@ -1153,6 +1240,15 @@ def read_mirror(folder):
         api.call('SUModelCreateFromFile', C.byref(model), os.fsencode(folder / 'source.skp'))
         info = get_model_data(api, model)
         entities = api.ref('SUModelGetEntities', model)
+        unsupported_geometry = []
+        def inspect(groups):
+            for group in groups:
+                data = get_data(api, to_ref(api, 'SUGroupToEntity', group)) or {}
+                if unsupported_group_geometry(api, group, data):
+                    unsupported_geometry.append(data.get('id', 'unknown'))
+                    warnings.append('Local face edits in ' + str(data.get('id')) + ' need review; automatic rewriting is blocked.')
+                inspect(api.collection(api.ref('SUGroupGetEntities', group), 'Groups'))
+        inspect(api.collection(entities, 'Groups'))
         walls, rooms, fixtures, untagged_groups, stray = [], [], [], 0, 0
         for group in api.collection(entities, 'Groups'):
             data = get_data(api, to_ref(api, 'SUGroupToEntity', group))
@@ -1183,7 +1279,7 @@ def read_mirror(folder):
         instances = C.c_size_t()
         api.call('SUEntitiesGetNumInstances', entities, C.byref(instances))
         return {'format': FORMAT, 'version': VERSION, 'model': info, 'walls': walls, 'rooms': rooms, 'fixtures': fixtures, 'underlays': underlays,
-                'untagged': {'faces': count.value, 'groups': untagged_groups, 'instances': instances.value}, 'warnings': warnings}
+                'unsupportedGeometry': unsupported_geometry, 'untagged': {'faces': count.value, 'groups': untagged_groups, 'instances': instances.value}, 'warnings': warnings}
     finally:
         if model.ptr:
             api.call('SUModelRelease', C.byref(model))
