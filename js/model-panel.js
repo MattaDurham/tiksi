@@ -9,7 +9,7 @@
 
 import { ws, uid, touch, escapeHtml, fmtMoney, fmtArea, materialById } from './store.js';
 import { modelTakeoff, createModelEstimate, createComponentEstimate, finishAmount, amountText } from './model-takeoff.js';
-import { modelComponents, instanceOf, instanceChain, componentKeyOf, componentProductRecord, linkComponentProduct, unlinkComponentProduct,
+import { modelComponents, instanceOf, instanceChain, componentKeyOf, componentProductRecord, componentProductEvidence, componentIdentityStatus, normalizeComponentProduct, linkComponentProduct, unlinkComponentProduct,
   componentSchedule, propertyComponentSchedule, convertedWithComponents } from './model-components.js';
 import { identityLine, colourLine, productLine } from './material-identity.js';
 import { materialTitle } from './materials.js';
@@ -72,18 +72,41 @@ function componentsHtml(scan, obj, comps) {
   }).join('');
   return componentsFoot(comps, rows, priced, total);
 }
+function componentEvidenceHtml(evidence, label = 'Identity') {
+  if (!evidence) return '';
+  const dimensions = typeof evidence.dims_mm === 'string' ? evidence.dims_mm : Object.entries(evidence.dims_mm || {}).map(([k, v]) => k + ': ' + v).join('; ');
+  const sources = typeof evidence.evidence === 'string' ? [evidence.evidence] : Object.entries(evidence.evidence || {}).flatMap(([aspect, claim]) => {
+    if (!claim || typeof claim !== 'object') return [];
+    const words = [claim.source, claim.note].filter(v => typeof v === 'string' && v.trim());
+    return words.length ? [aspect + ': ' + words.join(' — ')] : [];
+  });
+  if (evidence.evidenceText) sources.unshift(evidence.evidenceText);
+  return `<div class="mp-facts"><span>${escapeHtml(label)}: ${escapeHtml(componentIdentityStatus(evidence))}</span></div>
+    ${evidence.uncertainty ? `<div class="mp-facts"><span>Unresolved: ${escapeHtml(evidence.uncertainty)}</span></div>` : ''}
+    ${sources.length || dimensions || evidence.documents?.length || evidence.url ? `<details class="mp-evidence"><summary>EVIDENCE</summary>
+      ${sources.map(source => `<p>${escapeHtml(source)}</p>`).join('')}
+      ${dimensions ? `<p>Recorded dimensions (mm): ${escapeHtml(dimensions)}</p>` : ''}
+      ${evidence.documents?.length ? `<p>Documents: ${evidence.documents.map(escapeHtml).join('; ')}</p>` : ''}
+      ${evidence.url ? `<a href="${escapeHtml(evidence.url)}" target="_blank" rel="noopener noreferrer">Source</a>` : ''}</details>` : ''}`;
+}
 function componentRow(scan, c, byKey, r, card = false) {
     const rec = componentProductRecord(ws.data, scan, c.key);
-    const installed = scan.componentProducts?.[c.key] || {}, editingLink = installed.proposedProduct || installed;
+    const evidence = componentProductEvidence(scan, c.key);
+    const identity = evidence && [evidence.brand, evidence.model].filter(Boolean).join(' · ');
+    const installed = evidence || {}, proposal = normalizeComponentProduct(installed.proposedProduct);
+    const activeProposal = proposal && !proposal.unlinked, editingLink = activeProposal ? proposal : installed;
+
     const within = c.parents.map(k => byKey.get(k)?.name).filter(Boolean);
     const holds = Object.entries(c.contains).map(([k, n]) => n + ' × ' + (byKey.get(k)?.name || 'component'));
     return `<div class="mp-comp" data-mp-comp="${escapeHtml(c.key)}">
       <div class="mp-comp-head"><b title="${escapeHtml(c.definitionId ? 'SketchUp definition ' + c.definitionId : c.name)}">${escapeHtml(c.name)}</b><span class="mp-count">× ${c.count}</span></div>
       ${within.length || holds.length ? `<div class="mp-facts">${within.length ? `<span>inside ${escapeHtml(within.join(', '))}</span>` : ''}${holds.length ? `<span>each holds ${escapeHtml(holds.join(', '))}</span>` : ''}</div>` : ''}
       ${c.description ? `<div class="mp-facts"><span>${escapeHtml(c.description.slice(0, 200))}</span></div>` : ''}
-      <div class="mp-facts">${rec ? `<span>${escapeHtml(productLine({ product: { productId: rec.id } }, ws.data.products) || rec.name || 'Product')}</span>${r.unitPrice ? `<span>${escapeHtml(fmtMoney(r.unitPrice))} each · ${escapeHtml(fmtMoney(r.extended))}</span>` : `<span class="faint">${escapeHtml(r.priceNote || 'no price yet')}</span>`}` : '<span class="faint">no product linked</span>'}</div>
+      <div class="mp-facts">${rec ? `<span>${escapeHtml(productLine({ product: { productId: rec.id } }, ws.data.products) || rec.name || 'Product')}</span>${r.unitPrice ? `<span>${escapeHtml(fmtMoney(r.unitPrice))} each · ${escapeHtml(fmtMoney(r.extended))}</span>` : `<span class="faint">${escapeHtml(r.priceNote || 'no price yet')}</span>`}` : `${evidence ? `<span>${escapeHtml(identity || evidence.name || 'Recorded component evidence')}</span>` : ''}<span class="faint">no product linked</span>`}</div>
+      ${componentEvidenceHtml(evidence)}
+      ${proposal ? componentEvidenceHtml(proposal, proposal.unlinked ? 'Previous proposed match' : 'Proposed match') : ''}
       ${card ? '' : `<div class="mp-actions"><button class="btn" data-mp-select="${escapeHtml(c.key)}" title="Select and outline every instance">SELECT ${c.count}</button></div>`}
-      <p class="empty">Installed identity: ${escapeHtml(productLine({ product: installed }, ws.data.products) || 'unidentified')} (${escapeHtml(installed.identityStatus || 'unknown')}). Geometry retains the observed appearance.${scan.componentProducts?.[c.key]?.proposedProduct ? ' A separate proposed purchasable match is linked below.' : ''}</p>
+      <p class="empty">Installed identity: ${escapeHtml(productLine({ product: installed }, ws.data.products) || 'unidentified')} (${escapeHtml(componentIdentityStatus(installed))}). Linking a product does not change the geometry.${activeProposal ? ' A separate proposed purchasable match is linked below.' : ''}</p>
       <details class="mp-link"><summary>${rec ? 'CHANGE PRODUCT' : 'LINK PRODUCT'}</summary>
         <div class="field"><label>From the products list</label><select data-mp-product>${productOptions(rec ? rec.id : '')}</select></div>
         <div class="field-row"><div class="field"><label>Maker</label><input type="text" data-mp-brand value="${escapeHtml(rec ? rec.brand || '' : '')}" placeholder="e.g. Kohler"></div>
@@ -91,7 +114,7 @@ function componentRow(scan, c, byKey, r, card = false) {
         <div class="field"><label>Product name</label><input type="text" data-mp-name value="${escapeHtml(rec ? rec.name || '' : '')}" placeholder="optional"></div>
         <div class="field"><label>Identity status</label><select data-mp-identity>${['unknown','observed','proposed'].map(k => `<option value="${k}" ${editingLink.identityStatus === k ? 'selected' : ''}>${k === 'proposed' ? 'Proposed purchasable match' : k}</option>`).join('')}</select></div>
         <div class="field"><label>Identity evidence reference</label><input type="text" data-mp-evidence value="${escapeHtml(editingLink.evidence?.identity?.source || '')}"></div>
-        <button class="btn" data-mp-link="${escapeHtml(c.key)}">LINK</button>${rec ? `<button class="btn" data-mp-unlink="${escapeHtml(c.key)}">${installed.proposedProduct ? 'UNLINK PROPOSED MATCH' : 'UNLINK'}</button>` : ''}
+        <button class="btn" data-mp-link="${escapeHtml(c.key)}">LINK</button>${rec ? `<button class="btn" data-mp-unlink="${escapeHtml(c.key)}">${activeProposal ? 'UNLINK PROPOSED MATCH' : 'UNLINK'}</button>` : ''}
       </details>
     </div>`;
 }
@@ -198,7 +221,7 @@ export function bindModelPanel(root, ctx) {
         say(c.name + ' × ' + c.count + ' is linked to ' + (record.name || record.model) + (created ? ' (added to Products; add its price there)' : '') + '.');
       } catch (e) { say(e.message, 'warn'); }
     };
-    if (unlink) unlink.onclick = () => { unlinkComponentProduct(scan, key, scan.componentProducts?.[key]?.proposedProduct ? 'proposed' : 'all'); touch(); ctx.rerender(); };
+    if (unlink) unlink.onclick = () => { unlinkComponentProduct(scan, key, scan.componentProducts?.[key]?.proposedProduct && !scan.componentProducts[key].proposedProduct.unlinked ? 'proposed' : 'all'); touch(); ctx.rerender(); };
   });
   const again = panel.querySelector('[data-mp-reconvert]');
   if (again) again.onclick = async () => {

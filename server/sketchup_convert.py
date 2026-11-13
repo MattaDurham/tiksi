@@ -129,7 +129,8 @@ def read_skp(source, output):
     each instance a node with its transform and extras naming its definition. Groups are unique,
     so their faces are placed in the frame they sit in. Faces on the default material take the
     nearest enclosing instance's or group's material (SketchUp's rule), so a definition's shared
-    meshes are keyed by definition and that inherited material."""
+    meshes are keyed by definition and that inherited material. Explicitly hidden drawing
+    elements are omitted; the retained source SKP still contains them."""
     if __package__:from .mesh_exchange import write_glb
     else:from mesh_exchange import write_glb
     api = API(); model = Ref(); meshes = []; material_cache = {}; warnings = []; templates = {}; counts = {'nodes': 0}
@@ -163,6 +164,9 @@ def read_skp(source, output):
         face_element = api.lib.SUFaceToDrawingElement; face_element.restype = Ref
         group_instance = api.lib.SUGroupToComponentInstance; group_instance.restype = Ref
         instance_element = api.lib.SUComponentInstanceToDrawingElement; instance_element.restype = Ref
+        def is_hidden(element):
+            hidden = C.c_bool(False)
+            return not api.call('SUDrawingElementGetHidden', element, C.byref(hidden), optional=True) and hidden.value
         def collect(entities, matrix, name, inherited, depth, tag, out):
             """Faces of `entities`, placed by `matrix` in the current frame, become batch nodes in
             `out` (one per material and tag); groups are placed in the same frame; component
@@ -172,6 +176,7 @@ def read_skp(source, output):
             batches = {}
             det = determinant(matrix)
             for face in api.collection(entities,'Faces'):
+                if is_hidden(face_element(face)): continue
                 mat = Ref(); api.call('SUFaceGetFrontMaterial',face,C.byref(mat),optional=True)
                 if not mat.ptr: mat=inherited
                 face_tag = tag_of(face_element(face), tag)
@@ -199,11 +204,13 @@ def read_skp(source, output):
                 finally:api.call('SUMeshHelperRelease',C.byref(mesh))
             for child in api.collection(entities,'Groups'):
                 instance=group_instance(child)
+                if is_hidden(instance_element(instance)): continue
                 t=Transform();api.call('SUComponentInstanceGetTransform',instance,C.byref(t))
                 mat=Ref();api.call('SUDrawingElementGetMaterial',instance_element(instance),C.byref(mat),optional=True)
                 collect(api.ref('SUGroupGetEntities',child),multiply(matrix,list(t.values)),api.text('SUGroupGetName',child) or name,
                         mat if mat.ptr else inherited,depth+1,tag_of(instance_element(instance),tag),out)
             for instance in api.collection(entities,'Instances'):
+                if is_hidden(instance_element(instance)): continue
                 definition=api.ref('SUComponentInstanceGetDefinition',instance)
                 t=Transform();api.call('SUComponentInstanceGetTransform',instance,C.byref(t))
                 mat=Ref();api.call('SUDrawingElementGetMaterial',instance_element(instance),C.byref(mat),optional=True)
@@ -264,7 +271,7 @@ def read_skp(source, output):
         stats=write_glb(meshes,output,place(top,None),{'sketchupComponents':1})
         components=len({k[0] for k in templates})
         summary=f'{components} component definition{"s" if components!=1 else ""} written once and shared by their instances; {stats["materials"]} material{"s" if stats["materials"]!=1 else ""}.' if components else f'{stats["materials"]} material{"s" if stats["materials"]!=1 else ""}.'
-        return {'warnings': sorted(set(warnings))+['Native SKP faces, holes, component definitions and instances, names, tags, diffuse textures and colours converted. '+summary+' Scenes, guides, dynamic component logic and PBR extensions remain in the source SKP.']}
+        return {'warnings': sorted(set(warnings))+['Visible native SKP faces, holes, component definitions and instances, names, tags, diffuse textures and colours converted. '+summary+' Scenes, guides, dynamic component logic and PBR extensions remain in the source SKP.']}
     finally:
         if model.ptr:api.call('SUModelRelease',C.byref(model))
         api.lib.SUTerminate()

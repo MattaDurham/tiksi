@@ -29,7 +29,7 @@ const check = (ok, label) => { assert.ok(ok, label); console.log('  ok   ' + lab
 
 try {
   await page.goto(url + '/#/budget');
-  await page.waitForSelector('#btn-file');
+  await page.waitForSelector('#btn-file', { state: 'attached' });
 
   // Shared helpers inside the page: OPFS folders, a listing, and a sync that never races the timer.
   await page.evaluate(async () => {
@@ -131,7 +131,7 @@ try {
   console.log('\n[reload] the own folder link is remembered');
   await page.waitForTimeout(600);
   await page.reload();
-  await page.waitForSelector('#btn-file');
+  await page.waitForSelector('#btn-file', { state: 'attached' });
   const after = await page.evaluate(async () => {
     const f = await import('/js/files.js'), s = await import('/js/store.js');
     const deadline = Date.now() + 10000;
@@ -145,8 +145,8 @@ try {
   await page.evaluate(async () => { const s = await import('/js/store.js'); const a = s.ws.data.properties.find(p => p.name === 'House A'); s.ws.data.settings.activePropertyId = a.id; s.touch(); });
   await page.waitForTimeout(600);
   await page.reload();
-  await page.waitForSelector('#btn-file');
-  await page.click('#btn-file'); await page.click('[data-file-tab=settings]');
+  await page.waitForSelector('#btn-file', { state: 'attached' });
+  await page.click('#tiksi-menu').then(() => page.click('#btn-file')); await page.click('[data-file-tab=settings]');
   await page.waitForFunction(() => /moved/.test(document.querySelector('[data-own-folder-label]')?.textContent || ''));
   const label = await page.locator('[data-own-folder-label]').textContent();
   check(/Kept in moved\. Only this project is written there\./.test(label), 'the settings label names the folder (' + label + ')');
@@ -173,7 +173,7 @@ try {
   console.log('\n[reload] a Tiksi folder inside the pick is found again after a reload');
   await page.waitForTimeout(600);
   await page.reload();
-  await page.waitForSelector('#btn-file');
+  await page.waitForSelector('#btn-file', { state: 'attached' });
   const again = await page.evaluate(async () => {
     const f = await import('/js/files.js'), s = await import('/js/store.js');
     const a = s.ws.data.properties.find(p => p.name === 'House A'), deadline = Date.now() + 10000;

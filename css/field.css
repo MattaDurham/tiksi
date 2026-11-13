@@ -19,8 +19,8 @@ html.phone {
 }
 html.phone body { overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
 
-/* ---------- shell: no topbar, no rail ---------- */
-html.phone #topbar, html.phone #rail { display: none; }
+/* ---------- shell: no topbar, no page tabs, no left pane ---------- */
+html.phone #topbar, html.phone #rail, html.phone #side { display: none; }
 html.phone #app { grid-template: minmax(0, 1fr) / minmax(0, 1fr); grid-template-areas: "view"; height: 100vh; height: 100dvh; }
 html.phone:not(.fd-model) #view { padding-top: calc(var(--fd-bar-h) + var(--fd-top)); }
 /* Page content keeps clear of the notch held sideways and of the home bar. Margins, not

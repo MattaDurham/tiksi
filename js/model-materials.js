@@ -22,7 +22,8 @@ const hex = c => c && c.getHexString ? c.getHexString() : '';
 export function materialLook(m) {
   return [m.type, m.name || '', hex(m.color), round(m.opacity, 4), m.transparent ? 1 : 0, round(m.roughness, 3), round(m.metalness, 3),
     hex(m.emissive), round(m.emissiveIntensity, 3), ...TEXTURE_KEYS.map(k => texId(m[k])), m.vertexColors ? 1 : 0, m.side, round(m.alphaTest, 3),
-    m.flatShading ? 1 : 0, m.transmission != null ? round(m.transmission, 3) : '', (m.userData && m.userData.tiksiMaterialId) || ''].join('|');
+    m.flatShading ? 1 : 0, m.transmission != null ? round(m.transmission, 3) : '', (m.userData && m.userData.tiksiMaterialId) || '',
+    m.userData?.tiksiMirror?.type === 'planar' ? 'planar-mirror' : ''].join('|');
 }
 
 const meshesOf = root => { const out = []; root.traverse(o => { if (o.isMesh && !(o.userData && o.userData.pickBox)) out.push(o); }); return out; };

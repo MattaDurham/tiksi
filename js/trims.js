@@ -25,6 +25,7 @@
 
 import { sectionOf, isCrownProfile } from './trim-profiles.js';
 import { catalogItem, catalogFor, TRIM_CATALOG } from './trim-catalog.js';
+import { doorDetail, windowDetail, plainOpening } from './wall-solids.js';
 
 // kind: 'run' (one moulding along the wall), 'crown' (a run at the ceiling), 'field' (an area).
 export const TRIM_STYLES = {
@@ -142,8 +143,10 @@ export function openingBlocks(wall, openings, L, H) {
     if (o.wallId !== wall.id) continue;
     const w = Math.min(o.width || 0, L);
     const c = Math.min(Math.max((o.t || 0) * L, w / 2), L - w / 2);
-    const plain = o.type !== 'window' && o.plain === true;
-    const cw = plain ? 0 : clamp(fin(o.profile && o.profile.casingWidth, .07), 0, .3);
+    // Use the same construction details as the rendered opening: measured detail wins
+    // over the older profile interface, and an explicit zero means no casing width.
+    const detail = o.type === 'window' ? windowDetail(o, w, o.height || 0) : doorDetail(o, w, o.height || 0, false);
+    const cw = plainOpening(o) || (o.type !== 'window' && !detail.casingDepth) ? 0 : detail.casingWidth;
     if (o.type === 'window') {
       const sill = Math.max(0, o.sill || 0);
       out.push({ x0: c - w / 2 - cw, x1: c + w / 2 + cw, y0: Math.max(0, sill - .11), y1: Math.min(H, sill + (o.height || 0) + cw), id: o.id });

@@ -193,7 +193,7 @@ function assertPlan(prop, tag) {
   void thick;
 }
 async function runDialog(link, opts) {
-  await page.click('#btn-file');await page.click('[data-new-property]');
+  await page.click('#tiksi-menu').then(() => page.click('#btn-file'));await page.click('[data-new-property]');
   await page.waitForSelector('#np-dialog [data-np-input]');
   if (opts && opts.relay === false) await page.uncheck('#np-dialog [data-np-relay]');
   else if (opts && opts.relay) {
@@ -326,7 +326,7 @@ try {
     const p = ws.data.properties.find(p => p.source?.captureId === captureId);
     return { levels: p.levels.length, walls: p.walls.length, scans: p.scans.length, name: p.name };
   }, CAPTURE_ID);
-  await page.click('#btn-file');await page.click('[data-file-tab=capture]');
+  await page.click('#tiksi-menu').then(() => page.click('#btn-file'));await page.click('[data-file-tab=capture]');
   await page.setInputFiles('[data-any-file]',glbPath);
   // File parsing and viewer attachment are separate async transitions. Match
   // the import budget above, then wait for the new mesh instead of clicking a

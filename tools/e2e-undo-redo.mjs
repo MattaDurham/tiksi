@@ -95,9 +95,17 @@ try {
   assert.equal(await wallField(page, 'material'), chosen);
   await page.evaluate(async () => { const s = window.undoStore; s.mergeWorkspace(JSON.parse(JSON.stringify(s.ws.data))); });
   assert.equal(await page.locator('#btn-undo').isDisabled(), true, 'opening/reimporting a project clears its previous session history');
+  // On the desktop UNDO and REDO are in the Tiksi menu, beside FILE, not on the top bar.
+  assert.equal(await page.locator('#btn-undo').isVisible(), false, 'no UNDO button on the top bar');
+  await page.locator('#rail [data-view=plan]').click();
+  await page.locator('[data-tool=wall]').first().waitFor();
+  await page.click('#tiksi-menu');
+  assert.equal(await page.locator('.tk-menu #btn-undo').isVisible(), true, 'UNDO is in the Tiksi menu');
+  assert.equal(await page.locator('.tk-menu #btn-file').isVisible(), true, 'beside FILE');
+  await page.keyboard.press('Escape');
   for (const width of [320, 800, 1280]) {
     await page.setViewportSize({ width, height: 900 });
-    assert.equal(await page.locator('#topbar').evaluate(el => el.scrollWidth <= el.clientWidth), true, 'history controls fit header at ' + width);
+    assert.equal(await page.locator('#topbar').evaluate(el => el.scrollWidth <= el.clientWidth), true, 'the top bar fits at ' + width);
   }
   assert.deepEqual(errors, []);
   console.log('ok   MODEL finish change, MODEL/MEASURE shared undo, disk saves, independent shared edits, project isolation, mobile Undo/Redo and shortcuts');

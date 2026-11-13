@@ -40,7 +40,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto(url + '/#/materials');
-  await page.locator('#btn-file').waitFor();
+  await page.locator('#btn-file').waitFor({ state: 'attached' });
   await page.evaluate(async () => {
     const s = await import('/js/store.js');
     const THREE = await import('three');
@@ -167,17 +167,15 @@ try {
     }, key);
     return [rect.x + (at[0] + 1) / 2 * rect.width, rect.y + (1 - at[1]) / 2 * rect.height];
   };
-  await page.locator('#tiksi-menu').click();
-  await page.locator('.tk-item', { hasText: 'Top, north up' }).click();
+  await page.locator('#side [data-act=top-mode]').click();
   await delay(1300);
   await idle(page);
   await page.mouse.click(...await screenOf(chairs[0]));
   await page.locator('.inspector .op-name').waitFor();
   assert.equal(await page.locator('.inspector .op-name').innerText(), 'Dining chair');
   assert.ok(/1 of 2/.test(await page.locator('.inspector').innerText()));
-  // The Tiksi menu brings the list back, with the chair marked in it.
-  await page.locator('#tiksi-menu').click();
-  await page.locator('.tk-item', { hasText: 'Component list' }).click();
+  // The left pane brings the list back, with the chair marked in it.
+  await page.locator('#side [data-act=component-list]').click();
   await list.waitFor();
   assert.equal(await list.locator('.ol-row.active').count(), 1);
 

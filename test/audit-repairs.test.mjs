@@ -14,7 +14,7 @@ const { resizeOpening, openingSchedule } = await import('../js/opening-schedule.
 const { buildRoomCeiling, thresholdFloors } = await import('../js/geometry.js');
 const { needsOwner } = await import('../js/measurements.js');
 const { sha256Blob } = await import('../js/sha256.js');
-const { linkComponentProduct, unlinkComponentProduct } = await import('../js/model-components.js');
+const { linkComponentProduct, unlinkComponentProduct, componentProductRecord } = await import('../js/model-components.js');
 const { mergeMirror } = await import('../js/sketchup-mirror.js');
 
 test('a saved project retains directly referenced and proposed products after scope deletion', () => {
@@ -123,4 +123,62 @@ test('slab dimensions agree with rendered automatic pairs and cased openings', a
   assert.equal(openingDimensions(prop,opening).slabWidth,null);
   assert.equal(openingDimensions(prop,{...opening,leaves:1}).leaves,1);
   assert.equal(openingDimensions(prop,{...opening,plain:true}).slabWidth,null);
+});
+
+test('reviewed construction details become stale after handing, sash, soffit, trim or threshold changes', () => {
+  const cases = [
+    [{ detail: { door: { hinge: 'start', leafWidth: 0.7 } } }, r => { r.detail.door.hinge = 'end'; }],
+    [{ detail: { door: { hinge: 'start', leafWidth: 0.7 } } }, r => { r.detail.door.leafWidth = 0.75; }],
+    [{ detail: { window: { type: 'double-hung', upperColumns: 3, lowerColumns: 1 } } }, r => { r.detail.window.lowerColumns = 3; }],
+    [{ pts: [[0, 0], [2, 0], [2, 2]], ceilingHeight: 2.4 }, r => { r.ceilingHeight = 2.07; }],
+    [{ baseboardPos: { height: 0.14, depth: 0.012, profile: 'rectangular' } }, r => { r.baseboardPos.height = 0.09; r.baseboardPos.profile = 'rounded'; }],
+    [{ baseboardNeg: { height: 0.09, depth: 0.012, profile: 'rounded' } }, r => { delete r.baseboardNeg; }],
+    [{ type: 'door', floorContinuity: true }, r => { r.floorContinuity = false; }],
+    [{ type: 'door', doorState: 'closed' }, r => { r.doorState = 'open'; }],
+  ];
+  for (const [record, change] of cases) {
+    setEvidence(record, 'geometry', 'observed', 'Synthetic measured detail');
+    assert.equal(evidenceState(record), 'observed');
+    change(record);
+    assert.equal(evidenceState(record), 'stale', JSON.stringify(record));
+    assert.equal(record.evidence.geometry.source, 'Synthetic measured detail', 'staleness retains the original source');
+    setEvidence(record, 'geometry', 'observed', 'Synthetic revised detail');
+    assert.equal(evidenceState(record), 'observed', 'explicit review accepts the revised geometry');
+  }
+});
+
+test('adding opening detail invalidates its host wall review but unrelated notes do not', () => {
+  const wall = { id: 'wall', ax: 0, ay: 0, bx: 3, by: 0, thickness: 0.12 };
+  const opening = { id: 'door', wallId: wall.id, type: 'door', width: 0.8, height: 2 };
+  const prop = { walls: [wall], openings: [opening], levels: [] };
+  const reviewed = elementEvidenceRecord(prop, 'wall', wall);
+  setEvidence(reviewed, 'geometry', 'observed', 'Synthetic wall elevation'); wall.evidence = reviewed.evidence;
+  wall.notes = 'Retained explanatory note';
+  assert.equal(evidenceState(elementEvidenceRecord(prop, 'wall', wall)), 'observed');
+  opening.detail = { door: { hinge: 'end', style: 'slab' } };
+  assert.equal(evidenceState(elementEvidenceRecord(prop, 'wall', wall)), 'stale');
+});
+
+test('component identity review preserves legacy prose while proposed matches remain separate and safely unlink', () => {
+  const data = { products: [{ id: 'actual', brand: 'A', model: 'A1' }, { id: 'match', brand: 'B', model: 'B1' }, { id: 'other', brand: 'C', model: 'C1' }] };
+  const component = { key: 'key', name: 'Synthetic fixture' };
+  const scan = { componentProducts: { key: { productId: 'actual', brand: 'A', model: 'A1', status: 'likely', evidence: 'Photograph of the installed fixture.', uncertainty: 'Finish unknown.' } } };
+  linkComponentProduct(data, null, scan, component, { productId: 'actual', identityStatus: 'observed', evidence: { identity: { source: 'label.jpg' } } }, () => {});
+  assert.equal(scan.componentProducts.key.evidenceText, 'Photograph of the installed fixture.');
+  assert.equal(scan.componentProducts.key.evidence.identity.source, 'label.jpg');
+  unlinkComponentProduct(scan, 'key');
+  linkComponentProduct(data, null, scan, component, { productId: 'match', identityStatus: 'proposed', evidence: { identity: { source: 'catalog.pdf' } } }, () => {});
+  assert.equal(scan.componentProducts.key.unlinked, true, 'linking a proposal does not relink the installed identity');
+  assert.equal(componentProductRecord(data, scan, 'key').id, 'match', 'only the active proposal is priced');
+  unlinkComponentProduct(scan, 'key');
+  assert.equal(componentProductRecord(data, scan, 'key'), null, 'unlink all detaches both associations');
+  assert.equal(scan.componentProducts.key.proposedProduct.evidence.identity.source, 'catalog.pdf', 'proposal research is retained without pricing');
+  linkComponentProduct(data, null, scan, component, { productId: 'match', identityStatus: 'proposed' }, () => {});
+  assert.equal(scan.componentProducts.key.proposedProduct.evidence.identity.source, 'catalog.pdf');
+  linkComponentProduct(data, null, scan, component, { productId: 'other', identityStatus: 'proposed' }, () => {});
+  assert.equal(scan.componentProducts.key.proposedProduct.evidence, undefined, 'another candidate does not inherit the first proposal source');
+  assert.equal(scan.componentProducts.key.evidenceText, 'Photograph of the installed fixture.', 'installed observations are unchanged');
+  unlinkComponentProduct(scan, 'key', 'proposed');
+  assert.equal(scan.componentProducts.key.proposedProduct, undefined);
+  assert.equal(componentProductRecord(data, scan, 'key'), null);
 });

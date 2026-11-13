@@ -94,11 +94,12 @@ function apply() {
   // The desktop layout chosen on a phone keeps a way back on screen: the top bar shows it.
   if (els) els.back.hidden = on || !(media && media.matches || touchDevice());
   // UNDO and REDO move into the slim bar on a phone (editing pages show them there) and back
-  // beside the save status on the desktop. The buttons keep their ids and handlers.
+  // into the Tiksi menu on the desktop, where Cmd+Z and Cmd+Shift+Z do the same. The buttons
+  // keep their ids and handlers.
   const history = document.getElementById('edit-history');
   if (history && els) {
     if (on && history.parentElement !== els.bar) els.bar.append(history);
-    else if (!on && history.parentElement === els.bar) document.getElementById('save-status')?.before(history);
+    else if (!on && history.parentElement === els.bar) document.getElementById('tk-top')?.append(history);
   }
   refreshChrome();
 }
@@ -155,7 +156,7 @@ function build() {
   back.type = 'button'; back.className = 'tb-btn fd-return'; back.dataset.fieldLayout = 'phone'; back.hidden = true;
   back.textContent = 'PHONE LAYOUT';
   back.title = 'Back to the phone layout: the model full screen, with one side panel';
-  document.querySelector('#topbar .topbar-group:last-child')?.prepend(back);
+  document.getElementById('save-status')?.before(back);
   els = { bar, menu: bar.querySelector('.fd-menu'), title: bar.querySelector('.fd-title'), save: bar.querySelector('.fd-save'), note, frame, pad, task, scrim, panel, camera, back };
   watchSave();
   task.querySelector('.fd-task-done').onclick = () => { fieldAction('tool', 'select'); refreshChrome(); };

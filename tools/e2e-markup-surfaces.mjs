@@ -90,7 +90,7 @@ try {
   await go('v-west');
   const box = await page.locator('canvas.v-canvas').boundingBox();
   const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
-  await page.locator('.tool-col [data-act=markup]').click();
+  await page.locator('#side [data-act=markup]').click();
   await page.locator('.mk-bar').waitFor();
   assert.equal((await state(page)).place, 'surface');
   const camWest = (await state(page)).camera;

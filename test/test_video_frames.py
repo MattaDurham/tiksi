@@ -211,17 +211,47 @@ class WithFfmpeg(unittest.TestCase):
         slow = Path(self.temp.name) / 'bin'; slow.mkdir()
         (slow / 'ffmpeg').write_text('#!/bin/sh\nexec sleep 30\n'); (slow / 'ffmpeg').chmod(0o755)
         service = VideoFrameService(self.root, ffmpeg=str(slow / 'ffmpeg'), ffprobe=FFPROBE)
-        data = self.tape.read_bytes(); job = service.open(None, io.BytesIO(data), len(data))
-        wait(service, job['id'], states=('queued',))
-        started = time.time(); self.assertEqual(service.cancel(job['id'])['cancelled'], 1)
-        job = wait(service, job['id'])
-        self.assertEqual(job['state'], 'cancelled'); self.assertLess(time.time() - started, 10)
-        self.assertEqual(service.active_jobs(), 0)
-        resumed = VideoFrameService(self.root, ffmpeg=FFMPEG, ffprobe=FFPROBE)
-        self.assertIn(resumed.open(job['id'])['state'], ('queued', 'analyzing', 'ready'), 'opening a cancelled video resumes it')
-        self.assertEqual(wait(resumed, job['id'])['state'], 'ready')
-        resumed.delete(job['id'])
-        self.assertFalse((self.root / job['id']).exists())
+        resumed = None
+        try:
+            data = self.tape.read_bytes(); job = service.open(None, io.BytesIO(data), len(data))
+            # "analyzing" is saved before Popen registers the decoder. The test promises
+            # a running process, so synchronize on that process, not the earlier label.
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                with service.lock:
+                    processes = list(service.processes.get(job['id'], ()))
+                    live = [process for process in processes if process.poll() is None]
+                    current = service.load(job['id'])
+                    if live:
+                        self.assertEqual(len(live), 1)
+                        decoder = live[0]
+                        self.assertEqual(current['state'], 'analyzing', current)
+                        started = time.monotonic()
+                        self.assertEqual(service.cancel(job['id'])['cancelled'], 1)
+                        worker = service.threads[job['id']]
+                        break
+                if not current or current['state'] not in ('queued', 'analyzing'):
+                    self.fail('decoder did not reach a running state: ' + json.dumps(current))
+                time.sleep(0.01)
+            else:
+                with service.lock:
+                    diagnostic = {'job': service.load(job['id']), 'processes': [
+                        {'pid': process.pid, 'returncode': process.poll()}
+                        for process in service.processes.get(job['id'], ())]}
+                self.fail('decoder was not registered within 10 seconds: ' + json.dumps(diagnostic))
+            job = wait(service, job['id'])
+            worker.join(max(0, 10 - (time.monotonic() - started)))
+            self.assertEqual(job['state'], 'cancelled'); self.assertLess(time.monotonic() - started, 10)
+            self.assertIsNotNone(decoder.poll(), 'cancel must stop the actual decoder process')
+            self.assertEqual(service.active_jobs(), 0)
+            resumed = VideoFrameService(self.root, ffmpeg=FFMPEG, ffprobe=FFPROBE)
+            self.assertIn(resumed.open(job['id'])['state'], ('queued', 'analyzing', 'ready'), 'opening a cancelled video resumes it')
+            self.assertEqual(wait(resumed, job['id'])['state'], 'ready')
+            resumed.delete(job['id'])
+            self.assertFalse((self.root / job['id']).exists())
+        finally:
+            if resumed: resumed.close()
+            service.close()
 
     def test_interrupted_analysis_is_marked_on_restart(self):
         job = wait(self.service, self.upload(self.tape)['id'])

@@ -50,7 +50,7 @@ const boxOf = async locator => { for (let i = 0; i < 40; i++) { const b = await 
 
 try {
   await page.goto(url + '/#/model');
-  await page.waitForSelector('#btn-file');
+  await page.waitForSelector('#btn-file', { state: 'attached' });
   await page.evaluate(async () => {
     const s = await import('/js/store.js');
     localStorage.clear();

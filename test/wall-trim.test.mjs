@@ -20,6 +20,7 @@ const { buildWallGroup, buildTrimGroup } = await import('../js/geometry.js');
 const T = await import('../js/trims.js');
 const { TRIM_CATALOG, catalogItem, catalogFor } = await import('../js/trim-catalog.js');
 const { sectionOf } = await import('../js/trim-profiles.js');
+const { trimMeshParts } = await import('../js/trim-mesh.js');
 
 const X = { matOpts: { transparent: true, opacity: 0.5 } };
 const WALL = { id: 'w1', ax: 0, ay: 0, bx: 4, by: 0, thickness: 0.114, height: 2.44, level: 'l1' };
@@ -60,6 +61,54 @@ test('a baseboard stops at the door casing and keeps its height, and reaches the
   near(a.x1, 2 - 0.4 - 0.07, 'stops at the left casing'); near(b.x0, 2 + 0.4 + 0.07, 'starts at the right casing');
   assert.ok(a.mitreA && !a.mitreB && !b.mitreA && b.mitreB, 'mitred only where it meets the next wall');
   near(a.W, 3.25 * 0.0254, 'its height is the product\'s width', 1e-4);
+});
+
+test('trim cuts use measured door and window casing widths before legacy profiles', () => {
+  for (const type of ['door', 'window']) {
+    for (const [measured, legacy] of [[0.18, 0.09], [0.025, 0.18], [0, 0.14]]) {
+      const o = { ...DOOR, type, sill: type === 'window' ? 0.5 : 0, height: 1.5,
+        profile: { casingWidth: legacy }, detail: { [type]: { casingWidth: measured } } };
+      const [block] = T.openingBlocks(WALL, [o], 4, 2.44);
+      near(block.x0, 1.6 - measured, type + ' left casing boundary');
+      near(block.x1, 2.4 + measured, type + ' right casing boundary');
+      near(block.y1, o.sill + o.height + measured, type + ' upper casing boundary');
+      const t = T.trimTemplate('chair-rail', null, WALL, 1, { wallHeight: 2.44 });
+      const pieces = T.trimLayout(t, WALL, [o], { H: 2.44 }).parts;
+      assert.equal(pieces.length, 2, type + ' cuts the rail into two pieces');
+      near(pieces[0].x1, block.x0, type + ' left rail meets casing');
+      near(pieces[1].x0, block.x1, type + ' right rail meets casing');
+    }
+  }
+});
+
+test('trim cuts retain legacy casing and default dimensions when measured details omit them', () => {
+  for (const type of ['door', 'window']) {
+    for (const [profile, expected] of [[undefined, 0.07], [{ casingWidth: 0.04 }, 0.04], [{ casingWidth: 0.36 }, 0.36]]) {
+      const o = { ...DOOR, type, profile, detail: { [type]: {} } };
+      const [block] = T.openingBlocks(WALL, [o], 4, 2.44);
+      near(block.x0, 1.6 - expected, type + ' fallback left casing boundary');
+      near(block.x1, 2.4 + expected, type + ' fallback right casing boundary');
+    }
+  }
+});
+
+test('plain doors and passages have no casing cuts even when their profiles and details specify it', () => {
+  for (const type of ['door', 'opening']) {
+    const o = { ...DOOR, type, plain: true, profile: { casingWidth: 0.12 }, detail: { door: { casingWidth: 0.2 } } };
+    const [block] = T.openingBlocks(WALL, [o], 4, 2.44);
+    near(block.x0, 1.6, type + ' left edge is the aperture');
+    near(block.x1, 2.4, type + ' right edge is the aperture');
+    near(block.y1, DOOR.height, type + ' upper edge is the aperture');
+  }
+  const win = { ...DOOR, type: 'window', plain: true, sill: 0.3, detail: { window: { casingWidth: 0.12 } } };
+  near(T.openingBlocks(WALL, [win], 4, 2.44)[0].x0, 1.48, 'plain does not remove a window casing');
+});
+
+test('zero-depth door casing leaves no casing clearance, matching the rendered opening', () => {
+  const o = { ...DOOR, profile: { casingWidth: .12, casingDepth: .02 }, detail: { door: { casingDepth: 0 } } };
+  const [block] = T.openingBlocks(WALL, [o], 4, 2.44);
+  near(block.x0, 1.6, 'no left casing'); near(block.x1, 2.4, 'no right casing');
+  near(block.y1, DOOR.height, 'no head casing');
 });
 
 test('a chair rail passes under a window\'s casing only where it clears it', () => {
@@ -184,5 +233,27 @@ test('crown sits at the ceiling; fields draw every part', () => {
     assert.ok(mesh.geometry.boundingBox.max.z <= -WALL.thickness / 2 + 1e-6, style + ' sits on the other face');
     const n = mesh.geometry.getAttribute('normal');
     for (let i = 0; i < n.count; i++) assert.ok(Number.isFinite(n.getX(i)), style + ' normals');
+  }
+});
+
+
+test('rendered trim uses the same local mesh and layout as native export', () => {
+  const wall = { ...WALL, ax: 1.25, ay: -0.7, bx: 3.65, by: 2.5 };
+  const neighbour = { ...WALL, id: 'w2', ax: wall.bx, ay: wall.by, bx: wall.bx - 2.4, by: wall.by + 1.8 };
+  const view = { walls: [wall, neighbour], wallHeight: 2.44 };
+  for (const style of Object.keys(T.TRIM_STYLES)) for (const side of [-1, 1]) {
+    const trim = T.trimTemplate(style, null, wall, side, view);
+    const expected = trimMeshParts(trim, wall, view, [DOOR]);
+    const group = buildTrimGroup(trim, wall, view, [DOOR], X);
+    assert.deepEqual(group.userData.layout, expected.layout, style + ' layout');
+    assert.equal(group.children.length, expected.parts.length, style + ' material parts');
+    expected.parts.forEach((part, i) => {
+      for (const [attribute, values] of [['position', part.positions], ['normal', part.normals], ['uv', part.uv]]) {
+        assert.deepEqual(group.children[i].geometry.getAttribute(attribute).array, new Float32Array(values), style + ' ' + attribute);
+      }
+    });
+    near(group.position.x, wall.ax, 'local origin x'); near(group.position.z, wall.ay, 'local origin z');
+    near(group.rotation.y, -Math.atan2(3.2, 2.4), 'local wall rotation');
+    group.traverse(o => o.geometry?.dispose());
   }
 });

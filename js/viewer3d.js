@@ -1,5 +1,6 @@
 import { openingProblems } from './opening-validation.js';
 import { openingDimensions } from './opening-dimensions.js';
+import { openingProfileValue, openingGridFields } from './opening-profile-edit.js';
 import { modelAnnotations } from './model-annotations.js';
 import { EVIDENCE_STATES, EVIDENCE_COLORS, evidenceState, setEvidence, elementEvidenceRecord } from './evidence.js';
 import { withUncertainty } from './uncertainty-view.js';
@@ -63,6 +64,7 @@ import {
 import { attachSketchupNavigation } from './sketchup-nav.js';
 import { diskWorkspace } from './disk-workspace.js';
 import { ModelBatches } from './model-batch.js';
+import { ModelMirrors } from './model-mirrors.js';
 import { componentKeyOf } from './model-components.js';
 import { modelObjectTree, objectForClick, objectBelow, objectOffset, setObjectOffset, applyPartOffsets, objectBox } from './model-objects.js';
 import { renderObjectList, showListTab, revealInList, objectThing, hiddenState } from './object-list.js';
@@ -72,8 +74,8 @@ import { catalogItem } from './trim-catalog.js';
 import { objectPanelHtml, bindObjectPanel, multiPanelHtml, bindMultiPanel, planTagHtml, bindPlanTag } from './object-panel.js';
 import { ensureCanonTag } from './tags.js';
 import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown, setHidden, hiddenKeys, showAllHidden } from './tags.js';
-import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags } from './saved-views.js';
-import { onScreen, setOnScreen, onScreenChange, setMenuProvider } from './tiksi-menu.js';
+import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags, applySavedHidden, modelState } from './saved-views.js';
+import { onScreen, setOnScreen, onScreenChange, setMenuProvider, refreshPane } from './tiksi-menu.js';
 import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility, partKeyForObject, partByKey, partName, planKeyOf, modelParts, partKey } from './tags-scene.js';
 
 // ---------- persistent GPU state (one context for the life of the page) ----------
@@ -111,7 +113,8 @@ const PARALLEL_BACK = 500, PARALLEL_DEPTH = 2500;   // m: the parallel camera st
 const PARALLEL_SNAP = 40;      // px the FIELD OF VIEW drag goes past the narrowest angle to reach PARALLEL
 let xray = false;
 // Section cuts (section-planes.js), per property and kept across remounts:
-// { on, planes: [{ id, kind, q, pos }], active: id of the plane whose handles show }.
+// { on, planes: [{ id, kind, q, pos }], active: id of the plane whose handles show, done }.
+// `done` is DONE in the section bar: the cuts stay, the planes and their handles are put away.
 const sectionsByProp = {};
 let section = { on: false, planes: [], active: null };
 let sectionSnap = true, sectionSheets = true;   // snapping, and the floating sheets with their handles
@@ -120,6 +123,7 @@ let sheetRoot = null, secMove = null, secTurn = null, secDragAt = -Infinity;
 let framesLeft = 0, lastT = 0, tween = null, resizeObs = null;
 // Imported models drawn grouped by look (model-batch.js); built lazily as models arrive.
 let batches = null;
+let mirrors = null;
 // While the camera moves the frame skips ambient occlusion (and SMAA where MSAA already smooths
 // edges); the full frame follows once it has been still this long.
 const SETTLE_MS = 150;
@@ -323,6 +327,7 @@ function graphicsRestored() {
   hideNotice('draw');
   if (envRT) { envRT.dispose(); envRT = null; }
   scene.environment = null;
+  if (mirrors) mirrors.clear();
   if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
   // Buffers for smoothing, shading, outlines and glow at this device's quality and size.
   applyQuality();
@@ -382,6 +387,8 @@ function setupScene() {
   sheetRoot = new THREE.Group(); sheetRoot.name = 'section planes'; scene.add(sheetRoot);
   batches = new ModelBatches();
   scene.add(batches.root);
+  mirrors = new ModelMirrors();
+  scene.add(mirrors.root);
   invalidateShadows();
 
   controls = new OrbitControls(camera, renderer.domElement);
@@ -687,7 +694,7 @@ function updateAnnotLabels() {
 function rebuildGround() {
   if (groundGroup) { scene.remove(groundGroup); disposeBuilt(groundGroup); }
   groundGroup = buildGround(prop, { showGrid: prop.env.showGrid, studio: prop.env.sky === 'studio' });
-  groundGroup.visible = prop.env.showGround !== false;
+  groundGroup.visible = prop.env.showGround !== false && !lookingUp;
   scene.add(groundGroup);
   invalidateShadows();
   requestRender(2);
@@ -1178,8 +1185,9 @@ function syncSectionHandles() {
   const i = section.on ? section.planes.findIndex(s => s.id === section.active) : -1;
   const g = i >= 0 ? sheetRoot.children[i] : null;
   // While marking up, the handles are put away: a drawing finger or pen would drag the cut.
-  const show = !!g && sectionSheets && mode !== 'walk' && !fieldLayout() && !(markup && markup.isOn());
-  sheetRoot.visible = sectionSheets;
+  const sheets = sectionSheets && !section.done;
+  const show = !!g && sheets && mode !== 'walk' && !fieldLayout() && !(markup && markup.isOn());
+  sheetRoot.visible = sheets;
   for (const h of [secMove, secTurn]) {
     if (!show) h.detach();
     else if (h.object !== g) h.attach(g);
@@ -1258,7 +1266,7 @@ function addSection(kind) {
   if (!SECTION_KINDS.includes(kind)) return;
   if (section.planes.length >= MAX_SECTIONS) { toast('A view holds up to ' + MAX_SECTIONS + ' section cuts. Remove one first.', 'warn'); return; }
   const s = newSection(kind);
-  section.planes.push(s); section.active = s.id; section.on = true;
+  section.planes.push(s); section.active = s.id; section.on = true; section.done = false;
   applySection(); renderHud();
 }
 function removeSection(id) {
@@ -1299,6 +1307,12 @@ function setSectionKind(kind) {
   applySection(); renderHud();
 }
 function setSectionSnap(on) { sectionSnap = !!on; syncSectionHandles(); renderSectionBar(); }
+// DONE: a clean section, with no floating planes, handles or controls over the view; EDIT CUTS
+// brings them back.
+function setSectionDone(done) {
+  section.done = !!done;
+  syncSectionHandles(); renderSectionBar(); setHint(''); refreshPane();
+}
 function setSectionSheets(on) { sectionSheets = !!on; syncSectionHandles(); renderSectionBar(); }
 
 // ---------- camera framing ----------
@@ -1317,21 +1331,44 @@ function fitDistance(radius) {
   const hfov = 2 * Math.atan(Math.tan(fov / 2) * aspect);
   return radius / Math.sin(Math.min(fov, hfov) / 2) * 1.08;
 }
+// The standard views, as SketchUp has them: each looks at the model from one side. FRONT looks
+// from the model's front (+z, the plan's bottom edge) toward the back; LEFT from -x, RIGHT from
+// +x, BACK from -z. The four sides keep FRONT's slight lift so floors and sills read. TOP looks
+// straight down, north up the screen; BOTTOM straight up from under the ground, which is hidden
+// while the camera is below it.
+export const STANDARD_VIEWS = [['top', 'Top'], ['bottom', 'Bottom'], ['front', 'Front'], ['back', 'Back'], ['left', 'Left'], ['right', 'Right'], ['iso', 'Iso']];
+const SIDE_DIRS = { front: [0.02, 0.26, 1], back: [-0.02, 0.26, -1], left: [-1, 0.26, 0.02], right: [1, 0.26, -0.02] };
 function presetView(name, immediate) {
   const { H, cx, cz, radius } = boundsInfo();
   const target = new THREE.Vector3(cx, H * 0.45, cz);
   let dir;
   // Elevations around 35 deg: high enough that sight lines clear the far walls and reach the
   // floors (a dollhouse read), low enough that facades and openings still show.
-  if (name === 'front') dir = new THREE.Vector3(0.02, 0.26, 1);
+  if (SIDE_DIRS[name]) dir = new THREE.Vector3(...SIDE_DIRS[name]);
   else if (name === 'iso') dir = new THREE.Vector3(-0.72, 0.62, 0.72);
   else if (name === 'top') dir = northVector().multiplyScalar(-0.002).add(new THREE.Vector3(0, 1, 0));
+  else if (name === 'bottom') dir = northVector().multiplyScalar(-0.002).add(new THREE.Vector3(0, -1, 0));
   else dir = new THREE.Vector3(0.66, 0.74, 0.8);
   dir.normalize();
-  const dist = fitDistance(radius) * (name === 'top' ? 1.15 : 1);
+  const flat = name === 'top' || name === 'bottom';
+  const dist = fitDistance(radius) * (flat ? 1.15 : 1);
+  if (name === 'bottom') target.y = 0;
   const pos = target.clone().addScaledVector(dir, dist);
   if (name === 'top') target.y = 0;
+  setLookingUp(name === 'bottom');
   flyTo(pos, target, immediate ? 0 : 650);
+}
+// Under the model (BOTTOM, or a saved view from below): orbiting may go below the horizon and the
+// ground is put away so it does not cover the model. Any other view puts both back.
+let lookingUp = false;
+function setLookingUp(on) {
+  on = !!on && !match;
+  if (on === lookingUp) return;
+  lookingUp = on;
+  if (controls) { controls.maxPolarAngle = on ? MATCH_POLAR : (match ? MATCH_POLAR : ORBIT_POLAR); }
+  if (groundGroup) groundGroup.visible = !on && prop.env.showGround !== false;
+  invalidateShadows();
+  requestRender(2);
 }
 // Fly to look at any object from a pleasant three-quarter angle.
 function frameObject(obj) {
@@ -1346,6 +1383,7 @@ function frameBox(box) {
   const radius = Math.max(size.length() / 2, 0.5);
   const dir = new THREE.Vector3(0.6, 0.45, 0.75).normalize();
   if (mode === 'walk') setMode('orbit');
+  setLookingUp(false);
   flyTo(centre.clone().addScaledVector(dir, fitDistance(radius)), centre, 700);
 }
 function flyTo(pos, target, ms) {
@@ -1378,16 +1416,17 @@ function setMode(next) {
     for (const k of Object.keys(walkKeys)) delete walkKeys[k];
   }
   mode = next;
+  if (lookingUp && next !== 'orbit') setLookingUp(false);
   controls.enabled = next !== 'walk';
   controls.enableRotate = next !== 'top';
   nav.refresh();
   // A photo can look up at a ceiling; ordinary orbiting stays above the horizon.
-  controls.maxPolarAngle = match ? MATCH_POLAR : ORBIT_POLAR;
+  controls.maxPolarAngle = match || lookingUp ? MATCH_POLAR : ORBIT_POLAR;
   if (next === 'top') { if (!parallel) setParallel(true, true); }
   else if (parallelFromTop) setParallel(false);
   if (next === 'walk') startWalk();
   else if (next === 'top') presetView('top');
-  else if (next === 'orbit' && camera.position.y < 0.3) camera.position.y = 0.3;
+  else if (next === 'orbit' && camera.position.y < 0.3 && !lookingUp) camera.position.y = 0.3;
   if (next !== 'walk') { controls.target.y = Math.max(controls.target.y, 0); controls.update(); }
   syncSectionHandles();
   renderHud();
@@ -1555,6 +1594,8 @@ function renderFrame(still = false) {
   passes.smaa.enabled = !(fast && composer.renderTarget1.samples > 0);
   lastFrameFast = fast;
   frameCounts[fast ? 'fastFrames' : 'fullFrames']++;
+  mirrors.update(scanObjs, camera, { enabled: !xray && !uncertaintyShown,
+    textureSize: quality() === 'low' ? 256 : quality() === 'medium' ? 512 : 1024 });
   if (batches.beginFrame(scanObjs, uncertaintyShown)) invalidateShadows();
   if (renderer.shadowMap.needsUpdate) frameCounts.shadowRefreshes++;
   if (renderer.shadowMap.needsUpdate) sunThroughOpenings();
@@ -1563,7 +1604,13 @@ function renderFrame(still = false) {
   // The parallel camera stands PARALLEL_BACK further off, so the distance haze starts that much later.
   const fog = cam.isOrthographicCamera && scene.fog && scene.fog.isFog ? scene.fog : null;
   if (fog) { fog.near += PARALLEL_BACK; fog.far += PARALLEL_BACK; }
-  try { if (uncertaintyShown) withUncertainty([modelGroup, scanRoot], uncertaintyRecord, () => composer.render()); else composer.render(); }
+  try {
+    mirrors.render(renderer, scene, cam, { exclude: [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, markupRoot, annotRoot,
+      ...sectionOverlays()] });
+    mirrors.draw(() => {
+      if (uncertaintyShown) withUncertainty([modelGroup, scanRoot], uncertaintyRecord, () => composer.render()); else composer.render();
+    });
+  }
   finally { batches.endFrame(); if (fog) { fog.near -= PARALLEL_BACK; fog.far -= PARALLEL_BACK; } }
 }
 
@@ -2229,7 +2276,7 @@ function onTrimPointerDown(e) {
   e.stopImmediatePropagation(); e.preventDefault();
   try { renderer.domElement.setPointerCapture(e.pointerId); } catch (err) { /* moves still reach the window */ }
   trimDrag = { ...grab, ids, x: e.clientX, y: e.clientY, shift: e.shiftKey, hit: under, moved: false,
-    base: new Map(ids.map(id => [id, JSON.parse(JSON.stringify(trimById(id)))])) };
+    base: new Map(ids.map(id => [id, JSON.parse(JSON.stringify(trimById(id)))])), localAfter: new Map() };
   window.addEventListener('pointermove', onTrimDragMove);
   window.addEventListener('pointerup', onTrimDragEnd);
   window.addEventListener('pointercancel', onTrimDragEnd);
@@ -2250,18 +2297,21 @@ function onTrimDragMove(e) {
       const t = trimById(id), b = d.base.get(id);
       if (!t || !b) continue;
       setTrimY(t, b.y + snapHeight(dy), trimWallHeight(t));   // every section moves by the same snapped distance
+      d.localAfter.set(id, { id, y: t.y });
     }
     note = 'Bottom edge ' + fmtLen(trimById(d.ids[0]).y) + (d.ids.length > 1 ? ' (' + d.ids.length + ' sections moved together)' : '');
   } else if (d.mode === 'top' || d.mode === 'bottom') {
     const t = trimById(d.t.id), b = d.base.get(d.t.id);
     Object.assign(t, { y: b.y, h: b.h });
     setFieldEdge(t, d.mode, snapHeight((d.mode === 'top' ? b.y + b.h : b.y) + dy), trimWallHeight(t));
+    d.localAfter.set(t.id, { id: t.id, y: t.y, h: t.h });
     note = 'Field ' + fmtLen(t.y) + ' to ' + fmtLen(t.y + t.h) + ' (' + fmtLen(t.h) + ' tall)';
   } else if (d.mode === 'divider') {
     const t = trimById(d.t.id), w = d.widths.slice(), min = .05;
     const move = Math.max(min - w[d.i], Math.min(w[d.i + 1] - min, snapHeight(dx)));
     w[d.i] += move; w[d.i + 1] -= move;
     t.widths = w.map(v => Math.round(v * 10000) / 10000); t.cols = w.length;
+    d.localAfter.set(t.id, { id: t.id, widths: t.widths.slice(), cols: t.cols });
     note = 'Boxes ' + fmtLen(w[d.i]) + ' and ' + fmtLen(w[d.i + 1]);
   }
   setHint('EDIT TRIM: ' + note);
@@ -2279,7 +2329,10 @@ function onTrimDragEnd(e) {
     if (e.type === 'pointerup') { const key = planKey('trim', d.hit.id); pickThing({ key, keys: [key], scanId: null, name: '', sel: { kind: 'trim', id: d.hit.id } }, d.shift); }
     return;
   }
-  if (e.type === 'pointercancel') { revertGeometryEdit(prop); rebuildModel(); renderInspector(); return; }
+  if (e.type === 'pointercancel') {
+    if (!revertGeometryEdit(prop, { trims: [...d.localAfter.values()] })) toast('Trim changed on another device; cancellation kept the current values.', 'warn');
+    touch(); rebuildModel(); renderInspector(); return;
+  }
   endGeometryHold(prop);
   touch();
   renderInspector();
@@ -4056,7 +4109,7 @@ function defaultHint() {
   if (tool === 'fov') return 'FIELD OF VIEW: drag up to narrow the view, down to widen it. The panel has the iPhone 0.5×, 1× and 2× lenses. Esc ends.';
   if (tool === 'pin') return 'PIN: choose a photo or document, then click the surface to hang it on.';
   if (tool === 'note') return noteHint();
-  if (section.on) return fieldLayout() || !sectionSheets ? 'SECTION: slide the cut to look inside.' : 'SECTION: drag the arrow to slide the cut, a ring to turn it. SNAP holds it to ' + TURN_SNAP_DEG + '° turns and ' + (units() === 'metric' ? '50 mm' : '1"') + ' steps.';
+  if (section.on && !section.done) return fieldLayout() || !sectionSheets ? 'SECTION: slide the cut to look inside.' : 'SECTION: drag the arrow to slide the cut, a ring to turn it. SNAP holds it to ' + TURN_SNAP_DEG + '° turns and ' + (units() === 'metric' ? '50 mm' : '1"') + ' steps.';
   return 'Drag or middle-drag to orbit, hold Shift to pan, scroll or pinch to zoom. Click elements to inspect; right-click to pin a note.';
 }
 function showProgress(label, frac) {
@@ -4116,6 +4169,7 @@ function renderHud() {
   }
   renderSectionBar();
   setHint('');
+  refreshPane();
 }
 // The strip of section controls, over the bottom of the view whenever the cut is on (the mode
 // bar may be off the screen): the planes, the four ways to add one, and the active plane's
@@ -4129,7 +4183,13 @@ function renderSectionBar() {
   const bar = hud.sections;
   if (!bar) return;
   bar.hidden = !section.on;
+  bar.classList.toggle('v-sec-done', !!(section.on && section.done));
   if (!section.on) { bar.innerHTML = ''; return; }
+  if (section.done) {
+    bar.innerHTML = `<button class="v-pill" data-cut-edit title="Bring back the section planes, their handles and these controls">EDIT CUTS</button>`;
+    bar.querySelector('[data-cut-edit]').onclick = () => setSectionDone(false);
+    return;
+  }
   const short = { level: 'UP/DOWN', side: 'SIDE', front: 'FRONT', custom: 'CUSTOM' };
   const s = activeSection();
   const chips = section.planes.map((x, i) => `<button class="v-pill ${x.id === section.active ? 'active' : ''}" data-cut="${escapeHtml(x.id)}" aria-pressed="${x.id === section.active}" title="Section cut ${i + 1}: show its handles">${i + 1} ${short[x.kind]}</button>`).join('');
@@ -4148,7 +4208,8 @@ function renderSectionBar() {
       <button class="v-pill" data-cut-remove title="Remove this cut">REMOVE</button>
     </div>`;
   }
-  bar.innerHTML = `<div class="v-sec-row">${chips}<span class="v-pill-sep"></span>${adds}</div>${row}`;
+  bar.innerHTML = `<div class="v-sec-row">${chips}<span class="v-pill-sep"></span>${adds}<span class="v-pill-sep"></span><button class="v-pill v-sec-done-btn" data-cut-done title="Done placing the cuts: put away the planes, their handles and these controls, and leave a clean section">DONE</button></div>${row}`;
+  bar.querySelector('[data-cut-done]').onclick = () => setSectionDone(true);
   bar.querySelectorAll('[data-cut]').forEach(b => b.onclick = () => selectSection(b.dataset.cut));
   bar.querySelectorAll('[data-cut-add]').forEach(b => b.onclick = () => addSection(b.dataset.cutAdd));
   const on = (sel, fn) => { const b = bar.querySelector(sel); if (b) b.onclick = fn; };
@@ -4174,6 +4235,7 @@ function updateSectionReadout(fromSlider) {
 }
 function toggleSection() {
   section.on = !section.on;
+  if (section.on) section.done = false;
   if (section.on && !section.planes.length) {
     // The first cut: flat, at waist height on the lowest level.
     const s = newSection('level');
@@ -4597,7 +4659,7 @@ function uncertaintyRecord(mesh) {
       const object = modelObjectTree(o).ofMesh.get(mesh);
       return object && scan ? modelObjectEvidence(scan, object) : scan;
     }
-    const collection = { wall: 'walls', opening: 'openings', fixture: 'fixtures', room: 'rooms', ceiling: 'rooms' }[u.kind];
+    const collection = { wall: 'walls', opening: 'openings', fixture: 'fixtures', room: 'rooms', ceiling: 'rooms', trim: 'trims' }[u.kind];
     if (collection) { const record=prop[collection]?.find(r => r.id === u.id); if(record) return elementEvidenceRecord(prop, u.kind, record); }
   }
   return null;
@@ -4606,7 +4668,7 @@ function renderEvidenceInspector() {
   if (!inspEl || !selection || picked.length > 1 || tool === 'pin' || match) return;
   const object = selectedModelObject();
   const scan = selection.kind === 'scan' && prop.scans.find(s => s.id === selection.id);
-  const collection = { wall:'walls', opening:'openings', fixture:'fixtures', room:'rooms', ceiling:'rooms' }[selection.kind];
+  const collection = { wall:'walls', opening:'openings', fixture:'fixtures', room:'rooms', ceiling:'rooms', trim:'trims' }[selection.kind];
   const native = prop[collection]?.find(r => r.id === selection.id);
   const record = object ? modelObjectEvidence(scan, object) : scan || elementEvidenceRecord(prop, selection.kind, native);
   if (!record) return;
@@ -4619,12 +4681,16 @@ function renderEvidenceInspector() {
   if (selection.kind === 'opening') {
     const issues = openingProblems(prop, record), dimensions=openingDimensions(prop,record);
     const profile = document.createElement('section');
-    // What the opening is built with, as the model holds it. Sizes change in SketchUp.
-    const stored=Object.entries(record.profile||{}).filter(([,v])=>v!==''&&v!=null);
+    // What the opening is built with, as the model holds it (measured details first, then the
+    // flat profile, as the build reads them). Sizes and details change in SketchUp.
+    const sizes=record.type==='window'?['frameWidth','sashWidth','muntinWidth','casingWidth','casingDepth']:['jambWidth','leafThickness','casingWidth','casingDepth','handleHeight','handleBackset'];
     const label=k=>k.replace(/[A-Z]/g,c=>' '+c.toLowerCase()).replace(/^./,c=>c.toUpperCase());
+    const rows=[...sizes.map(k=>[k,openingProfileValue(record,k)]).filter(([,v])=>Number.isFinite(v)).map(([k,v])=>[label(k),fmtLen(v)]),
+      ...(record.type==='window'?openingGridFields(record).map(k=>[label('observedGrid'+k[0].toUpperCase()+k.slice(1)),openingProfileValue(record,k)]):[['Hardware',openingProfileValue(record,'hardware')],['Door face',openingProfileValue(record,'panels')==='six'?'Six panel':openingProfileValue(record,'panels')?'Flat':undefined]])
+        .filter(([,v])=>v!=null&&v!=='')];
     profile.innerHTML=`<h3>OPENING CONFIGURATION</h3><p class="empty">Width and height are the hole in the wall. Profiles and hardware stay provisional until documented; change them in SketchUp.</p>${issues.length?`<p role="alert">${issues.map(escapeHtml).join('; ')}</p>`:''}
       ${record.type!=='window' && dimensions.leaves ?`<div class="stat-line"><span>Slab width per leaf</span><b>${escapeHtml(fmtLen(dimensions.slabWidth))}</b></div>`:''}
-      ${stored.map(([k,v])=>`<div class="stat-line"><span>${escapeHtml(label(k))}</span><b>${escapeHtml(typeof v==='number'&&!['columns','rows'].includes(k)?fmtLen(v):String(v))}</b></div>`).join('')}`;
+      ${rows.map(([k,v])=>`<div class="stat-line"><span>${escapeHtml(k)}</span><b>${escapeHtml(String(v))}</b></div>`).join('')}`;
     inspEl.append(profile);
   }
   inspEl.append(section);
@@ -4639,6 +4705,7 @@ function renderEvidenceInspector() {
 }
 
 function renderInspector() {
+  refreshPane();
   renderInspectorBody();
   renderEvidenceInspector();
   renderObjects();
@@ -5200,15 +5267,22 @@ function viewState() {
     camera: { position: camera.position.toArray(), target: controls.target.toArray(), fov: camera.fov, parallel },
     mode: mode === 'top' ? 'top' : 'orbit', xray,
     // `height` is the first flat cut, for a version of the app that knows only one cut height.
-    section: { on: section.on, height: levelHeightOf(section.planes) ?? 1.2, planes: section.planes.map(s => ({ id: s.id, kind: s.kind, q: [...s.q], pos: [...s.pos] })), active: section.active },
+    section: { on: section.on, height: levelHeightOf(section.planes) ?? 1.2, planes: section.planes.map(s => ({ id: s.id, kind: s.kind, q: [...s.q], pos: [...s.pos] })), active: section.active, done: !!section.done },
     hiddenLevels: [...hiddenLevels()],
+    // What else decides what shows: the imported models, BEFORE or AFTER, photo pins and notes,
+    // how see-through x-ray is and the evidence colours. Tags and hidden objects come from prop.
+    models: modelState(prop),
+    ...(prop.designComparison ? { compare: prop.designComparison.view === 'before' ? 'before' : 'after' } : {}),
+    markers: { pins: markersShown('pins'), notes: markersShown('notes') },
+    xrayOpacity: prop.env.xrayOpacity,
+    uncertainty: uncertaintyShown,
   };
 }
 function addView() {
   const v = addSavedView(prop, '', viewState());
   activeViewId = v.id;
   touch(); renderViews();
-  toast('Saved the view "' + v.name + '" with its camera and tags.' + (fieldLayout() ? '' : ' Double-click its tab, or use the pencil beside it, to rename it.'), 'ok');
+  toast('Saved the view "' + v.name + '" with its camera, tags, section cuts and everything hidden.' + (fieldLayout() ? '' : ' Double-click its tab, or use the pencil beside it, to rename it.'), 'ok');
   return v;
 }
 function goToView(id) {
@@ -5218,13 +5292,37 @@ function goToView(id) {
   showView(v);
 }
 // Put the view on the screen as `v` (a saved view, or the view a markup was drawn from) has it:
-// camera, mode, tags, section cuts, x-ray and hidden levels. `ms` 0 goes there at once.
+// camera, mode, tags, section cuts, x-ray, hidden levels, objects hidden one by one, imported
+// models, BEFORE or AFTER, photo pins and notes. What a view did not keep (one saved by an
+// earlier version) stays as it is. `ms` 0 goes there at once.
 function showView(v, ms = 650) {
   if (match) endMatch();
   if (v.mode === 'top' && mode !== 'top') setMode('top');
   else if (v.mode !== 'top' && mode !== 'orbit') setMode('orbit');
-  const tagsMoved = applySavedTags(prop, v) > 0;
+  let moved = applySavedTags(prop, v) > 0;
+  if (applySavedHidden(prop, v) > 0) moved = true;
+  const c = prop.designComparison;
+  if (v.compare && c && (c.view === 'before' ? 'before' : 'after') !== v.compare) { compareDesignView(v.compare); moved = true; }
+  if (v.models) {
+    let shown = false;
+    for (const sc of prop.scans) {
+      const on = v.models[sc.id];
+      if (typeof on !== 'boolean' || (sc.visible !== false) === on) continue;
+      sc.visible = on; applyScanTransform(sc, scanObjs[sc.id]); shown = true;
+    }
+    if (shown) { moved = true; loadShownScans(); fitShadow(); applyEnvironment(); }
+  }
+  if (v.markers) {
+    for (const k of ['pins', 'notes']) {
+      const key = k === 'notes' ? 'showNotes' : 'showPins';
+      if (typeof v.markers[k] === 'boolean' && markersShown(k) !== v.markers[k]) { prop.env[key] = v.markers[k]; moved = true; }
+    }
+    applyMarkerVisibility();
+  }
+  if (typeof v.xrayOpacity === 'number' && prop.env.xrayOpacity !== v.xrayOpacity) { prop.env.xrayOpacity = v.xrayOpacity; moved = true; if (xray && v.xray) applyXray(); }
+  if (typeof v.uncertainty === 'boolean') uncertaintyShown = v.uncertainty;
   section.on = v.section.on;
+  if (typeof v.section.done === 'boolean') section.done = v.section.done;
   if (v.section.planes) { section.planes = normalizeSections(v.section.planes); section.active = v.section.active; }
   else if (v.section.on) {
     // A view saved when the cut could only move up and down: one flat cut at its height.
@@ -5243,11 +5341,13 @@ function showView(v, ms = 650) {
   applySection();
   adoptFov(v.camera.fov);
   setParallel(v.camera.parallel === true, v.mode === 'top' && v.camera.parallel === true);
+  // A view from below the model opens the way BOTTOM does: orbiting under the horizon, no ground.
+  setLookingUp(v.camera.position[1] < v.camera.target[1] - 0.01);
   flyTo(new THREE.Vector3(...v.camera.position), new THREE.Vector3(...v.camera.target), ms);
   const sel = selectedObject();
   if (sel && !isVisibleChain(sel)) setSelection(null);
   renderHud(); renderToolCol(); renderInspector(); renderViews();
-  if (tagsMoved) touch();
+  if (moved) touch();
 }
 function stepView(by) {
   const list = prop.savedViews || [];
@@ -5268,7 +5368,7 @@ function viewMenu(id, at) {
   if (i < 0) return;
   popupMenu(at, [
     ['view-rename', 'RENAME', () => renameView(id)],
-    ['view-update', 'UPDATE TO THIS CAMERA AND TAGS', () => { updateSavedView(prop, id, viewState()); activeViewId = id; touch(); renderViews(); toast('View updated.', 'ok'); }],
+    ['view-update', 'UPDATE TO WHAT SHOWS NOW', () => { updateSavedView(prop, id, viewState()); activeViewId = id; touch(); renderViews(); toast('View updated.', 'ok'); }],
     i > 0 ? ['view-left', 'MOVE LEFT', () => { moveSavedView(prop, id, -1); touch(); renderViews(); }] : null,
     i < list.length - 1 ? ['view-right', 'MOVE RIGHT', () => { moveSavedView(prop, id, 1); touch(); renderViews(); }] : null,
     null,
@@ -5284,6 +5384,7 @@ function placeViewEdit(strip) {
   if (tab && tab.nextElementSibling !== edit) tab.after(edit);
 }
 function renderViews() {
+  refreshPane();
   const strip = hud.views;
   if (!strip) return;
   const list = prop.savedViews || [];
@@ -5336,9 +5437,10 @@ function renderViews() {
   }
 }
 
-// ---------- what is on the screen, and the Tiksi menu ----------
-// The tool column's groups, the view bar, the compass and the view tabs show only when the
-// Tiksi menu has them ON SCREEN; everything is in the menu either way.
+// ---------- what is on the screen, and the left pane ----------
+// Every command of the model is in the left pane (tiksi-menu.js), in groups that fold to their
+// headers. The view bar, the compass, the saved-view tabs and the component list sit over the
+// model only while their group's eye in the pane has them on.
 function applyScreen() {
   if (!hud.modes) return;
   hud.modes.hidden = !onScreen('model.modes', false);
@@ -5346,161 +5448,105 @@ function applyScreen() {
   if (hud.views) hud.views.hidden = !onScreen('model.views', true);
   placeObjectList();
   wrapEl && wrapEl.classList.toggle('v-views-on', !hud.views.hidden);
+  refreshPane();
 }
 function menuGroups() {
   if (!prop || !scene) return [];
-  const g = (title, id, on, label, items) => ({ title, screen: { id, on: onScreen(id, on), label }, items });
-  const counts = tagCounts(prop);
+  const screen = (id, on, label) => ({ id, on: onScreen(id, on), label });
+  const counts = tagCounts(prop), hidden = hiddenLevels();
+  const orbitTo = name => () => { if (mode !== 'orbit') setMode('orbit'); presetView(name); };
+  const cut = section.on && section.planes.length;
+  const tagItem = (id, name, color, shown) => ({ label: name, icon: shown ? 'eye' : 'eye-off', dot: color, key: String(counts.get(id) || 0), active: shown, pressed: shown, data: { tag: id }, title: (shown ? 'Hide ' : 'Show ') + name, run: () => toggleTag(id) });
+  const scanBadge = sc => scanObjs[sc.id] ? (sc.kind || '').toUpperCase().slice(0, 5) : ({ missing: 'GONE', failed: 'ERR', hidden: 'OFF', 'too-large': 'BIG' }[scanState[sc.id]] || '...');
+  const c = prop.designComparison;
   return [
-    g('Saved views', 'model.views', true, 'Tabs over the model', [
-      ...(prop.savedViews || []).map(v => ({ label: v.name, active: v.id === activeViewId, run: () => goToView(v.id) })),
-      { label: 'Save this view', key: '+', run: addView },
-    ]),
-    g('View', 'model.view', false, 'FRAME, FRONT and ISO in the left column', [
-      { label: 'Frame the model', key: 'F', run: () => { if (mode !== 'orbit') setMode('orbit'); presetView('frame'); } },
-      { label: 'Front', run: () => { if (mode !== 'orbit') setMode('orbit'); presetView('front'); } },
-      { label: 'Iso', run: () => { if (mode !== 'orbit') setMode('orbit'); presetView('iso'); } },
-      { label: 'Orbit', key: 'O', active: mode === 'orbit', run: () => setMode('orbit') },
-      { label: 'Walk through', key: 'W', active: mode === 'walk', run: () => setMode('walk') },
-      { label: 'Top, north up', key: 'T', active: mode === 'top', run: () => setMode('top') },
-      { label: 'Parallel projection', key: 'Shift+P', active: parallel, keep: true, run: () => setParallel(!parallel) },
-      ...LENSES.map(l => ({ label: 'Lens: iPhone ' + l.label + ' (' + Math.round(l.f35) + ' mm)', active: lensPick === l.id, run: () => applyLens(l.id) })),
-      { label: 'Lens: default (' + DEFAULT_VFOV + '° tall)', active: !lensPick && camera && Math.abs(camera.fov - DEFAULT_VFOV) < 0.05, run: () => applyLens(null) },
-    ]),
-    g('Display', 'model.modes', false, 'The ORBIT to NOTES bar over the model', [
-      { label: 'Section cut', key: 'C', active: section.on, run: toggleSection },
-      ...SECTION_KINDS.map(k => ({ label: 'Add a section cut: ' + SECTION_LABELS[k].toLowerCase(), run: () => addSection(k) })),
-      { label: 'Snap section cuts', active: sectionSnap, keep: true, run: () => setSectionSnap(!sectionSnap) },
-      { label: 'X-ray', key: 'X', active: xray, run: toggleXray },
-      { label: 'Lighting and sun', run: () => { hud.env.hidden = false; hud.env.classList.add('open'); renderEnvPanel(); } },
-      { label: 'Photo pins', active: markersShown('pins'), run: () => toggleMarkers('pins') },
-      { label: 'Notes', active: markersShown('notes'), run: () => toggleMarkers('notes') },
-      { label: 'Wall dimensions', active: annotShown('dims'), keep: true, run: () => toggleAnnot('dims') },
-      { label: 'Room names and areas', active: annotShown('rooms'), keep: true, run: () => toggleAnnot('rooms') },
-      { label: 'Door and window numbers', active: annotShown('numbers'), keep: true, run: () => toggleAnnot('numbers') },
-      { label: allInteriorDoorsClosed() ? 'Open all doors' : 'Close all doors', disabled: !interiorDoors().length, run: toggleAllDoors },
-      { label: 'Render a still image', run: openStillDialog },
-    ]),
-    g('Tools', 'model.tools', false, 'The tools in the left column', [
-      { label: 'Select', key: 'V', active: tool === 'select', run: () => setTool('select') },
-      { label: 'Measure', key: 'D', active: tool === 'measure', run: () => setTool(tool === 'measure' ? 'select' : 'measure') },
-      { label: 'Field of view: drag up or down', key: 'Z', active: tool === 'fov', run: () => setTool(tool === 'fov' ? 'select' : 'fov') },
-      ...(measures.length ? [{ label: 'Clear measures', run: () => { clearMeasures(); renderToolCol(); } }] : []),
-      { label: 'Pin a photo', key: 'P', active: tool === 'pin', run: () => { if (tool === 'pin') setTool('select'); else startPinMode(null); } },
-      { label: 'Note', key: 'N', active: tool === 'note', run: () => { if (tool === 'note') setTool('select'); else startNoteMode(null); } },
-      { label: 'Mark up: draw and pin numbered notes', key: 'U', active: !!markup && markup.isOn(), run: toggleMarkup },
-      { label: 'Edit in SketchUp', run: () => document.dispatchEvent(new CustomEvent('tiksi:edit-in-sketchup')) },
-    ]),
-    g('Components', 'model.objects', true, 'The component list over the left of the model', [
-      { label: 'Component list: every object, with an eye to hide it', run: () => openList('list') },
-      { label: 'Tag list: rename, recolour, add or delete tags', run: () => openList('tags') },
-      { label: 'Hide the selected object', key: 'H', disabled: !picked.length, run: hideSelection },
-      { label: 'Show all hidden objects', key: 'Shift+H', disabled: !hiddenKeys(prop).length, run: showHidden },
-    ]),
-    g('Tags', 'model.tags', false, 'Tag switches in the left column', [
-      ...prop.tags.map(t => ({ label: (t.visible !== false ? 'Hide ' : 'Show ') + t.name + ' (' + (counts.get(t.id) || 0) + ')', active: t.visible !== false, keep: true, run: () => toggleTag(t.id) })),
-      { label: 'Rename, recolour, add or delete tags', run: () => openList('tags') },
-    ]),
-    g('Levels', 'model.levels', false, 'Level switches in the left column',
-      prop.levels.map(l => ({ label: (hiddenLevels().has(l.id) ? 'Show ' : 'Hide ') + l.name, active: !hiddenLevels().has(l.id), keep: true, run: () => toggleLevel(l.id) }))),
-    g('Models and scans', 'model.models', false, 'The list of imported models in the left column', [
-      ...prop.scans.map(sc => ({ label: sc.name, active: scanSelected(sc.id), run: () => setSelection({ kind: 'scan', id: sc.id }) })),
-      { label: 'Import and exchange models (FILE)', run: () => exchangeDialog() },
-    ]),
-    g('Compass', 'model.compass', true, 'The compass over the model', []),
+    { title: 'Saved views', screen: screen('model.views', true, 'The saved-view tabs over the model'), items: [
+      ...(prop.savedViews || []).map(v => ({ label: v.name, icon: 'camera', active: v.id === activeViewId, data: { viewGo: v.id }, title: v.name + ': go to this view', run: () => goToView(v.id) })),
+      { label: 'Save this view', key: '+', icon: 'plus', act: 'view-add', title: 'Save this view: the camera, tags, section cuts, x-ray, levels, models and what is hidden', run: addView },
+    ] },
+    { title: 'Standard views', items: [
+      { label: 'Frame the model', key: 'F', icon: 'frame', act: 'frame', run: orbitTo('frame') },
+      ...STANDARD_VIEWS.map(([id, label]) => ({ label, icon: id === 'top' || id === 'bottom' ? 'top' : id === 'iso' ? 'model' : 'target', act: id, title: label + ' view', run: orbitTo(id) })),
+    ] },
+    { title: 'Camera', items: [
+      { label: 'Orbit', key: 'O', icon: 'rotate', act: 'orbit', active: mode === 'orbit', run: () => setMode('orbit') },
+      { label: 'Walk through', key: 'W', icon: 'walk', act: 'walk', active: mode === 'walk', run: () => setMode(mode === 'walk' ? 'orbit' : 'walk') },
+      { label: 'Plan: top, north up', key: 'T', icon: 'north', act: 'top-mode', active: mode === 'top', title: 'Top, north up, in parallel projection (T)', run: () => setMode('top') },
+      { label: 'Parallel projection', key: 'Shift+P', icon: 'frame', act: 'parallel', active: parallel, pressed: parallel, title: 'No perspective, as at the far end of FIELD OF VIEW (Shift+P)', run: () => setParallel(!parallel) },
+      ...LENSES.map(l => ({ label: 'iPhone ' + l.label + ' lens (' + Math.round(l.f35) + ' mm)', icon: 'camera', active: !parallel && lensPick === l.id, run: () => applyLens(l.id) })),
+      { label: 'Default lens (' + DEFAULT_VFOV + '° tall)', icon: 'camera', active: !parallel && !lensPick && camera && Math.abs(camera.fov - DEFAULT_VFOV) < 0.05, run: () => applyLens(null) },
+    ] },
+    { title: 'Display', screen: screen('model.modes', false, 'The ORBIT to NOTES bar over the model'), items: [
+      { label: 'Section cut', key: 'C', icon: 'section', act: 'section', active: section.on, run: toggleSection },
+      ...(cut ? [section.done
+        ? { label: 'Edit the section cuts', icon: 'edit', act: 'cut-edit', run: () => setSectionDone(false) }
+        : { label: 'Done placing section cuts', icon: 'check', act: 'cut-done', run: () => setSectionDone(true) }] : []),
+      ...SECTION_KINDS.map(k => ({ label: 'Add a cut: ' + SECTION_LABELS[k].toLowerCase(), icon: 'plus', data: { paneCut: k }, run: () => addSection(k) })),
+      { label: 'Snap section cuts', icon: 'snap', active: sectionSnap, run: () => setSectionSnap(!sectionSnap) },
+      { label: 'X-ray', key: 'X', icon: 'xray', act: 'xray', active: xray, run: toggleXray },
+      { label: 'Lighting and sun', icon: 'sun', act: 'light', run: () => { hud.env.hidden = false; hud.env.classList.add('open'); renderEnvPanel(); } },
+      { label: 'Photo pins', icon: 'image', act: 'pins', active: markersShown('pins'), run: () => toggleMarkers('pins') },
+      { label: 'Notes', icon: 'note', act: 'notes', active: markersShown('notes'), run: () => toggleMarkers('notes') },
+      { label: 'Wall dimensions', icon: 'dims', act: 'dims', active: annotShown('dims'), pressed: annotShown('dims'), title: 'Each wall\'s length, measured on its centre line', run: () => toggleAnnot('dims') },
+      { label: 'Room names and areas', icon: 'home', act: 'rooms', active: annotShown('rooms'), pressed: annotShown('rooms'), run: () => toggleAnnot('rooms') },
+      { label: 'Door and window numbers', icon: 'door', act: 'numbers', active: annotShown('numbers'), pressed: annotShown('numbers'), title: 'D1, W1... as on the DOCUMENTS schedule', run: () => toggleAnnot('numbers') },
+      { label: 'Compass', icon: 'compass', act: 'compass', active: onScreen('model.compass', true), run: () => setOnScreen('model.compass', !onScreen('model.compass', true)) },
+      { label: allInteriorDoorsClosed() ? 'Open all doors' : 'Close all doors', icon: 'door', disabled: !interiorDoors().length, run: toggleAllDoors },
+      { label: 'Render a still image', icon: 'image', act: 'render', run: openStillDialog },
+    ] },
+    { title: 'Tools', items: [
+      { label: 'Select', key: 'V', icon: 'select', act: 'select', active: tool === 'select', run: () => setTool('select') },
+      { label: 'Measure', key: 'D', icon: 'measure', act: 'measure', active: tool === 'measure', run: () => setTool(tool === 'measure' ? 'select' : 'measure') },
+      { label: 'Field of view', key: 'Z', icon: 'zoom-in', act: 'fov', active: tool === 'fov', title: 'Field of view: drag up or down (Z)', run: () => setTool(tool === 'fov' ? 'select' : 'fov') },
+      ...(measures.length ? [{ label: 'Clear measures', icon: 'close', act: 'clearm', run: () => { clearMeasures(); renderToolCol(); } }] : []),
+      { label: 'Pin a photo', key: 'P', icon: 'pin', act: 'pin', active: tool === 'pin', run: () => { if (tool === 'pin') setTool('select'); else startPinMode(null); } },
+      { label: 'Note', key: 'N', icon: 'note', act: 'note', active: tool === 'note', run: () => { if (tool === 'note') setTool('select'); else startNoteMode(null); } },
+      { label: 'Mark up', key: 'U', icon: 'edit', act: 'markup', active: !!markup && markup.isOn(), title: 'Mark up: draw and pin numbered notes (U)', run: toggleMarkup },
+      { label: 'Edit in SketchUp', icon: 'external', act: 'sketchup', title: 'Open this project\'s SketchUp model (the .skp kept beside the project file) in SketchUp. Saves there come back here.', run: () => document.dispatchEvent(new CustomEvent('tiksi:edit-in-sketchup')) },
+    ] },
+    { title: 'Components', screen: screen('model.objects', true, 'The component list over the left of the model'), items: [
+      { label: 'Component list', icon: 'layers', act: 'component-list', title: 'Every object, with an eye to hide it', run: () => openList('list') },
+      { label: 'Rename, recolour, add or delete tags', icon: 'edit', act: 'tag-list', run: () => openList('tags') },
+      { label: 'Hide the selected object', key: 'H', icon: 'eye-off', act: 'hide', disabled: !picked.length, run: hideSelection },
+      { label: 'Show all hidden objects', key: 'Shift+H', icon: 'eye', act: 'show-hidden', disabled: !hiddenKeys(prop).length, run: showHidden },
+    ] },
+    { title: 'Tags', items: [
+      ...prop.tags.map(t => tagItem(t.id, t.name, t.color, t.visible !== false)),
+      ...((counts.get(UNTAGGED) || prop.tagUntaggedVisible === false) ? [tagItem(UNTAGGED, UNTAGGED_LABEL, 'transparent', prop.tagUntaggedVisible !== false)] : []),
+    ] },
+    { title: 'Levels', items: prop.levels.map(l => ({ label: l.name, icon: hidden.has(l.id) ? 'eye-off' : 'layers', key: fmtLen(l.elevation, { short: true }), active: !hidden.has(l.id), pressed: !hidden.has(l.id), data: { level: l.id }, title: (hidden.has(l.id) ? 'Show ' : 'Hide ') + l.name + ' (floor at ' + fmtLen(l.elevation) + ')', run: () => toggleLevel(l.id) })) },
+    { title: 'Models and scans', items: [
+      ...(c ? [{ label: 'Before', icon: 'scan', act: 'before', active: c.view === 'before', run: () => compareDesignView('before') }, { label: 'After', icon: 'model', act: 'after', active: c.view === 'after', run: () => compareDesignView('after') }] : []),
+      ...prop.scans.map(sc => ({ label: sc.name, icon: sc.kind === 'splat' ? 'splat' : sc.kind === 'mesh' ? 'model' : 'scan', key: scanBadge(sc), active: scanSelected(sc.id), cls: 'v-scan-row', data: { scan: sc.id }, title: sc.name + (scanObjs[sc.id] ? '' : ' (' + (scanState[sc.id] || 'loading') + ')'), run: () => setSelection({ kind: 'scan', id: sc.id }) })),
+      { label: 'Import and exchange models', icon: 'import', act: 'exchange', title: 'PLY / PCD / XYZ / LAS point clouds, OBJ / GLB meshes, .splat / .spz / .ply Gaussian splats (FILE)', run: () => exchangeDialog() },
+    ] },
   ];
 }
 
 function exchangeDialog(selected) { document.dispatchEvent(new CustomEvent('tiksi:files',{detail:{tab:'exchange',selected}})); }
 
+// BEFORE / AFTER, when the property has a design comparison: one side shows, the other hides.
+function compareDesignView(view) {
+  const c = prop && prop.designComparison; if (!c) return;
+  c.view = view;
+  const chosen = view === 'before' ? c.beforeId : c.afterId;
+  for (const id of [c.beforeId, c.afterId]) {
+    const scan = prop.scans.find(s => s.id === id); if (scan) { scan.visible = id === chosen; applyScanTransform(scan, scanObjs[id]); }
+  }
+  loadShownScans();   // the side now shown, if this is the first time
+  if (chosen === 'design') delete prop.modelSourceId; else prop.modelSourceId = chosen;
+  // Select the record immediately, including while its scene object is loading.
+  // setScanState refreshes this inspector when the chosen object is ready.
+  rebuildModel(); setSelection(chosen === 'design' ? null : { kind: 'scan', id: chosen }); renderToolCol(); touch();
+}
+
 // ---------- tool column ----------
+// The model's tools moved to the left pane; the column stays empty and folded away, and every
+// caller that used to redraw it now redraws the pane.
 function renderToolCol() {
   const tc = el && el.querySelector('.tool-col');
-  if (!tc) return;
-  // Same button anatomy as the plan editor: icon, label, key badge.
-  const tb = (act, ic, label, key, active) =>
-    `<button class="tool-btn ${active ? 'active' : ''}" data-act="${act}" title="${label}${key ? ' (' + key + ')' : ''}">` +
-    `${icon(ic)}<span class="tb-text">${label}</span>${key ? `<kbd class="key">${key}</kbd>` : ''}</button>`;
-  const scanBadge = s => scanObjs[s.id] ? (s.kind || '').toUpperCase().slice(0, 5) : ({ missing: 'GONE', failed: 'ERR', hidden: 'OFF', 'too-large': 'BIG' }[scanState[s.id]] || '...');
-  const scanRows = prop.scans.map(s => `<button class="tool-btn v-scan-row ${scanSelected(s.id) ? 'active' : ''}" data-scan="${escapeHtml(s.id)}" title="${escapeHtml(s.name)}${scanObjs[s.id] ? '' : ' (' + escapeHtml(scanState[s.id] || 'loading') + ')'}">${icon(s.kind === 'splat' ? 'splat' : s.kind === 'mesh' ? 'model' : 'scan')}<span class="tb-text">${escapeHtml(s.name.length > 14 ? s.name.slice(0, 12) + '..' : s.name)}</span><kbd class="key">${escapeHtml(scanBadge(s))}</kbd></button>`).join('');
-  // One toggle per storey, lit while the level is shown; the key badge is its floor elevation.
-  const hidden = hiddenLevels();
-  // One toggle per tag, lit while the tag is shown; the badge counts its objects.
-  const counts = tagCounts(prop);
-  const keyOf = { [CANON.scan.id]: ' (G)', [CANON.furniture.id]: ' (K)' };
-  const tagRow = (id, name, color, shown) => `<button class="tool-btn v-tag-btn ${shown ? 'active' : ''}" data-tag="${escapeHtml(id)}" aria-pressed="${shown}" title="${shown ? 'Hide' : 'Show'} ${escapeHtml(name)}${keyOf[id] || ''}">${icon(shown ? 'eye' : 'eye-off')}<span class="v-tag-dot" style="background:${escapeHtml(color)}"></span><span class="tb-text">${escapeHtml(name.length > 13 ? name.slice(0, 11) + '..' : name)}</span><kbd class="key">${counts.get(id) || 0}</kbd></button>`;
-  const tagRows = prop.tags.map(t => tagRow(t.id, t.name, t.color, t.visible !== false)).join('') +
-    ((counts.get(UNTAGGED) || prop.tagUntaggedVisible === false) ? tagRow(UNTAGGED, UNTAGGED_LABEL, 'transparent', prop.tagUntaggedVisible !== false) : '');
-  const levelRows = prop.levels.map(l => `<button class="tool-btn ${hidden.has(l.id) ? '' : 'active'}" data-level="${escapeHtml(l.id)}" title="${hidden.has(l.id) ? 'Show' : 'Hide'} ${escapeHtml(l.name)} (floor at ${escapeHtml(fmtLen(l.elevation))})">${icon(hidden.has(l.id) ? 'eye-off' : 'layers')}<span class="tb-text">${escapeHtml(l.name.length > 14 ? l.name.slice(0, 12) + '..' : l.name)}</span><kbd class="key">${escapeHtml(fmtLen(l.elevation, { short: true }))}</kbd></button>`).join('');
-  // Each group is on the screen only when the Tiksi menu says so; otherwise it lives in the menu.
-  const groups = [
-    onScreen('model.view', false) && `<div class="tool-head">VIEW</div>
-    ${tb('frame', 'frame', 'FRAME', 'F')}
-    ${tb('front', 'target', 'FRONT')}
-    ${tb('iso', 'model', 'ISO')}`,
-    onScreen('model.tools', false) && `<div class="tool-head">TOOLS</div>
-    ${tb('select', 'select', 'SELECT', 'V', tool === 'select')}
-    ${tb('measure', 'measure', 'MEASURE', 'D', tool === 'measure')}
-    ${tb('fov', 'zoom-in', 'FIELD OF VIEW', 'Z', tool === 'fov')}
-    ${measures.length ? tb('clearm', 'close', 'CLEAR MEASURES') : ''}
-    ${tb('pin', 'pin', 'PIN', 'P', tool === 'pin')}
-    ${tb('note', 'note', 'NOTE', 'N', tool === 'note')}
-    ${tb('markup', 'edit', 'MARK UP', 'U', !!markup && markup.isOn())}
-    ${tb('sketchup', 'external', 'EDIT IN SKETCHUP')}`,
-    onScreen('model.tags', false) && `<div class="tool-head" title="Show or hide each tag. With nothing selected, the panel on the right renames, recolours, adds and deletes tags.">TAGS</div>
-    ${tagRows}`,
-    onScreen('model.levels', false) && `<div class="tool-head">LEVELS</div>
-    ${levelRows}`,
-    onScreen('model.models', false) && `<div class="tool-head">MODELS & SCANS</div>
-    ${prop.designComparison ? tb('before', 'scan', 'BEFORE', '', prop.designComparison.view === 'before') + tb('after', 'model', 'AFTER', '', prop.designComparison.view === 'after') : ''}
-    ${scanRows}
-    <div class="empty" style="padding:6px 8px; font-size:9.5px; color:var(--faint); font-family:var(--mono); line-height:1.5">
-      PLY / PCD / XYZ / LAS point clouds, OBJ / GLB meshes, .splat / .spz / .ply Gaussian splats.</div>
-    <div class="tool-sep"></div>
-<div class="empty">Import and exchange models in FILE.</div>`,
-  ].filter(Boolean);
-  tc.innerHTML = groups.join('<div class="tool-sep"></div>');
-  tc.closest('.v-layout')?.classList.toggle('v-no-tools', !groups.length);
-  const on = (act, fn) => { const b = tc.querySelector(`[data-act=${act}]`); if (b) b.onclick = fn; };
-  on('frame', () => { if (mode !== 'orbit') setMode('orbit'); presetView('frame'); });
-  on('front', () => { if (mode !== 'orbit') setMode('orbit'); presetView('front'); });
-  on('iso', () => { if (mode !== 'orbit') setMode('orbit'); presetView('iso'); });
-  on('top', () => setMode('top'));
-  on('walk', () => setMode(mode === 'walk' ? 'orbit' : 'walk'));
-  on('select', () => setTool('select'));
-  on('measure', () => setTool(tool === 'measure' ? 'select' : 'measure'));
-  on('fov', () => setTool(tool === 'fov' ? 'select' : 'fov'));
-  on('clearm', () => { clearMeasures(); renderToolCol(); });
-  on('pin', () => { if (tool === 'pin') setTool('select'); else startPinMode(null); });
-  on('note', () => { if (tool === 'note') setTool('select'); else startNoteMode(null); });
-  on('markup', toggleMarkup);
-  on('sketchup', () => document.dispatchEvent(new CustomEvent('tiksi:edit-in-sketchup')));
-  const su = tc.querySelector('[data-act=sketchup]');
-  if (su) su.classList.add('tb-wrap');
-  if (su) su.title = 'Open this project\'s SketchUp model (the .skp kept beside the project file) in SketchUp. Saves there come back here.';
-  on('section', toggleSection);
-  on('xray', toggleXray);
-  on('render', openStillDialog);
-  on('exchange', () => exchangeDialog());
-  const compare = view => {
-    const c=prop.designComparison; if(!c)return;
-    c.view=view;
-    const chosen=view==='before'?c.beforeId:c.afterId;
-    for(const id of [c.beforeId,c.afterId]) {
-      const scan=prop.scans.find(s=>s.id===id);if(scan){scan.visible=id===chosen;applyScanTransform(scan,scanObjs[id]);}
-    }
-    loadShownScans();   // the side now shown, if this is the first time
-    if(chosen==='design')delete prop.modelSourceId;else prop.modelSourceId=chosen;
-    // Select the record immediately, including while its scene object is loading.
-    // setScanState refreshes this inspector when the chosen object is ready.
-    rebuildModel();setSelection(chosen==='design'?null:{kind:'scan',id:chosen});renderToolCol();touch();
-  };
-  on('before',()=>compare('before'));on('after',()=>compare('after'));
-  compareDesign = compare;
-  tc.querySelectorAll('[data-scan]').forEach(b => b.onclick = () => setSelection({ kind: 'scan', id: b.dataset.scan }));
-  tc.querySelectorAll('[data-level]').forEach(b => b.onclick = () => toggleLevel(b.dataset.level));
-  tc.querySelectorAll('[data-tag]').forEach(b => b.onclick = () => toggleTag(b.dataset.tag));
-  on('rebuild', () => { rebuildModel(); rebuildGround(); buildAllPins(); buildAllNotes(); });
+  if (tc) { tc.innerHTML = ''; tc.closest('.v-layout')?.classList.add('v-no-tools'); }
+  refreshPane();
 }
 // ---------- field of view ----------
 // The camera the view is drawn with: the perspective camera, or the parallel one following it.
@@ -5552,6 +5598,7 @@ function setViewFov(vfov, pick) {
   camera.fov = vfov; camera.updateProjectionMatrix();
   markMotion(); requestRender(2);
   updateFovReadout();
+  refreshPane();
 }
 // A camera angle that came from somewhere else (a saved view, a restored camera): it keeps its
 // preset when it is one, so it is refitted when the window changes shape.
@@ -5731,7 +5778,7 @@ export function mount(root) {
     try { unmount(); } catch (err) { console.error(err); }
     // Whatever the failed open left half-built must not be torn down twice or drawn.
     if (renderer) { renderer.setAnimationLoop(null); renderer.domElement.remove(); }
-    scene = null; camera = null; composer = null; passes = {}; controls = null; modelGroup = null; groundGroup = null; batches = null;
+    scene = null; camera = null; composer = null; passes = {}; controls = null; modelGroup = null; groundGroup = null; batches = null; mirrors = null;
     annotRoot = null; annotLabels = []; orthoCam = null;
     el = null; wrapEl = null; inspEl = null; hud = {};
     const why = e && e.graphics
@@ -5778,7 +5825,7 @@ function openModel(root) {
     progress: wrapEl.querySelector('.v-progress'), toast: wrapEl.querySelector('.v-toast'), hint: wrapEl.querySelector('.v-hint'),
     views: wrapEl.querySelector('.v-views'), compassBox: wrapEl.querySelector('.v-compass'), objects: wrapEl.querySelector('.v-objects'),
   };
-  activeViewId = null;
+  activeViewId = null; lookingUp = false;
   mode = 'orbit'; parallel = false; parallelFromTop = false; tool = 'select'; selection = null; tagPicks = []; picked = []; lastClick = null; hoverTarget = null; tween = null; measureDraft = null; pinPhotoId = null; match = null;
   movingNoteId = null; rightPress = null; ctxMenu = null; noteEditor = null;
   panoNagged = false; panoPending = null; panoMissing = null;
@@ -5835,7 +5882,12 @@ function openModel(root) {
   // A rebuild that must not move the picture (keepViewOnNextMount): the camera last shown.
   const kept = keepView && lastView && lastView.propId === prop.id ? lastView : null;
   keepView = false;
-  if (kept && controls && controls.target) { camera.position.fromArray(kept.position); controls.target.fromArray(kept.target); adoptFov(kept.fov); camera.updateProjectionMatrix(); controls.update(); parallel = kept.parallel === true; }
+  if (kept && controls && controls.target) {
+    setLookingUp(kept.position[1] < kept.target[1] - .01);
+    camera.position.fromArray(kept.position); controls.target.fromArray(kept.target);
+    adoptFov(kept.fov); camera.updateProjectionMatrix(); controls.update();
+    parallel = kept.parallel === true;
+  }
 
   const focus=pendingScanFocus || prop.modelSourceId,token=mountId,focusVersion=selectionVersion;pendingScanFocus=null;
   loadShownScans().then(()=>{if(token===mountId && selectionVersion===focusVersion && !match && !kept && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
@@ -5911,6 +5963,10 @@ export function drawStats({ grouped } = {}) {
   return { calls: info.render.calls, triangles: Math.round(info.render.triangles), groups: batches.stats(),
     camera: { projection: camera.projectionMatrix.toArray(), inverse: camera.matrixWorldInverse.toArray() } };
 }
+
+// Reflection acceptance: actual surface planes and reflected camera positions, without
+// exposing or mutating the imported model tree.
+export function mirrorStats() { return mirrors ? mirrors.stats() : null; }
 // For the browser checks: draw one frame now, as the still view (`fast` false) or as a frame
 // drawn while the camera moves (`fast` true), and return its mean brightness, 0 to 1, read
 // straight off the canvas before the browser shows it.
@@ -6064,6 +6120,7 @@ export function unmount() {
   for (const id of Object.keys(positionObjs)) removePositionMarker(id);
   for (const id of Object.keys(noteObjs)) removeNote(id);
   if (batches) { batches.dispose(); batches = null; }
+  if (mirrors) { mirrors.dispose(); mirrors = null; }
   for (const id of Object.keys(scanObjs)) { disposeScanObject(scanObjs[id]); delete scanObjs[id]; }
   for (const id of Object.keys(scanState)) delete scanState[id];
   releaseSplatRenderer();
@@ -6088,7 +6145,6 @@ export function unmount() {
   selection = null; hoverTarget = null; tween = null; pressed = null; dragLook = null; rightPress = null; movingNoteId = null;
 }
 
-let compareDesign = null;   // the BEFORE / AFTER switch (set where the tool column builds it)
 
 // ---------- phone layout (field.js) ----------
 // The phone layout hides the tool column, inspector and HUD; its side panel reads the view's
@@ -6169,7 +6225,7 @@ export function fieldAction(kind, id, value) {
   }
   else if (kind === 'load-scan') loadScanAnyway(id);
   else if (kind === 'clear-measures') { clearMeasures(); renderToolCol(); requestRender(2); }
-  else if (kind === 'compare') { if (compareDesign && prop.designComparison && (id === 'before' || id === 'after')) compareDesign(id); }
+  else if (kind === 'compare') { if (prop.designComparison && (id === 'before' || id === 'after')) compareDesignView(id); }
   else if (kind === 'tag') toggleTag(id || UNTAGGED);
   else if (kind === 'level') toggleLevel(id);
   else if (kind === 'quality') {
@@ -6186,10 +6242,15 @@ export function fieldAction(kind, id, value) {
     else if (id in ANNOT_KEYS) toggleAnnot(id);
   }
 }
+// Where the camera stands and looks, and whether the ground shows (BOTTOM puts it away).
+export function cameraState() {
+  if (!camera || !controls) return null;
+  return { position: camera.position.toArray(), target: controls.target.toArray(), mode, ground: !!(groundGroup && groundGroup.visible), lookingUp };
+}
 // The section cuts as plain data: every plane's cut-away direction and where it sits.
 export function sectionState() {
   return {
-    on: section.on, snap: sectionSnap, sheets: sectionSheets, active: section.active,
+    on: section.on, snap: sectionSnap, sheets: sectionSheets, active: section.active, done: !!section.done,
     planes: section.planes.map(s => { const { n, d } = planeOf(s); return { id: s.id, kind: s.kind, normal: n, d, pos: [...s.pos] }; }),
   };
 }

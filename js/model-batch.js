@@ -28,8 +28,9 @@ const BASE_BEFORE = THREE.Object3D.prototype.onBeforeRender, BASE_AFTER = THREE.
 
 // ---------- look keys ----------
 // Two materials share a look when they would draw the same pixels: same class and the same
-// values for everything a shader or render state reads. Names, ids and user data do not count;
-// textures count by their image source and sampling settings, so per-part copies of one
+// values for everything a shader or render state reads. Names, ids and descriptive user data
+// do not count; the explicit mirror declaration does, because capture visibility differs.
+// Textures count by their image source and sampling settings, so per-part copies of one
 // texture still group. Objects that cannot be compared by value (planes, which move; functions)
 // count by identity.
 const identities = new WeakMap();
@@ -63,7 +64,10 @@ function textureKey(tex) {
 }
 export function lookKey(material) {
   if (!material) return 'none';
-  const parts = [material.type];
+  // Reflection capture/composition changes a declared source material's render flags.
+  // Keep its identity separate from both ordinary neighbours and distinct declared
+  // materials: an unsupported surface using a different material must retain its fallback.
+  const parts = [material.type, material.userData?.tiksiMirror?.type === 'planar' ? 'planar-mirror:' + identity(material) : 'ordinary'];
   for (const k of Object.keys(material).sort()) if (!MATERIAL_SKIP.has(k)) parts.push(k + '=' + valueKey(material[k], 0));
   return parts.join('|');
 }

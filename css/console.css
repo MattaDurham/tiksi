@@ -23,7 +23,7 @@
   --sel: #4f8fd0;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --rail-w: 152px;
+  --pane-w: 216px;
   --top-h: 48px;
   --radius: 6px;
   --radius-lg: 10px;
@@ -60,8 +60,8 @@ svg.ic { flex: none; vertical-align: -3px; }
 
 #app {
   display: grid;
-  grid-template: var(--top-h) 1fr / var(--rail-w) 1fr;
-  grid-template-areas: "top top" "rail view";
+  grid-template: var(--top-h) minmax(0, 1fr) / var(--pane-w) minmax(0, 1fr);
+  grid-template-areas: "top top" "side view";
   height: 100vh;
   background: var(--bg);
 }
@@ -95,15 +95,11 @@ svg.ic { flex: none; vertical-align: -3px; }
   color: var(--ink);
   line-height: 1;
 }
-.topbar-group { display: flex; align-items: center; gap: 8px; }
 .history-actions { display: flex; gap: 4px; }
 .history-actions[hidden] { display: none; }
 .history-actions .tb-btn { display: inline-flex; align-items: center; gap: 5px; min-height: 36px; }
 .history-actions .tb-btn:disabled { opacity: .4; cursor: default; }
-@media (min-width: 761px) and (max-width: 1040px) {
-  #property-select { max-width: 150px; }
-  #topbar .topbar-group { gap: 6px; }
-}
+#topbar .save-status { margin-left: auto; flex: none; }
 .tb-select, select {
   background: var(--panel-3);
   color: var(--ink);
@@ -209,47 +205,79 @@ select option { background: var(--panel-2); color: var(--ink); }
   animation: pulse 900ms ease-in-out infinite;
 }
 
-/* ---------- rail ---------- */
+/* ---------- page tabs across the top (#rail) ---------- */
 #rail {
-  grid-area: rail;
-  background: var(--panel);
-  border-right: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
-  padding: 12px 8px;
-  gap: 2px;
+  display: flex; align-items: stretch; gap: 0;
+  flex: 0 1 auto; min-width: 0; height: 100%;
+  overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
 }
+#rail::-webkit-scrollbar { display: none; }
+#rail.more-right { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); }
+#rail.more-left { -webkit-mask-image: linear-gradient(90deg, transparent, #000 28px); mask-image: linear-gradient(90deg, transparent, #000 28px); }
+#rail.more-left.more-right { -webkit-mask-image: linear-gradient(90deg, transparent, #000 28px, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, transparent, #000 28px, #000 calc(100% - 28px), transparent); }
 #rail a {
+  flex: none;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: var(--radius);
+  gap: 5px;
+  padding: 0 7px;
   color: var(--dim);
   text-decoration: none;
   font-family: var(--mono);
   font-size: 10.5px;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
   position: relative;
   transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
 }
-#rail a .ic { opacity: 0.7; transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease); }
+#rail a .ic { opacity: 0.7; transition: opacity var(--dur) var(--ease); }
 #rail a::before {
-  content: ''; position: absolute; left: -8px; top: 8px; bottom: 8px; width: 3px;
-  border-radius: 0 3px 3px 0; background: var(--accent);
-  opacity: 0; transform: scaleY(0.4); transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
+  content: ''; position: absolute; left: 8px; right: 8px; bottom: 0; height: 2px;
+  border-radius: 2px 2px 0 0; background: var(--accent);
+  opacity: 0; transform: scaleX(0.4); transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
 }
 #rail a:hover { color: var(--ink); background: rgba(255, 255, 255, 0.035); }
 #rail a:hover .ic { opacity: 1; }
-#rail a.active {
-  color: var(--accent);
-  background: linear-gradient(90deg, rgba(232, 151, 58, 0.16), rgba(232, 151, 58, 0.04));
-  box-shadow: inset 0 0 0 1px rgba(232, 151, 58, 0.12), 0 0 18px rgba(232, 151, 58, 0.08);
-}
+#rail a.active { color: var(--accent); background: linear-gradient(0deg, rgba(232, 151, 58, 0.14), rgba(232, 151, 58, 0)); }
 #rail a.active .ic { opacity: 1; filter: drop-shadow(0 0 4px rgba(232, 151, 58, 0.5)); }
-#rail a.active::before { opacity: 1; transform: scaleY(1); }
-.rail-foot { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--line); }
-.rail-foot a { font-size: 9.5px; color: var(--faint); }
+#rail a.active::before { opacity: 1; transform: scaleX(1); }
+#app.tabs-icons #rail a { padding: 0 9px; }
+#app.tabs-icons #rail a .lbl { display: none; }
+
+/* ---------- the left pane: the page's commands, in groups that fold to their headers ---------- */
+#side {
+  grid-area: side; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--panel); border-right: 1px solid var(--line); padding: 6px 0 24px;
+}
+#side[hidden] { display: none; }
+#app.no-side { grid-template-columns: 0 minmax(0, 1fr); }
+.sd-group { border-bottom: 1px solid var(--line); }
+.sd-group header { display: flex; align-items: center; gap: 2px; padding: 0 6px 0 0; }
+.sd-head {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 9px 8px 7px 10px;
+  background: none; border: 0; cursor: pointer; text-align: left;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.14em; color: var(--faint);
+}
+.sd-head:hover, .sd-head:focus-visible { color: var(--ink); outline: none; }
+.sd-head .ic { width: 12px; height: 12px; flex: none; transition: transform var(--dur) var(--ease); }
+.sd-group.shut .sd-head .ic { transform: rotate(-90deg); }
+.sd-eye { display: inline-grid; place-items: center; width: 26px; height: 24px; padding: 0; background: none; border: 1px solid transparent; border-radius: 5px; color: var(--faint); cursor: pointer; }
+.sd-eye .ic { width: 14px; height: 14px; }
+.sd-eye.on { color: var(--accent); }
+.sd-eye:hover, .sd-eye:focus-visible { border-color: var(--line-2); color: var(--ink); outline: none; }
+.sd-items { padding: 0 0 6px; }
+.sd-item {
+  display: flex; width: 100%; align-items: center; gap: 8px; padding: 5px 10px 5px 12px; min-height: 28px;
+  background: none; border: 0; color: var(--dim); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.sd-item .ic, .sd-gap { width: 14px; height: 14px; flex: none; opacity: 0.75; }
+.sd-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sd-dot { width: 8px; height: 8px; border-radius: 2px; flex: none; border: 1px solid var(--line-2); }
+.sd-item kbd { font-family: var(--mono); font-size: 9.5px; color: var(--faint); border: 1px solid var(--line-2); border-radius: 4px; padding: 0 4px; flex: none; }
+.sd-item:hover, .sd-item:focus-visible { background: rgba(255, 255, 255, 0.05); color: var(--ink); outline: none; }
+.sd-item.active { color: var(--accent); background: linear-gradient(90deg, rgba(232, 151, 58, 0.12), rgba(232, 151, 58, 0.02)); }
+.sd-item.active .ic { opacity: 1; }
+.sd-item:disabled { color: var(--faint); opacity: 0.6; cursor: default; background: none; }
 
 /* ---------- view chrome ---------- */
 #view { grid-area: view; overflow: hidden; position: relative; background: var(--bg); }
@@ -1108,18 +1136,15 @@ kbd {
    phone held sideways gets these page rules with its phone bar, not desktop columns. */
 #view, .editor-layout > *, .two-col > *, .sheet-layout > * { min-width: 0; min-height: 0; }
 @media (max-width: 760px), (max-height: 500px) and (pointer: coarse) {
-  #app { grid-template: auto auto minmax(0, 1fr) / minmax(0, 1fr); grid-template-areas: "top" "rail" "view"; height: 100dvh; }
-  #topbar { flex-wrap: wrap; gap: 8px; padding: 8px 10px; }
+  #app, #app.no-side { grid-template: auto auto minmax(0, 1fr) / minmax(0, 1fr); grid-template-areas: "top" "side" "view"; height: 100dvh; }
+  #topbar { flex-wrap: wrap; gap: 4px 8px; padding: 6px 10px 0; }
   .brand { margin-right: 0; }
-  #topbar .topbar-group { min-width: 0; }
-  #topbar .topbar-group:last-child { width: 100%; flex-wrap: wrap; }
   .history-actions .tb-btn { min-height: 44px; padding: 8px; }
-  #property-select { width: min(205px, 49vw); max-width: 100%; }
-  .save-status { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #topbar .save-status { flex-basis: 100%; }
-  #rail { flex-direction: row; overflow-x: auto; padding: 5px 8px; border-right: 0; border-bottom: 1px solid var(--line); }
-  #rail a { flex: none; padding: 10px; }
-  #rail a::before, .rail-foot { display: none; }
+  .save-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #rail { order: 3; flex-basis: 100%; height: auto; }
+  #rail a { padding: 10px; }
+  #rail a::before { display: none; }
+  #side { max-height: 34dvh; border-right: 0; border-bottom: 1px solid var(--line); }
   .view-scroll { padding: 16px 12px 40px; }
   .two-col { grid-template-columns: minmax(0, 1fr); height: auto; overflow: visible; }
   #proj-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
@@ -1267,11 +1292,23 @@ html.touch .file-dialog .file-units .seg-btn { min-height:44px; }
 .tk-item:disabled { color: var(--faint); cursor: default; }
 .tk-item kbd { font-family: var(--mono); font-size: 10px; color: var(--faint); border: 1px solid var(--line-2); border-radius: 4px; padding: 0 5px; }
 .tk-foot { margin: 6px 14px 4px; font-size: 11px; line-height: 1.45; color: var(--faint); }
+/* The Tiksi menu's top: the project, FILE and GUIDE, UNDO and REDO. Kept in #tk-hold while the menu is shut. */
+#tk-hold { display: none; }
+.tk-top { display: grid; gap: 8px; padding: 6px 14px 8px; }
+.tk-field { display: grid; gap: 4px; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.14em; color: var(--faint); }
+.tk-field .tb-select { max-width: none; width: 100%; }
+.tk-row { display: flex; gap: 6px; }
+.tk-row .tb-btn, .tk-top .history-actions .tb-btn { flex: 1; }
+.tk-top .history-actions .tb-btn { min-height: 0; }
+.tk-check { cursor: pointer; }
+.tk-check input { accent-color: var(--accent); margin: 0; }
+.tk-tabmenu {
+  position: fixed; z-index: 61; min-width: 180px; padding: 4px 0;
+  background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 8px; box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);
+}
 .tk-menu .tk-last { border-top: 1px solid var(--line); border-bottom: 0; padding: 4px 0 2px; }
 /* RESTART TIKSI: the page waits under this cover until the Mac's server is back. */
 .tk-restarting {
   position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; padding: 24px; text-align: center;
   background: rgba(8, 10, 14, 0.82); color: var(--ink); font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em;
 }
-@media (min-width: 761px) { #app.no-rail { grid-template-columns: 0 1fr; } }
-#app.no-rail #rail { display: none; }

@@ -35,12 +35,14 @@ function lampCount(n) {
 }
 
 // Parts that carry the word "light" without being a light source.
-const NOT_A_LIGHT = /\b(switch|dimmer|outlet|receptacle|sensor|skylight|lightweight|light[- ](?:grey|gray|oak|wood|tile|blue|green|beige|brown|stone|well)|lighting plan|tile)\b/i;
+const NOT_A_LIGHT = /\b(switch|dimmer|outlet|receptacle|sensor|skylight|lightweight|radiators?|convectors?|heaters?|heating|light[- ](?:grey|gray|oak|wood|tile|blue|green|beige|brown|stone|well)|lighting plan|tile)\b/i;
 
 // Kinds of fixture, first match wins. `cone`: the light points down in a beam; otherwise it
 // shines all round.
 const KINDS = [
-  { kind: 'downlight', label: 'Recessed downlight', re: /\b(recessed|downlights?|down[- ]lights?|can lights?|pot lights?|wafer lights?)\b/i, lumens: n => (inches(n) && inches(n) <= 4.5 ? 650 : 850), cone: true },
+  // Recessed is also a mounting style for heating covers, cabinets and other non-lights.
+  // Require a lighting noun, or an explicitly LED trim/panel, rather than that adjective alone.
+  { kind: 'downlight', label: 'Recessed downlight', re: /\b(recessed[- ](?:lights?|lighting|luminaires?)|recessed\b.{0,40}\bled[- ](?:trims?|panels?|fixtures?|lights?)|downlights?|down[- ]lights?|can lights?|pot lights?|wafer lights?)\b/i, lumens: n => (inches(n) && inches(n) <= 4.5 ? 650 : 850), cone: true },
   { kind: 'track', label: 'Track light', re: /\btrack[- ](lights?|heads?|lighting)\b/i, lumens: () => 500, cone: true },
   { kind: 'chandelier', label: 'Chandelier', re: /\bchandeliers?\b/i, lumens: () => 2400 },
   { kind: 'fan', label: 'Ceiling fan light', re: /\bceiling[- ]fans?\b/i, lumens: n => (/\blight/i.test(n.replace(/ceiling[- ]fans?/ig, '')) ? 1000 : 0) },

@@ -25,6 +25,7 @@ const MAT = await import('../js/materials.js');
 const MM = await import('../js/model-materials.js');
 const MC = await import('../js/model-components.js');
 const TK = await import('../js/model-takeoff.js');
+const MP = await import('../js/model-panel.js');
 
 const fresh = () => { store.ws.data = store.emptyWorkspace(); return store.ws.data; };
 const ORIGINAL_13 = ['mat-drywall', 'mat-plaster', 'mat-brick', 'mat-cmu', 'mat-cedar', 'mat-fiber', 'mat-tile-w', 'mat-oak', 'mat-walnut', 'mat-tile-f', 'mat-concrete', 'mat-carpet', 'mat-lvp'];
@@ -312,6 +313,109 @@ test('a component links to a product; the schedule prices it by count, across mo
   assert.throws(() => TK.createComponentEstimate(prop, scan, inner), /already exists/);
   MC.unlinkComponentProduct(scan, screw.key);
   assert.equal(MC.componentProductRecord(d, scan, screw.key), null);
+});
+
+test('component evidence survives normalization without implying a verified product or price', () => {
+  const input = {
+    name: 'Existing faucet', brand: 'Example Fixtures', model: 'F-100', status: 'proposed-match',
+    evidence: 'Photograph shows a curved spout.\n No label is visible.', uncertainty: 'Finish and installed model are unknown.',
+    dims_mm: { width: 120, height: 'about 400', depth: Infinity, nested: { value: 100 } },
+    documents: ['Product documents/F-100/spec.pdf', 'Product documents/F-100/spec.pdf', null], url: 'javascript:alert(1)',
+  };
+  const evidence = MC.normalizeComponentProduct(input);
+  assert.equal(evidence.status, 'proposed-match');
+  assert.equal(evidence.evidence, 'Photograph shows a curved spout. No label is visible.');
+  assert.deepEqual(evidence.dims_mm, { width: 120, height: 'about 400' });
+  assert.deepEqual(evidence.documents, ['Product documents/F-100/spec.pdf']);
+  assert.equal(evidence.url, undefined);
+  assert.equal(MC.componentIdentityStatus(evidence), 'Proposed match');
+  assert.equal(MC.componentIdentityStatus({}), 'Identification not verified');
+  assert.equal(MC.componentIdentityStatus({ status: '__proto__' }), '__proto__');
+  assert.equal(MC.normalizeComponentProduct({ name: 'Unidentified grille', uncertainty: 'Maker unknown.' }).uncertainty, 'Maker unknown.');
+  assert.deepEqual(MC.normalizeComponentProduct({ dims_mm: { width: 120 } }).dims_mm, { width: 120 });
+  assert.deepEqual(MC.normalizeComponentProduct({ documents: ['drawing.pdf'] }).documents, ['drawing.pdf']);
+  assert.equal(MC.normalizeComponentProduct({ url: 'https://example.com/spec' }).url, 'https://example.com/spec');
+  assert.equal(MC.normalizeComponentProduct({ evidence: 'x'.repeat(5000) }).evidence.length, 4000);
+  const d = fresh(), { inner } = kitchen();
+  const scan = { id: 'scan-evidence', componentProducts: { 'def:guid-faucet-a': evidence } };
+  assert.equal(MC.componentProductRecord(d, scan, 'def:guid-faucet-a'), null);
+  const row = MC.componentSchedule(d, scan, inner).find(r => r.key === 'def:guid-faucet-a');
+  assert.equal(row.productId, null);
+  assert.equal(row.unitPrice, 0);
+  assert.equal(row.extended, 0);
+  assert.equal(d.products.length, 0, 'inline evidence does not recreate deleted product records');
+  assert.deepEqual(MC.componentProductEvidence(JSON.parse(JSON.stringify(scan)), 'def:guid-faucet-a'), evidence);
+  const component = MC.modelComponents(inner).find(c => c.key === 'def:guid-faucet-a');
+  const { record } = MC.linkComponentProduct(d, null, scan, component, { brand: input.brand, model: input.model }, () => 'prod-new');
+  assert.equal(scan.componentProducts[component.key].status, 'proposed-match', 'linking the recorded candidate does not verify it');
+  assert.equal(scan.componentProducts[component.key].uncertainty, evidence.uncertainty);
+  MC.linkComponentProduct(d, null, scan, component, { productId: record.id }, () => 'unused');
+  assert.equal(scan.componentProducts[component.key].evidence, evidence.evidence, 'relinking the same record retains its evidence');
+  d.products.push({ id: 'prod-other', brand: 'Different Fixtures', model: 'F-200' });
+  MC.linkComponentProduct(d, null, scan, component, { productId: 'prod-other' }, () => 'unused');
+  assert.equal(scan.componentProducts[component.key].evidence, undefined, 'a different selection must not inherit evidence for the old candidate');
+  assert.equal(MC.componentIdentityStatus(scan.componentProducts[component.key]), 'Identification not verified');
+});
+
+test('component cards show proposed identity and unresolved evidence after a product record is removed', () => {
+  const d = fresh(), { wrapper } = kitchen();
+  const key = 'def:guid-faucet-a';
+  const scan = { id: 'scan-evidence', componentProducts: { [key]: {
+    productId: 'prod-removed', brand: 'Example Fixtures', model: 'F-100', name: 'Existing faucet',
+    status: 'proposed-match', uncertainty: 'Finish <unknown> & label unreadable.',
+    evidence: 'Photograph comparison', dims_mm: { height: 400 },
+    documents: ['Product documents/F-100/spec.pdf'], url: 'https://example.com/spec',
+  } } };
+  const html = MP.componentCardHtml({ scan, obj: wrapper }, key);
+  assert.match(html, /Example Fixtures · F-100/);
+  assert.match(html, /Identity: Proposed match/);
+  assert.match(html, /Unresolved: Finish &lt;unknown&gt; &amp; label unreadable\./);
+  assert.match(html, /Photograph comparison/);
+  assert.match(html, /Recorded dimensions \(mm\): height: 400/);
+  assert.match(html, /Product documents\/F-100\/spec.pdf/);
+  assert.match(html, /href="https:\/\/example.com\/spec"/);
+  assert.match(html, /no product linked/);
+  assert.doesNotMatch(html, /<unknown>|Identified<\/span>/);
+  assert.equal(d.products.length, 0);
+  // A matching priced record does not erase the component's identity qualification.
+  d.products.push({ id: 'prod-current', brand: 'Example Fixtures', model: 'F-100', price: 200, unit: 'ea' });
+  assert.match(MP.componentCardHtml({ scan, obj: wrapper }, key), /Identity: Proposed match/);
+});
+
+test('unlinking retains component observations but stops product matching and pricing until explicitly relinked', () => {
+  const d = fresh(), { wrapper, inner } = kitchen(), key = 'def:guid-faucet-a';
+  const product = { id: 'prod-faucet', brand: 'Example Fixtures', model: 'F-100', price: 200, unit: 'ea' };
+  d.products.push(product);
+  const evidence = { productId: product.id, brand: product.brand, model: product.model, name: 'Existing faucet',
+    status: 'proposed-match', evidence: 'Curved spout in photograph.', uncertainty: 'Installed model is unknown.',
+    dims_mm: { height: 400 }, documents: ['drawing.pdf'], url: 'https://example.com/spec' };
+  let scan = { id: 'scan-evidence', componentProducts: { [key]: evidence } };
+  const row = () => MC.componentSchedule(d, scan, inner).find(r => r.key === key);
+  assert.equal(row().unitPrice, 200);
+  MC.unlinkComponentProduct(scan, key);
+  assert.deepEqual(scan.componentProducts[key], { ...evidence, productId: null, unlinked: true });
+  assert.equal(MC.componentProductRecord(d, scan, key), null, 'the retained maker/model must not silently reattach the product');
+  assert.equal(row().unitPrice, 0);
+  assert.equal(row().extended, 0);
+  scan = JSON.parse(JSON.stringify(scan));
+  scan.componentProducts[key] = MC.normalizeComponentProduct(scan.componentProducts[key]);
+  assert.equal(MC.componentProductRecord(d, scan, key), null, 'unlink survives saving and normalization');
+  const html = MP.componentCardHtml({ scan, obj: wrapper }, key);
+  assert.match(html, /Identity: Proposed match/);
+  assert.match(html, /Installed model is unknown\./);
+  assert.match(html, /Curved spout in photograph\./);
+  assert.match(html, /no product linked/);
+  const component = MC.modelComponents(inner).find(c => c.key === key);
+  MC.linkComponentProduct(d, null, scan, component, { productId: product.id }, () => 'unused');
+  assert.equal(MC.componentProductRecord(d, scan, key), product);
+  assert.equal(row().unitPrice, 200);
+  assert.equal(scan.componentProducts[key].unlinked, undefined);
+  assert.equal(scan.componentProducts[key].uncertainty, evidence.uncertainty);
+  assert.deepEqual(scan.componentProducts[key].dims_mm, evidence.dims_mm);
+  const legacyKey = 'def:guid-faucet-b';
+  scan.componentProducts[legacyKey] = { productId: product.id, brand: product.brand, model: product.model, name: 'Faucet' };
+  MC.unlinkComponentProduct(scan, legacyKey);
+  assert.equal(scan.componentProducts[legacyKey], undefined, 'legacy links without observations retain their deletion behavior');
 });
 
 test('reconverting carries part tags by name, file tag and position', () => {

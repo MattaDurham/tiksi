@@ -10,6 +10,7 @@ import { loadMesh, applyScanTransform, disposeScanObject } from './scans.js';
 import { applyModelMaterials } from './model-materials.js';
 import { stampTags, partKeyForObject } from './tags-scene.js';
 import { pendingTextureJobs } from './textures.js';
+import { trimProduct } from './trims.js';
 
 // Metadata that travels with exported nodes. SketchUp component extras let a GLB or SKP round trip
 // keep its components; a node's sketchupTag does not travel (its Tiksi tag, tiksiTag, does).
@@ -89,9 +90,16 @@ export function exchangeEvidence(prop, options = {}) {
   const slice = projectSlice(prop.id) || { products: [], materials: [] };
   const scans = (prop.scans || []).filter(s => options.source === 'model' ? s.id === options.scanId : options.includeModels && s.visible !== false);
   const fields = s => ({ id:s.id, sourceFile:s.originalName || s.name, componentProducts:s.componentProducts || {}, objectEvidence:s.objectEvidence || {}, materialIdentities:s.materialIdentities || {}, materialBindings:s.materialBindings || {}, importedEvidence:s.importedEvidence || null });
+  const trimProducts = new Map();
+  const trimSelections = (options.source === 'model' ? [] : prop.trims || []).map(t => {
+    const product = trimProduct(t), selectedId = typeof t.product === 'string' ? t.product : null;
+    if (product) trimProducts.set(product.id, structuredClone(product));
+    return { elementId: t.id, selectedId, resolvedId: product?.id || null, usedFallback: selectedId !== (product?.id || null) };
+  });
   return { format:'tiksi-model-evidence', version:1, route:'static-mesh', lighting:'illustrative',
     limitations:['Static triangles are not editable parametric assemblies.','A product link does not establish installed identity.','Unknown geometry is retained.'],
-    elements:options.source === 'model' ? [] : ['walls','openings','rooms','fixtures'].flatMap(kind => (prop[kind] || []).map(record => ({kind, ...structuredClone(record)}))),
+    elements:options.source === 'model' ? [] : ['walls','openings','rooms','fixtures','trims'].flatMap(kind => (prop[kind] || []).map(record => ({kind, ...structuredClone(record)}))),
+    ...(trimSelections.length ? { trimCatalog: { role: 'geometry-specification', selections: trimSelections, products: [...trimProducts.values()] } } : {}),
     scans:scans.map(fields), products:structuredClone(slice.products), materials:structuredClone(slice.materials) };
 }
 export async function exportModel(prop, options = {}) {

@@ -62,7 +62,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto(url + '/#/budget');
-  await page.locator('#btn-file').waitFor();
+  await page.locator('#btn-file').waitFor({ state: 'attached' });
   await page.evaluate(async () => {
     const s = await import('/js/store.js');
     const { writeGlb, boxGeometry, bottleGeometry } = await import('/tools/synthetic-model.mjs');
@@ -200,8 +200,7 @@ try {
   assert.ok(cGrouped.calls * 4 < cPlain.calls, 'draw calls per frame drop from ' + cPlain.calls + ' to ' + cGrouped.calls);
   same(cPlain, cGrouped, 'component model');
   const bottles = await prop(page, 'return p.tags.find(t => t.name === "Bottles").id');
-  await page.locator('#tiksi-menu').click();
-  await page.locator('.tk-item', { hasText: 'Tag list' }).click();
+  await page.locator('#side [data-act=tag-list]').click();
   await page.locator(`.v-tags [data-tag-eye="${bottles}"]`).click();
   await delay(300);
   const cDrawn = await page.evaluate(async tag => {

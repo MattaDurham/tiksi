@@ -523,7 +523,7 @@ async function computerChecks(browser, say) {
   await settled(desk, 'after the wheel step');
 
   // A click on a large scan goes through the pick index and selects the scan.
-  await desk.locator('.tool-col [data-scan="scan-shell"]').click();
+  await desk.locator('#side [data-scan="scan-shell"]').click();
   await desk.locator('.inspector [data-frame]').click();
   await delay(1100); await settled(desk, 'the scan framed');
   await desk.keyboard.press('Escape');

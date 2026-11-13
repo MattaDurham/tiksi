@@ -241,6 +241,51 @@ else {
         self.assertEqual(sorted(model_materials(self.root / 'write-0' / 'model.skp')),
                          sorted('Tiksi: ' + m['name'] for m in (SAGE, BRICK, DRYWALL, OAK, TRIM, GLASS)))
 
+        # Explicit endpoint finishes change only those complete vertical end faces.
+        # The baseline above still proves the legacy default, including opening reveals.
+        key = lambda f: (f['id'], tuple(sorted(tuple(round(v, 7) for v in p) for p in f['vertices'])))
+        baseline = {key(f): (f['front'], f['back']) for f in faces}
+        for selected in [('A',), ('B',), ('A', 'B')]:
+            with self.subTest(ends=selected):
+                chosen = {'A': TRIM, 'B': OAK}
+                source = finished(); wall = source['walls'][0]
+                for end in selected:
+                    wall['materialEnd' + end] = chosen[end]['id']
+                    wall['materials']['end' + end] = dict(chosen[end])
+                skp = self.write(source)
+                rendered = painted_faces(skp)
+                self.assertEqual({key(f) for f in rendered}, set(baseline), 'end finishes never alter wall geometry')
+                changed = set()
+                for face in rendered:
+                    expected = baseline[key(face)]
+                    for end, x in [('A', 0), ('B', 4)]:
+                        if end in selected and face['id'] == 'w-s' and all(abs(v[0]-x) < 1e-7 for v in face['vertices']):
+                            expected = (('Tiksi: ' + chosen[end]['name'], rgb(chosen[end]['color'])),) * 2
+                            changed.add(end)
+                    self.assertEqual((face['front'], face['back']), expected,
+                                     'only the requested vertical endpoint changes: ' + str(key(face)))
+                self.assertEqual(changed, set(selected))
+                roundtrip = next(w for w in self.read(skp)['walls'] if w['id'] == 'w-s')
+                self.assertEqual(roundtrip['now'], roundtrip['base'])
+                for end in selected:
+                    self.assertEqual(roundtrip['now']['materialEnd' + end], chosen[end]['id'])
+
+                if len(selected) == 2:
+                    mirrored = self.root / 'end-reflected.skp'
+                    reflect_wall_x(skp, mirrored, 'w-s')
+                    actual = next(w for w in self.read(mirrored)['walls'] if w['id'] == 'w-s')
+                    self.assertEqual((actual['now']['ax'], actual['now']['bx']), (4, 0))
+                    self.assertEqual(actual['now']['materialEndA'], TRIM['id'])
+                    self.assertEqual(actual['now']['materialEndB'], OAK['id'])
+                    for face in painted_faces(mirrored):
+                        if face['id'] != 'w-s':
+                            continue
+                        for x, material in [(4, TRIM), (0, OAK)]:
+                            if all(abs(v[0]-x) < 1e-7 for v in face['vertices']):
+                                self.assertEqual((face['front'], face['back']),
+                                                 (('Tiksi: ' + material['name'], rgb(material['color'])),) * 2,
+                                                 'paint follows its physical endpoint under a native X reflection')
+
     def test_a_glass_door_is_glass_where_its_spec_says_and_reads_back_as_the_same_door(self):
         def doors(glass):
             spec = finished()
@@ -566,6 +611,33 @@ def io_zip(entries):
     return stream.getvalue()
 
 
+
+def reflect_wall_x(source, destination, wall_id):
+    """Reflect one synthetic wall about its local midpoint, keeping its two painted ends."""
+    from server.sketchup_convert import API, Ref, Transform
+    from server.sketchup_mirror import get_data, to_ref, group_transform
+    api, model = API(), Ref(); changed = False
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
+        for group in api.collection(api.ref('SUModelGetEntities', model), 'Groups'):
+            data = get_data(api, to_ref(api, 'SUGroupToEntity', group))
+            if not data or data.get('id') != wall_id:
+                continue
+            values = group_transform(api, group)
+            length = data['local']['x1'] - data['local']['x0']
+            for i in range(3):
+                values[12+i] += values[i] * length
+            values[:4] = [-v for v in values[:4]]
+            transform = Transform(); transform.values[:] = values
+            api.call('SUGroupSetTransform', group, C.byref(transform)); changed = True
+        if not changed:
+            raise AssertionError('Synthetic wall to reflect was missing')
+        api.call('SUModelSaveToFile', model, str(destination).encode())
+    finally:
+        if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
+
+
 def painted_faces(source):
     """Every face in the model: the Tiksi id of its group (None for loose geometry), its centre
     in plan metres [x, y, z], each side's (material name, rgb), and 'seen from'(x, y[, z]): the
@@ -591,7 +663,8 @@ def painted_faces(source):
             front, back = side(face, 'SUFaceGetFrontMaterial'), side(face, 'SUFaceGetBackMaterial')
             # Plan (x, y, z) is SketchUp (x, -y, z).
             seen = lambda x, y, z=0, normal=normal, front=front, back=back: front if normal[0] * x - normal[1] * y + normal[2] * z > 0 else back
-            out.append({'id': owner, 'plan': skp_to_plan(centre) + [centre[2] * 0.0254], 'front': front, 'back': back, 'seen from': seen})
+            out.append({'id': owner, 'plan': skp_to_plan(centre) + [centre[2] * 0.0254], 'front': front, 'back': back, 'seen from': seen,
+                        'vertices': [skp_to_plan(p) + [p[2] * 0.0254] for p in ring]})
         for g in api.collection(entities, 'Groups'):
             data = get_data(api, to_ref(api, 'SUGroupToEntity', g))
             walk(api.ref('SUGroupGetEntities', g), multiply(m, group_transform(api, g)), (data or {}).get('id', owner))

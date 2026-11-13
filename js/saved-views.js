@@ -1,20 +1,26 @@
-// Saved views, the way SketchUp has scene tabs: a named camera with the tags, section cut,
-// x-ray and hidden levels it was saved with. Kept on the property so they travel in its project
+// Saved views, the way SketchUp has scene tabs: a named camera with everything that decided what
+// showed when it was saved: tags, section cuts, x-ray, hidden levels, objects hidden one by one,
+// which imported models showed, photo pins and notes. Kept on the property so they travel in its project
 // file. Pure data only (no DOM, no three.js), so Node tests run it; MODEL (viewer3d.js) shows
 // them as tabs over the view, and a DOCUMENTS 3D view can start from one.
 //
 // prop.savedViews = [{ id, name, camera: { position: [x,y,z], target: [x,y,z], fov, parallel? },
 //   mode: 'orbit' | 'top', tags: { tagId | '_untagged': shown },
-//   section: { on, height, planes: [{ id, kind, q, pos }], active }, xray, hiddenLevels: [levelId] }]
+//   section: { on, height, planes: [{ id, kind, q, pos }], active, done }, xray, hiddenLevels: [levelId],
+//   hidden: [object key], models: { scanId: shown }, compare: 'before' | 'after',
+//   markers: { pins, notes }, xrayOpacity, uncertainty }]
 // `planes` (section-planes.js) is every cut the view was saved with and `active` the one whose
-// handles show; a view saved before cuts could be rotated has only `height`, one flat cut.
+// handles show; `done` is a clean section, its planes and handles put away. A view saved before
+// cuts could be rotated has only `height`, one flat cut. A view saved before Tiksi kept
+// `hidden`, `models`, `compare`, `markers`, `xrayOpacity` or `uncertainty` has none of them, and
+// going to it leaves those as they are.
 
-import { OVERRIDE_UNTAGGED } from './tags.js';
+import { OVERRIDE_UNTAGGED, parseKey } from './tags.js';
 import { normalizeSections } from './section-planes.js';
 import { VFOV_MIN, VFOV_MAX, DEFAULT_VFOV } from './lens.js';
 
 const ID_RE = /^[\w.:-]{1,80}$/;
-const MAX_VIEWS = 100;
+const MAX_VIEWS = 100, MAX_HIDDEN = 20000;
 const num = v => (typeof v === 'number' || (typeof v === 'string' && v.trim())) ? Number(v) : NaN;
 const vec3 = v => Array.isArray(v) && v.length === 3 && v.every(x => Number.isFinite(num(x)) && Math.abs(num(x)) < 1e6) ? v.map(num) : null;
 const clean = v => String(typeof v === 'string' ? v : '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
@@ -41,13 +47,30 @@ export function normalizeSavedView(v, taken = new Set()) {
     section.planes = planes;
     section.active = planes.some(x => x.id === s.active) ? s.active : planes[0].id;
   }
-  return {
+  if (typeof s.done === 'boolean') section.done = s.done;
+  const out = {
     id, name: clean(v.name) || 'View', camera: { position, target, fov, ...(c.parallel === true ? { parallel: true } : {}) },
     mode: v.mode === 'top' ? 'top' : 'orbit', tags,
     section,
     xray: v.xray === true,
     hiddenLevels: Array.isArray(v.hiddenLevels) ? [...new Set(v.hiddenLevels.filter(x => typeof x === 'string' && ID_RE.test(x)))].slice(0, 100) : [],
   };
+  // What later versions keep: only when the view has it.
+  if (Array.isArray(v.hidden)) out.hidden = [...new Set(v.hidden.filter(k => typeof k === 'string' && k.length <= 500 && parseKey(k)))].slice(0, MAX_HIDDEN);
+  if (v.models && typeof v.models === 'object' && !Array.isArray(v.models)) {
+    out.models = {};
+    for (const [k, on] of Object.entries(v.models).slice(0, 500)) if (ID_RE.test(k) && typeof on === 'boolean') out.models[k] = on;
+  }
+  if (v.compare === 'before' || v.compare === 'after') out.compare = v.compare;
+  if (v.markers && typeof v.markers === 'object' && !Array.isArray(v.markers)) {
+    const m = {};
+    for (const k of ['pins', 'notes']) if (typeof v.markers[k] === 'boolean') m[k] = v.markers[k];
+    if (Object.keys(m).length) out.markers = m;
+  }
+  const xo = num(v.xrayOpacity);
+  if (v.xrayOpacity != null && Number.isFinite(xo)) out.xrayOpacity = Math.min(1, Math.max(0, xo));
+  if (typeof v.uncertainty === 'boolean') out.uncertainty = v.uncertainty;
+  return out;
 }
 
 export function normalizeSavedViews(p) {
@@ -86,9 +109,34 @@ export function nextViewName(prop) {
   for (let i = (prop.savedViews || []).length + 1; ; i++) if (!names.has('view ' + i)) return 'View ' + i;
 }
 
-// A new saved view from the current state; `state` = { camera, mode, section, xray, hiddenLevels }.
+// Objects hidden one by one, as a view stores them.
+export function hiddenObjects(prop) { return Object.keys(prop.hidden || {}).filter(k => prop.hidden[k] === true); }
+
+// Restore a view's objects hidden one by one: exactly those are hidden. A view without the
+// list leaves them as they are. Returns how many changed.
+export function applySavedHidden(prop, view) {
+  if (!Array.isArray(view.hidden)) return 0;
+  const want = new Set(view.hidden), now = new Set(hiddenObjects(prop));
+  let changed = 0;
+  for (const k of now) if (!want.has(k)) changed++;
+  for (const k of want) if (!now.has(k)) changed++;
+  if (!changed) return 0;
+  prop.hidden = {};
+  for (const k of want) prop.hidden[k] = true;
+  return changed;
+}
+
+// Which imported models show, as a view stores them.
+export function modelState(prop) {
+  const out = {};
+  for (const s of prop.scans || []) if (s && typeof s.id === 'string' && ID_RE.test(s.id)) out[s.id] = s.visible !== false;
+  return out;
+}
+
+// A new saved view from the current state; `state` = { camera, mode, section, xray, hiddenLevels,
+// models, compare, markers, xrayOpacity, uncertainty }. Tags and hidden objects come from `prop`.
 export function addSavedView(prop, name, state) {
-  const v = normalizeSavedView({ ...state, name: clean(name) || nextViewName(prop), tags: tagState(prop) }, new Set((prop.savedViews || []).map(x => x.id)));
+  const v = normalizeSavedView({ ...state, name: clean(name) || nextViewName(prop), tags: tagState(prop), hidden: hiddenObjects(prop) }, new Set((prop.savedViews || []).map(x => x.id)));
   if (!v) throw new Error('This view has no usable camera');
   (prop.savedViews = prop.savedViews || []).push(v);
   return v;
@@ -96,7 +144,7 @@ export function addSavedView(prop, name, state) {
 export function updateSavedView(prop, id, state) {
   const i = (prop.savedViews || []).findIndex(v => v.id === id);
   if (i < 0) return null;
-  const v = normalizeSavedView({ ...prop.savedViews[i], ...state, tags: tagState(prop), id: undefined });
+  const v = normalizeSavedView({ ...prop.savedViews[i], ...state, tags: tagState(prop), hidden: hiddenObjects(prop), id: undefined });
   if (!v) return null;
   v.id = id;
   prop.savedViews[i] = v;
