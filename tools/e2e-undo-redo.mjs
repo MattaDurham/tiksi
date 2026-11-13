@@ -35,12 +35,15 @@ try {
   });
   await page.locator('#rail [data-view=model]').click();
   await page.locator('canvas.v-canvas').waitFor();
-  await page.locator('.v-modes [data-mode=top]').click();
+  await page.locator('#side [data-act=front]').click();
   await page.waitForTimeout(900); // finish the camera tween, as in the MODEL interaction checks
+  // A click on the wall selects its face (room-faces.js); THE WALL BEHIND opens the wall itself.
   const canvas = page.locator('canvas.v-canvas'), box = await canvas.boundingBox();
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.locator('.inspector [data-face-wall]').waitFor();
+  await page.locator('.inspector [data-face-wall]').click();
   await page.locator('.inspector [data-mat]').waitFor();
-  assert.equal(await page.locator('.inspector h3').first().innerText(), 'WALL', 'a click selects the wall');
+  assert.equal(await page.locator('.inspector h3').first().innerText(), 'WALL', 'the face\'s THE WALL BEHIND selects the wall');
   const wallField = (pg, k) => pg.evaluate(k => window.undoStore.activeProperty().walls[0][k] ?? null, k);
   // Two wall materials other than the one the wall has: one for the computer, one for the phone.
   const [chosen, inner] = await page.locator('.inspector [data-mat] option').evaluateAll(os => os.map(o => o.value).filter(v => v && v !== 'mat-drywall').slice(0, 2));

@@ -141,9 +141,10 @@ export function surfaceReport(detection, base) {
     facing: !detection.signed ? 'unknown' : detection.upShare(p) > 0.75 ? 'up' : detection.upShare(p) < 0.25 ? 'down' : 'mixed' }));
 }
 
-export function floorReviewText(report) {
+// `len` writes an elevation (metres in) as the app shows lengths; plain metres when not given.
+export function floorReviewText(report, len = m => m.toFixed(2) + ' m') {
   if (!report) return '';
-  const datums = report.levels.map(l => `${l.elevation.toFixed(2)} m (${l.datum.confidence})`).join(', ');
+  const datums = report.levels.map(l => `${len(l.elevation)} (${l.datum.confidence})`).join(', ');
   return `${report.required ? 'Review floor datums' : 'Supported floor datums'}: ${datums}. ` +
     (report.required ? 'Mixed or uncertain surfaces remain in the scan; check elevations and room takeoffs.' : 'Scan estimates; verify before using takeoffs.');
 }
