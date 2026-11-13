@@ -1,3 +1,4 @@
+import { openingProblems } from './opening-validation.js';
 import { floorReviewText } from './scan-surfaces.js';
 
 // Floorplan editor: trace walls over an uploaded plan image, place doors/windows,
@@ -446,6 +447,8 @@ function addOpening(wallId, t, type) {
   pushUndo();
   const def = type === 'door' ? DOOR_DEFAULT : WINDOW_DEFAULT;
   const o = Object.assign({ id: uid('o'), wallId, t, type }, def);
+  const issues = openingProblems(prop, o);
+  if (issues.length) { setHint(issues.join('; ')); return; }
   prop.openings.push(o);
   selection = { kind: 'opening', id: o.id };
   touch(); renderInspector();
@@ -1194,7 +1197,8 @@ function editScheduleSize(id, key, inp) {
   pushUndo('resize ' + row.number);
   const got = resizeOpening(prop, o, { [key]: v }, wallHeightOf(prop, wall));
   touch();
-  if (got && Math.abs(got[key] - v) > 0.002) setHint(`${row.number} ${key} limited to ${fmtLen(got[key])}: the ${key === 'width' ? 'wall is not long enough' : 'wall is not tall enough'}.`);
+  if (!got) setHint('The opening would overlap another opening or has invalid geometry.');
+  else if (Math.abs(got[key] - v) > 0.002) setHint(`${row.number} ${key} limited to ${fmtLen(got[key])}: the ${key === 'width' ? 'wall is not long enough' : 'wall is not tall enough'}.`);
   else setHint(`${row.number} is now ${fmtLen(o.width)} \u00d7 ${fmtLen(o.height)}. Undo reverts it.`);
   renderInspector(); renderSchedule(); invalidate();
 }
@@ -1937,7 +1941,8 @@ function onPointerMove(e) {
     if (!p) return;
     const { t } = distToSeg(wx, wy, p.w.ax, p.w.ay, p.w.bx, p.w.by);
     const minT = Math.min(0.5, o.width / 2 / p.L);
-    o.t = Math.max(minT, Math.min(1 - minT, t));
+    const next = { ...o, t: Math.max(minT, Math.min(1 - minT, t)) };
+    if (!openingProblems(prop, next).length) o.t = next.t;
   } else if (drag.kind === 'underlay') {
     drag.pl.offsetX = drag.ox + (wx - drag.wx);
     drag.pl.offsetY = drag.oy + (wy - drag.wy);
@@ -2657,7 +2662,7 @@ function renderInspector() {
         <select data-type><option value="door" ${o.type === 'door' ? 'selected' : ''}>Door</option>
         <option value="window" ${o.type === 'window' ? 'selected' : ''}>Window</option></select></div>
       <div class="field-row">
-        ${lenField('Width', o.width, 'w')}
+        ${lenField('Wall opening width', o.width, 'w')}
         ${lenField('Height', o.height, 'h')}
       </div>
       ${o.type === 'window' ? lenField('Sill height', o.sill || 0, 's') : ''}
@@ -2687,7 +2692,7 @@ function renderInspector() {
       const elx = insp.querySelector(`[data-len=${key}]`);
       if (elx) elx.onchange = e => {
         const v = typedLengthIn(e.target.value, what[key], min, Infinity, min === 0);
-        if (!isNaN(v)) { pushUndo(); fn(v); touch(); }
+        if (!isNaN(v)) { pushUndo(); const before={...o}; const result=fn(v); const issues=openingProblems(prop,o); if (result===null || issues.length) { Object.assign(o,before); setHint(issues.join('; ') || 'Opening change refused: overlapping or invalid geometry.'); } touch(); }
         renderInspector();
       };
     };

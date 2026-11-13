@@ -1,3 +1,5 @@
+// Network fault injection uses Playwright routing, which service workers bypass.
+// The real service-worker/offline journey is covered in e2e-audit-repairs.mjs.
 // The pages other than MODEL on a phone, with real touch input: Chromium with a touch screen
 // (real touches through its protocol) and, when Playwright has it, WebKit (Safari's engine) with
 // the iPhone profile, both at 402 x 874 points. Synthetic demo projects in a temporary state
@@ -143,7 +145,7 @@ async function run(label, engine, profile) {
   const browser = engine === webkit ? await webkit.launch() : await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   const errors = [];
   try {
-    const context = await browser.newContext(profile);
+    const context = await browser.newContext({ ...profile, serviceWorkers: 'block' });
     context.setDefaultTimeout(20000);
     context.setDefaultNavigationTimeout(120000);
     const page = await context.newPage();
@@ -393,10 +395,12 @@ async function run(label, engine, profile) {
           const cdp = await page.context().newCDPSession(page);
           const state = () => page.evaluate(() => ({ strip: !!document.querySelector('#gantt-detail'), taps: document.querySelectorAll('#gantt .g-item').length, touch: document.documentElement.classList.contains('touch') }));
           await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
-          await page.waitForTimeout(500);
+          await page.waitForFunction(() => !matchMedia('(pointer: coarse)').matches && navigator.maxTouchPoints === 0);
+          await page.waitForFunction(() => !document.documentElement.classList.contains('touch') && !document.querySelector('#gantt-detail'));
           const mouse = await state();
           await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
-          await page.waitForTimeout(500);
+          await page.waitForFunction(() => matchMedia('(pointer: coarse)').matches && navigator.maxTouchPoints > 0);
+          await page.waitForFunction(() => document.documentElement.classList.contains('touch') && !!document.querySelector('#gantt-detail'));
           const finger = await state();
           check(!mouse.touch && !mouse.strip && mouse.taps === 0 && finger.touch && finger.strip && finger.taps > 0, label + ': SCHEDULE follows the touch mark while open (mouse ' + JSON.stringify(mouse) + ', finger ' + JSON.stringify(finger) + ')');
           // This session stays open: closing it would undo its touch screen for the parts after.
@@ -496,7 +500,7 @@ async function desktop() {
   const { url } = server;
   const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   try {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
     context.setDefaultTimeout(20000); context.setDefaultNavigationTimeout(120000);
     const page = await context.newPage();
     page.on('dialog', d => (d.type() === 'beforeunload' ? d.accept() : d.dismiss()).catch(() => {}));

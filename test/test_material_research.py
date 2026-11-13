@@ -245,7 +245,7 @@ class ResearchTests(unittest.TestCase):
                 running = manager.create(REQUEST)['id']
                 with self.assertRaises(ResearchError) as full: manager.create(REQUEST)
                 self.assertEqual(full.exception.status, 507)
-                self.assertIn('Finished records can be removed one at a time', str(full.exception))
+                self.assertIn('Use Research history to remove finished records one at a time', str(full.exception))
                 capability = Handler('GET', '/api/material-research/capabilities', {})
                 service.dispatch(capability)
                 headers = {'Host': 'localhost:8642', 'Origin': 'http://localhost:8642', 'X-Tiksi-Token': capability.answer()['token']}

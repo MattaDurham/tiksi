@@ -1,3 +1,5 @@
+// Network fault injection uses Playwright routing, which service workers bypass.
+// The real service-worker/offline journey is covered in e2e-audit-repairs.mjs.
 // The copy a phone keeps of what the Mac has not confirmed, at its edges: an original that
 // could not be kept, two pages open on one device, a kept copy that takes minutes to send,
 // browser storage that cannot be read, and a bar narrow enough to cut its words off.
@@ -49,7 +51,7 @@ async function openPage(context, { hash = '#/photos', ready = SAVED, before } = 
 }
 // A property made straight on the Mac's copy by a desktop page, for one part of the suite.
 async function makeProperty(id) {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   const page = await openPage(context, { hash: '' });
   await page.evaluate(async id => {
     const store = await import('/js/store.js');
@@ -106,7 +108,7 @@ const room = (mac, id, roomId) => prop(mac, id).rooms.find(r => r.id === roomId)
 async function originalsThatWereNotKept(name, profile) {
   step('originals');
   const id = 'prop-originals-' + name; await makeProperty(id);
-  const context = await browser.newContext({ ...profile });
+  const context = await browser.newContext({ serviceWorkers: 'block', ...profile });
   let phone = await openPage(context);
   await look(phone, id);
   // Stand in for a video too large to copy into the phone's storage: nothing over 30 kB is kept.
@@ -158,7 +160,7 @@ async function originalsThatWereNotKept(name, profile) {
 async function twoPagesKeepTheirOwn(name, profile) {
   step('pages');
   const id = 'prop-pages-' + name; await makeProperty(id);
-  const context = await browser.newContext({ ...profile });
+  const context = await browser.newContext({ serviceWorkers: 'block', ...profile });
   const first = await openPage(context);
   await look(first, id);
   await context.setOffline(true);
@@ -168,11 +170,13 @@ async function twoPagesKeepTheirOwn(name, profile) {
   await context.setOffline(false);
   // The second page cannot get a save through, and does not answer other pages: it is as a
   // page frozen in the background is.
+  let abortedWrites = 0;
   const second = await openPage(context, { ready: null, before: async page => {
     await page.addInitScript(() => { BroadcastChannel.prototype.postMessage = () => {}; });
-    await page.route('**/api/workspace', route => route.request().method() === 'PUT' ? route.abort() : route.continue());
+    await page.route('**/api/workspace', route => { if (route.request().method() === 'PUT') { abortedWrites++; return route.abort(); } return route.continue(); });
   } });
   await second.waitForFunction(KEPT, null, { timeout: 30000 });
+  assert.ok(abortedWrites > 0, 'the simulated save failure actually intercepted a write');
   await addRoom(second, id, 'room-two', 'Added in the second page');
   await second.waitForTimeout(700);
   // The third page opens, takes up what it finds, and its save is held for a moment.
@@ -204,7 +208,7 @@ async function twoPagesKeepTheirOwn(name, profile) {
 async function theAppOpensWhileTheKeptCopyIsSent(name, profile) {
   step('start');
   const id = 'prop-start-' + name; await makeProperty(id);
-  const context = await browser.newContext({ ...profile });
+  const context = await browser.newContext({ serviceWorkers: 'block', ...profile });
   let phone = await openPage(context);
   await look(phone, id);
   await context.setOffline(true);
@@ -243,20 +247,23 @@ async function unreadableStorageIsLeftAlone(name) {
   step('unreadable');
   const id = 'prop-unreadable-' + name; await makeProperty(id);
   // A computer, not a phone: a narrow window keeps what is unsent, a wide one does not.
-  const context = await browser.newContext({ viewport: { width: 390, height: 800 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 390, height: 800 } });
   const narrow = await openPage(context);
   await look(narrow, id);
   await context.setOffline(true);
   await edit(narrow, id, { notes: 'Kept by the narrow window' });
   await narrow.waitForFunction(KEPT, null, { timeout: 20000 });
   await narrow.close();
+  assert.equal(prop(await onTheMac(), id).notes, 'As the Mac has it', 'closing an offline page did not write to the Mac');
   await context.setOffline(false);
+  assert.equal(prop(await onTheMac(), id).notes, 'As the Mac has it', 'reconnection did not replay the closed page before the wide page opened');
   // The same browser, wide now, at a moment when the kept copies cannot be read.
   const wide = await openPage(context, { hash: '', before: async page => {
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.addInitScript(() => { IDBObjectStore.prototype.getAll = () => { throw new DOMException('Synthetic: the storage cannot be read', 'UnknownError'); }; });
+    await page.addInitScript(() => { window.keptReadFailures = 0; IDBObjectStore.prototype.getAll = () => { window.keptReadFailures++; throw new DOMException('Synthetic: the storage cannot be read', 'UnknownError'); }; });
   } });
-  await wide.waitForTimeout(1500);
+  await wide.waitForFunction(() => window.keptReadFailures > 0, null, { timeout: 20000 });
+  await wide.evaluate(async () => { await (await import('/js/disk-workspace.js')).diskWorkspace.sync(); });
   assert.equal(prop(await onTheMac(), id).notes, 'As the Mac has it', 'nothing was sent from storage that could not be read');
   await wide.close();
   // Readable again: what was kept is still there, and is sent.
@@ -272,7 +279,7 @@ async function theBarFits(name, profile) {
   step('bar');
   const id = 'prop-bar-' + name; await makeProperty(id);
   for (const width of [375, 390]) {
-    const context = await browser.newContext({ ...profile, viewport: { width, height: 667 } });
+    const context = await browser.newContext({ serviceWorkers: 'block', ...profile, viewport: { width, height: 667 } });
     const phone = await openPage(context, { hash: '#/plan' });
     await look(phone, id);
     await phone.locator('#btn-undo').waitFor();

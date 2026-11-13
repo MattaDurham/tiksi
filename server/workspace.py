@@ -1184,6 +1184,23 @@ class WorkspaceService:
                 with self.lock: paths, unavailable = self.visible_paths(), self.unavailable_projects()
                 saved = {'saveId': request['saveId'], 'repeated': repeated} if isinstance(request, dict) and request.get('saveId') is not None else {}
                 self.reply(h, 200, {'revision': revision, 'paths': paths, 'unavailable': unavailable, **saved})
+            elif path == '/api/workspace/recovery' and h.command == 'GET':
+                files = sorted((self.root / 'history').glob('*.tiksi'), key=lambda p: p.stat().st_mtime, reverse=True)
+                self.reply(h, 200, {'copies': [{'name': p.name, 'size': p.stat().st_size, 'modified': p.stat().st_mtime} for p in files]})
+            elif path.startswith('/api/workspace/recovery/') and h.command == 'GET':
+                name = path.removeprefix('/api/workspace/recovery/')
+                if not re.fullmatch(r'[a-z0-9-]+\.tiksi', name): raise WorkspaceError('Invalid recovery name', 400)
+                target = self.root / 'history' / name
+                if not target.is_file(): raise WorkspaceError('Recovery copy not found', 404)
+                if parse_qs(urlsplit(h.path).query).get('summary') == ['1']:
+                    with zipfile.ZipFile(target) as archive:
+                        info = archive.getinfo('workspace.json')
+                        if info.file_size > MAX_JSON: raise WorkspaceError('Recovery metadata is too large', 413)
+                        data = json.loads(archive.read(info))
+                    self.reply(h, 200, {'properties': [{'id': p.get('id'), 'name': p.get('name'), 'walls': len(p.get('walls', [])), 'rooms': len(p.get('rooms', []))} for p in data.get('properties', [])], 'products': len(data.get('products', [])), 'scopes': len(data.get('projects', []))})
+                else:
+                    from server.folder_intake import FolderIntakeService
+                    FolderIntakeService.send_file(h, target)
             elif path == '/api/workspace/recovery' and h.command == 'POST':
                 payload = self.read(h, MAX_WORKSPACE_REQUEST)
                 try: record = json.loads(payload)
@@ -1242,10 +1259,32 @@ class WorkspaceService:
                     try:
                         with self.lock:
                             if h.headers.get('X-File-Mtime') != stamp(): raise WorkspaceError('SketchUp model changed; retry before overwriting', 409)
+                            if model.exists():
+                                shutil.copy2(model, model.with_name(model.stem + '.before-sync-' + str(time.time_ns()) + '.skp'))
                             os.replace(temp, model)
                     finally: temp.unlink(missing_ok=True)
                     self.reply(h, 200, {})
                 else: raise WorkspaceError('Mirror endpoint not found', 404)
+            elif path.startswith('/api/workspace/document/') and h.command == 'GET':
+                import mimetypes
+                identifier = path.removeprefix('/api/workspace/document/')
+                if identifier not in self.paths: raise WorkspaceError('Project is not mounted', 404)
+                self.check_available(identifier)
+                relative = parse_qs(urlsplit(h.path).query).get('path', [''])[0]
+                target, _ = open_in_folder(self.project_folder(identifier), relative, run=lambda *a, **k: subprocess.CompletedProcess(a, 0))
+                if not target.is_file() or target.suffix.lower() not in DOCUMENT_TYPES or not opens_directly(target):
+                    raise WorkspaceError('This file is not a supported project document', 400)
+                mime = mimetypes.guess_type(target.name)[0] or 'application/octet-stream'
+                size = target.stat().st_size
+                h.send_response(200); h.send_header('Content-Type', mime); h.send_header('Content-Length', str(size))
+                h.send_header('Cache-Control', 'no-store'); h.send_header('X-Content-Type-Options', 'nosniff')
+                h.end_headers()
+                with target.open('rb') as source:
+                    remaining = size
+                    while remaining:
+                        chunk = source.read(min(1024 * 1024, remaining))
+                        if not chunk: h.close_connection = True; break
+                        h.wfile.write(chunk); remaining -= len(chunk)
             elif path.startswith('/api/workspace/open/') and h.command == 'POST':
                 # Product documents and the project folder, opened in Finder or Preview on this Mac.
                 from server.sketchup_open import at_this_mac

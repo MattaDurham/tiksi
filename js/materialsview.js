@@ -250,6 +250,10 @@ function renderEditor() {
           <div class="field"><label>Maker</label><input type="text" data-ident="colorBrand" value="${escapeHtml(m.colorBrand || '')}" placeholder="e.g. Benjamin Moore"></div>
         </div>
         <div class="kicker mv-sub-kicker">PRODUCT</div>
+        <p class="empty">Installed identity: ${escapeHtml(m.product?.identityStatus || 'unknown')}. A proposed match does not change the observed finish.</p>
+        <div class="field"><label>Installed identity status</label><select data-identity-status>${['unknown','observed'].map(k=>`<option value="${k}" ${m.product?.identityStatus===k?'selected':''}>${k}</option>`).join('')}</select></div>
+        <div class="field"><label>Identity evidence reference</label><input type="text" data-identity-source value="${escapeHtml(m.product?.evidence?.identity?.source || '')}"></div>
+        <div class="field"><label>Separate proposed purchasable match</label><select data-proposed-product><option value="">None</option>${ws.data.products.map(p=>`<option value="${escapeHtml(p.id)}" ${m.proposedProduct?.productId===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select></div>
         <div class="field"><label>From the products list</label>
           <select data-product-link><option value="">(none: type it below)</option>${ws.data.products.map(p => `<option value="${escapeHtml(p.id)}" ${m.product && m.product.productId === p.id ? 'selected' : ''}>${escapeHtml([p.name, p.model].filter(Boolean).join(' · '))}</option>`).join('')}</select></div>
         <div class="field-row">
@@ -340,9 +344,9 @@ function refreshDirty(m) {
 }
 
 function stripped(m) {
-  const { id, name, kind, color, pattern, tile, roughness, metalness, normalScale, accent, photoId, category, type, product, colorName, colorCode, colorBrand, coverage } = m;
+  const { id, name, kind, color, pattern, tile, roughness, metalness, normalScale, accent, photoId, category, type, product, colorName, colorCode, colorBrand, coverage, proposedProduct } = m;
   return { id, name, kind, color, pattern, tile, roughness, metalness, normalScale, accent: accent || null, photoId: photoId || null,
-    category, type: type || '', product: product || null, colorName: colorName || '', colorCode: colorCode || '', colorBrand: colorBrand || '', coverage: coverage || null };
+    proposedProduct: proposedProduct || null, category, type: type || '', product: product || null, colorName: colorName || '', colorCode: colorCode || '', colorBrand: colorBrand || '', coverage: coverage || null };
 }
 
 function autoAccent(hex) {
@@ -404,6 +408,13 @@ function bindEditor(m) {
     if (before && (inp.dataset.p === 'brand' || inp.dataset.p === 'model')) { m.product = Object.assign(m.product || {}, { productId: before }); unlinkMaterialProduct(ws.data, m); }
     changed(true);
   });
+  q('[data-identity-status]').onchange = () => {
+    const status=q('[data-identity-status]').value, source=q('[data-identity-source]').value.trim();
+    if(status==='observed' && !source) { notice='An observed identity needs a source reference.'; renderEditor(); return; }
+    m.product={...m.product, identityStatus:status,evidence:{...m.product?.evidence,identity:{source}}}; changed(true);
+  };
+  q('[data-identity-source]').onchange=()=>{ if(m.product){m.product.evidence={...m.product.evidence,identity:{source:q('[data-identity-source]').value.trim()}};if(!m.product.evidence.identity.source)m.product.identityStatus='unknown';changed(false);} };
+  q('[data-proposed-product]').onchange=()=>{const id=q('[data-proposed-product]').value;m.proposedProduct=id?{productId:id,identityStatus:'proposed'}:null;changed(false);};
   const link = q('[data-product-link]');
   link.onchange = () => {
     if (link.value) linkMaterialProduct(ws.data, m, { productId: link.value }, uid);

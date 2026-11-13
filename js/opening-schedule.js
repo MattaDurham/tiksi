@@ -1,3 +1,4 @@
+import { doorDimensions } from './opening-dimensions.js';
 // Opening schedule: every door and window numbered (D1.., W1..) with the rooms it joins and
 // its size, for an owner to correct by number. Pure data, no DOM; PLAN draws the tags.
 //
@@ -5,6 +6,7 @@
 // each level (bands of BAND m from the top of the plan, left to right inside a band, id last).
 // A number depends only on where openings sit, so editing a size, a wall finish or another
 // level never renumbers anything; adding or moving an opening shifts only the ones after it.
+import { openingProblems } from './opening-validation.js';
 import { wallFaces, faceAt, pointInPolygon } from './roomfill.js';
 
 export const BAND = 1.5;            // m: openings this close in plan y read as one row
@@ -77,7 +79,7 @@ export function openingSchedule(prop, levelId = null) {
     // Inside first, so a door reads "Kitchen / Exterior" rather than the other way round.
     if (sides[0].name === 'Exterior' && sides[1].name !== 'Exterior') sides.reverse();
     rows.push({ id: o.id, number, type, levelId: level.id, levelName: level.name || '', wallId: f.w.id,
-      width: o.width, height: o.height, sill: type === 'window' ? (o.sill ?? null) : null,
+      width: o.width, height: o.height, dimensionType: 'wall-opening', slabWidth: type === 'door' ? doorDimensions(o).slabWidth : null, problems: openingProblems(prop, o), sill: type === 'window' ? (o.sill ?? null) : null,
       cx: f.cx, cy: f.cy, ux: f.ux, uy: f.uy, sides });
   }
   return rows;
@@ -96,6 +98,9 @@ export function resizeOpening(prop, o, { width, height } = {}, wallHeight = Infi
   const f = openingFrame(prop, o);
   if (!f) return null;
   for (const v of [width, height]) if (v != null && !(Number.isFinite(v) && v >= MIN_SIZE)) return null;
+  const target = o;
+  const candidate = { ...o };
+  o = candidate;
   if (width != null) {
     o.width = Math.min(width, Math.max(MIN_SIZE, f.L - END_GAP * 2));
     const minT = Math.min(0.5, (o.width / 2 + END_GAP) / f.L);
@@ -105,5 +110,7 @@ export function resizeOpening(prop, o, { width, height } = {}, wallHeight = Infi
     const sill = o.type === 'window' ? (Number(o.sill) || 0) : 0;
     o.height = Math.max(MIN_SIZE, Math.min(height, wallHeight - sill));
   }
+  if (openingProblems(prop, o).length) return null;
+  Object.assign(target, candidate);
   return { width: o.width, height: o.height };
 }

@@ -156,7 +156,8 @@ export function canApply(prop, m) {
     // PLAN's rule for a typed size (the opening schedule's resize): try it on a copy, and refuse
     // a reading the rule would have to cut down rather than store a different number.
     const trial = Object.assign({}, o);
-    if (w && resizeOpening(prop, trial, { [m.element.dim]: m.value }, wallHeightOf(prop, w)) && Math.abs(trial[m.element.dim] - m.value) > TOLERANCE) {
+    if (w && !resizeOpening(prop, trial, { [m.element.dim]: m.value }, wallHeightOf(prop, w))) return 'The opening would overlap another opening or has invalid geometry.';
+    if (w && Math.abs(trial[m.element.dim] - m.value) > TOLERANCE) {
       if (m.element.dim === 'width') return 'The opening would be wider than its wall allows (' + fmtLen(trial.width) + ' at most on a ' + fmtLen(wallLength(w)) + ' wall).';
       const sill = o.type === 'window' ? Number(o.sill) || 0 : 0;
       return 'The opening would be taller than its wall (' + fmtLen(trial.height) + ' at most under a ' + fmtLen(wallHeightOf(prop, w)) + ' wall' + (sill ? ' above a ' + fmtLen(sill) + ' sill' : '') + ').';
@@ -190,7 +191,9 @@ export function applyMeasurement(prop, id) {
 // Readings a person has to explain: nobody said what they are, where they belong, or the
 // numbers could not be read. Applied readings have been decided.
 export function needsOwner(prop, m) {
-  if (m.status === 'applied') return false;
+  const state = readingState(prop, m);
+  if (state === 'changed' || state === 'missing') return true;
+  if (state === 'applied') return false;
   return m.status === 'unassigned' || m.confidence === 'unreadable' || !m.text.trim() || readingState(prop, m) === 'missing';
 }
 export function askOwnerList(prop) {

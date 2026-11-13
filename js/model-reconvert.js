@@ -38,12 +38,16 @@ export async function convertAgain(prop, scan, oldWrapper) {
     // Hidden objects and moved objects are kept by part path, and the new file's paths are
     // new: both start again (everything shown, everything where the file has it).
     for (const k of Object.keys(prop.hidden || {})) if (k.startsWith(prefix)) delete prop.hidden[k];
-    delete scan.partOffsets;
+    if (scan.partOffsets || scan.objectEvidence) {
+      scan.previousConversionEdits ||= [];
+      scan.previousConversionEdits.push({ at:new Date().toISOString(), partOffsets:structuredClone(scan.partOffsets || {}), objectEvidence:structuredClone(scan.objectEvidence || {}), note:'Paths changed on reconversion. Retained for review; not assigned to potentially different objects.' });
+    }
+    delete scan.partOffsets; delete scan.objectEvidence;
     scan.format = 'glb';
     // The stored file is the new one: its size is what a device's size limit goes by.
     scan.bytes = converted.buffer.byteLength;
     scan.conversionJobId = converted.conversionJobId || scan.conversionJobId || null;
-    scan.importWarnings = converted.warnings || [];
+    scan.importWarnings = [...(converted.warnings || []), ...(scan.previousConversionEdits?.length ? ['Previous object offsets and evidence are retained in previousConversionEdits; review their mapping to the reconverted model.'] : [])];
     scan.convertedAgainAt = new Date().toISOString();
     touch();
     return { components, materials, matched, unmatched };

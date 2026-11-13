@@ -1,3 +1,5 @@
+// Network fault injection uses Playwright routing, which service workers bypass.
+// The real service-worker/offline journey is covered in e2e-audit-repairs.mjs.
 // A phone on the Mac's project files: what it has not sent yet must survive a lock, a
 // switched app and a dropped tab, and the phone bar must say where a save stands.
 // Runs in Chromium with a phone profile, and also in WebKit (Safari's engine) with the
@@ -71,7 +73,7 @@ async function run(name, type, profile) {
   browser = await type.launch(type === chromium ? { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] } : {});
   const id = 'prop-site-' + name;
   // The Mac's desktop browser makes the property the phone will work on.
-  const desktopContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const desktopContext = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   const desktop = await openPage(desktopContext);
   await desktop.evaluate(async id => {
     const store = await import('/js/store.js');
@@ -79,7 +81,7 @@ async function run(name, type, profile) {
     store.ws.data.properties.push(p); store.ws.data.settings.activePropertyId = id; store.touch();
     await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
   }, id);
-  const phoneContext = await browser.newContext({ ...profile });
+  const phoneContext = await browser.newContext({ serviceWorkers: 'block', ...profile });
   const noteOnMac = async () => (await onTheMac()).data.properties.find(p => p.id === id).notes;
 
   step('1');

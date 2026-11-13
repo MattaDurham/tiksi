@@ -1,3 +1,4 @@
+import { referencedProductIds } from './evidence.js';
 // tiksi store: workspace state, persistence, units, shared helpers.
 // All lengths are stored in meters, money in USD, dates as ISO strings.
 
@@ -312,14 +313,27 @@ export function projectSlice(propId, data) {
   const projects = (d.projects || []).filter(pr => pr.propertyId === propId);
   const itemIds = new Set();
   for (const pr of projects) for (const it of pr.items || []) itemIds.add(it.id);
+  for (const removed of p.removedRecords || []) for (const record of removed.records || []) {
+    if (removed.kind === 'item') itemIds.add(record.id);
+    for (const item of record.items || []) itemIds.add(item.id);
+  }
   const matIds = new Set();
   for (const s of p.scans || []) for (const id of [...Object.values(s.materialBindings || {}),...Object.values(s.materialIdentities || {})]) matIds.add(id);
   for (const w of p.walls || []) for (const k of ['material', 'materialIn', 'materialPos', 'materialNeg']) matIds.add(w[k]);
   for (const r of p.rooms || []) { matIds.add(r.material); matIds.add(r.ceilingMaterial); }
   for (const f of p.fixtures || []) { matIds.add(f.material); matIds.add(f.bodyMaterial); }
   for (const m of d.materials || []) if (m && m.custom && materialOwners(m).includes(propId)) matIds.add(m.id);
+  const productIds = referencedProductIds(projects, referencedProductIds(p));
+  const collectProduct = link => { if (link && typeof link.productId === 'string') productIds.add(link.productId); };
+  for (const scan of p.scans || []) for (const link of Object.values(scan.componentProducts || {})) collectProduct(link);
+  for (const record of [...(p.fixtures || []), ...(p.walls || []), ...(p.openings || []), ...(p.rooms || [])]) { collectProduct(record.product); collectProduct(record.proposedProduct); }
+  for (const m of d.materials || []) if (matIds.has(m.id)) { collectProduct(m.product); collectProduct(m.proposedProduct); referencedProductIds(m, productIds); }
   // A product added while this property was open (propertyIds) stays with it before it is linked to work.
-  const products = (d.products || []).filter(pr => (pr.itemIds || []).some(id => itemIds.has(id)) || (pr.materialIds || []).some(id => matIds.has(id)) || (pr.propertyIds || []).includes(propId));
+  for (const pr of d.products || []) if ((pr.itemIds || []).some(id => itemIds.has(id)) || (pr.materialIds || []).some(id => matIds.has(id)) || (pr.propertyIds || []).includes(propId)) productIds.add(pr.id);
+  // Follow specifications which themselves link to another product, including cycles.
+  let previousSize;
+  do { previousSize = productIds.size; for (const pr of d.products || []) if (productIds.has(pr.id)) referencedProductIds(pr, productIds); } while (productIds.size !== previousSize);
+  const products = (d.products || []).filter(pr => productIds.has(pr.id));
   const photoIds = new Set((p.photos || []).map(ph => ph.id));
   // The file's list is itself the record of what it keeps (mergeWorkspace), so the browser's
   // owner list stays out of it: other properties' ids neither leak nor mark this file unsaved.
@@ -1178,6 +1192,7 @@ export async function putFile(id, buffer, meta) {
   // Callers retain ownership of their input, just as with IndexedDB writes.
   const owned = diskPersistence && buffer ? buffer.slice(0) : buffer;
   await cacheFile(id, owned, { ...(meta || {}), id, buffer: owned });
+  if (buffer) for (const p of ws.data?.properties || []) for (const scan of p.scans || []) if (scan.id === id || scan.originalFileId === id) scan.assetRevision = uid('rev');
   if (buffer && fileBackend) fileBackend.changed(id);
 }
 
@@ -1193,8 +1208,9 @@ export async function cacheFile(id, buffer, meta) {
 
 export async function getFile(id) {
   const local = await getCachedFile(id);
-  if (!fileBackend) return local;
-  const file = await fileBackend.read(id, local);
+  if (!fileBackend) return local?.buffer instanceof Blob ? { ...local, buffer: await local.buffer.arrayBuffer() } : local;
+  let file = await fileBackend.read(id, local);
+  if (file?.buffer instanceof Blob) return { ...file, buffer: await file.buffer.arrayBuffer() };
   // IndexedDB used to return an owned copy. Preserve that contract: renderers
   // may mutate bytes or transfer them to a worker, detaching the supplied buffer.
   // A file the backend did not keep (`owned`: too large to hold in page memory) is the
