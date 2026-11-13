@@ -9,7 +9,7 @@
 // underlays and the proposed walls land on top of each other in PLAN and MODEL.
 
 import * as THREE from 'three';
-import { uid, touch, levelOfWall, countsAsFloor } from './store.js';
+import { uid, touch, levelOfWall, countsAsFloor, fmtLen, fmtArea } from './store.js';
 import { loadMesh } from './scans.js';
 import { fitScan, placeResult, mergeProposal, existingPlan, proposedOpening, proposedRoom } from './scanmerge.js';
 import { scanToPlan } from './scan2plan-core.js';
@@ -349,7 +349,7 @@ function geometrySummary(result, applied) {
   }
   const n = applied.levels ? applied.levels.length : 1;
   return (n > 1 ? plural(n, 'level') + ', ' : '') + applied.walls.length + ' walls, ' + plural(rooms, 'room') + ', ' +
-    plural(doors.length, 'door') + ', ' + plural(wins, 'window') + (n > 1 ? '' : ', ceiling ' + result.wallHeight.toFixed(2) + ' m') + tail;
+    plural(doors.length, 'door') + ', ' + plural(wins, 'window') + (n > 1 ? '' : ', ceiling ' + fmtLen(result.wallHeight)) + tail;
 }
 
 // A starter project whose scope items carry the takeoffs from the proposal, each linked to
@@ -367,7 +367,7 @@ export function seedProject(prop, applied, label) {
   for (const r of applied.rooms.filter(countsAsFloor)) {
     const a = area(r.pts);
     const where = multi ? levelName(r.level) + ', ' + r.name : r.name;
-    items.push({ id: uid('it'), name: 'Flooring: ' + where, qty: sf(a), unit: 'sf', low: 0, likely: 0, high: 0, durationDays: 0, deps: [], elementIds: [r.id], notes: 'Takeoff from the scan: ' + a.toFixed(1) + ' m2 floor.' });
+    items.push({ id: uid('it'), name: 'Flooring: ' + where, qty: sf(a), unit: 'sf', low: 0, likely: 0, high: 0, durationDays: 0, deps: [], elementIds: [r.id], notes: 'Takeoff from the scan: ' + fmtArea(a) + ' floor.' });
   }
   for (const l of levels) {
     const walls = applied.walls.filter(w => w.level === l.id);

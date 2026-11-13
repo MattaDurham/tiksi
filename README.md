@@ -449,7 +449,7 @@ The code is public; projects, photos, scans and job state stay out of Git.
   and reports print through the browser
 - Bundles are plain ZIP files (fflate, shipped with three.js): a workspace.json,
   a manifest and the original scan and photo bytes
-- All lengths stored in meters, displayed in feet/inches or metric; money in USD
+- All lengths stored in meters, displayed in feet and inches (default, to 1/16") or millimetres, at the precision chosen in FILE → Settings; money in USD
 
 The data model deliberately follows BIM thinking in miniature: geometry elements
 (walls, openings, rooms) are first-class objects with identity, so scope items,

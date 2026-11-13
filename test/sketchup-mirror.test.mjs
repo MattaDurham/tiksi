@@ -328,9 +328,10 @@ test('spec carries each face\'s finish the way the 3D view paints it', () => {
   const list = mats(), spec = mirrorSpec(finished(), list);
   const wall = id => spec.walls.find(w => w.id === id).materials;
   // The studio lies on the +normal side of every wall drawn round it, so that is `pos`.
-  assert.deepEqual(wall('w-s'), { pos: pick(list, 'mat-sage'), neg: pick(list, 'mat-brick'), other: pick(list, 'mat-brick') });
+  assert.deepEqual(wall('w-s'), { pos: pick(list, 'mat-sage'), neg: pick(list, 'mat-brick'), other: pick(list, 'mat-sage') },
+    'ends, top and reveals take the interior finish, not the outside brick');
   assert.equal(wall('w-s').neg.color, '#9c4a3a', 'colours go out as lower-case hex');
-  assert.deepEqual(wall('w-n'), { pos: pick(list, 'mat-drywall'), neg: pick(list, 'mat-brick'), other: pick(list, 'mat-brick') },
+  assert.deepEqual(wall('w-n'), { pos: pick(list, 'mat-drywall'), neg: pick(list, 'mat-brick'), other: pick(list, 'mat-drywall') },
     'an exterior wall with an automatic interior is drywall on the room side');
   assert.deepEqual(wall('w-e'), { pos: pick(list, 'mat-brick'), neg: pick(list, 'mat-brick'), other: pick(list, 'mat-brick') },
     'a partition with an automatic interior wears its own finish both sides');
@@ -360,7 +361,7 @@ test('each long face can carry its own finish; an unrecorded exterior shows grey
   assert.deepEqual(faces('w-w').pos, pick(list, 'mat-drywall'), 'the room side keeps the automatic drywall');
   assert.deepEqual(faces('w-e'), { pos: pick(list, 'mat-brick'), neg: pick(list, 'mat-sage'), other: pick(list, 'mat-brick') },
     'a partition shows a different finish to each room');
-  assert.deepEqual(faces('w-s'), { pos: pick(list, 'mat-sage'), neg: pick(list, 'mat-brick'), other: pick(list, 'mat-brick') });
+  assert.deepEqual(faces('w-s'), { pos: pick(list, 'mat-sage'), neg: pick(list, 'mat-brick'), other: pick(list, 'mat-sage') });
   // A face's own finish wins on the outside too, once the cladding is known.
   w('w-n').materialNeg = 'mat-brick';
   spec = mirrorSpec(p, list);
@@ -369,6 +370,12 @@ test('each long face can carry its own finish; an unrecorded exterior shows grey
   // Labels name the compass side and what it looks onto (plan y runs south).
   assert.deepEqual(wallFaceLabels(w('w-s'), p.rooms), { pos: 'South face (Studio)', neg: 'North face (outside)' });
   assert.deepEqual(wallFaceLabels(w('w-e'), p.rooms), { pos: 'West face (Studio)', neg: 'East face (Annex)' });
+});
+
+test('a wall outside every room wears its own finish on every face', async () => {
+  const { wallFaceMaterialIds } = await import('../js/wall-solids.js');
+  const garden = { id: 'w-g', ax: 10, ay: 10, bx: 14, by: 10, thickness: 0.2, material: 'mat-brick' };
+  assert.deepEqual(wallFaceMaterialIds(garden, finished().rooms), { pos: 'mat-brick', neg: 'mat-brick', other: 'mat-brick' });
 });
 
 test('a finish change rewrites the mirror without reading back as a SketchUp edit', () => {

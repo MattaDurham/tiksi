@@ -37,11 +37,12 @@ test('tape readings with fractions, unicode fractions and metric units parse exa
   near("-7'-7\"", -91); near('30"', 30);
   for (const bad of ['3 1/0"', 'x"', '1/"']) assert.ok(Number.isNaN(store.parseLen(bad)), bad + ' is not a length');
   store.ws.data.settings.units = 'metric';
-  assert.ok(Math.abs(store.parseLen('0.85') - 0.85) < 1e-12, 'plain numbers stay metres in metric');
+  assert.ok(Math.abs(store.parseLen('850') - 0.85) < 1e-12, 'plain numbers are millimetres in metric');
+  assert.ok(Math.abs(store.parseLen('0.85 m') - 0.85) < 1e-12, 'metres still read when marked');
   store.ws.data.settings.units = 'imperial';
 });
 
-test('lengths show to the sixteenth of an inch and metric to the millimetre', () => {
+test('lengths show to the sixteenth of an inch and metric to the millimetre by default', () => {
   store.ws.data.settings.units = 'imperial';
   const IN = 0.0254;
   assert.equal(store.fmtLen(33.5 * IN), "2'-9 1/2\"");
@@ -56,11 +57,59 @@ test('lengths show to the sixteenth of an inch and metric to the millimetre', ()
   assert.equal(store.fmtLen((96 + 1 / 2) * IN, { short: true }), "8'-0 1/2\"");
   for (const inches of [33.5, 9.25, 120.0625, -7.75]) assert.ok(Math.abs(store.parseLen(store.fmtLen(inches * IN)) - inches * IN) < 1e-9, 'round trip exact at 1/16": ' + inches);
   store.ws.data.settings.units = 'metric';
-  assert.equal(store.fmtLen(0.8509), '0.851 m');
-  assert.equal(store.fmtLen(2.835), '2.835 m');
-  assert.equal(store.fmtLen(3), '3 m');
-  assert.equal(store.fmtLen(-0.0004), '0 m');
+  assert.equal(store.fmtLen(0.8509), '851 mm');
+  assert.equal(store.fmtLen(2.835), '2835 mm');
+  assert.equal(store.fmtLen(3), '3000 mm');
+  assert.equal(store.fmtLen(-0.0004), '0 mm');
+  assert.equal(store.fmtLen(-2.32), '-2320 mm');
+  for (const m of [0.8509, 2.835, -2.32]) assert.ok(Math.abs(store.parseLen(store.fmtLen(m)) - m) < 0.0005, 'mm round trip: ' + m);
   store.ws.data.settings.units = 'imperial';
+});
+
+test('a new workspace shows inches to 1/16"; the precision is a setting for each unit', () => {
+  const fresh = store.emptyWorkspace();
+  assert.equal(fresh.settings.units, 'imperial');
+  assert.equal(fresh.settings.inchPrecision, 16);
+  assert.equal(fresh.settings.mmPrecision, 1);
+  const IN = 0.0254, s = store.ws.data.settings;
+  s.units = 'imperial';
+  const len = 33.36 * IN;   // 2'-9 0.36": no value lands halfway between two marks
+  const at = den => { s.inchPrecision = den; return store.fmtLen(len); };
+  assert.equal(at(64), "2'-9 23/64\"");
+  assert.equal(at(32), "2'-9 3/8\"");
+  assert.equal(at(16), "2'-9 3/8\"", '0.36" is nearest 6/16 = 3/8');
+  assert.equal(at(8), "2'-9 3/8\"");
+  assert.equal(at(4), "2'-9 1/4\"");
+  assert.equal(at(2), "2'-9 1/2\"");
+  assert.equal(at(1), "2'-9\"");
+  s.inchPrecision = 1;
+  assert.equal(store.fmtLen(11.6 * IN), "1'-0\"", 'rounding to whole inches still carries into feet');
+  assert.equal(store.precisionLabel(), '1"');
+  s.inchPrecision = 16;
+  assert.equal(store.precisionLabel(), '1/16"');
+  s.units = 'metric';
+  const mm = step => { s.mmPrecision = step; return store.fmtLen(0.85137); };
+  assert.equal(mm(0.1), '851.4 mm');
+  assert.equal(mm(0.5), '851.5 mm');
+  assert.equal(mm(1), '851 mm');
+  assert.equal(mm(5), '850 mm');
+  assert.equal(mm(10), '850 mm');
+  assert.equal(store.precisionLabel(), '10 mm');
+  s.mmPrecision = 0.5;
+  assert.equal(store.fmtLen(0.851), '851 mm', 'whole millimetres drop the point');
+  s.mmPrecision = 0.1;
+  assert.equal(store.fmtLen(-0.00001), '0 mm');
+  s.mmPrecision = 1; s.units = 'imperial';
+});
+
+test('a saved precision that is not on the list falls back to 1/16" and 1 mm', () => {
+  const d = store.emptyWorkspace();
+  d.settings.inchPrecision = 3; d.settings.mmPrecision = 2; d.settings.units = 'cubits';
+  store.replaceWorkspace(JSON.parse(JSON.stringify(d)));
+  assert.equal(store.ws.data.settings.inchPrecision, 16);
+  assert.equal(store.ws.data.settings.mmPrecision, 1);
+  assert.equal(store.ws.data.settings.units, 'imperial');
+  store.ws.data = store.emptyWorkspace();
 });
 
 test('typed lengths: the forms people type are read, anything else is refused with a reason', () => {
@@ -106,7 +155,7 @@ test('every length field reads a number on its own in the unit it always did', a
   assert.deepEqual(found, BARE_UNIT_BEFORE);
 });
 
-test('a number on its own is feet where the field read feet, inches in MEASURE, metres in metric', () => {
+test('a number on its own is feet where the field read feet, inches in MEASURE, millimetres in metric', () => {
   store.ws.data.settings.units = 'imperial';
   const FT = 0.3048;
   assert.equal(store.parseLen('12'), 12 * FT, 'a 12 in PLAN is still a 12-foot wall');
@@ -121,9 +170,10 @@ test('a number on its own is feet where the field read feet, inches in MEASURE, 
   assert.match(store.readLength('ten', 'feet').error, /a number on its own is feet\.$/);
   assert.throws(() => store.readLength('12', 'yards'), /inches or feet/);
   store.ws.data.settings.units = 'metric';
-  assert.equal(store.parseLen('2.4'), 2.4);
-  assert.equal(store.readLength('2.4').value, 2.4);
-  assert.equal(store.bareLengthUnit('feet'), 'metres');
+  assert.equal(store.parseLen('2400'), 2.4);
+  assert.equal(store.readLength('2400').value, 2.4);
+  assert.equal(store.readLength('2.4 m').value, 2.4);
+  assert.equal(store.bareLengthUnit('feet'), 'millimetres');
   store.ws.data.settings.units = 'imperial';
 });
 

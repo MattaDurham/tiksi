@@ -18,6 +18,9 @@ const LS_KEY = 'tiksi.workspace.v1';   // storage slot, not the schema version (
 const SCHEMA_VERSION = 2;
 const M_PER_FT = 0.3048;
 const M2_PER_SF = 0.09290304;
+// Length display precision (see units below).
+export const INCH_PRECISIONS = [1, 2, 4, 8, 16, 32, 64];   // the denominator: 16 is 1/16"
+export const MM_PRECISIONS = [10, 5, 1, 0.5, 0.1];           // the step in millimetres
 
 export const ws = { data: null };
 
@@ -350,7 +353,7 @@ export function projectSlice(propId, data) {
   const property = photos.length === (p.photos || []).length ? p : Object.assign({}, p, { photos });
   return {
     version: d.version,
-    settings: { units: d.settings.units, budgetCap: d.settings.budgetCap, programStart: d.settings.programStart, activePropertyId: propId },
+    settings: { units: d.settings.units, inchPrecision: d.settings.inchPrecision, mmPrecision: d.settings.mmPrecision, budgetCap: d.settings.budgetCap, programStart: d.settings.programStart, activePropertyId: propId },
     properties: [property], materials, products, projects,
   };
 }
@@ -707,7 +710,10 @@ function validateWorkspace(d) {
 function migrate(d) {
   validateWorkspace(d);
   if (!d.version) d.version = 1;
-  d.settings = Object.assign({ units: 'imperial', budgetCap: 150000, programStart: isoToday(), activePropertyId: null, onePagerPrompt: 'changed' }, d.settings || {});
+  d.settings = Object.assign({ units: 'imperial', inchPrecision: 16, mmPrecision: 1, budgetCap: 150000, programStart: isoToday(), activePropertyId: null, onePagerPrompt: 'changed' }, d.settings || {});
+  if (!['imperial', 'metric'].includes(d.settings.units)) d.settings.units = 'imperial';
+  if (!INCH_PRECISIONS.includes(d.settings.inchPrecision)) d.settings.inchPrecision = 16;
+  if (!MM_PRECISIONS.includes(d.settings.mmPrecision)) d.settings.mmPrecision = 1;
   if (!['changed', 'always', 'never'].includes(d.settings.onePagerPrompt)) d.settings.onePagerPrompt = 'changed';
   d.properties = d.properties || [];
   d.materials = d.materials || [];   // material records are normalised by materials.js
@@ -855,7 +861,7 @@ function fixParents(d) {
 export function emptyWorkspace() {
   return migrate({
     version: SCHEMA_VERSION,
-    settings: { units: 'imperial', budgetCap: 150000, programStart: isoToday(), activePropertyId: null },
+    settings: { units: 'imperial', inchPrecision: 16, mmPrecision: 1, budgetCap: 150000, programStart: isoToday(), activePropertyId: null },
     properties: [],
     materials: [],
     products: [],
@@ -954,28 +960,50 @@ export function polyArea(pts) {
 
 export function units() { return ws.data.settings.units; }
 
-// Lengths are shown as a tape reads them: feet, inches and sixteenths (2'-9 1/2"), or metres
-// to the millimetre (0.851 m). Stored values are metres and never rounded here.
+// Lengths show in inches (feet and inches, as a tape reads them: 2'-9 1/2") or millimetres
+// (851 mm), to the precision chosen in FILE > Settings: 1/16" and 1 mm unless changed.
+// Stored values are metres and never rounded here; only what is shown is.
+export function inchPrecision() { const n = ws.data.settings.inchPrecision; return INCH_PRECISIONS.includes(n) ? n : 16; }
+export function mmPrecision() { const n = ws.data.settings.mmPrecision; return MM_PRECISIONS.includes(n) ? n : 1; }
+export const inchPrecisionLabel = den => den === 1 ? '1"' : '1/' + den + '"';
+export const mmPrecisionLabel = step => step + ' mm';
+export function precisionLabel() { return units() === 'metric' ? mmPrecisionLabel(mmPrecision()) : inchPrecisionLabel(inchPrecision()); }
+
 const M_PER_IN = M_PER_FT / 12;
-function sixteenthsText(n, afterFeet) {
-  const whole = Math.floor(n / 16);
-  let num = n % 16, den = 16;
+function fractionText(n, den, afterFeet) {
+  const whole = Math.floor(n / den);
+  let num = n % den;
   while (num && num % 2 === 0) { num /= 2; den /= 2; }
   if (!num) return String(whole);
   return (whole || afterFeet ? whole + ' ' : '') + num + '/' + den;
 }
+// Millimetres to the chosen step, with no thousands separator so the text reads back as typed.
+export function fmtMm(m, step = mmPrecision()) {
+  const steps = Math.round(m * 1000 / step);
+  const decimals = step < 1 ? String(step).split('.')[1].length : 0;
+  // Whole millimetres drop the point (851 mm, 851.5 mm); no sign on a value that rounds to zero.
+  const mm = Number((steps * step).toFixed(decimals));
+  return String(mm || 0) + ' mm';
+}
+// Feet and inches to the chosen fraction; below 1 ft, inches alone. opts.short drops -0" from
+// whole feet (8'), opts.den overrides the precision, opts.inchesUpTo (in inches) keeps lengths
+// below it in inches alone, as a tape reads them (33 1/2" rather than 2'-9 1/2").
+export function fmtFeetInches(m, opts) {
+  const den = (opts && opts.den) || inchPrecision(), perFoot = 12 * den;
+  // Below the datum (a basement floor) the sign covers feet and inches alike: -7'-7", not -8'-5".
+  let parts = Math.round(Math.abs(m) / M_PER_IN * den);
+  const ft = opts && opts.inchesUpTo && parts < opts.inchesUpTo * den ? 0 : Math.floor(parts / perFoot);
+  parts -= ft * perFoot;
+  const sign = m < 0 && (ft || parts) ? '-' : '';
+  const inch = fractionText(parts, den, ft > 0);
+  if (ft === 0) return sign + inch + '"';
+  if (opts && opts.short && parts === 0) return sign + ft + "'";
+  return sign + ft + "'-" + inch + '"';
+}
 export function fmtLen(m, opts) {
   if (m == null || isNaN(m)) return '-';
-  if (units() === 'metric') return (Math.round(m * 1000) / 1000 || 0) + ' m';
-  // Below the datum (a basement floor) the sign covers feet and inches alike: -7'-7", not -8'-5".
-  let sixteenths = Math.round(Math.abs(m) / M_PER_IN * 16);
-  const ft = Math.floor(sixteenths / 192);
-  sixteenths -= ft * 192;
-  const sign = m < 0 && (ft || sixteenths) ? '-' : '';
-  const inch = sixteenthsText(sixteenths, ft > 0);
-  if (ft === 0) return sign + inch + '"';
-  if (opts && opts.short && sixteenths === 0) return sign + ft + "'";
-  return sign + ft + "'-" + inch + '"';
+  if (units() === 'metric') return fmtMm(m);
+  return fmtFeetInches(m, opts);
 }
 
 export function fmtArea(m2) {
@@ -996,7 +1024,7 @@ function amount(s) {
   return m && +m[3] ? (m[1] ? +m[1] : 0) + m[2] / m[3] : NaN;
 }
 
-// A number typed on its own (no mark or unit) is metres in metric. In feet and inches each
+// A number typed on its own (no mark or unit) is millimetres in metric, the unit lengths show in. In feet and inches each
 // field says what it means, and keeps what that field has always meant: 'feet' for PLAN,
 // MODEL, DOCUMENTS, fixture and material fields, 'inches' for MEASURE's tape readings.
 const BARE_UNITS = ['inches', 'feet'];
@@ -1004,7 +1032,7 @@ function bareUnit(bare) {
   if (!BARE_UNITS.includes(bare)) throw new Error('A length field must say whether a bare number is inches or feet, not ' + JSON.stringify(bare));
   return bare;
 }
-export function bareLengthUnit(bare = 'inches') { return units() === 'metric' ? 'metres' : bareUnit(bare); }
+export function bareLengthUnit(bare = 'inches') { return units() === 'metric' ? 'millimetres' : bareUnit(bare); }
 
 // Reads a typed length. Returns { value } in metres, or { value: NaN, error } saying why it
 // cannot be read: nothing is guessed from part of the entry ("10x12", "2,5 m", "6 ft tall").
@@ -1014,11 +1042,11 @@ export function bareLengthUnit(bare = 'inches') { return units() === 'metric' ? 
 export function readLength(text, bare = 'inches') {
   bareUnit(bare);
   // Same arithmetic as a typed bare number, so a number argument stores the same metres.
-  const bareMetres = n => units() === 'metric' ? n : bare === 'feet' ? n * M_PER_FT : n / 12 * M_PER_FT;
+  const bareMetres = n => units() === 'metric' ? n / 1000 : bare === 'feet' ? n * M_PER_FT : n / 12 * M_PER_FT;
   if (typeof text === 'number') return Number.isFinite(text) ? { value: bareMetres(text) } : { value: NaN, error: 'Type a length.' };
   const raw = String(text ?? '');
   const refuse = why => ({ value: NaN, error: why });
-  const example = units() === 'metric' ? '3.2 m, 850 mm or 85 cm' : '12\'-6", 33 1/2", 6 ft 2 in or 3.2 m';
+  const example = units() === 'metric' ? '850 mm, 85 cm or 3.2 m' : '12\'-6", 33 1/2", 6 ft 2 in or 3.2 m';
   const cannot = () => refuse('"' + raw.trim() + '" is not a length. Type it like ' + example + '; a number on its own is ' + bareLengthUnit(bare) + '.');
   let s = raw.trim().toLowerCase()
     .replace(/[¼½¾⅛⅜⅝⅞⅓⅔⅙⅚⅕]/g, c => UNICODE_FRACTIONS[c])
