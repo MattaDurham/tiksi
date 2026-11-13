@@ -1565,9 +1565,7 @@ function drawVignette(w, h) {
 }
 
 function rulerLabel(v, major) {
-  if (ws.data.settings.units === 'metric') {
-    return (Math.round(v * 100) / 100).toString();
-  }
+  if (ws.data.settings.units === 'metric') return String(Math.round(v * 1000) || 0);   // millimetres
   const ft = v / 0.3048;
   if (major >= 0.3048) return Math.round(ft) + "'";
   return Math.round(ft * 12) + '"';
@@ -1647,7 +1645,7 @@ function drawRulers(w, h) {
   ctx.fillStyle = C.faint;
   ctx.font = `700 8px ${FONT}`;
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(ws.data.settings.units === 'metric' ? 'M' : 'FT', R / 2, R / 2 + 0.5);
+  ctx.fillText(ws.data.settings.units === 'metric' ? 'MM' : 'FT', R / 2, R / 2 + 0.5);
   ctx.textBaseline = 'alphabetic';
 }
 

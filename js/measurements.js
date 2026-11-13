@@ -6,7 +6,7 @@
 //     status: 'unassigned'|'assigned'|'applied', applied: { previous, at } | null, note, createdAt }
 // Applying a reading edits the model through the same geometry history as a typed edit in
 // PLAN, so UNDO reverts it; the reading then reports that the model no longer matches.
-import { uid, touch, units, readLength, wallsOn, roomsOn, openingsOn, levelOfWall, fmtLen, wallHeightOf } from './store.js';
+import { uid, touch, units, readLength, fmtMm, fmtFeetInches, wallsOn, roomsOn, openingsOn, levelOfWall, fmtLen, wallHeightOf } from './store.js';
 import { openingDimensions, wallWidthFromSlab } from './opening-dimensions.js';
 import { resizeOpening } from './opening-schedule.js';
 import { beginGeometryEdit } from './edit-history.js';
@@ -15,27 +15,22 @@ import { pointInPolygon } from './roomfill.js';
 
 export const DIRECTIONS = ['width', 'height', 'depth'];
 export const CONFIDENCE = ['clear', 'probable', 'unreadable'];
-const IN = 0.0254, TOLERANCE = 0.001;
+const TOLERANCE = 0.001;
 
 // A reading as typed, read by the same rule as every length field (store.js readLength): a
-// bare number is inches in imperial (what a tape blade shows) and metres in metric; the form
+// bare number is inches in imperial (what a tape blade shows) and millimetres in metric; the form
 // echoes the parsed value so an ambiguous entry is visible. Stray text is refused, not guessed.
 export function parseReading(text) {
   const value = readLength(text, 'inches').value;
   return Number.isFinite(value) && value > 0 && value < 100 ? value : NaN;
 }
 
-// Tape style: inches to the nearest 1/16 below 10 ft (33 1/2"), feet-inches above; metric in cm.
+// Tape style: inches below 10 ft (33 1/2"), feet-inches above, to the chosen fraction (1/16"
+// unless changed in FILE > Settings); millimetres in metric, to the chosen step.
 export function fmtReading(m) {
   if (m == null || !Number.isFinite(m)) return '-';
-  if (units() === 'metric') return (Math.round(m * 1000) / 10) + ' cm';
-  let sixteenths = Math.round(m / IN * 16);
-  const feet = sixteenths >= 120 * 16 ? Math.floor(sixteenths / 192) : 0;
-  sixteenths -= feet * 192;
-  const whole = Math.floor(sixteenths / 16); let num = sixteenths % 16, den = 16;
-  while (num && num % 2 === 0) { num /= 2; den /= 2; }
-  const inches = (whole || !num ? String(whole) : '') + (num ? (whole ? ' ' : '') + num + '/' + den : '') + '"';
-  return feet ? feet + "'-" + inches : inches;
+  if (units() === 'metric') return fmtMm(m);
+  return fmtFeetInches(m, { inchesUpTo: 120 });
 }
 
 export function measurements(prop) { return prop.measurements || (prop.measurements = []); }
