@@ -1,4 +1,3 @@
-import { doorDimensions } from './opening-dimensions.js';
 // Model -> three.js scene generation.
 // Plan coordinates are meters, x east / y south (canvas convention).
 // World mapping: plan (x, y) -> world (x, z); height is world y.
@@ -19,12 +18,13 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { materialById, ensureLevels, levelHeight, levelOfRoom, wallsOn, roomsOn, openingsOn } from './store.js';
 import { materialFor } from './textures.js';
-import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, wallFaceMaterialIds, pointInPoly, doorLeaves, doorShownOpen, doorGlass, leafGlazing, plainOpening } from './wall-solids.js';
+import { openingSpans, wallSolids, wallSides, wallInteriorMaterialId, wallFaceMaterialIds, pointInPoly, doorShownOpen, doorGlass, leafGlazing, plainOpening, doorDetail, windowDetail, baseboardDetail } from './wall-solids.js';
 import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
 import { applyPlanTagVisibility } from './tags-scene.js';
 import { cutPrism } from './section-planes.js';
-import { trimLayout } from './trims.js';
-import { sectionOf } from './trim-profiles.js';
+import { thresholdFloors as derivedThresholdFloors } from './threshold-floors.js';
+import { wallFrame, wallEnds } from './wall-joins.js';
+import { trimMeshParts } from './trim-mesh.js';
 
 const FALLBACK_WALL = '#d8d4cc';
 const FALLBACK_FLOOR = '#97999b';
@@ -35,13 +35,7 @@ const FALLBACK_CEILING = '#f1efe9';
 // fixtures and imported models stand at. (It used to sit on top of that height, which buried
 // the foot of every piece of furniture and hid anything thinner, a rug or a hearth.)
 export const FLOOR_T = 0.06;
-const CASING_W = 0.07, CASING_D = 0.016;
-const JAMB_W = 0.05;
-const FRAME_W = 0.045, SASH_W = 0.035, MULLION_W = 0.022;
-const LEAF_T = 0.045;
-const EPS = 0.0005;               // buried-face margin so joined solids never share a plane
-const JOIN_TOL = 0.012;           // wall endpoints closer than this meet at one joint
-const COLLINEAR = 0.3;            // sin of the deflection below which a neighbour continues the wall
+export const CEILING_T = 0.027;
 
 // ---------- materials ----------
 // Local fallbacks are cached for the life of the page; they are ours to keep.
@@ -164,7 +158,8 @@ function leafMaterials() {
 // so a wall can hand its room-facing side to a different material: FACE_POS is the long
 // +z face, FACE_NEG the long -z face, FACE_OTHER the ends, top and bottom.
 export const FACE_POS = 1, FACE_NEG = 2, FACE_OTHER = 4, FACE_ALL = 7;
-export function metricPrism(footprint, y0, y1, faces) {
+const FACE_END_A = 8, FACE_END_B = 16;
+export function metricPrism(footprint, y0, y1, faces, edgeKinds) {
   if (faces == null) faces = FACE_ALL;
   const P = [], N = [], UV = [], I = [];
   let base = 0;
@@ -179,7 +174,7 @@ export function metricPrism(footprint, y0, y1, faces) {
     const dx = bx - ax, dz = bz - az, len = Math.hypot(dx, dz);
     if (len < 1e-9) continue;
     const along = Math.abs(dz) < 1e-9;
-    const kind = along ? (dx > 0 ? FACE_POS : FACE_NEG) : FACE_OTHER;
+    const kind = edgeKinds?.[i] ?? (along ? (dx > 0 ? FACE_POS : FACE_NEG) : FACE_OTHER);
     if (!(faces & kind)) continue;
     // Long faces keep u = x so the pattern runs unbroken across the pieces of a wall;
     // end faces measure u along their own edge.
@@ -254,144 +249,6 @@ function segDist(px, py, ax, ay, bx, by) {
 }
 
 // ---------- wall joints ----------
-function wallFrame(wall) {
-  const L = Math.hypot(wall.bx - wall.ax, wall.by - wall.ay);
-  const d = L || 1;
-  const ux = (wall.bx - wall.ax) / d, uy = (wall.by - wall.ay) / d;
-  return { L, ux, uy, nx: -uy, ny: ux, h: (wall.thickness || 0.114) / 2 };
-}
-
-// Parameter along (dx, dy) from (ax, ay) where that line meets the line through (bx, by)
-// with direction (qx, qy); null when the lines are parallel.
-function lineHit(ax, ay, dx, dy, bx, by, qx, qy) {
-  const den = dx * qy - dy * qx;
-  if (Math.abs(den) < 1e-6) return null;
-  return ((bx - ax) * qy - (by - ay) * qx) / den;
-}
-
-// Two directions out of a shared point that run (nearly) opposite: one wall carrying on as the other.
-function continues(ax, ay, bx, by) {
-  return ax * bx + ay * by < 0 && Math.abs(ax * by - ay * bx) < COLLINEAR;
-}
-
-// Deterministic winner between two straight runs crossing at a point: thicker, then lower id,
-// so both runs agree on which one passes through and which is cut at its face.
-function outranks(p, q) {
-  const tp = Math.max(p[0].thickness || 0.114, p[1].thickness || 0.114);
-  const tq = Math.max(q[0].thickness || 0.114, q[1].thickness || 0.114);
-  if (tp !== tq) return tp > tq;
-  return [String(p[0].id), String(p[1].id)].sort()[0] < [String(q[0].id), String(q[1].id)].sort()[0];
-}
-
-// Close one end of a wall against the walls meeting it. Returns, in wall-local x, where the
-// +z face (`pos`) and the -z face (`neg`) stop, plus `tip` (a local {x, z} between the two)
-// when the end needs an extra corner: three or more walls meeting at a point, or a pair
-// that jogs where we abut it. `inflate` thickens every wall by that much per side, which
-// is how wall trim gets mitres matching the faces it sits on.
-function wallEnd(wall, end, walls, inflate) {
-  inflate = inflate || 0;
-  const f = wallFrame(wall);
-  const h = f.h + inflate;
-  const atStart = end === 'a';
-  const px = atStart ? wall.ax : wall.bx, py = atStart ? wall.ay : wall.by;
-  const dx = atStart ? -f.ux : f.ux, dy = atStart ? -f.uy : f.uy;   // outward along the axis
-  const ex = -dx, ey = -dy;                                          // into this wall
-  const local = (a) => atStart ? -a : f.L + a;
-  // tip: [outward extension, local z] of an extra footprint vertex between the two face cuts.
-  const result = (aPos, aNeg, tip) => ({ pos: local(aPos), neg: local(aNeg), tip: tip ? { x: local(tip[0]), z: tip[1] } : null });
-
-  const joined = [], through = [];
-  for (const o of walls) {
-    if (o === wall || o.id === wall.id) continue;
-    const g = wallFrame(o);
-    if (g.L < 0.01) continue;
-    const nearA = Math.hypot(o.ax - px, o.ay - py) < JOIN_TOL, nearB = Math.hypot(o.bx - px, o.by - py) < JOIN_TOL;
-    if (nearA || nearB) {
-      const s = nearA ? 1 : -1;
-      const ix = g.ux * s, iy = g.uy * s;                             // from the joint into the neighbour
-      if (ix * ex + iy * ey > 0 && Math.abs(ix * ey - iy * ex) < COLLINEAR) continue; // folds back over us
-      joined.push({ o, g, ix, iy, cont: continues(ex, ey, ix, iy) });
-    } else {
-      // A wall running past our endpoint within its own thickness: we abut it mid-span.
-      const t = (px - o.ax) * g.ux + (py - o.ay) * g.uy;
-      const d = Math.abs((px - o.ax) * g.nx + (py - o.ay) * g.ny);
-      if (t > JOIN_TOL && t < g.L - JOIN_TOL && d < g.h + JOIN_TOL) through.push({ o, g });
-    }
-  }
-
-  // Where our face s (+1 / -1) meets face t of neighbour nb, as an outward extension.
-  const hit = (s, nb, t, bury) => {
-    const gh = nb.g.h + inflate;
-    let a = lineHit(px + f.nx * h * s, py + f.ny * h * s, dx, dy,
-      nb.o.ax + nb.g.nx * gh * t, nb.o.ay + nb.g.ny * gh * t, nb.g.ux, nb.g.uy);
-    if (a == null) return 0;
-    if (bury) a += EPS;                                   // stay a hair inside the wall we abut
-    const reach = 6 * Math.max(f.h, nb.g.h);              // acute mitres run away: cap at three thicknesses
-    return Math.max(-Math.min(reach, f.L * 0.45), Math.min(reach, a));
-  };
-  // Which of a corner neighbour's faces pairs with our face s: inner with inner, outer with outer.
-  const pair = (s, nb) => s * Math.sign(f.nx * nb.ix + f.ny * nb.iy || 1) * Math.sign(nb.g.nx * ex + nb.g.ny * ey || 1);
-  // The face of a passing wall on our side.
-  const near = (nb) => Math.sign(nb.g.nx * ex + nb.g.ny * ey || 1);
-  // Where face t of neighbour p meets face u of neighbour q, as [outward extension, local z].
-  const meet = (p, t, q, u) => {
-    const ph = p.g.h + inflate, qh = q.g.h + inflate;
-    const ax = p.o.ax + p.g.nx * ph * t, ay = p.o.ay + p.g.ny * ph * t;
-    const s = lineHit(ax, ay, p.g.ux, p.g.uy, q.o.ax + q.g.nx * qh * u, q.o.ay + q.g.ny * qh * u, q.g.ux, q.g.uy);
-    if (s == null) return null;
-    const qx = ax + p.g.ux * s - px, qy = ay + p.g.uy * s - py;
-    return [qx * dx + qy * dy, qx * f.nx + qy * f.ny];
-  };
-  // Keep an extra vertex only if it sits within the wall's width and beyond the straight cut,
-  // so the footprint stays convex.
-  const beyond = (tip, aPos, aNeg) => {
-    if (!tip || Math.abs(tip[1]) > h - 0.001) return null;
-    const chord = aNeg + (tip[1] + h) / (2 * h) * (aPos - aNeg);
-    return tip[0] > chord + 0.001 ? tip : null;
-  };
-
-  if (through.length) {
-    const t = near(through[0]);
-    return result(hit(1, through[0], t, true), hit(-1, through[0], t, true), null);
-  }
-  const corners = joined.filter(j => !j.cont);
-  const conts = joined.filter(j => j.cont).sort((p, q) => Math.abs(p.ix * ey - p.iy * ex) - Math.abs(q.ix * ey - q.iy * ex));
-  // Angular neighbours: the corner wall first met sweeping from our axis towards +z, and towards -z.
-  for (const j of corners) j.phi = (Math.atan2(j.ix * f.nx + j.iy * f.ny, j.ix * ex + j.iy * ey) + 2 * Math.PI) % (2 * Math.PI);
-  const posNb = corners.length ? corners.reduce((m, j) => j.phi < m.phi ? j : m) : null;
-  const negNb = corners.length ? corners.reduce((m, j) => j.phi > m.phi ? j : m) : null;
-  // A corner neighbour that carries straight on past the joint cuts us at its face.
-  const passes = (nb) => joined.some(k => k !== nb && continues(nb.ix, nb.iy, k.ix, k.iy));
-
-  if (conts.length) {
-    const c = conts[0];
-    // Two straight runs crossing here: the one that outranks passes, the other is cut.
-    if (posNb && negNb && posNb !== negNb && continues(posNb.ix, posNb.iy, negNb.ix, negNb.iy) && outranks([posNb.o, negNb.o], [wall, c.o])) {
-      return result(hit(1, posNb, pair(1, posNb), true), hit(-1, negNb, pair(-1, negNb), true), null);
-    }
-    // Straight on there is nothing to add; a slight jog mitres the faces by a few millimetres.
-    return result(hit(1, c, pair(1, c), false), hit(-1, c, pair(-1, c), false), null);
-  }
-  if (!posNb) return result(0, 0, null);
-  const buryPos = passes(posNb), buryNeg = passes(negNb);
-  const tPos = pair(1, posNb), tNeg = pair(-1, negNb);
-  const aPos = hit(1, posNb, tPos, buryPos), aNeg = hit(-1, negNb, tNeg, buryNeg);
-  let tip = null;
-  if (posNb !== negNb && !buryPos && !buryNeg) {
-    // Three or more walls meeting at a point: the two face cuts leave a wedge in front of
-    // the end; a tip on the centreline at the joint fills it, and the neighbours' tips meet it there.
-    tip = [0, 0];
-  } else if (posNb !== negNb && buryPos && buryNeg) {
-    // Abutting a pair that jogs rather than runs straight: the end bends where the two
-    // faces meet instead of cutting a straight line between them and leaving a notch.
-    tip = meet(posNb, tPos, negNb, tNeg);
-  }
-  return result(aPos, aNeg, beyond(tip, aPos, aNeg));
-}
-function wallEnds(wall, walls, inflate) {
-  return { a: wallEnd(wall, 'a', walls, inflate), b: wallEnd(wall, 'b', walls, inflate) };
-}
-
 // Where one face (side +1 / -1) of a solid piece starts and stops along the wall: pieces
 // touching a wall end take that end's cut, the others keep their own span.
 function faceSpan(s, L, ends, side) {
@@ -413,11 +270,8 @@ function solidFootprint(s, L, h, ends) {
 // Spans and solid pieces live in wall-solids.js (shared with the SketchUp mirror).
 export { wallSolids };
 
-function profileSize(o, key, fallback, max = .3) { const v = o.profile?.[key]; return Number.isFinite(v) && v > 0 && v <= max ? v : fallback; }
-
 // ---------- doors ----------
 function buildDoor(o, s0, s1, top, th, sides, ctx) {
-  const JAMB_W = profileSize(o, 'jambWidth', .05), CASING_W = profileSize(o, 'casingWidth', .07), CASING_D = profileSize(o, 'casingDepth', .016);
   const g = new THREE.Group();
   g.userData = { kind: 'opening', id: o.id, wallId: ctx.wall.id };
   // A plain opening has no frame: the wall's own returns and the header above are all there is.
@@ -426,12 +280,17 @@ function buildDoor(o, s0, s1, top, th, sides, ctx) {
   const w = s1 - s0;
   const tm = trimMat(ctx.matOpts);
   const proud = 0.008;
+  const interior = !!(sides.pos && sides.neg);
+  const detail = doorDetail(o, w, top, interior, sides);
+  const { jambWidth: JAMB_W, casingWidth: CASING_W, casingDepth: CASING_D } = detail;
+  g.userData.detailWarnings = detail.warnings;
   // Jambs and head inside the rough opening.
   trim.push(metricBox(s0, s0 + JAMB_W, 0, top, -th / 2 - proud, th / 2 + proud));
   trim.push(metricBox(s1 - JAMB_W, s1, 0, top, -th / 2 - proud, th / 2 + proud));
   trim.push(metricBox(s0 + JAMB_W, s1 - JAMB_W, top - JAMB_W, top, -th / 2 - proud, th / 2 + proud));
   // Casing on every side that faces a room.
   for (const sgn of [1, -1]) {
+    if (!CASING_W || !CASING_D) continue;
     if (!(sgn > 0 ? sides.pos : sides.neg)) continue;
     const z0 = sgn > 0 ? th / 2 : -th / 2 - CASING_D, z1 = sgn > 0 ? th / 2 + CASING_D : -th / 2;
     trim.push(metricBox(s0 - CASING_W, s0 + 0.01, 0, top + CASING_W, z0, z1));
@@ -441,31 +300,29 @@ function buildDoor(o, s0, s1, top, th, sides, ctx) {
   const tmesh = mergedMesh(trim, tm, g.userData);
   if (tmesh) g.add(tmesh);
 
-  const interior = !!(sides.pos && sides.neg);
-  const leaves = doorLeaves(o, w, interior);      // 0: wide interior openings are cased, not hung
+  const leaves = detail.leaves;      // 0: wide interior openings are cased, not hung
   if (leaves) {
     // A pair (French doors, a slider drawn as a door): each leaf hangs from its own jamb and
     // they meet in the middle, closed outside, both ajar to the same side inside; o.doorState
     // shuts or opens either kind (doorShownOpen). An open door swings into the room side.
     const pair = leaves === 2;
-    const dims = doorDimensions({ ...o, leaves, height:top }, w);
-    const leafW = dims.slabWidth, leafH = dims.slabHeight;
-    const swingSide = sides.pos ? 1 : -1;
-    const swing = doorShownOpen(o, interior) ? -swingSide * THREE.MathUtils.degToRad(25) : 0;
-    g.add(doorLeaf(o, leafW, leafH, s0 + JAMB_W + 0.003, swing, ctx));
-    if (pair) g.add(doorLeaf(o, leafW, leafH, s1 - JAMB_W - 0.003, Math.PI - swing, ctx));
+    const leafW = detail.leafWidth, leafH = detail.leafHeight;
+    const swing = doorShownOpen(o, interior) ? -detail.swingSide * THREE.MathUtils.degToRad(25) : 0;
+    if (pair || detail.hinge === 'start') g.add(doorLeaf(o, leafW, leafH, s0 + JAMB_W + 0.003, swing, ctx, detail));
+    if (pair || detail.hinge === 'end') g.add(doorLeaf(o, leafW, leafH, s1 - JAMB_W - 0.003, Math.PI - swing, ctx, detail));
   }
   return g;
 }
 
 // One leaf on its hinge pivot: rotation 0 is closed, spanning +x from the pivot; Math.PI
 // hangs it from the opposite jamb. In x-ray the leaf is a ghost slab with no hardware.
-function doorLeaf(o, leafW, leafH, px, rotY, ctx) {
-  const LEAF_T = profileSize(o, 'leafThickness', .045);
+function doorLeaf(o, leafW, leafH, px, rotY, ctx, detail) {
+  const LEAF_T = detail.leafThickness;
   const pivot = new THREE.Group();
   pivot.position.set(px, 0.01, 0);
   pivot.rotation.y = rotY;
   const ghost = !!(ctx.matOpts && ctx.matOpts.transparent);
+  const leafFinish = detail.leafMaterial ? matFor(materialById(detail.leafMaterial), '#f1eee7', 0.45, ctx.matOpts) : flatMat('#f1eee7', 0.45, ctx.matOpts);
   const userData = { kind: 'opening', id: o.id, wallId: ctx.wall.id, noCollide: true };
   const glazing = ghost ? null : leafGlazing(doorGlass(o), leafW, leafH);
   if (glazing) {
@@ -478,73 +335,104 @@ function doorLeaf(o, leafW, leafH, px, rotY, ctx) {
       parts.push(metricBox(gx0, gx1, glazing.panel[3], gy0, -h, h));
       parts.push(metricBox(gx0, gx1, glazing.panel[2], glazing.panel[3], -h + 0.012, h - 0.012));
     }
-    const frame = mergedMesh(parts, flatMat('#f1eee7', 0.45), userData);
+    const frame = mergedMesh(parts, leafFinish, userData);
     frame.userData.leafWidth = leafW;
     pivot.add(frame);
     const glass = new THREE.Mesh(metricBox(gx0, gx1, gy0, gy1, -0.003, 0.003), ctx.glass || flatMat('#d2e7ee', 0.1, { transparent: true, opacity: 0.35 }));
     glass.userData = Object.assign({ glass: true }, userData);
     glass.castShadow = false; glass.receiveShadow = false;
     pivot.add(glass);
+  } else if (!ghost && (o.detail?.door || o.profile) && detail.style === 'six-panel') {
+    // Explicit construction uses actual recessed fields, including when the leaf has a
+    // wood finish; a paint-only normal texture must not erase that recorded form.
+    const mx = leafW * 24 / 256, my = leafH * 26 / 512, gx = leafW * 18 / 256, gy = leafH * 20 / 512;
+    const usable = leafH - 2 * my - 2 * gy, half = (leafW - gx) / 2, h = LEAF_T / 2;
+    const parts = [metricBox(0, mx, 0, leafH, -h, h), metricBox(leafW - mx, leafW, 0, leafH, -h, h), metricBox(half, half + gx, 0, leafH, -h, h)];
+    let z = my, previous = 0;
+    for (const proportion of [0.38, 0.38, 0.24]) {
+      const top = z + usable * proportion;
+      parts.push(metricBox(mx, leafW - mx, previous, z, -h, h));
+      for (const [x0, x1] of [[mx, half], [half + gx, leafW - mx]]) parts.push(metricBox(x0, x1, z, top, -h + 0.004, h - 0.004));
+      previous = top; z = top + gy;
+    }
+    parts.push(metricBox(mx, leafW - mx, previous, leafH, -h, h));
+    const leaf = mergedMesh(parts, leafFinish, userData);
+    leaf.userData.leafWidth = leafW; pivot.add(leaf);
   } else {
-    const leaf = new THREE.Mesh(new THREE.BoxGeometry(leafW, leafH, LEAF_T), ghost ? flatMat('#f1eee7', 0.45, ctx.matOpts) : o.profile?.panels === 'six' ? leafMaterials() : flatMat('#f1eee7', .45));
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(leafW, leafH, LEAF_T), ghost || detail.leafMaterial || detail.style === 'slab' ? leafFinish : leafMaterials());
     leaf.position.set(leafW / 2, leafH / 2, 0);
     leaf.castShadow = true; leaf.receiveShadow = true;
     leaf.userData = userData;
     pivot.add(leaf);
   }
-  if (ghost || o.profile?.hardware === 'none') return pivot;
-  // Lever handles, both faces, by the free edge.
-  const mm = metalMat();
+  if (ghost || detail.hardware === 'none') return pivot;
+  // Handles, both faces, by the free edge.
+  const mm = detail.hardwareFinish === 'brass' ? flatMat('#b29350', 0.3, { metalness: 0.85 })
+    : detail.hardwareFinish === 'dark' ? flatMat('#332e29', 0.4, { metalness: 0.7 }) : metalMat();
+  const knobMat = detail.hardwareFinish === 'glass' ? (ctx.glass || glassMat()) : mm;
   for (const sgn of [1, -1]) {
-    const hx = leafW - profileSize(o, 'handleBackset', .075), hy = profileSize(o, 'handleHeight', 1.0, 2);
+    const hx = leafW - detail.handleBackset, hy = Math.min(detail.handleHeight, leafH - 0.1);
     const rose = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.01, 24), mm);
     rose.rotation.x = Math.PI / 2;
     rose.position.set(hx, hy, sgn * (LEAF_T / 2 + 0.005));
     const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.05, 16), mm);
     stem.rotation.x = Math.PI / 2;
     stem.position.set(hx, hy, sgn * (LEAF_T / 2 + 0.03));
-    const lever = new THREE.Mesh(o.profile?.hardware === 'knob' ? new THREE.SphereGeometry(profileSize(o, 'knobRadius', .025), 24, 16) : new THREE.CylinderGeometry(0.008, 0.007, 0.12, 16), mm);
-    lever.rotation.z = Math.PI / 2;
-    lever.position.set(hx - (o.profile?.hardware === 'knob' ? 0 : .055), hy, sgn * (LEAF_T / 2 + 0.05));
-    for (const p of [rose, stem, lever]) { p.castShadow = true; p.userData = userData; pivot.add(p); }
+    const handle = detail.hardware === 'knob'
+      ? new THREE.Mesh(detail.knobShape === 'faceted' ? new THREE.IcosahedronGeometry(detail.knobRadius, 1) : new THREE.SphereGeometry(detail.knobRadius, 20, 12), knobMat)
+      : new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.007, 0.12, 16), mm);
+    if (detail.hardware === 'knob') handle.scale.z = 0.85; else handle.rotation.z = Math.PI / 2;
+    handle.position.set(hx - (detail.hardware === 'knob' ? 0 : 0.055), hy, sgn * (LEAF_T / 2 + 0.05));
+    handle.userData.hardware = detail.hardware;
+    for (const p of [rose, stem, handle]) { p.castShadow = true; p.userData = { ...p.userData, ...userData }; pivot.add(p); }
   }
   return pivot;
 }
 
 // ---------- windows ----------
 function buildWindow(o, s0, s1, v0, v1, th, sides, ctx) {
-  const FRAME_W = profileSize(o, 'frameWidth', .045), SASH_W = profileSize(o, 'sashWidth', .035), MULLION_W = profileSize(o, 'muntinWidth', .022), CASING_W = profileSize(o, 'casingWidth', .07), CASING_D = profileSize(o, 'casingDepth', .016);
   const g = new THREE.Group();
   g.userData = { kind: 'opening', id: o.id, wallId: ctx.wall.id };
   const trim = [];
   const tm = trimMat(ctx.matOpts);
   const w = s1 - s0, h = v1 - v0;
+  const detail = windowDetail(o, w, h);
+  const { frameWidth: FRAME_W, sashWidth: SASH_W, muntinWidth: MULLION_W, casingWidth: CASING_W, casingDepth: CASING_D } = detail;
   const fz0 = -th / 2 - 0.005, fz1 = th / 2 + 0.005;
   // Outer frame.
   trim.push(metricBox(s0, s0 + FRAME_W, v0, v1, fz0, fz1));
   trim.push(metricBox(s1 - FRAME_W, s1, v0, v1, fz0, fz1));
   trim.push(metricBox(s0 + FRAME_W, s1 - FRAME_W, v1 - FRAME_W, v1, fz0, fz1));
   trim.push(metricBox(s0 + FRAME_W, s1 - FRAME_W, v0, v0 + FRAME_W, fz0, fz1));
-  // Sash.
+  // Each double-hung sash has its own rails and grille. A clear lower sash must not
+  // inherit the upper sash's grille, and the meeting rail is not a decorative muntin.
   const sx0 = s0 + FRAME_W, sx1 = s1 - FRAME_W, sy0 = v0 + FRAME_W, sy1 = v1 - FRAME_W;
-  const sz0 = -0.024, sz1 = 0.024;
-  trim.push(metricBox(sx0, sx0 + SASH_W, sy0, sy1, sz0, sz1));
-  trim.push(metricBox(sx1 - SASH_W, sx1, sy0, sy1, sz0, sz1));
-  trim.push(metricBox(sx0 + SASH_W, sx1 - SASH_W, sy1 - SASH_W, sy1, sz0, sz1));
-  trim.push(metricBox(sx0 + SASH_W, sx1 - SASH_W, sy0, sy0 + SASH_W, sz0, sz1));
-  // Mullion grid: 2 columns up to ~1.1 m wide, 3 beyond; always 2 rows.
-  const gx0 = sx0 + SASH_W, gx1 = sx1 - SASH_W, gy0 = sy0 + SASH_W, gy1 = sy1 - SASH_W;
-  const cols = Math.max(1, Math.min(12, Math.round(o.profile?.columns || 1))), rows = Math.max(1, Math.min(12, Math.round(o.profile?.rows || 1)));
-  for (let c = 1; c < cols; c++) {
-    const x = gx0 + (gx1 - gx0) * c / cols;
-    trim.push(metricBox(x - MULLION_W / 2, x + MULLION_W / 2, gy0, gy1, -0.016, 0.016));
-  }
-  for (let r = 1; r < rows; r++) {
-    const y = gy0 + (gy1 - gy0) * r / rows;
-    trim.push(metricBox(gx0, gx1, y - MULLION_W / 2, y + MULLION_W / 2, -0.016, 0.016));
-  }
-  // Stool, apron and casing on the room side; sill outside.
+  const panes = [];
+  const sash = (y0, y1, z, grid) => {
+    const sz0 = z - 0.024, sz1 = z + 0.024;
+    trim.push(metricBox(sx0, sx0 + SASH_W, y0, y1, sz0, sz1));
+    trim.push(metricBox(sx1 - SASH_W, sx1, y0, y1, sz0, sz1));
+    trim.push(metricBox(sx0 + SASH_W, sx1 - SASH_W, y1 - SASH_W, y1, sz0, sz1));
+    trim.push(metricBox(sx0 + SASH_W, sx1 - SASH_W, y0, y0 + SASH_W, sz0, sz1));
+    const gx0 = sx0 + SASH_W, gx1 = sx1 - SASH_W, gy0 = y0 + SASH_W, gy1 = y1 - SASH_W;
+    if (gx1 <= gx0 || gy1 <= gy0) return;
+    for (let c = 1; c < grid.columns; c++) {
+      const x = gx0 + (gx1 - gx0) * c / grid.columns;
+      trim.push(metricBox(x - MULLION_W / 2, x + MULLION_W / 2, gy0, gy1, z - 0.016, z + 0.016));
+    }
+    for (let r = 1; r < grid.rows; r++) {
+      const y = gy0 + (gy1 - gy0) * r / grid.rows;
+      trim.push(metricBox(gx0, gx1, y - MULLION_W / 2, y + MULLION_W / 2, z - 0.016, z + 0.016));
+    }
+    panes.push({ gx0, gx1, gy0, gy1, z });
+  };
   const inSide = sides.pos ? 1 : (sides.neg ? -1 : 1);
+  if (detail.type === 'double-hung') {
+    const mid = (sy0 + sy1) / 2;
+    sash(sy0, mid + SASH_W / 2, inSide * 0.025, detail.lower);
+    sash(mid - SASH_W / 2, sy1, -inSide * 0.025, detail.upper);
+  } else sash(sy0, sy1, 0, detail);
+  // Stool, apron and casing on the room side; sill outside.
   const bothRooms = !!(sides.pos && sides.neg);
   const roomSides = bothRooms ? [1, -1] : [inSide];
   for (const sgn of roomSides) {
@@ -562,11 +450,13 @@ function buildWindow(o, s0, s1, v0, v1, th, sides, ctx) {
   }
   const tmesh = mergedMesh(trim, tm, g.userData);
   if (tmesh) g.add(tmesh);
-  // Glass: a single 6 mm pane behind the sash.
-  const glass = new THREE.Mesh(metricBox(gx0, gx1, gy0, gy1, -0.003, 0.003), ctx.glass);
-  glass.userData = { kind: 'opening', id: o.id, wallId: ctx.wall.id, glass: true };
-  glass.castShadow = false; glass.receiveShadow = false;
-  g.add(glass);
+  // Separate glazing planes for separate sashes; grids are part of their corresponding sash.
+  for (const { gx0, gx1, gy0, gy1, z } of panes) {
+    const glass = new THREE.Mesh(metricBox(gx0, gx1, gy0, gy1, z - 0.003, z + 0.003), ctx.glass);
+    glass.userData = { kind: 'opening', id: o.id, wallId: ctx.wall.id, glass: true };
+    glass.castShadow = false; glass.receiveShadow = false;
+    g.add(glass);
+  }
   return g;
 }
 
@@ -613,17 +503,70 @@ export function buildWallGroup(wall, openings, property, ctx) {
   bucket(matOf(faceIds.other), FACE_OTHER);
   bucket(matOf(faceIds.pos), FACE_POS);
   bucket(matOf(faceIds.neg), FACE_NEG);
+  if (faceIds.endA) bucket(matOf(faceIds.endA), FACE_END_A);
+  if (faceIds.endB) bucket(matOf(faceIds.endB), FACE_END_B);
 
+  const baseGeos = [];
+  const baseEnds = new Map();
+  const endsAtDepth = depth => {
+    if (!baseEnds.has(depth)) baseEnds.set(depth, wallEnds(wall, walls, depth));
+    return baseEnds.get(depth);
+  };
   for (const s of solids) {
     const fp = solidFootprint(s, L, h, ends);
+    // The footprint runs A+ -> B+ -> optional B tip -> B- -> A- -> optional A tip.
+    // Only pieces that reach a real wall endpoint get its override; the vertical
+    // edges at an opening remain ordinary reveals, even when their normal matches.
+    const atA = s.s0 < 0.001, atB = s.s1 > L - 0.001;
+    const negEdge = 2 + (atB && ends.b.tip ? 1 : 0);
+    const edgeKinds = fp.map((_, i) => i > 0 && i < negEdge && atB && faceIds.endB ? FACE_END_B
+      : i > negEdge && atA && faceIds.endA ? FACE_END_A : undefined);
     const y1 = s.v1 >= H - 0.001 ? H + lift : s.v1;
-    for (const b of buckets) b.geos.push(metricPrism(fp, s.v0, y1, b.mask));
+    for (const b of buckets) b.geos.push(metricPrism(fp, s.v0, y1, b.mask, edgeKinds));
+    if (s.v0 < 0.001) {
+      // Preserve recorded baseboards without inventing trim on unspecified faces.
+      // This is the same explicit-record gate used by the native mirror. New editable
+      // catalog trim is drawn separately from property.trims.
+      for (const sgn of [1, -1]) {
+        if (!(sgn > 0 ? sides.pos : sides.neg)) continue;
+        const record = wall[sgn > 0 ? 'baseboardPos' : 'baseboardNeg'];
+        const specified = record && typeof record === 'object' || Number.isFinite(wall.profile?.baseboardHeight) || Number.isFinite(wall.profile?.baseboardDepth);
+        if (!specified) continue;
+        const detail = baseboardDetail(wall, sgn);
+        detail.height = Math.min(detail.height, s.v1);
+        detail.radius = Math.min(detail.radius, detail.height);
+        if (!detail.height || !detail.depth) continue;
+        const [i0, i1] = faceSpan(s, L, ends, sgn), zi = sgn * h;
+        const footprint = depth => {
+          const [o0, o1] = faceSpan(s, L, endsAtDepth(depth), sgn), zo = sgn * (h + depth);
+          return sgn > 0 ? [[o0, zo], [o1, zo], [i1, zi], [i0, zi]] : [[i0, zi], [i1, zi], [o1, zo], [o0, zo]];
+        };
+        if (detail.profile === 'rectangular') baseGeos.push(metricPrism(footprint(detail.depth), 0, detail.height));
+        else {
+          const { height, depth, radius } = detail;
+          baseGeos.push(metricPrism(footprint(depth), 0, height - radius));
+          for (let band = 0; band < 4; band++) {
+            const a = band * Math.PI / 8, b = (band + 1) * Math.PI / 8;
+            const low = footprint(depth - radius + radius * Math.cos(a)), high = footprint(depth - radius + radius * Math.cos(b));
+            const y0 = height - radius + radius * Math.sin(a), y1 = height - radius + radius * Math.sin(b);
+            const geo = metricPrism(low, y0, y1), pos = geo.getAttribute('position');
+            // Loft matching footprints so the outside top edge rounds back toward the wall.
+            for (let v = 0; v < pos.count; v++) if (Math.abs(pos.getY(v) - y1) < 1e-6) {
+              const k = low.findIndex(([x, z]) => pos.getX(v) === Math.fround(x) && pos.getZ(v) === Math.fround(z));
+              if (k >= 0) pos.setXYZ(v, high[k][0], y1, high[k][1]);
+            }
+            geo.computeVertexNormals(); baseGeos.push(geo);
+          }
+        }
+      }
+    }
   }
-  // No baseboard is drawn on its own: trim is the owner's choice, a wall trim record (trims.js).
   for (const b of buckets) {
     const m = mergedMesh(b.geos, b.mat, { kind: 'wall', id: wall.id });
     if (m) group.add(m);
   }
+  const baseMesh = mergedMesh(baseGeos, trimMat(ctx.matOpts), { kind: 'wall', id: wall.id });
+  if (baseMesh) group.add(baseMesh);
 
   // Openings, on the same clipped spans the solids were cut around.
   for (const { s0, s1, o } of openingSpans(wall, openings, L)) {
@@ -639,52 +582,7 @@ export function buildWallGroup(wall, openings, property, ctx) {
 }
 
 // ---------- wall trim ----------
-// Each trim record (trims.js) is a group in its wall's frame, like the wall itself: every part
-// of its layout swept from its section (trim-profiles.js). A run that reaches the end of its
-// wall is mitred there, each point of its section stopping where the wall's face, thickened
-// by that point's depth, meets the next wall's face thickened the same: the baseboard of the
-// next wall meets it at the corner. The section's depth varies linearly between the face (no
-// thickening) and the profile's full depth, so the two face cuts bound every point.
-function sweepInto(out, sec, at, inward, outDir, capStart, capEnd) {
-  // sec: [a, d] points; at(k, end) -> [x, y, z] of section point k at the start (0) or end (1).
-  const n = sec.length;
-  let area = 0;
-  for (let i = 0; i < n; i++) { const [a0, d0] = sec[i], [a1, d1] = sec[(i + 1) % n]; area += a0 * d1 - a1 * d0; }
-  const ccw = area > 0;
-  const tri = (p, q, r, want) => {
-    const ux = q[0] - p[0], uy = q[1] - p[1], uz = q[2] - p[2], vx = r[0] - p[0], vy = r[1] - p[1], vz = r[2] - p[2];
-    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
-    const len = Math.hypot(nx, ny, nz);
-    if (len < 1e-12) return;
-    if (nx * want[0] + ny * want[1] + nz * want[2] < 0) { [q, r] = [r, q]; nx = -nx; ny = -ny; nz = -nz; }
-    out.P.push(...p, ...q, ...r);
-    for (let i = 0; i < 3; i++) out.N.push(nx / len, ny / len, nz / len);
-    out.UV.push(p[0] + p[2], p[1], q[0] + q[2], q[1], r[0] + r[2], r[1]);
-  };
-  for (let k = 0; k < n; k++) {
-    const j = (k + 1) % n;
-    const da = sec[j][0] - sec[k][0], dd = sec[j][1] - sec[k][1];
-    if (Math.abs(da) + Math.abs(dd) < 1e-9) continue;
-    // The edge's outward normal in the section plane, then in 3D.
-    const na = ccw ? dd : -dd, nd = ccw ? -da : da;
-    const want = [inward[0] * na + outDir[0] * nd, inward[1] * na + outDir[1] * nd, inward[2] * na + outDir[2] * nd];
-    const s0 = at(k, 0), s1 = at(j, 0), e0 = at(k, 1), e1 = at(j, 1);
-    tri(s0, s1, e1, want); tri(s0, e1, e0, want);
-  }
-  const contour = [];
-  for (const [a, d] of sec) { const v = new THREE.Vector2(a, d); if (!contour.length || contour[contour.length - 1].distanceTo(v) > 1e-7) contour.push(v); }
-  if (contour.length > 2 && contour[0].distanceTo(contour[contour.length - 1]) < 1e-7) contour.pop();
-  if (contour.length < 3) return;
-  const idx = sec.map(([a, d]) => contour.findIndex(v => Math.abs(v.x - a) < 1e-7 && Math.abs(v.y - d) < 1e-7));
-  const back = new Map(); idx.forEach((ci, k) => { if (!back.has(ci)) back.set(ci, k); });
-  for (const [i, j, k] of THREE.ShapeUtils.triangulateShape(contour, [])) {
-    const ki = back.get(i), kj = back.get(j), kk = back.get(k);
-    if (ki == null || kj == null || kk == null) continue;
-    tri(at(ki, 0), at(kj, 0), at(kk, 0), capStart);
-    tri(at(ki, 1), at(kj, 1), at(kk, 1), capEnd);
-  }
-}
-
+// Both the viewer and native exporter consume the same wall-local triangles.
 export function buildTrimGroup(t, wall, view, openings, ctx) {
   ctx = ctx || {};
   const group = new THREE.Group();
@@ -694,68 +592,21 @@ export function buildTrimGroup(t, wall, view, openings, ctx) {
   if (f.L < 0.01) return group;
   group.position.set(wall.ax, 0, wall.ay);
   group.rotation.y = -Math.atan2(f.uy, f.ux);
-  const H = wall.height || view.wallHeight || 2.44;
-  const side = t.side === -1 ? -1 : 1, h = f.h;
-  const walls = view.walls || [];
-  const endsAt = new Map();
-  const faceEnds = (inflate) => {
-    const key = Math.round(inflate * 1e5);
-    if (!endsAt.has(key)) endsAt.set(key, wallEnds(wall, walls, inflate));
-    const e = endsAt.get(key);
-    return side > 0 ? [e.a.pos, e.b.pos] : [e.a.neg, e.b.neg];
-  };
-  const [e0, e1] = faceEnds(0);
-  const lay = trimLayout(t, wall, openings, { L: f.L, H, x0: e0, x1: e1 });
-  const z = d => side * (h + d);
-  const main = { P: [], N: [], UV: [] }, backer = { P: [], N: [], UV: [] };
-  const OUT = [0, 0, side];
-  for (const part of lay.parts) {
-    const out = part.role === 'backer' ? backer : main;
-    const lift = part.d || 0;
-    if (part.kind === 'run') {
-      const sec = sectionOf(part.profile, part.W, part.T);
-      const [o0, o1] = part.mitreA || part.mitreB ? faceEnds(part.T) : [part.x0, part.x1];
-      const xs = d => part.mitreA ? part.x0 + (o0 - part.x0) * d / part.T : part.x0;
-      const xe = d => part.mitreB ? part.x1 + (o1 - part.x1) * d / part.T : part.x1;
-      const yOf = a => part.crown ? H - a : part.y + a;
-      sweepInto(out, sec, (k, end) => { const [a, d] = sec[k]; return [end ? xe(d) : xs(d), yOf(a), z(d)]; },
-        [0, part.crown ? -1 : 1, 0], OUT, [-1, 0, 0], [1, 0, 0]);
-    } else if (part.kind === 'frame') {
-      const sec = sectionOf(part.profile, part.W, part.T);
-      const { x0, x1, y0, y1 } = part;
-      // Bottom, top, left, right: each mitred at 45 degrees, its inner edge shorter by its width.
-      sweepInto(out, sec, (k, end) => { const [w, d] = sec[k]; return [end ? x1 - w : x0 + w, y0 + w, z(d + lift)]; }, [0, 1, 0], OUT, [-1, 0, 0], [1, 0, 0]);
-      sweepInto(out, sec, (k, end) => { const [w, d] = sec[k]; return [end ? x1 - w : x0 + w, y1 - w, z(d + lift)]; }, [0, -1, 0], OUT, [-1, 0, 0], [1, 0, 0]);
-      sweepInto(out, sec, (k, end) => { const [w, d] = sec[k]; return [x0 + w, end ? y1 - w : y0 + w, z(d + lift)]; }, [1, 0, 0], OUT, [0, -1, 0], [0, 1, 0]);
-      sweepInto(out, sec, (k, end) => { const [w, d] = sec[k]; return [x1 - w, end ? y1 - w : y0 + w, z(d + lift)]; }, [-1, 0, 0], OUT, [0, -1, 0], [0, 1, 0]);
-    } else if (part.kind === 'board') {
-      const { x0, x1, y0, y1 } = part;
-      if (part.dir === 'v') {
-        const sec = sectionOf(part.profile, x1 - x0, part.T);
-        sweepInto(out, sec, (k, end) => { const [a, d] = sec[k]; return [x0 + a, end ? y1 : y0, z(d + lift)]; }, [1, 0, 0], OUT, [0, -1, 0], [0, 1, 0]);
-      } else {
-        const sec = sectionOf(part.profile, y1 - y0, part.T);
-        sweepInto(out, sec, (k, end) => { const [a, d] = sec[k]; return [end ? x1 : x0, y0 + a, z(d + lift)]; }, [0, 1, 0], OUT, [-1, 0, 0], [1, 0, 0]);
-      }
-    }
-  }
-  const meshOf = (buf, mat) => {
-    if (!buf.P.length) return null;
+  const { parts, layout } = trimMeshParts(t, wall, view, openings);
+  const record = t.material ? materialById(t.material) : null;
+  for (const part of parts) {
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(buf.P, 3));
-    g.setAttribute('normal', new THREE.Float32BufferAttribute(buf.N, 3));
-    g.setAttribute('uv', new THREE.Float32BufferAttribute(buf.UV, 2));
+    g.setAttribute('position', new THREE.Float32BufferAttribute(part.positions, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(part.normals, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(part.uv, 2));
+    const mat = part.role === 'backer' ? flatMat('#2b2825', 0.9, ctx.matOpts)
+      : record ? matFor(record, FALLBACK_TRIM, 0.55, ctx.matOpts) : trimMat(ctx.matOpts);
     const m = new THREE.Mesh(g, mat);
     m.castShadow = true; m.receiveShadow = true;
     m.userData = { kind: 'trim', id: t.id, wallId: wall.id };
-    return m;
-  };
-  const record = t.material ? materialById(t.material) : null;
-  const m1 = meshOf(main, record ? matFor(record, FALLBACK_TRIM, 0.55, ctx.matOpts) : trimMat(ctx.matOpts));
-  const m2 = meshOf(backer, flatMat('#2b2825', 0.9, ctx.matOpts));
-  if (m1) group.add(m1);
-  if (m2) group.add(m2);
-  group.userData.layout = { rects: lay.rects, boxes: lay.boxes, cols: lay.cols, H, side, h };
+    group.add(m);
+  }
+  group.userData.layout = layout;
   return group;
 }
 
@@ -784,31 +635,22 @@ export function buildRoomFloor(room, ctx) {
   return group;
 }
 
-// Fill only an interior doorway with finished floor on both sides. Never bridge a
-// stair void, an exterior opening or a missing room. Each half keeps its room finish.
+// Backward-compatible public signature for callers using three arrays; all consumers
+// use the same exact gap subtraction, so an already continuous floor is never doubled.
 export function thresholdFloors(walls, openings, rooms) {
-  const floors = [];
-  for (const o of openings) {
-    if (o.type === 'window' || o.floorContinuity === false) continue;
-    const w = walls.find(w => w.id === o.wallId); if (!w) continue;
-    const L = Math.hypot(w.bx-w.ax,w.by-w.ay); if (!L) continue;
-    const ux=(w.bx-w.ax)/L, uy=(w.by-w.ay)/L, half=(w.thickness || .114)/2;
-    const point=(along,across)=>[w.ax+ux*along-uy*across,w.ay+uy*along+ux*across];
-    const center=o.t*L, left=center-o.width/2, right=center+o.width/2;
-    const side = sign => rooms.find(r => r.kind !== 'unscanned' && r.kind !== 'void' && r.floorContinuity !== false &&
-      [left+.005,center,right-.005].every(x => pointInPoly(...point(x,sign*(half+.002)),r.pts || [])));
-    const pos=side(1), neg=side(-1); if (!pos || !neg || pos.id === neg.id) continue;
-    for (const [r,sign] of [[pos,1],[neg,-1]]) floors.push({ ...r, pts:[point(left,0),point(right,0),point(right,sign*(half+.003)),point(left,sign*(half+.003))], thresholdOf:o.id });
-  }
-  return floors;
+  if (!Array.isArray(walls)) return derivedThresholdFloors(walls);
+  return derivedThresholdFloors({ walls, openings, rooms })
+    .sort((a, b) => rooms.findIndex(r => r.id === a.roomId) - rooms.findIndex(r => r.id === b.roomId))
+    .map(patch => ({ ...patch, id: patch.roomId, thresholdOf: patch.openingId }));
 }
 
 export function buildRoomCeiling(room, H, ctx) {
   if (!room.pts || room.pts.length < 3) return null;
-  const geo = new THREE.ExtrudeGeometry(roomShape(room), { depth: 0.027, bevelEnabled: false });
+  H = Number.isFinite(room.ceilingHeight) && room.ceilingHeight > 0 ? room.ceilingHeight : H;
+  const geo = new THREE.ExtrudeGeometry(roomShape(room), { depth: CEILING_T, bevelEnabled: false });
   geo.rotateX(Math.PI / 2);
   const mesh = new THREE.Mesh(geo, ceilingMat(room.ceilingMaterial, ctx && ctx.matOpts));
-  mesh.position.y = H + 0.027;                    // H is the finished underside; slab extends upward
+  mesh.position.y = H + CEILING_T;               // H is the finished underside, not the slab top
   mesh.receiveShadow = true; mesh.castShadow = true;
   mesh.userData = { kind: 'ceiling', id: room.id };
   return mesh;
@@ -862,7 +704,7 @@ export function roomCentres(property) {
     if (!r.pts || r.pts.length < 3) continue;
     const p = roomInteriorPoint(r.pts);
     const lvl = levelOfRoom(property, r);
-    out.push({ id: r.id, name: r.name, x: p.x, z: p.y, level: lvl.id, y: lvl.elevation, top: lvl.elevation + levelHeight(property, lvl.id) });
+    out.push({ id: r.id, name: r.name, x: p.x, z: p.y, level: lvl.id, y: lvl.elevation, top: lvl.elevation + (Number.isFinite(r.ceilingHeight) && r.ceilingHeight > 0 ? r.ceilingHeight : levelHeight(property, lvl.id)) });
   }
   return out;
 }
@@ -892,9 +734,13 @@ export function buildPropertyGroup(property, opts) {
     lg.position.y = lvl.elevation;
     lg.visible = !(hidden && hidden.has(lvl.id));
 
-    for (const room of [...view.rooms, ...thresholdFloors(view.walls, openings, view.rooms)]) {
+    for (const room of view.rooms) {
       const g = buildRoomFloor(room, ctx);
       if (g) lg.add(g);
+    }
+    for (const patch of derivedThresholdFloors({ ...view, openings })) {
+      const floor = buildRoomFloor({ ...patch, id: patch.roomId, thresholdOf: patch.openingId }, ctx);
+      if (floor) { floor.userData.threshold = patch.openingId; lg.add(floor); }
     }
     view.walls.forEach((wall, index) => {
       lg.add(buildWallGroup(wall, openings, view, Object.assign({ index }, ctx)));

@@ -127,6 +127,18 @@ try {
   await page.locator('#side [data-act=bottom]').click();
   cv = await settled();
   assert.ok(cv.position[1] < cv.target[1] - 1 && cv.ground === false && cv.lookingUp, 'BOTTOM looks up from under the model, the ground put away: ' + JSON.stringify(cv));
+  // A shared edit uses this keep-camera remount path; underside orbit must be enabled
+  // before OrbitControls updates, or it clamps the restored camera above the horizon.
+  const bottom = cv;
+  await page.evaluate(async () => {
+    const viewer = await import('/js/viewer3d.js');
+    viewer.keepViewOnNextMount(); viewer.unmount(); viewer.mount(document.getElementById('view'));
+  });
+  cv = await settled();
+  assert.ok(cv.lookingUp && cv.ground === false, 'a keep-camera remount retains underside viewing');
+  for (const key of ['position', 'target']) for (let i = 0; i < 3; i++) {
+    assert.ok(Math.abs(cv[key][i] - bottom[key][i]) < 1e-5, 'the remount preserves BOTTOM ' + key);
+  }
   await page.locator('#side [data-act=top]').click();
   cv = await settled();
   assert.ok(cv.position[1] > cv.target[1] + 1 && cv.ground === true && !cv.lookingUp, 'TOP looks down, the ground back');

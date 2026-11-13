@@ -1,6 +1,7 @@
 import { openingProblems } from './opening-validation.js';
 import { resizeOpening } from './opening-schedule.js';
 import { openingDimensions, wallWidthFromSlab } from './opening-dimensions.js';
+import { openingProfileValue, setOpeningProfileValue, openingGridFields, setExplicitSlabWidth } from './opening-profile-edit.js';
 import { EVIDENCE_STATES, EVIDENCE_COLORS, evidenceState, setEvidence, elementEvidenceRecord } from './evidence.js';
 import { withUncertainty } from './uncertainty-view.js';
 // 3D model view: a rendering, not a debug scene.
@@ -64,6 +65,7 @@ import {
 import { attachSketchupNavigation } from './sketchup-nav.js';
 import { diskWorkspace } from './disk-workspace.js';
 import { ModelBatches } from './model-batch.js';
+import { ModelMirrors } from './model-mirrors.js';
 import { componentKeyOf } from './model-components.js';
 import { modelObjectTree, objectForClick, objectBelow, objectOffset, setObjectOffset, applyPartOffsets, objectBox } from './model-objects.js';
 import { renderObjectList, showListTab, revealInList, objectThing, hiddenState } from './object-list.js';
@@ -114,6 +116,7 @@ let sheetRoot = null, secMove = null, secTurn = null, secDragAt = -Infinity;
 let framesLeft = 0, lastT = 0, tween = null, resizeObs = null;
 // Imported models drawn grouped by look (model-batch.js); built lazily as models arrive.
 let batches = null;
+let mirrors = null;
 // While the camera moves the frame skips ambient occlusion (and SMAA where MSAA already smooths
 // edges); the full frame follows once it has been still this long.
 const SETTLE_MS = 150;
@@ -317,6 +320,7 @@ function graphicsRestored() {
   hideNotice('draw');
   if (envRT) { envRT.dispose(); envRT = null; }
   scene.environment = null;
+  if (mirrors) mirrors.clear();
   if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
   // Buffers for smoothing, shading, outlines and glow at this device's quality and size.
   applyQuality();
@@ -375,6 +379,8 @@ function setupScene() {
   sheetRoot = new THREE.Group(); sheetRoot.name = 'section planes'; scene.add(sheetRoot);
   batches = new ModelBatches();
   scene.add(batches.root);
+  mirrors = new ModelMirrors();
+  scene.add(mirrors.root);
   invalidateShadows();
 
   controls = new OrbitControls(camera, renderer.domElement);
@@ -1528,10 +1534,18 @@ function renderFrame(still = false) {
   passes.smaa.enabled = !(fast && composer.renderTarget1.samples > 0);
   lastFrameFast = fast;
   frameCounts[fast ? 'fastFrames' : 'fullFrames']++;
+  mirrors.update(scanObjs, camera, { enabled: !xray && !uncertaintyShown,
+    textureSize: quality() === 'low' ? 256 : quality() === 'medium' ? 512 : 1024 });
   if (batches.beginFrame(scanObjs, uncertaintyShown)) invalidateShadows();
   if (renderer.shadowMap.needsUpdate) frameCounts.shadowRefreshes++;
   if (renderer.shadowMap.needsUpdate) sunThroughOpenings();
-  try { if (uncertaintyShown) withUncertainty([modelGroup, scanRoot], uncertaintyRecord, () => composer.render()); else composer.render(); }
+  try {
+    mirrors.render(renderer, scene, camera, { exclude: [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, markupRoot,
+      ...sectionOverlays(), gizmo && gizmo.getHelper()] });
+    mirrors.draw(() => {
+      if (uncertaintyShown) withUncertainty([modelGroup, scanRoot], uncertaintyRecord, () => composer.render()); else composer.render();
+    });
+  }
   finally { batches.endFrame(); }
 }
 
@@ -2182,7 +2196,7 @@ function onTrimPointerDown(e) {
   e.stopImmediatePropagation(); e.preventDefault();
   try { renderer.domElement.setPointerCapture(e.pointerId); } catch (err) { /* moves still reach the window */ }
   trimDrag = { ...grab, ids, x: e.clientX, y: e.clientY, shift: e.shiftKey, hit: under, moved: false,
-    base: new Map(ids.map(id => [id, JSON.parse(JSON.stringify(trimById(id)))])) };
+    base: new Map(ids.map(id => [id, JSON.parse(JSON.stringify(trimById(id)))])), localAfter: new Map() };
   window.addEventListener('pointermove', onTrimDragMove);
   window.addEventListener('pointerup', onTrimDragEnd);
   window.addEventListener('pointercancel', onTrimDragEnd);
@@ -2203,18 +2217,21 @@ function onTrimDragMove(e) {
       const t = trimById(id), b = d.base.get(id);
       if (!t || !b) continue;
       setTrimY(t, b.y + snapHeight(dy), trimWallHeight(t));   // every section moves by the same snapped distance
+      d.localAfter.set(id, { id, y: t.y });
     }
     note = 'Bottom edge ' + fmtLen(trimById(d.ids[0]).y) + (d.ids.length > 1 ? ' (' + d.ids.length + ' sections moved together)' : '');
   } else if (d.mode === 'top' || d.mode === 'bottom') {
     const t = trimById(d.t.id), b = d.base.get(d.t.id);
     Object.assign(t, { y: b.y, h: b.h });
     setFieldEdge(t, d.mode, snapHeight((d.mode === 'top' ? b.y + b.h : b.y) + dy), trimWallHeight(t));
+    d.localAfter.set(t.id, { id: t.id, y: t.y, h: t.h });
     note = 'Field ' + fmtLen(t.y) + ' to ' + fmtLen(t.y + t.h) + ' (' + fmtLen(t.h) + ' tall)';
   } else if (d.mode === 'divider') {
     const t = trimById(d.t.id), w = d.widths.slice(), min = .05;
     const move = Math.max(min - w[d.i], Math.min(w[d.i + 1] - min, snapHeight(dx)));
     w[d.i] += move; w[d.i + 1] -= move;
     t.widths = w.map(v => Math.round(v * 10000) / 10000); t.cols = w.length;
+    d.localAfter.set(t.id, { id: t.id, widths: t.widths.slice(), cols: t.cols });
     note = 'Boxes ' + fmtLen(w[d.i]) + ' and ' + fmtLen(w[d.i + 1]);
   }
   setHint('EDIT TRIM: ' + note);
@@ -2232,7 +2249,10 @@ function onTrimDragEnd(e) {
     if (e.type === 'pointerup') { const key = planKey('trim', d.hit.id); pickThing({ key, keys: [key], scanId: null, name: '', sel: { kind: 'trim', id: d.hit.id } }, d.shift); }
     return;
   }
-  if (e.type === 'pointercancel') { revertGeometryEdit(prop); rebuildModel(); renderInspector(); return; }
+  if (e.type === 'pointercancel') {
+    if (!revertGeometryEdit(prop, { trims: [...d.localAfter.values()] })) toast('Trim changed on another device; cancellation kept the current values.', 'warn');
+    touch(); rebuildModel(); renderInspector(); return;
+  }
   endGeometryHold(prop);
   touch();
   renderInspector();
@@ -4665,7 +4685,7 @@ function uncertaintyRecord(mesh) {
       const object = modelObjectTree(o).ofMesh.get(mesh);
       return object && scan ? modelObjectEvidence(scan, object) : scan;
     }
-    const collection = { wall: 'walls', opening: 'openings', fixture: 'fixtures', room: 'rooms', ceiling: 'rooms' }[u.kind];
+    const collection = { wall: 'walls', opening: 'openings', fixture: 'fixtures', room: 'rooms', ceiling: 'rooms', trim: 'trims' }[u.kind];
     if (collection) { const record=prop[collection]?.find(r => r.id === u.id); if(record) return elementEvidenceRecord(prop, u.kind, record); }
   }
   return null;
@@ -4674,7 +4694,7 @@ function renderEvidenceInspector() {
   if (!inspEl || !selection || picked.length > 1 || tool === 'pin' || match) return;
   const object = selectedModelObject();
   const scan = selection.kind === 'scan' && prop.scans.find(s => s.id === selection.id);
-  const collection = { wall:'walls', opening:'openings', fixture:'fixtures', room:'rooms', ceiling:'rooms' }[selection.kind];
+  const collection = { wall:'walls', opening:'openings', fixture:'fixtures', room:'rooms', ceiling:'rooms', trim:'trims' }[selection.kind];
   const native = prop[collection]?.find(r => r.id === selection.id);
   const record = object ? modelObjectEvidence(scan, object) : scan || elementEvidenceRecord(prop, selection.kind, native);
   if (!record) return;
@@ -4689,19 +4709,28 @@ function renderEvidenceInspector() {
     const profile = document.createElement('section');
     const sizes=record.type==='window'?['frameWidth','sashWidth','muntinWidth','casingWidth','casingDepth']:['jambWidth','leafThickness','casingWidth','casingDepth','handleHeight','handleBackset'];
     profile.innerHTML=`<h3>OPENING CONFIGURATION</h3><p class="empty">Stored width and height are the hole in the wall. Profiles and hardware remain provisional until documented.</p>${issues.length?`<p role="alert">${issues.map(escapeHtml).join('; ')}</p>`:''}
-      ${record.type!=='window' && dimensions.leaves ?`<div class="field"><label>Slab width per leaf (bare numbers are inches; metric mode uses metres)</label><input data-slab-width value="${escapeHtml(fmtLen(dimensions.slabWidth))}"></div>`:''}
-      ${sizes.map(k=>`<div class="field"><label>${escapeHtml(k.replace(/[A-Z]/g,c=>' '+c.toLowerCase()))} (metres; blank uses provisional default)</label><input type="number" step=".001" min="0.001" max="${k==='handleHeight'?2:.3}" data-profile="${k}" value="${escapeHtml(record.profile?.[k] ?? '')}"></div>`).join('')}
-      ${record.type==='window'?['columns','rows'].map(k=>`<div class="field"><label>Observed grid ${k}</label><input type="number" min="1" max="12" step="1" data-profile="${k}" value="${escapeHtml(record.profile?.[k] || 1)}"></div>`).join(''):`<div class="field"><label>Hardware</label><select data-profile-choice="hardware">${['lever','knob','none'].map(k=>`<option ${record.profile?.hardware===k?'selected':''}>${k}</option>`).join('')}</select></div><div class="field"><label>Door face</label><select data-profile-choice="panels"><option value="flat">Flat / unresolved</option><option value="six" ${record.profile?.panels==='six'?'selected':''}>Six panel</option></select></div>`}`;
+      ${record.type!=='window' && dimensions.leaves ?`<div class="field"><label>Slab width per leaf (bare numbers are ${units() === 'metric' ? 'millimetres' : 'inches'})</label><input data-slab-width value="${escapeHtml(fmtLen(dimensions.slabWidth))}"></div>`:''}
+      ${sizes.map(k=>`<div class="field"><label>${escapeHtml(k.replace(/[A-Z]/g,c=>' '+c.toLowerCase()))} (metres; blank uses provisional default)</label><input type="number" step=".001" min="0.001" max="${k==='handleHeight'?2:.3}" data-profile="${k}" value="${escapeHtml(openingProfileValue(record,k) ?? '')}"></div>`).join('')}
+      ${record.type==='window'?openingGridFields(record).map(k=>`<div class="field"><label>Observed grid ${escapeHtml(k.replace(/[A-Z]/g,c=>' '+c.toLowerCase()))}</label><input type="number" min="1" max="12" step="1" data-profile="${k}" value="${escapeHtml(openingProfileValue(record,k) || 1)}"></div>`).join(''):`<div class="field"><label>Hardware</label><select data-profile-choice="hardware">${['lever','knob','none'].map(k=>`<option ${openingProfileValue(record,'hardware')===k?'selected':''}>${k}</option>`).join('')}</select></div><div class="field"><label>Door face</label><select data-profile-choice="panels"><option value="flat">Flat / unresolved</option><option value="six" ${openingProfileValue(record,'panels')==='six'?'selected':''}>Six panel</option></select></div>`}`;
     inspEl.append(profile);
     profile.querySelectorAll('[data-profile],[data-profile-choice]').forEach(input=>input.onchange=()=>{
       const key=input.dataset.profile || input.dataset.profileChoice;
       if(input.dataset.profile && input.value && !input.checkValidity())return;
-      beginGeometryEdit(prop,'edit opening profile'); record.profile ||= {}; if (native) native.profile = record.profile;
-      if(input.value==='')delete record.profile[key];else record.profile[key]=input.dataset.profile?Number(input.value):input.value;
+      beginGeometryEdit(prop,'edit opening profile');
+      setOpeningProfileValue(native || record,key,input.value === '' ? '' : input.dataset.profile ? Number(input.value) : input.value);
       touch();rebuildModel();renderInspector();
     });
     const slab=profile.querySelector('[data-slab-width]');
-    if(slab)slab.onchange=()=>{const width=wallWidthFromSlab(record,parseLen(slab.value, 'inches'),dimensions.leaves);if(width){beginGeometryEdit(prop,'edit slab width'); if(!resizeOpening(prop,native || record,{width}))toast('That slab would overlap another opening.','warn');else (native || record).leaves=dimensions.leaves;touch();rebuildModel();renderInspector();}};
+    if(slab)slab.onchange=()=>{
+      const value=parseLen(slab.value,'inches'),width=wallWidthFromSlab(record,value,dimensions.leaves);
+      if(!width)return;
+      const target=native || record,trial=structuredClone(target);
+      trial.leaves=dimensions.leaves;setExplicitSlabWidth(trial,value);
+      if(!resizeOpening(prop,trial,{width}) || Math.abs(openingDimensions(prop,trial).slabWidth-value)>1e-6) {
+        toast('That slab would overlap another opening or exceed its wall.','warn');renderInspector();return;
+      }
+      beginGeometryEdit(prop,'edit slab width');Object.assign(target,trial);touch();rebuildModel();renderInspector();
+    };
   }
   inspEl.append(section);
   section.querySelector('[data-evidence-save]').onclick = () => {
@@ -5773,7 +5802,7 @@ export function mount(root) {
     try { unmount(); } catch (err) { console.error(err); }
     // Whatever the failed open left half-built must not be torn down twice or drawn.
     if (renderer) { renderer.setAnimationLoop(null); renderer.domElement.remove(); }
-    scene = null; camera = null; composer = null; passes = {}; controls = null; modelGroup = null; groundGroup = null; batches = null;
+    scene = null; camera = null; composer = null; passes = {}; controls = null; modelGroup = null; groundGroup = null; batches = null; mirrors = null;
     el = null; wrapEl = null; inspEl = null; hud = {};
     const why = e && e.graphics
       ? 'This browser could not start 3D graphics, so MODEL cannot be shown. Close other tabs or apps that use 3D, then reload. The other pages still work.'
@@ -5876,7 +5905,11 @@ function openModel(root) {
   // A rebuild that must not move the picture (keepViewOnNextMount): the camera last shown.
   const kept = keepView && lastView && lastView.propId === prop.id ? lastView : null;
   keepView = false;
-  if (kept && controls && controls.target) { camera.position.fromArray(kept.position); controls.target.fromArray(kept.target); adoptFov(kept.fov); camera.updateProjectionMatrix(); controls.update(); }
+  if (kept && controls && controls.target) {
+    setLookingUp(kept.position[1] < kept.target[1] - .01);
+    camera.position.fromArray(kept.position); controls.target.fromArray(kept.target);
+    adoptFov(kept.fov); camera.updateProjectionMatrix(); controls.update();
+  }
 
   const focus=pendingScanFocus || prop.modelSourceId,token=mountId,focusVersion=selectionVersion;pendingScanFocus=null;
   loadShownScans().then(()=>{if(token===mountId && selectionVersion===focusVersion && !match && !kept && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
@@ -5933,6 +5966,10 @@ export function drawStats({ grouped } = {}) {
   return { calls: info.render.calls, triangles: Math.round(info.render.triangles), groups: batches.stats(),
     camera: { projection: camera.projectionMatrix.toArray(), inverse: camera.matrixWorldInverse.toArray() } };
 }
+
+// Reflection acceptance: actual surface planes and reflected camera positions, without
+// exposing or mutating the imported model tree.
+export function mirrorStats() { return mirrors ? mirrors.stats() : null; }
 // For the browser checks: draw one frame now, as the still view (`fast` false) or as a frame
 // drawn while the camera moves (`fast` true), and return its mean brightness, 0 to 1, read
 // straight off the canvas before the browser shows it.
@@ -6100,6 +6137,7 @@ export function unmount() {
   for (const id of Object.keys(positionObjs)) removePositionMarker(id);
   for (const id of Object.keys(noteObjs)) removeNote(id);
   if (batches) { batches.dispose(); batches = null; }
+  if (mirrors) { mirrors.dispose(); mirrors = null; }
   for (const id of Object.keys(scanObjs)) { disposeScanObject(scanObjs[id]); delete scanObjs[id]; }
   for (const id of Object.keys(scanState)) delete scanState[id];
   releaseSplatRenderer();

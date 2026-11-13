@@ -16,10 +16,13 @@
 // its version and the conflict is reported. The pure parts here (spec, signatures, merge)
 // run under Node for tests; the rest talks to /api/model-conversion/mirror.
 
-import { wallHeightOf, levelOfWall, levelOfRoom, levelHeight, roomsOn, uid } from './store.js';
-import { openingSpans, wallFaceMaterialIds, doorGlassBand, plainOpening } from './wall-solids.js';
+import { wallHeightOf, levelOfWall, levelOfRoom, levelHeight, roomsOn, wallsOn, openingsOn, uid } from './store.js';
+import { openingSpans, wallSolids, baseboardDetail, wallFaceMaterialIds, wallSides, doorGlassBand, plainOpening, doorDetail, windowDetail, doorShownOpen, doorGlass, leafGlazing } from './wall-solids.js';
 import { tagIdOf, tagById } from './tags.js';
+import { thresholdFloors } from './threshold-floors.js';
 import { fixtureShape, fixtureMirrorParams, fixtureLocalFrame, fixtureParts, fixtureLabel, fixturesOn, normaliseFixture, FIXTURE_FALLBACK } from './fixtures.js';
+import { trimMeshParts } from './trim-mesh.js';
+import { trimLabel, trimProduct } from './trims.js';
 
 export const MIRROR_FORMAT = 'tiksi-sketchup-mirror';
 // Signatures compare lengths to 0.1 mm, finer than any typed change, and the opening position
@@ -42,11 +45,33 @@ const current = s => typeof s === 'string' && s.endsWith(SIG_TAIL);
 function openingParams(o, s0, s1, L, H) {
   const v0 = o.type === 'window' ? Math.max(0, o.sill || 0) : 0;
   const v1 = Math.min(v0 + (o.height || 0), H);
-  return { wallId: o.wallId, t: (s0 + s1) / 2 / L, width: s1 - s0, height: v1 - v0, sill: v0, s0, s1, v0, v1 };
+  const p = { wallId: o.wallId, t: (s0 + s1) / 2 / L, width: s1 - s0, height: v1 - v0, sill: v0, s0, s1, v0, v1 };
+  for (const key of ['profile', 'detail']) if (o[key] && typeof o[key] === 'object') p[key] = JSON.parse(JSON.stringify(o[key]));
+  if (p.profile || p.detail) {
+    p.configuration = Object.fromEntries(['leaves', 'glass', 'doorState', 'plain'].filter(k => o[k] !== undefined).map(k => [k, o[k]]));
+  }
+  if (o.floorContinuity === false) p.floorContinuity = false;
+  return p;
 }
 
 function wallParams(prop, w) {
-  return { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by, thickness: w.thickness || 0.114, height: wallHeightOf(prop, w) };
+  const p = { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by, thickness: w.thickness || 0.114, height: wallHeightOf(prop, w) };
+  for (const key of ['profile', 'baseboardPos', 'baseboardNeg']) if (w[key] && typeof w[key] === 'object') p[key] = JSON.parse(JSON.stringify(w[key]));
+  for (const key of ['materialEndA', 'materialEndB']) if (w[key]) p[key] = w[key];
+  const trims = (prop.trims || []).filter(t => t.wallId === w.id).sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  if (trims.length) p.trimState = { version: 1, records: trims.map(t => ({ source: structuredClone(t), product: structuredClone(trimProduct(t)) })) };
+  return p;
+}
+
+// The viewer and native writer consume the same wall-local triangles. This signature is
+// also a readback guard: a rigid wall move is safe only if its regenerated mitres still fit.
+function trimMeshes(prop, wall) {
+  const level = levelOfWall(prop, wall), view = { walls: wallsOn(prop, level.id), rooms: roomsOn(prop, level.id), wallHeight: levelHeight(prop, level.id) };
+  const openings = openingsOn(prop, level.id);
+  return (prop.trims || []).filter(t => t.wallId === wall.id).sort((a, b) => String(a.id).localeCompare(String(b.id))).map(source => {
+    const { parts } = trimMeshParts(source, wall, view, openings);
+    return { source, parts, meshSig: hash(JSON.stringify(stableDetail(parts.map(p => ({ role: p.role, positions: p.positions }))))) };
+  });
 }
 
 // Every element the mirror carries, with comparable signatures: id -> { kind, sig, params }.
@@ -68,6 +93,7 @@ export function elementState(prop, legacy = false) {
   for (const r of prop.rooms || []) {
     if ((r.pts || []).length < 3) continue;
     const p = { pts: r.pts.map(q => [q[0], q[1]]), name: r.name || '' };
+    if (Number.isFinite(r.ceilingHeight) && r.ceilingHeight > 0) p.ceilingHeight = r.ceilingHeight;
     out.set(r.id, { kind: 'room', sig: roomSig(p), params: p });
   }
   for (const f of prop.fixtures || []) {
@@ -79,11 +105,33 @@ export function elementState(prop, legacy = false) {
 }
 
 export function wallSig(p) { return wallSigNow(p); }
-function wallSigNow(p) { return ['wall', tenth(p.ax), tenth(p.ay), tenth(p.bx), tenth(p.by), tenth(p.thickness), tenth(p.height)].join(',') + SIG_TAIL; }
+function wallSigNow(p) {
+  let sig = ['wall', tenth(p.ax), tenth(p.ay), tenth(p.bx), tenth(p.by), tenth(p.thickness), tenth(p.height)].join(',');
+  for (const key of ['profile', 'baseboardPos', 'baseboardNeg']) if (p[key] && typeof p[key] === 'object') sig += '|' + key + ':' + JSON.stringify(stableDetail(p[key]));
+  for (const key of ['materialEndA', 'materialEndB']) if (p[key]) sig += '|' + key + ':' + JSON.stringify(p[key]);
+  if (p.trimState) sig += '|trims:' + JSON.stringify(stableDetail(p.trimState));
+  return sig + SIG_TAIL;
+}
 export function openingSig(p) { return openingSigNow(p); }
-function openingSigNow(p) { return ['opening', p.wallId, along(p.t), tenth(p.width), tenth(p.height), tenth(p.sill)].join(',') + SIG_TAIL; }
+// Detail is optional so old opening signatures remain unchanged. Sorting keys makes the
+// signature independent of JSON field order and catches concurrent handing/profile edits.
+function stableDetail(value) {
+  if (Array.isArray(value)) return value.map(stableDetail);
+  if (!value || typeof value !== 'object') return typeof value === 'number' ? micro(value) : value;
+  return Object.fromEntries(Object.keys(value).sort().map(k => [k, stableDetail(value[k])]));
+}
+function openingSigNow(p) {
+  const sig = ['opening', p.wallId, along(p.t), tenth(p.width), tenth(p.height), tenth(p.sill)].join(',');
+  return sig + (p.detail && typeof p.detail === 'object' ? '|detail:' + JSON.stringify(stableDetail(p.detail)) : '')
+    + (p.profile && typeof p.profile === 'object' ? '|profile:' + JSON.stringify(stableDetail(p.profile)) : '')
+    + (p.configuration ? '|configuration:' + JSON.stringify(stableDetail(p.configuration)) : '')
+    + (p.floorContinuity === false ? '|floor:false' : '') + SIG_TAIL;
+}
 export function roomSig(p) { return roomSigNow(p); }
-function roomSigNow(p) { return ['room', p.name || '', ...(p.pts || []).map(q => tenth(q[0]) + ':' + tenth(q[1]))].join(',') + SIG_TAIL; }
+function roomSigNow(p) {
+  return ['room', p.name || '', ...(p.pts || []).map(q => tenth(q[0]) + ':' + tenth(q[1]))].join(',')
+    + (Number.isFinite(p.ceilingHeight) && p.ceilingHeight > 0 ? '|ceiling:' + tenth(p.ceilingHeight) : '') + SIG_TAIL;
+}
 // Rotation to a tenth of a degree, the rest to 0.1 mm.
 const decideg = v => ((Math.round(Number(v || 0) * 10) % 3600) + 3600) % 3600;
 export function fixtureSig(p) { return fixtureSigNow(p); }
@@ -112,6 +160,7 @@ const LEGACY_SIG = {
 // Two materials sharing a name both take their id in brackets, so neither repaints the other.
 const FALLBACK = {
   wall: { name: 'Default wall', color: '#d8d4cc' }, floor: { name: 'Default floor', color: '#97999b' },
+  ceiling: { name: 'Default ceiling', color: '#f1efe9' },
   door: { name: 'Default trim', color: '#f3f1ec' }, window: { name: 'Default glass', color: '#d2e7ee' },
   'fx-top': { name: 'Default counter', color: FIXTURE_FALLBACK.top }, 'fx-body': { name: 'Default cabinet', color: FIXTURE_FALLBACK.body },
   'fx-kick': { name: 'Default toe kick', color: FIXTURE_FALLBACK.kick }, 'fx-appliance': { name: 'Default appliance', color: FIXTURE_FALLBACK.appliance },
@@ -163,18 +212,70 @@ export function mirrorSpec(prop, materials, legacy = false) {
       if (open) hole.material = { id: null, name: 'Opening, no door', color: '#ffffff', opacity: 0.06 };
       const band = open ? null : doorGlassBand(o, p.v0, p.v1);
       if (band) hole.glass = { v0: band[0], v1: band[1], material: finish(OPENING_MATERIAL.window, 'window', 'opening ' + o.id) };
+      if (p.floorContinuity === false) hole.floorContinuity = false;
+      if (p.profile || p.detail) {
+        for (const key of ['profile', 'detail']) if (p[key]) hole[key] = JSON.parse(JSON.stringify(p[key]));
+        hole.configuration = JSON.parse(JSON.stringify(p.configuration));
+        const observedSides = wallSides(w, roomsOn(prop, lvl.id));
+        hole.sides = { pos: !!observedSides.pos, neg: !!observedSides.neg };
+        const interior = hole.sides.pos && hole.sides.neg;
+        hole.resolved = role === 'door' ? doorDetail(o, p.width, p.height, interior, hole.sides) : windowDetail(o, p.width, p.height);
+        hole.trimMaterial = finish('mat-trim', 'door', 'opening ' + o.id);
+        const glassFinish = finish('mat-glass', 'window', 'opening ' + o.id);
+        // Keep a distinct native material from older opaque opening-marker panes.
+        hole.glassMaterial = { ...glassFinish, name: glassFinish.name + ' (transparent)', opacity: 0.22 };
+        const hardware = hole.resolved.hardwareFinish || 'chrome';
+        hole.metalMaterial = { id: null, name: 'Door hardware, ' + (hardware === 'glass' ? 'chrome' : hardware), color: hardware === 'brass' ? '#b99b54' : hardware === 'dark' ? '#35332e' : '#b9bcc0' };
+        hole.knobMaterial = hardware === 'glass' ? hole.glassMaterial : hole.metalMaterial;
+        hole.leafMaterial = finish(hole.resolved.leafMaterial || 'mat-trim', 'door', 'opening ' + o.id);
+        if (role === 'door') {
+          hole.leaves = open ? 0 : hole.resolved.leaves;
+          hole.shownOpen = doorShownOpen(o, interior);
+          hole.leafGlazing = leafGlazing(doorGlass(o), hole.resolved.leafWidth, hole.resolved.leafHeight);
+          hole.plain = plainOpening(o);
+        }
+      }
       return hole;
     });
     // pos: the long face on the side the plan normal (-uy, ux) of a -> b points to (in the
     // .skp, local y = -thickness/2); neg: the opposite face; other: ends, top and reveals.
+    // Optional endA/endB override only the physical vertical ends at local x=0 / x=L.
     const ids = wallFaceMaterialIds(w, roomsOn(prop, lvl.id));
     const faces = Object.fromEntries(Object.entries(ids).map(([face, id]) => [face, finish(id, 'wall', 'wall ' + w.id)]));
-    walls.push(Object.assign({ id: w.id, level: lvl.id, elevation: lvl.elevation, name: 'Wall ' + w.id, holes, materials: faces, tag: tag('wall:' + w.id) }, st.params));
+    const wall = Object.assign({ id: w.id, level: lvl.id, elevation: lvl.elevation, name: 'Wall ' + w.id, holes, materials: faces, tag: tag('wall:' + w.id) }, st.params);
+    if (wall.trimState) wall.trims = trimMeshes(prop, w).map(({ source, parts, meshSig }) => ({
+      id: source.id, name: trimLabel(source), tag: tag('trim:' + source.id), source: structuredClone(source), product: structuredClone(trimProduct(source)), meshSig,
+      parts: parts.map(part => ({ role: part.role, positions: part.positions,
+        material: part.role === 'backer' ? { id: null, name: 'Trim backer', color: '#2b2825' } : finish(source.material || 'mat-trim', 'door', 'trim ' + source.id) })),
+    }));
+    const sides = wallSides(w, roomsOn(prop, lvl.id));
+    for (const [side, key, sign] of [['pos', 'baseboardPos', 1], ['neg', 'baseboardNeg', -1]]) {
+      const specified = w[key] && typeof w[key] === 'object' || Number.isFinite(w.profile?.baseboardHeight) || Number.isFinite(w.profile?.baseboardDepth);
+      if (!specified || !sides[side]) continue;
+      const detail = baseboardDetail(w, sign);
+      if (!(detail.height > 0) || !(detail.depth > 0)) continue;
+      for (const s of wallSolids(w, prop.openings || [], st.params.height).solids) {
+        if (s.v0 >= .001) continue;
+        const height = Math.min(detail.height, s.v1);
+        (wall.baseboards ||= []).push({ s0: s.s0, s1: s.s1, side, ...detail, height, radius: Math.min(detail.radius, height), material: finish('mat-trim', 'door', 'wall ' + w.id) });
+      }
+    }
+    walls.push(wall);
   }
   const rooms = (prop.rooms || []).filter(r => state.has(r.id)).map(r => {
     const lvl = levelOfRoom(prop, r);
-    return { id: r.id, level: lvl.id, elevation: lvl.elevation, name: r.name || '', pts: state.get(r.id).params.pts, material: finish(r.material, 'floor', 'room ' + r.id), tag: tag('room:' + r.id) };
+    const room = { id: r.id, level: lvl.id, elevation: lvl.elevation, name: r.name || '', pts: state.get(r.id).params.pts, material: finish(r.material, 'floor', 'room ' + r.id), tag: tag('room:' + r.id) };
+    if (Number.isFinite(r.ceilingHeight) && r.ceilingHeight > 0) {
+      room.ceilingHeight = r.ceilingHeight;
+      room.ceilingMaterial = finish(r.ceilingMaterial || 'mat-ceiling', 'ceiling', 'room ' + r.id);
+    }
+    return room;
   });
+  for (const patch of thresholdFloors(prop)) {
+    const room = rooms.find(r => r.id === patch.roomId);
+    if (!room) continue;
+    (room.thresholds ||= []).push({ pts: patch.pts, material: finish(patch.material, 'floor', 'threshold ' + patch.openingId) });
+  }
   // Fixtures: one group per fixture, framed at its origin (a box's centre, a run's first
   // back-line point) along its own direction; parts are prisms in that frame, (u, v) metres.
   const fixtures = [];
@@ -220,8 +321,9 @@ export function hash(s) {
   return (h >>> 0).toString(36);
 }
 
-// Finishes are part of the spec, so a material change rewrites the .skp; `elements` holds
-// geometry signatures only, so the read-back never reports it as a SketchUp edit.
+// Finishes are part of the spec, so a material change rewrites the .skp. Element records
+// compare geometry and explicit endpoint IDs; repainting ordinary native faces is not
+// interpreted as a geometry edit.
 export function specSignature(spec) {
   return hash(JSON.stringify(Object.assign({}, spec, { underlays: spec.underlays.map(u => u.sig) })));
 }
@@ -234,6 +336,46 @@ const readSig = {
   room: p => roomSig(p),
   fixture: p => fixtureSig(p),
 };
+
+// Catalog trim is generated against neighbouring walls. A rigid native move can therefore
+// alter a mitre when reconstructed. Check the complete proposed wall layout before mutating
+// any records, and preserve the native file whenever that layout is not exactly representable.
+function trimReadbackIssue(prop, read) {
+  const trimWalls = new Set((prop.trims || []).map(t => t.wallId));
+  const rows = read.walls || [], counts = new Map();
+  for (const row of rows) counts.set(row.id, (counts.get(row.id) || 0) + 1);
+  for (const row of rows) if (row.base?.trimState || row.now?.trimState || trimWalls.has(row.id)) {
+    if (!row.id || counts.get(row.id) > 1 || !(prop.walls || []).some(w => w.id === row.id)) {
+      return { id: row.id || 'trim', reason: 'Copying or importing a native wall with catalog trim needs review; the SketchUp copy was preserved.' };
+    }
+  }
+  if (trimWalls.size && rows.some(row => !row.id || counts.get(row.id) > 1 || !(prop.walls || []).some(w => w.id === row.id))) {
+    return { id: 'trim', reason: 'Native wall copies or additions can change editable trim joints; review them before syncing. The SketchUp copy was preserved.' };
+  }
+  const fields = ['ax', 'ay', 'bx', 'by', 'thickness', 'height'];
+  const changed = rows.filter(row => fields.some(k => Number.isFinite(row.now?.[k]) && Number.isFinite(row.base?.[k]) && Math.abs(row.now[k] - row.base[k]) > 1e-5));
+  const deleted = new Set((prop.walls || []).filter(w => read.model?.elements?.[w.id]?.kind === 'wall' && !counts.has(w.id)).map(w => w.id));
+  if ((!changed.length && !deleted.size) || !trimWalls.size) return null;
+  const byId = new Map(changed.map(row => [row.id, row]));
+  const candidate = { ...prop, walls: (prop.walls || []).filter(w => !deleted.has(w.id)).map(w => {
+    const row = byId.get(w.id);
+    return row ? { ...w, ...Object.fromEntries(fields.map(k => [k, row.now[k]])) } : w;
+  }) };
+  const geometry = (p, w) => trimMeshes(p, w).map(t => ({ id: t.source.id, meshSig: t.meshSig }));
+  const same = (a, b) => JSON.stringify(stableDetail(a)) === JSON.stringify(stableDetail(b));
+  for (const wall of prop.walls || []) {
+    if (!trimWalls.has(wall.id) || deleted.has(wall.id)) continue;
+    const row = byId.get(wall.id), proposed = candidate.walls.find(w => w.id === wall.id);
+    const after = geometry(candidate, proposed);
+    if (row && (!row.base?.trimState || !same(wallParams(prop, wall).trimState, row.base.trimState) || !same(after, row.base.trimGeometry))) {
+      return { id: wall.id, reason: 'This native wall move changes or predates its editable trim geometry; the SketchUp copy was preserved.' };
+    }
+    if (!same(geometry(prop, wall), after)) {
+      return { id: wall.id, reason: 'This native wall move changes a trim mitre against another wall; the SketchUp copy was preserved.' };
+    }
+  }
+  return null;
+}
 
 // `read` is the server's reading of the .skp. `synced` maps id -> signature at the last
 // moment Tiksi and the .skp agreed; `seenBefore` maps id -> the value the .skp reported last
@@ -249,6 +391,13 @@ export function mergeMirror(prop, read, synced, seenBefore) {
   seenBefore = seenBefore || {};
   const written = (read.model && read.model.elements && typeof read.model.elements === 'object') ? read.model.elements : {};
   const report = { ...(read.unsupportedGeometry?.length ? { blockWrite: true } : {}), applied: [], added: [], deleted: [], conflicts: [], warnings: (read.warnings || []).slice(), untagged: read.untagged || null, seen: {} };
+  const trimIssue = trimReadbackIssue(prop, read);
+  if (trimIssue) {
+    report.blockWrite = true;
+    report.conflicts.push({ ...trimIssue, kind: 'wall' });
+    report.warnings.push(trimIssue.reason);
+    return report;
+  }
   const before = elementState(prop);
   // A millimetre signature saved before SIG_TAIL stands for `sigNow` (the value's signature
   // today) when it is the millimetre signature of that same value; otherwise it differs from it.
@@ -303,7 +452,7 @@ export function mergeMirror(prop, read, synced, seenBefore) {
       const existing = (prop.openings || []).find(o => o.id === oid);
       if (oaction === 'apply') { applyOpening(existing, ro.now, parentId); report.applied.push(oid); }
       else if (oaction === 'copy' || oaction === 'add') {
-        const fresh = Object.assign({}, existing || { type: ro.type === 'window' ? 'window' : 'door' }, { id: oaction === 'copy' ? uid('o') : oid });
+        const fresh = Object.assign(JSON.parse(JSON.stringify(existing || { type: ro.type === 'window' ? 'window' : 'door' })), { id: oaction === 'copy' ? uid('o') : oid });
         applyOpening(fresh, ro.now, parentId);
         prop.openings.push(fresh);
         report.added.push(fresh.id);
@@ -353,6 +502,7 @@ export function mergeMirror(prop, read, synced, seenBefore) {
     if (cur.kind === 'wall') {
       prop.walls = prop.walls.filter(w => w.id !== id);
       prop.openings = prop.openings.filter(o => o.wallId !== id);
+      if (prop.trims) prop.trims = prop.trims.filter(t => t.wallId !== id);
     } else if (cur.kind === 'opening') prop.openings = prop.openings.filter(o => o.id !== id);
     else if (cur.kind === 'fixture') prop.fixtures = prop.fixtures.filter(f => f.id !== id);
     else prop.rooms = prop.rooms.filter(r => r.id !== id);
@@ -362,6 +512,14 @@ export function mergeMirror(prop, read, synced, seenBefore) {
 }
 
 function applyWall(prop, w, now) {
+  for (const key of ['profile', 'baseboardPos', 'baseboardNeg']) {
+    if (now[key] && typeof now[key] === 'object') w[key] = JSON.parse(JSON.stringify(now[key]));
+    else if (Object.hasOwn(now, key) && now[key] === null) delete w[key];
+  }
+  for (const key of ['materialEndA', 'materialEndB']) {
+    if (typeof now[key] === 'string' && now[key]) w[key] = now[key];
+    else if (Object.hasOwn(now, key) && now[key] === null) delete w[key];
+  }
   for (const k of ['ax', 'ay', 'bx', 'by']) w[k] = round(now[k]);
   if (now.thickness > 0.005) w.thickness = round(now.thickness);
   if (now.height > 0.05) {
@@ -377,6 +535,14 @@ function applyOpening(o, now, wallId) {
   if (now.width > 0.05) o.width = round(now.width);
   if (now.height > 0.05) o.height = round(now.height);
   if (o.type === 'window') o.sill = round(Math.max(0, now.sill));
+  for (const key of ['profile', 'detail']) if (now[key] && typeof now[key] === 'object') o[key] = JSON.parse(JSON.stringify(now[key]));
+  if (now.floorContinuity === false) o.floorContinuity = false;
+  if (now.configuration && typeof now.configuration === 'object') {
+    for (const key of ['leaves', 'glass', 'doorState', 'plain']) {
+      if (Object.hasOwn(now.configuration, key)) o[key] = now.configuration[key];
+      else delete o[key];
+    }
+  }
 }
 
 // A fixture moved, turned or stretched in SketchUp. Its own parameters (toe kick, seat
@@ -397,6 +563,7 @@ function applyFixture(f, now) {
 }
 
 function applyRoom(r, now) {
+  if (Number.isFinite(now.ceilingHeight) && now.ceilingHeight > 0) r.ceilingHeight = round(now.ceilingHeight);
   if (Array.isArray(now.pts) && now.pts.length >= 3) r.pts = now.pts.map(p => [round(p[0]), round(p[1])]);
   if (now.name) r.name = String(now.name).slice(0, 120);
 }

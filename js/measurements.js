@@ -8,6 +8,7 @@
 // PLAN, so UNDO reverts it; the reading then reports that the model no longer matches.
 import { uid, touch, units, readLength, fmtMm, fmtFeetInches, wallsOn, roomsOn, openingsOn, levelOfWall, fmtLen, wallHeightOf } from './store.js';
 import { openingDimensions, wallWidthFromSlab } from './opening-dimensions.js';
+import { setExplicitSlabWidth } from './opening-profile-edit.js';
 import { resizeOpening } from './opening-schedule.js';
 import { beginGeometryEdit } from './edit-history.js';
 import { planCornerMove, applyCornerMove } from './wallmove.js';
@@ -154,8 +155,8 @@ export function canApply(prop, m) {
     const changes=m.element.dim === 'slabWidth' ? {width:wallWidthFromSlab(o,m.value,openingDimensions(prop,o).leaves)} : {[m.element.dim]:m.value};
     // PLAN's rule for a typed size (the opening schedule's resize): try it on a copy, and refuse
     // a reading the rule would have to cut down rather than store a different number.
-    const trial = Object.assign({}, o);
-    if (m.element.dim === 'slabWidth') trial.leaves=openingDimensions(prop,o).leaves;
+    const trial = structuredClone(o);
+    if (m.element.dim === 'slabWidth') { trial.leaves=openingDimensions(prop,o).leaves; setExplicitSlabWidth(trial,m.value); }
     if (w && !resizeOpening(prop, trial, changes, wallHeightOf(prop, w))) return 'The opening would overlap another opening or has invalid geometry.';
     if (w && Math.abs((m.element.dim === 'slabWidth' ? openingDimensions(prop,trial).slabWidth : trial[m.element.dim]) - m.value) > TOLERANCE) {
       if (['width','slabWidth'].includes(m.element.dim)) return 'The opening would be wider than its wall allows (' + fmtLen(trial.width) + ' at most on a ' + fmtLen(wallLength(w)) + ' wall).';
@@ -178,7 +179,7 @@ export function applyMeasurement(prop, id) {
     const changes=e.dim === 'slabWidth' ? {width:wallWidthFromSlab(o,m.value,openingDimensions(prop,o).leaves)} : {[e.dim]:m.value};
     const leaves=openingDimensions(prop,o).leaves;
     if (!w || !resizeOpening(prop, o, changes, wallHeightOf(prop, w))) throw new Error('Opening change refused; review its host and overlap.');
-    if(e.dim === 'slabWidth') o.leaves=leaves;
+    if(e.dim === 'slabWidth') { o.leaves=leaves; setExplicitSlabWidth(o,m.value); }
   }
   else {
     // As PLAN's length field: the b end moves along the wall, joined walls and floors follow.

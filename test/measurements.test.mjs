@@ -122,3 +122,17 @@ test('door slab readings retain their dimension type and convert through jambs a
   assert.equal(ms.readingState(p,reading),'applied');
   p.openings[0].profile={jambWidth:.04};assert.equal(ms.needsOwner(p,reading),true);
 });
+
+test('slab readings replace explicit leaf dimensions atomically and undo retains both interfaces', () => {
+  const p=kitchen(),o=p.openings[0];o.width=.694;o.profile={jambWidth:.04};o.detail={door:{jambWidth:.019,leafWidth:.65,style:'slab',hinge:'end'}};
+  const target=ms.elementTargets(p).find(t=>t.dim==='slabWidth');assert.equal(target.current,.65);
+  const reading=ms.addMeasurement(p,{input:'0.7 m',text:'measured slab',confidence:'clear',element:target});
+  const before=structuredClone(o);
+  assert.equal(ms.canApply(p,reading),'');assert.deepEqual(o,before,'validation must not mutate nested source details');
+  ms.applyMeasurement(p,reading.id);assert.equal(o.detail.door.leafWidth,.7);assert.ok(Math.abs(o.width-.744)<1e-9);assert.equal(ms.readingState(p,reading),'applied');
+  assert.equal(restoreGeometryEdit(p,'undo'),true);assert.equal(p.openings[0].detail.door.leafWidth,.65);assert.equal(p.openings[0].width,.694);
+  assert.equal(restoreGeometryEdit(p,'redo'),true);assert.equal(p.openings[0].detail.door.leafWidth,.7);assert.equal(ms.readingState(p,reading),'applied');
+  const huge=ms.addMeasurement(p,{input:'9 m',text:'oversized slab',confidence:'clear',element:target});
+  const unchanged=structuredClone(p.openings[0]);assert.notEqual(ms.canApply(p,huge),'');assert.deepEqual(p.openings[0],unchanged);
+  assert.throws(()=>ms.applyMeasurement(p,huge.id),/wider|overlap|invalid/);assert.deepEqual(p.openings[0],unchanged);
+});

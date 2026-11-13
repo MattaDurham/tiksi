@@ -299,9 +299,10 @@ export function planVectorSvg(prop, v) {
     const P = (s, d) => [w.ax + ux * s + nx * d, w.ay + uy * s + ny * d];
     if (o.type === 'door') {
       // The leaves PLAN and MODEL draw (wall-solids.js): one leaf, or a pair meeting in the
-      // middle. Each opens on the wall's positive side from its hinge to its swing arc.
+      // middle. Recorded handing and swing side match the interactive plan.
       for (const sw of doorSwings(o)) {
-        const [hx, hy] = P(c + sw.s, t2), [ex, ey] = P(c + sw.s, t2 + sw.r), [fx, fy] = P(c + sw.s + sw.dir * sw.r, t2);
+        const side = sw.side || 1;
+        const [hx, hy] = P(c + sw.s, t2 * side), [ex, ey] = P(c + sw.s, (t2 + sw.r) * side), [fx, fy] = P(c + sw.s + sw.dir * sw.r, t2 * side);
         const H = [m.X(hx), m.Y(hy)], E = [m.X(ex), m.Y(ey)], F = [m.X(fx), m.Y(fy)];
         out.push(`<line x1="${n3(H[0])}" y1="${n3(H[1])}" x2="${n3(E[0])}" y2="${n3(E[1])}" stroke="#1d1d1d" stroke-width="0.9"/>`);
         const r = sw.r * m.k;

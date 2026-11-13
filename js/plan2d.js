@@ -1033,19 +1033,19 @@ function drawOpening(o) {
     ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
   }
   if (o.type === 'door') {
-    // Hinge at the -half end (a pair: both ends); solid leaf + quarter-circle swing.
-    // n is u rotated +90 degrees in screen space, so the swing is always the default-direction
-    // quarter from the wall direction; a computed end angle could wrap and sweep 270 degrees.
+    // Solid leaf and quarter-circle arc, respecting each recorded hinge and swing side.
+    // Select clockwise/counterclockwise explicitly so an end-hung leaf never sweeps 270 degrees.
     const a1 = Math.atan2(uy, ux);
     ctx.save();
     if (sel) { ctx.shadowColor = 'rgba(232,151,58,0.7)'; ctx.shadowBlur = 10; }
     for (const sw of doorSwings(o)) {
       const hx = p.cx + ux * sw.s, hy = p.cy + uy * sw.s;
-      const hs = w2s([hx, hy]), ls = w2s([hx + nx * sw.r, hy + ny * sw.r]);
-      const a0 = sw.dir > 0 ? a1 : a1 + Math.PI / 2;
+      const side = sw.side || 1;
+      const hs = w2s([hx, hy]), ls = w2s([hx + nx * sw.r * side, hy + ny * sw.r * side]);
+      const a0 = a1 + (sw.dir > 0 ? 0 : Math.PI), aEnd = a1 + side * Math.PI / 2;
       ctx.strokeStyle = hexA(col, 0.8);
       ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.arc(hs[0], hs[1], sw.r * vs.zoom, a0, a0 + Math.PI / 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(hs[0], hs[1], sw.r * vs.zoom, a0, aEnd, sw.dir * side < 0); ctx.stroke();
       ctx.strokeStyle = col;
       ctx.lineWidth = Math.max(2.5, Math.min(5, 0.045 * vs.zoom));
       ctx.beginPath(); ctx.moveTo(hs[0], hs[1]); ctx.lineTo(ls[0], ls[1]); ctx.stroke();

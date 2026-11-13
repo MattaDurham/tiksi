@@ -1,11 +1,12 @@
-import { doorLeaves, wallSides } from './wall-solids.js';
+import { doorDetail, wallSides } from './wall-solids.js';
 export function jambWidth(o) {
-  const v=o.profile?.jambWidth; return Number.isFinite(v) && v>0 && v<=.3 ? v : .05;
+  return doorDetail(o, o.width || 0.8, o.height || 2.03, false).jambWidth;
 }
 export function doorDimensions(o, wallWidth=o.width, interior=false) {
-  const count=doorLeaves(o,wallWidth,interior), gap=count===2?.009:.006;
-  return {wallWidth, frameClearWidth:wallWidth-2*jambWidth(o), slabWidth:count ? (wallWidth-2*jambWidth(o)-gap)/count : null,
-    slabHeight:count ? o.height-jambWidth(o)-.012 : null, leaves:count};
+  const d = doorDetail(o, wallWidth, o.height || 2.03, interior);
+  return { wallWidth, frameClearWidth: wallWidth - 2 * d.jambWidth,
+    slabWidth: d.leaves ? d.leafWidth : null, slabHeight: d.leaves ? d.leafHeight : null, leaves: d.leaves };
+
 }
 export function wallWidthFromSlab(o, slabWidth, count=doorDimensions(o).leaves) {
   if(!count || !Number.isFinite(slabWidth)||slabWidth<=0) return null;
