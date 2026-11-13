@@ -1383,7 +1383,7 @@ function setMode(next) {
   nav.refresh();
   // A photo can look up at a ceiling; ordinary orbiting stays above the horizon.
   controls.maxPolarAngle = match ? MATCH_POLAR : ORBIT_POLAR;
-  if (next === 'top') setParallel(true, true);
+  if (next === 'top') { if (!parallel) setParallel(true, true); }
   else if (parallelFromTop) setParallel(false);
   if (next === 'walk') startWalk();
   else if (next === 'top') presetView('top');
