@@ -4832,12 +4832,16 @@ function renderInspectorBody() {
   if (modelObject) return renderObjectPanel(modelObject);
   if (!selection) {
     const hidden = hiddenLevels();
+    // Each level's name can be changed here; its floor elevation and height come from SketchUp.
     const levelRows = prop.levels.map(l => {
       const nw = wallsOn(prop, l.id).length, nr = roomsOn(prop, l.id).length;
-      return `<div class="stat-line" title="Elevation ${escapeHtml(fmtLen(l.elevation))}, height ${escapeHtml(fmtLen(levelHeight(prop, l.id)))}"><span>${escapeHtml(l.name)}${hidden.has(l.id) ? ' (hidden)' : ''}</span><b>${nw} wall${nw === 1 ? '' : 's'} &middot; ${nr} room${nr === 1 ? '' : 's'}</b></div>`;
+      return `<div class="field"><label>Level name${hidden.has(l.id) ? ' (hidden)' : ''}</label><input type="text" data-lvl-name="${escapeHtml(l.id)}" value="${escapeHtml(l.name)}"></div>
+        <div class="stat-line"><span>Floor at ${escapeHtml(fmtLen(l.elevation))}, ${escapeHtml(fmtLen(levelHeight(prop, l.id)))} high</span><b>${nw} wall${nw === 1 ? '' : 's'} &middot; ${nr} room${nr === 1 ? '' : 's'}</b></div>`;
     }).join('');
     inspEl.innerHTML = `<h3>NOTHING SELECTED</h3>
       <div class="empty" style="margin-bottom:12px">Click an object in the model or in the component list. This panel then shows that object and nothing else: its tag and hiding it.</div>
+      <h3>PROPERTY</h3>
+      <div class="field"><label>Name</label><input type="text" data-prop-name value="${escapeHtml(prop.name || '')}"></div>
       <h3>MODEL</h3>
       ${levelRows}
       <div class="tool-sep"></div>
@@ -4856,6 +4860,17 @@ function renderInspectorBody() {
       ${notesListHtml()}
       ${camerasPanelHtml()}
       ${autoUndo.length ? `<button class="btn" data-auto-undo>UNDO AUTOMATIC PLACEMENT (${autoUndo.length})</button>` : ''}`;
+    inspEl.querySelector('[data-prop-name]').onchange = e => {
+      const name = e.target.value.trim();
+      if (!name) { e.target.value = prop.name || ''; return; }
+      prop.name = name; touch();   // the top bar's property list follows every change
+    };
+    inspEl.querySelectorAll('[data-lvl-name]').forEach(input => input.onchange = () => {
+      const l = prop.levels.find(x => x.id === input.dataset.lvlName);
+      const name = input.value.trim();
+      if (!l || !name) { if (l) input.value = l.name; return; }
+      beginGeometryEdit(prop, 'rename level'); l.name = name; touch(); renderToolCol();
+    });
     bindPinsList(inspEl);
     bindPositionsList(inspEl);
     bindNotesList(inspEl);

@@ -1,5 +1,7 @@
 // Phone layout: on a phone the console opens on the model with no toolbars, and one side panel
-// moves the camera, flips what shows and reaches the other pages. Desktop is unchanged.
+// moves the camera (modes, cameras, lenses and Parallel), flips what shows (section cut, x-ray,
+// dimensions, rooms, door and window numbers, tags) and reaches the other pages (there is no
+// PLAN page). Desktop is unchanged.
 // Synthetic demo project in a temporary state directory; live 8642 is never used.
 // E2E_BROWSER=webkit runs it on Safari's engine (node scripts/e2e.mjs --webkit), the engine the
 // phone uses; otherwise Chromium.
@@ -136,6 +138,24 @@ try {
   await page.locator('.fd-switch[data-id=xray]').click();
   assert.equal((await state3d()).show.find(s => s.id === 'xray').on, true, 'x-ray turns on');
   assert.equal(await page.locator('.fd-switch[data-id=pins]').count(), 0, 'no Photos switch without pinned photos');
+  // Dimensions, Rooms and Door and window numbers: each switch turns its labels on and off.
+  for (const id of ['dims', 'rooms', 'numbers']) {
+    const sw = () => page.locator(`.fd-switch[data-id=${id}]`);
+    assert.equal(await sw().getAttribute('aria-checked'), 'false', id + ' starts off');
+    await sw().click();
+    assert.equal(await sw().getAttribute('aria-checked'), 'true', id + ' turns on');
+    assert.equal((await state3d()).show.find(s => s.id === id).on, true, id + ' is on in the model');
+    await sw().click();
+    assert.equal((await state3d()).show.find(s => s.id === id).on, false, id + ' turns off again');
+  }
+  // Parallel sits beside the lenses and switches the projection; tapping it again goes back.
+  assert.equal((await page.locator('.fd-seg[data-act=lens]').allTextContents()).at(-1), 'Parallel', 'Parallel is the last lens button');
+  await page.locator('.fd-seg[data-act=lens][data-id=parallel]').click();
+  assert.equal(await page.locator('.fd-seg[data-act=lens][data-id=parallel]').getAttribute('aria-pressed'), 'true', 'tapping Parallel presses it');
+  assert.equal((await state3d()).lenses.find(l => l.id === 'parallel').on, true, 'and the model draws in parallel projection');
+  assert.equal(await page.evaluate(() => document.documentElement.classList.contains('fd-open')), true, 'the panel stays open');
+  await page.locator('.fd-seg[data-act=lens][data-id=parallel]').click();
+  assert.equal(await page.locator('.fd-seg[data-act=lens][data-id=parallel]').getAttribute('aria-pressed'), 'false', 'tapping it again lets it go');
   // Tags: one switch per tag that holds something; switching one hides it in the model.
   const walls = page.locator('.fd-switch[data-act=tag][data-id="tag-walls"]');
   assert.equal(await walls.getAttribute('aria-checked'), 'true', 'the Walls tag has a switch, on');
@@ -183,9 +203,10 @@ try {
 
   // Other pages keep a slim bar with the menu; the panel links there.
   await page.locator('.fd-menu').click();
-  await page.locator('.fd-panel a[href="#/plan"]').click();
-  await page.waitForFunction(() => document.querySelector('#rail a.active')?.dataset.view === 'plan');
-  assert.equal(await page.locator('.fd-title').textContent(), 'Plan');
+  assert.equal(await page.locator('.fd-panel a[href="#/plan"]').count(), 0, 'the panel has no link to PLAN');
+  await page.locator('.fd-panel a[href="#/materials"]').click();
+  await page.waitForFunction(() => document.querySelector('#rail a.active')?.dataset.view === 'materials');
+  assert.equal(await page.locator('.fd-title').textContent(), 'Materials');
   assert.equal(await shown(page, '.fd-bar'), true);
   assert.equal(await shown(page, '.fd-frame'), false, 'no overview button off the model');
 
@@ -246,7 +267,7 @@ try {
   assert.equal(await shown(desk, '#topbar .fd-return'), false, 'a computer at full width needs no PHONE LAYOUT button');
 
   assert.deepEqual(errors, []);
-  console.log(`Phone layout passed on ${ENGINE}: opens on a full-screen model with no toolbars; the side panel switches section and x-ray; holding the walk pad walks and lifting stops; a one-finger drag orbits; the overview button frames the model; the panel reaches other pages; desktop layout is remembered and FIELD VIEW returns; desktop is unchanged.`);
+  console.log(`Phone layout passed on ${ENGINE}: opens on a full-screen model with no toolbars; the side panel switches section, x-ray, dimensions, rooms and door and window numbers, and Parallel; holding the walk pad walks and lifting stops; a one-finger drag orbits; the overview button frames the model; the panel reaches other pages; desktop layout is remembered and FIELD VIEW returns; desktop is unchanged.`);
 } finally {
   if (browser) await browser.close();
   child.kill();

@@ -1,4 +1,6 @@
-// Synthetic exchange round trips, including real installed native engines when available.
+// Synthetic exchange round trips, including real installed native engines when available:
+// export, evidence download, bring-back with a before/after comparison that survives leaving
+// MODEL (for MATERIALS) and a slow model load on return, and the FILE dialog at phone width.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
@@ -117,8 +119,8 @@ try {
   // A slow scan load used to restore the mount's AFTER selection after the user
   // had already chosen BEFORE. Hold the actual GLB parser across a new mount so
   // this ordering is deterministic on machines both with and without native engines.
-  await page.locator('#rail a[data-view=plan]').click();
-  await page.locator('.plan-canvas canvas').waitFor();
+  await page.locator('#rail a[data-view=materials]').click();
+  await page.locator('.mv-grid').waitFor();
   await page.evaluate(async()=>{
     const {GLTFLoader}=await import('three/addons/loaders/GLTFLoader.js');
     const original=GLTFLoader.prototype.parseAsync;

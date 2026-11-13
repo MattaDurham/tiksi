@@ -70,7 +70,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto(url); await page.locator('[data-prop-name]').waitFor();
+  await page.goto(url + '/#/materials'); await page.locator('#btn-file').waitFor();
   await page.evaluate(async () => {
     const store = await import('/js/store.js');
     store.ws.data = store.emptyWorkspace();
@@ -99,8 +99,7 @@ try {
   assert.equal(doc.mime, 'application/pdf'); assert.equal(doc.pageCount, 1);
   assert.ok(Math.abs(doc.sheetW - 0.2159) < 1e-4 && Math.abs(doc.sheetH - 0.2794) < 1e-4, 'a letter page is 8.5 x 11 in');
 
-  // Pin both on the south wall's room face (as a click there would), then move the wall: the
-  // sheets lie flat on it and go with it.
+  // Pin both on the south wall's room face (as a click there would): the sheets lie flat on it.
   await page.evaluate(async () => {
     const store = await import('/js/store.js'), p = store.activeProperty();
     const [ph, d] = [p.photos.find(x => x.kind === 'photo'), p.photos.find(x => x.kind === 'document')];
@@ -109,7 +108,7 @@ try {
     store.touch();
   });
   if (await page.locator('[data-cancel]').count()) await page.locator('[data-cancel]').click();   // close the PIN tool
-  await page.locator('#rail a[data-view="plan"]').click({ noWaitAfter: true }); await delay(300);
+  await page.locator('#rail a[data-view="materials"]').click({ noWaitAfter: true }); await delay(300);   // leave MODEL and come back, so it draws the new pins
   await page.locator('#rail a[data-view="model"]').click({ noWaitAfter: true }); await page.locator('canvas.v-canvas').waitFor();
   await page.locator('.v-pin-row', { hasText: 'Spec sheet.pdf' }).locator('[data-locate]').click();
   await delay(900);

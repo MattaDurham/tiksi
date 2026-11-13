@@ -42,7 +42,7 @@ try {
   const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto(url); await page.locator('[data-prop-name]').waitFor();
+  await page.goto(url + '/#/materials'); await page.locator('#btn-file').waitFor();
   await page.evaluate(async () => {
     const store = await import('/js/store.js');
     store.ws.data = store.emptyWorkspace();
@@ -200,8 +200,7 @@ try {
 
   // The path found is the next lookup's hint; a failure is reported as the server words it.
   openReply = { status: 404, json: { error: 'Could not find Notes check.skp on this Mac.' } };
-  await page.locator('.v-modes [data-mode=orbit]').click();   // the PLAN button does the same
-  await page.locator('#rail a[data-view="plan"]').click({ noWaitAfter: true });
+  await page.locator('.v-modes [data-mode=orbit]').click();
   await page.locator('.tool-col [data-act=sketchup]').click();
   await waitUntil(async () => /Could not find Notes check\.skp on this Mac/.test(await page.locator('.toast.error').innerText().catch(() => '')), 'the failure toast');
   assert.equal(asked.length, 2);
