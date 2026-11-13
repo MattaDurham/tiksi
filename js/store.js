@@ -745,6 +745,10 @@ function migrate(d) {
       // The lens read from the photo file (photo-exif.js), and when it was taken.
       if (ph.lens !== undefined) { const l = normalizeLens(ph.lens); if (l) ph.lens = l; else delete ph.lens; }
       if (ph.takenAt !== undefined && (typeof ph.takenAt !== 'string' || !ph.takenAt)) delete ph.takenAt;
+      // A photo kept in the project folder names its file there (photos-store.js); the Mac
+      // checks the path again before reading it.
+      if (ph.file !== undefined && !(ph.file && typeof ph.file === 'object' && typeof ph.file.path === 'string' && ph.file.path)) delete ph.file;
+      if (ph.selected !== undefined && ph.selected !== true) delete ph.selected;
       if (!ph.createdAt) ph.createdAt = new Date(0).toISOString();
       // '' is the slim localStorage form (thumbnail lives in IndexedDB, see persistable). A
       // picture reference whose file could not be read is kept, never erased (picture-assets.js).
@@ -1275,7 +1279,8 @@ export function listAllFileIds(data) {
   const ids = [];
   for (const p of d.properties || []) {
     for (const s of p.scans || []) { ids.push(s.id); if (s.originalFileId && s.originalFileId !== s.id) ids.push(s.originalFileId); }
-    for (const ph of p.photos || []) ids.push(ph.id);
+    // A photo kept in the project folder (photos-store.js) has no original in Tiksi's storage.
+    for (const ph of p.photos || []) if (!ph.file) ids.push(ph.id);
     for (const v of p.videos || []) ids.push(v.id);
     for (const m of p.measurements || []) if (m.frameAssetId) ids.push(m.frameAssetId);
   }
@@ -1289,6 +1294,7 @@ export function listAllFileIds(data) {
 export async function orphanFiles(opts) {
   const keep = new Set();
   for (const id of listAllFileIds()) { keep.add(id); keep.add(thumbKey(id)); }
+  for (const p of ws.data.properties || []) for (const ph of p.photos || []) keep.add(thumbKey(ph.id));
   for (const p of ws.data.properties || []) for (const l of p.levels || []) keep.add(planKey(l.id, p.id));
   const ids = (await storedFileIds()).filter(id => !keep.has(id) && !id.startsWith(HANDLE_PREFIX));
   let bytes = 0;

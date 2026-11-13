@@ -761,7 +761,11 @@ async function runFolder(source, name, chosen, items) {
       if (ok === list.length) step.ok(ok + ' of ' + list.length + ' in');
       else step.warn(ok + ' of ' + list.length + ' in; ' + (list.length - ok) + ' could not be read');
     };
-    await batch('photo', 'Photos', async (file, item) => {
+    // A property kept in this folder shows the folder's photos where they are (PHOTOS reads the
+    // folder): nothing is copied into Tiksi.
+    const photosHere = chosen.filter(i => i.kind === 'photo').length;
+    if (keptAt && photosHere) log(photosHere + ' photo' + (photosHere === 1 ? ' stays' : 's stay') + ' in the folder and show in PHOTOS', 'ok');
+    else await batch('photo', 'Photos', async (file, item) => {
       const rec = await addPhotoFromFile(live(), file);
       // A photo from a subfolder says so, since the gallery is one list.
       if (item.group) { rec.notes = 'From the folder ' + dirName(item.path) + '.'; touch(); }

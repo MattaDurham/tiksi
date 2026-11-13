@@ -54,12 +54,15 @@ async function startServer() {
 }
 
 // A small JPEG made in the page, as a camera would hand one over.
-const jpeg = page => page.evaluate(async () => {
+// Each call makes a different picture: a photo whose bytes are already in the project folder is
+// that same photo (e2e-project-photos.mjs), and two camera photos never match byte for byte.
+let jpegs = 0;
+const jpeg = page => page.evaluate(async n => {
   const c = document.createElement('canvas'); c.width = 64; c.height = 48;
-  const g = c.getContext('2d'); g.fillStyle = '#b07040'; g.fillRect(0, 0, 64, 48); g.fillStyle = '#fff'; g.fillRect(8, 8, 20, 12);
+  const g = c.getContext('2d'); g.fillStyle = '#b07040'; g.fillRect(0, 0, 64, 48); g.fillStyle = '#fff'; g.fillRect(8 + n % 30, 8, 20, 12);
   const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.9));
   return Array.from(new Uint8Array(await blob.arrayBuffer()));
-}).then(bytes => Buffer.from(bytes));
+}, jpegs++).then(bytes => Buffer.from(bytes));
 
 // What is wrong with the page at phone size: sideways scroll, controls under 44 points, fields
 // under 16 points. A checkbox or radio inside a label counts by the label.
@@ -333,8 +336,7 @@ async function run(label, engine, profile) {
       await page.locator('.ph-lb-close').tap();
       // One new card per import: the cards already there stay the same elements.
       await page.evaluate(() => { window.__firstCard = document.querySelector('.ph-card'); });
-      const pic = await jpeg(page);
-      await page.locator('.ph-head input[data-file=upload]').setInputFiles([{ name: 'a.jpg', mimeType: 'image/jpeg', buffer: pic }, { name: 'b.jpg', mimeType: 'image/jpeg', buffer: pic }]);
+      await page.locator('.ph-head input[data-file=upload]').setInputFiles([{ name: 'a.jpg', mimeType: 'image/jpeg', buffer: await jpeg(page) }, { name: 'b.jpg', mimeType: 'image/jpeg', buffer: await jpeg(page) }]);
       await page.waitForFunction(() => document.querySelectorAll('.ph-card').length >= 2 && !/IMPORTING/.test(document.querySelector('.ph-head .view-sub')?.textContent || ''), null, { timeout: 30000 });
       await page.waitForFunction(() => [...document.querySelectorAll('.ph-card .ph-name')].some(n => n.textContent === 'b.jpg'), null, { timeout: 30000 });
       check(await page.evaluate(() => !!window.__firstCard && window.__firstCard.isConnected), label + ': importing photos adds their cards without drawing the gallery again');

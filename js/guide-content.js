@@ -213,16 +213,19 @@ export const chapters = [
   },
   {
     id: 'photos', group: 'Capture', title: 'Keep photos attached to the room', path: 'PHOTOS', route: 'photos', image: 'photos.png',
-    intro: 'The photo gallery holds site references and panoramas with notes, room links, model links and scope links. A photo can also become a plan underlay, a material or a 3D pin.',
+    intro: 'The photo gallery holds site references and panoramas with notes, room links, model links and scope links. A photo can also become a plan underlay, a material or a 3D pin. With Tiksi running on the Mac, the gallery is the project folder: every picture in it and its subfolders shows where it is, and Tiksi keeps no copy.',
     caption: 'Select a gallery card to open its inspector. Send to offers PLAN UNDERLAY, PIN IN 3D, MATERIAL and panorama lighting.',
     steps: [
-      'Use UPLOAD to add reference images, or CAMERA on a supported phone/browser.',
+      'Put pictures anywhere in the project folder, or use UPLOAD or CAMERA (on a phone): a photo added in Tiksi is saved into the folder\'s Photos folder.',
       'Select a card and give it a useful name, room and notes. Link the relevant scope items and model elements.',
       'Choose PIN IN 3D, then click the matching surface in MODEL. Use the gallery’s PLACE … IN 3D action to place unpinned photos one after another.',
-      'Return to PHOTOS to filter by room, kind or pin status. Double-click a card or choose ZOOM for a large viewer.',
-      'Choose DOWNLOAD when you need the original file, or save the property as .tiksi to carry all the images with the project.',
+      'Return to PHOTOS to filter by room, or by pinned, unpinned or selected. Double-click a card or choose ZOOM for a large viewer.',
+      'Choose DOWNLOAD or SHOW IN FINDER when you need the original file.',
     ],
     features: [
+      ['Photos, scan frames and renderings', 'Each picture is in a group with its own button above the gallery: PHOTOS, 360 PANORAMAS, SCAN FRAMES (the keyframe photos of a Polycam raw data export in the folder; its depth and confidence maps are not pictures and are not listed), RENDERINGS (pictures in a folder named for renders, or in the project\'s build folder) and DOCUMENTS. Press a button to hide that group; this device remembers it.'],
+      ['Select the good ones', 'Tick the corner of a card, choose SELECT in the details, or press S in the viewer while stepping through with the arrow keys. The SELECTED filter then shows only those, so a few hundred scan frames are gone through once.'],
+      ['Photos Tiksi held', 'Photos added before Tiksi read the project folder are moved into its Photos folder the first time PHOTOS opens, with their notes, pins and links, and Tiksi lets go of its copy. A photo already in the folder is linked to that file instead of written twice.'],
       ['Plan reference', 'PLAN UNDERLAY sends the selected image to the active level for tracing and calibration.'],
       ['Material from a photo', 'MATERIAL creates a photo-based finish that you can tune in MATERIALS.'],
       ['360 panorama', 'Mark a true equirectangular image as 360 PANORAMA, then USE AS SKY for the model environment.'],

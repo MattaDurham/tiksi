@@ -87,18 +87,25 @@ async function reviewAndCreate(page, { name, where, held }) {
   await page.waitForSelector('#np-dialog[data-state="done"]', { timeout: 240000 });
   return page.$$eval('#np-dialog .np-step', els => els.map(e => ({ state: e.className.replace('np-step ', ''), text: e.textContent })));
 }
-async function checkProperty(page, steps, name) {
+// kept: the project file is kept in the picked folder, so its photos stay there and PHOTOS reads
+// them where they are; otherwise (static hosting) they are copied into the browser.
+async function checkProperty(page, steps, name, kept = false) {
   const prop = await activeProperty(page);
   check(prop.name === name, 'the property carries the name typed in the review');
   check(prop.scans.length === 1 && prop.scans[0].kind === 'mesh', 'the scan is kept as a mesh');
   check(prop.walls.length >= 4 && prop.rooms.length >= 1, 'the plan is proposed from the scan (' + prop.walls.length + ' walls, ' + prop.rooms.length + ' rooms)');
   const photos = prop.photos.filter(p => p.kind !== 'document' && p.source !== 'rendering'), docs = prop.photos.filter(p => p.kind === 'document');
-  check(photos.some(p => p.name === 'IMG_1.png') && !photos.some(p => p.name === 'IMG_2.png'), 'the photo at the top is in; the unticked subfolder\'s photo is not');
+  if (kept) {
+    check(!photos.length, 'no photo is copied into Tiksi: they stay in the folder');
+    check(steps.some(s => s.state === 'ok' && /^2 photos stay in the folder and show in PHOTOS/.test(s.text)), 'the run says the photos stay in the folder and show in PHOTOS');
+  } else check(photos.some(p => p.name === 'IMG_1.png') && !photos.some(p => p.name === 'IMG_2.png'), 'the photo at the top is in; the unticked subfolder\'s photo is not');
   check(docs.some(d => d.name === 'survey.pdf' && d.mime === 'application/pdf' && d.pageCount === 1), 'the PDF is a document of the property');
   if (ffmpeg) check(prop.videos.length === 1 && prop.videos[0].name === 'walk.mp4', 'the video is kept for MEASURE');
-  const bad = steps.find(s => s.text.includes('not a picture.jpg'));
-  check(bad && bad.state === 'fail' && /cannot read the picture/.test(bad.text), 'the file that is not a picture is reported by name with the reason, not dropped silently');
-  check(steps.some(s => s.state === 'warn' && /Photos/.test(s.text) && /1 of 2 in; 1 could not be read/.test(s.text)), 'the photo count says one of two came in');
+  if (!kept) {
+    const bad = steps.find(s => s.text.includes('not a picture.jpg'));
+    check(bad && bad.state === 'fail' && /cannot read the picture/.test(bad.text), 'the file that is not a picture is reported by name with the reason, not dropped silently');
+    check(steps.some(s => s.state === 'warn' && /Photos/.test(s.text) && /1 of 2 in; 1 could not be read/.test(s.text)), 'the photo count says one of two came in');
+  }
   const left = steps.find(s => /left in the folder, unchanged/.test(s.text));
   check(left && left.text.startsWith('3 files were left') && /1 photo/.test(left.text) && /1 audio recording/.test(left.text) && /1 other file/.test(left.text), 'the run ends with what stayed in the folder (' + (left && left.text) + ')');
   check(steps.every(s => s.state !== 'run'), 'no step is left running');
@@ -126,7 +133,7 @@ try {
     await page.click('[data-new-folder]');
     const steps = await reviewAndCreate(page, { name: 'Elm Street kitchen', where: 'kept in this folder', held });
     check(steps.some(s => s.state === 'ok' && s.text.includes(join(visit, 'Tiksi', 'Elm Street kitchen.tiksi'))), 'the run names the project file it will write in the folder');
-    const prop = await checkProperty(page, steps, 'Elm Street kitchen');
+    const prop = await checkProperty(page, steps, 'Elm Street kitchen', true);
     await page.click('[data-np-cancel]');
     await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK', null, { timeout: 60000 });
     const saved = join(visit, 'Tiksi', 'Elm Street kitchen.tiksi');
