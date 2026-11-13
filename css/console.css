@@ -1313,5 +1313,11 @@ html.touch .file-dialog .file-units .seg-btn { min-height:44px; }
 .tk-item:disabled { color: var(--faint); cursor: default; }
 .tk-item kbd { font-family: var(--mono); font-size: 10px; color: var(--faint); border: 1px solid var(--line-2); border-radius: 4px; padding: 0 5px; }
 .tk-foot { margin: 6px 14px 4px; font-size: 11px; line-height: 1.45; color: var(--faint); }
+.tk-menu .tk-last { border-top: 1px solid var(--line); border-bottom: 0; padding: 4px 0 2px; }
+/* RESTART TIKSI: the page waits under this cover until the Mac's server is back. */
+.tk-restarting {
+  position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; padding: 24px; text-align: center;
+  background: rgba(8, 10, 14, 0.82); color: var(--ink); font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em;
+}
 @media (min-width: 761px) { #app.no-rail { grid-template-columns: 0 1fr; } }
 #app.no-rail #rail { display: none; }

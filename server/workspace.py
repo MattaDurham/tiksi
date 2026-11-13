@@ -269,6 +269,9 @@ class WorkspaceService:
     def __init__(self, root, projects_dir=None):
         # Set by the server that serves the app (tools/serve.py): the fingerprint of its files.
         self.code_version = None
+        # Set by that server too: restart(force) starts it again with the code now in its folder,
+        # and the page offers RESTART TIKSI only when it is set.
+        self.restart = None
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / 'blobs').mkdir(exist_ok=True)
@@ -1158,7 +1161,8 @@ class WorkspaceService:
             # seed private state, including when fetch metadata is absent on HTTP origins.
             if h.headers.get('X-Tiksi-Workspace') != '1': raise WorkspaceError('Use the Tiksi workspace client', 403)
             if path == '/api/workspace/capabilities' and h.command == 'GET':
-                self.reply(h, 200, {'instanceId': self.identity, 'token': self.token, 'storage': 'project-files', 'projectsFolder': str(self.projects_dir), 'features': list(FEATURES)})
+                features = list(FEATURES) + (['restart'] if self.restart else [])
+                self.reply(h, 200, {'instanceId': self.identity, 'token': self.token, 'storage': 'project-files', 'projectsFolder': str(self.projects_dir), 'features': features})
                 return True
             if not secrets.compare_digest(h.headers.get('X-Tiksi-Token', ''), self.token): raise WorkspaceError('Reconnect to the workspace server', 403)
             if path == '/api/workspace/head' and h.command == 'GET':
@@ -1184,6 +1188,12 @@ class WorkspaceService:
                 with self.lock: paths, unavailable = self.visible_paths(), self.unavailable_projects()
                 saved = {'saveId': request['saveId'], 'repeated': repeated} if isinstance(request, dict) and request.get('saveId') is not None else {}
                 self.reply(h, 200, {'revision': revision, 'paths': paths, 'unavailable': unavailable, **saved})
+            elif path == '/api/workspace/restart' and h.command == 'POST':
+                # The server starts again with the code now in its folder. Long jobs (photo to 3D,
+                # model conversion, ...) would stop: refused with code 'busy' unless ?force=1.
+                if not self.restart: raise WorkspaceError('This server cannot restart itself', 404)
+                force = parse_qs(urlsplit(h.path).query).get('force', [''])[0] == '1'
+                self.reply(h, 202, self.restart(force))
             elif path == '/api/workspace/recovery' and h.command == 'GET':
                 files = sorted((self.root / 'history').glob('*.tiksi'), key=lambda p: p.stat().st_mtime, reverse=True)
                 self.reply(h, 200, {'copies': [{'name': p.name, 'size': p.stat().st_size, 'modified': p.stat().st_mtime} for p in files]})
