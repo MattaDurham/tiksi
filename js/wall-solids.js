@@ -130,6 +130,21 @@ export function doorLeaves(o, width, interior) {
   return width > 1.25 ? (interior ? 0 : 2) : 1;
 }
 
+// ---------- open and closed doors ----------
+// How MODEL shows a hung door's leaf. o.doorState is the owner's call: 'closed' shuts it,
+// 'open' stands it ajar. Without it an interior door stands ajar so you can see through rooms
+// and an exterior one is shut. The plan's swing arcs and the drawings do not change with it.
+export const DOOR_STATES = ['open', 'closed'];
+export function doorShownOpen(o, interior) {
+  if (o && o.doorState === 'closed') return false;
+  if (o && o.doorState === 'open') return true;
+  return !!interior;
+}
+// Show a door open or closed: the field is kept only where it differs from the default.
+export function setDoorShownOpen(o, interior, open) {
+  if (!!open === !!interior) delete o.doorState; else o.doorState = open ? 'open' : 'closed';
+}
+
 // ---------- glass doors ----------
 // What a door's leaf is made of. o.glass is the owner's call: 'full' is a pane of glass in
 // stiles and rails (a French door, a patio door), 'half' is glass over a solid lower panel (an
