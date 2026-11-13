@@ -19,7 +19,8 @@ import { connectDiskWorkspace, diskWorkspace } from './disk-workspace.js';
 import { editHistoryState, onEditHistoryChange } from './edit-history.js';
 import { icon } from './icons.js';
 import { initPaneResize } from './pane-resize.js';
-import { initTiksiMenu } from './tiksi-menu.js';
+import { initTiksiMenu, setRestartAction } from './tiksi-menu.js';
+import { restartTiksi } from './restart.js';
 import { initField, fieldRouted, phoneLayout } from './field.js';
 import * as plan2d from './plan2d.js';
 import * as viewer3d from './viewer3d.js';
@@ -117,6 +118,7 @@ async function boot() {
 
   bindTopbar();
   initTiksiMenu();
+  if (diskWorkspace && diskWorkspace.canRestart()) setRestartAction(() => restartTiksi(diskWorkspace));
   initField();
   initPaneResize(document.getElementById('view'));
   bindHistoryControls();

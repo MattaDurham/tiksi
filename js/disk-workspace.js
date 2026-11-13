@@ -965,6 +965,14 @@ export async function connectDiskWorkspace({ hadLocal, onRemote }) {
     finally { mirrorRunning = false; }
   }
   diskWorkspace = { sync, changed,
+    // RESTART TIKSI (js/restart.js): what is waiting is saved first, then the Mac's server starts
+    // again with the code now in its folder (server/restart.py). A long job running on the Mac
+    // refuses it with code 'busy' unless `force`.
+    canRestart: () => features.has('restart'),
+    async restart(force = false) {
+      await sync();
+      return (await ask('/restart' + (force ? '?force=1' : ''), { method: 'POST' })).json();
+    },
     // The Mac's reduced copy of a stored picture, at most `longest` pixels on its longest side
     // (a size the server offers): { buffer, mime, smaller } or null when there is none to be had
     // (not on the Mac yet, changed here since, or refused). A Mac that has no smaller copy sends
