@@ -103,7 +103,7 @@ test('an explicit rounded baseboard changes only its observed wall side and stop
     .intersectObject(g, true)[0]?.point.z;
   near(firstZ(1, 0.05, 1), 0.072);
   near(firstZ(1, 0.1, 1), 0.06, 1e-6); // observed lower board ends below this ray
-  near(firstZ(1, 0.1, -1), -0.072); // unobserved opposite side keeps prior default
+  near(firstZ(1, 0.1, -1), -0.06); // the unspecified opposite face has no invented baseboard
   assert.ok(firstZ(1, 0.089, 1) < 0.072 && firstZ(1, 0.089, 1) > 0.068, 'rounded top recedes from the face');
   assert.equal(firstZ(2, 0.05, 1), undefined, 'no baseboard across a plain doorway');
 });

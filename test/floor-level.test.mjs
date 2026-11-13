@@ -40,11 +40,11 @@ test('the floor is a slab under the level\'s height, its top at that height', ()
   assert.ok(FLOOR_T > 0.02, 'the slab has a visible edge at a floor opening');
 });
 
-test('walls, their baseboards and a door all start at the floor\'s top, not below or above it', () => {
+test('walls and a door all start at the floor\'s top, not below or above it', () => {
   const door = { id: 'd1', wallId: 'w1', t: 0.5, type: 'door', width: 0.8, height: 2.03 };
   const group = buildWallGroup(WALL, [door], { walls: [WALL], rooms: [ROOM], wallHeight: 2.44 }, X);
   const [wallLow, wallTop] = span(group, o => o.userData.kind === 'wall');
-  near(wallLow, 0, 'the wall and its baseboard stand on the floor'); near(wallTop, 2.44, 'wall top');
+  near(wallLow, 0, 'the wall stands on the floor'); near(wallTop, 2.44, 'wall top');
   const [doorLow] = span(group, o => o.userData.kind === 'opening');
   assert.ok(doorLow >= 0 && doorLow < 0.02, 'the door frame and leaf start at the floor (' + doorLow + ')');
 });

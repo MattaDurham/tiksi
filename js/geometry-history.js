@@ -6,7 +6,7 @@ const clone = value => JSON.parse(JSON.stringify(value));
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 export function geometrySnapshot(prop) {
   return {
-    data: clone({ id: prop.id, walls: prop.walls, openings: prop.openings, rooms: prop.rooms, fixtures: prop.fixtures || [],
+    data: clone({ id: prop.id, walls: prop.walls, openings: prop.openings, rooms: prop.rooms, fixtures: prop.fixtures || [], trims: prop.trims || [],
       levels: prop.levels.map(level => ({ ...level, plan: null })), activeLevelId: prop.activeLevelId }),
     plans: Object.fromEntries(prop.levels.map(level => [level.id, level.plan || null])),
   };
@@ -61,7 +61,7 @@ export class GeometryHistory {
     const data = clone(pending.before.data);
     const plans = Object.fromEntries(prop.levels.map(level => [level.id, level.plan || null]));
     for (const level of data.levels) level.plan = (level.id in plans ? plans[level.id] : pending.before.plans[level.id]) || null;
-    for (const key of ['walls', 'openings', 'rooms', 'fixtures', 'levels', 'activeLevelId']) prop[key] = key === 'fixtures' ? data.fixtures || [] : data[key];
+    for (const key of ['walls', 'openings', 'rooms', 'fixtures', 'trims', 'levels', 'activeLevelId']) prop[key] = key === 'fixtures' || key === 'trims' ? data[key] || [] : data[key];
     return true;
   }
   restore(prop, direction) {
@@ -71,7 +71,7 @@ export class GeometryHistory {
     const plans = Object.fromEntries(prop.levels.map(level => [level.id, level.plan || null]));
     const data = clone(result.value);
     for (const level of data.levels) level.plan = (level.id in plans ? plans[level.id] : result.target.plans[level.id]) || null;
-    for (const key of ['walls', 'openings', 'rooms', 'fixtures', 'levels', 'activeLevelId']) prop[key] = key === 'fixtures' ? data.fixtures || [] : data[key];
+    for (const key of ['walls', 'openings', 'rooms', 'fixtures', 'trims', 'levels', 'activeLevelId']) prop[key] = key === 'fixtures' || key === 'trims' ? data[key] || [] : data[key];
     this[direction].pop(); this[direction === 'undo' ? 'redo' : 'undo'].push(result.entry);
     return true;
   }
