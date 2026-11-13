@@ -19,7 +19,8 @@ try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch('http://127.0.0.1:' + port)).ok) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
   browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-  await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));
+  // Everything on the screen but the component list: the long drag below would end over it.
+  await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true,"model.objects":false}'));
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto('http://127.0.0.1:' + port + '/#/plan');
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
