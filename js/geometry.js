@@ -583,7 +583,9 @@ export function buildWallGroup(wall, openings, property, ctx) {
     }
   }
   for (const b of buckets) {
-    const m = mergedMesh(b.geos, b.mat, { kind: 'wall', id: wall.id });
+    // With room faces these are the wall's top, bottom, ends and reveals: a surface to measure
+    // or pin a note on, but not something a click selects (`cap`).
+    const m = mergedMesh(b.geos, b.mat, parts ? { kind: 'wall', id: wall.id, cap: true } : { kind: 'wall', id: wall.id });
     if (m) group.add(m);
   }
   // The long sides, one mesh per face this wall carries, each clipped to the face's span. They

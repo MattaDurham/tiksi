@@ -1878,7 +1878,7 @@ function pick(e, opts) {
     if (opts.surfaceOnly && ['pin', 'note', 'camera', 'position'].includes(o.userData.kind)) continue;
     const n = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : new THREE.Vector3(0, 1, 0);
     const part = o.userData.kind === 'scan' ? partKeyForObject(o, h.object) : null;
-    return { kind: o.userData.kind, id: o.userData.id, point: h.point, normal: n, object: o, wallId: o.userData.wallId, faceId: o.userData.faceId, part, mesh: h.object };
+    return { kind: o.userData.kind, id: o.userData.id, point: h.point, normal: n, object: o, wallId: o.userData.wallId, faceId: o.userData.faceId, cap: !!o.userData.cap, part, mesh: h.object };
   }
   return null;
 }
@@ -1933,6 +1933,8 @@ function onPointerUp(e) {
   const now = performance.now();
   const again = !!lastClick && now - lastClick.t < 450 && Math.hypot(e.clientX - lastClick.x, e.clientY - lastClick.y) < 6;
   lastClick = { t: now, x: e.clientX, y: e.clientY };
+  // A wall's top, ends and reveals belong to no room face: a click there selects nothing.
+  if (hit.cap) { if (!e.shiftKey) setSelection(null); return; }
   if (hit.kind === 'wall') wallFaceClicked = wallSideOfHit(hit);
   pickThing(thingForHit(hit, again && !e.shiftKey), e.shiftKey);
 }
@@ -2009,7 +2011,7 @@ function onPointerMove(e) {
     hoverPending = false;
     if (!scene) return;
     const hit = pick(e, { scans: false, ground: false });
-    const next = hit && hit.faceId ? findGroupFor('face', hit.faceId) : hit && ['wall', 'room', 'opening', 'ceiling', 'trim'].includes(hit.kind) ? hit.object : null;
+    const next = hit && hit.faceId ? findGroupFor('face', hit.faceId) : hit && !hit.cap && ['wall', 'room', 'opening', 'ceiling', 'trim'].includes(hit.kind) ? hit.object : null;
     const under = trimEdit && hit ? trimUnder(e, hit) : null;
     if (under) { const g = trimGrab(e, under); renderer.domElement.style.cursor = g && g.mode === 'divider' ? 'ew-resize' : 'ns-resize'; return; }
     if (tool === 'fov') renderer.domElement.style.cursor = 'ns-resize';
