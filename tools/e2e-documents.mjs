@@ -1,5 +1,6 @@
 // DOCUMENTS: a drawing set on a synthetic two-room house. Plan, section, elevation and 3D views
-// render the model; the plan draws the cut walls, door swings, room names and the section mark;
+// render the model; the plan draws the cut walls, door swings, room names, door and window
+// numbers (a layer that can be switched off) and the section mark;
 // views move, resize and adjust on the sheet; a changed wall redraws the plan; a schedule lists the
 // doors; a second sheet numbers on; SAVE PDF TO PROJECT stores revision 1 as a document of the
 // property, and the set survives a reload. Synthetic workspace only.
@@ -48,7 +49,7 @@ const waitImages = n => page.waitForFunction(n => document.querySelectorAll('.dc
 const boxOf = async locator => { for (let i = 0; i < 40; i++) { const b = await locator.boundingBox(); if (b) return b; await page.waitForTimeout(100); } throw new Error('No box for ' + locator); };
 
 try {
-  await page.goto(url + '/#/plan');
+  await page.goto(url + '/#/model');
   await page.waitForSelector('#btn-file', { state: 'attached' });
   await page.evaluate(async () => {
     const s = await import('/js/store.js');
@@ -88,6 +89,20 @@ try {
   check((svg.match(/stroke-dasharray="2 1.5"/g) || []).length === 2, 'the plan draws a swing for each of the two doors');
   check(/stroke="#b3261e"/.test(svg), 'the plan marks where the section cuts');
   check(/SCALE: [0-9/]+" = 1'-0"/.test(svg) && /Test House/.test(svg) && /1 Synthetic Way/.test(svg), 'drawing labels carry the scale and the title block names the property and address');
+  // Door and window numbers: the schedule's marks in circles on the plan, a layer on by default.
+  const planSvg = () => page.evaluate(id => document.querySelector(`.dc-paper svg g[data-vp-group="${id}"]`)?.innerHTML || '', plan.id);
+  const marks = s => ['D1', 'D2', 'W1'].filter(m => s.includes('>' + m + '</text>'));
+  check(marks(await planSvg()).join() === 'D1,D2,W1', 'the plan numbers both doors and the window as the schedule does (D1, D2, W1)');
+  const planHit = page.locator(`.dc-vp-hit[data-vp="${plan.id}"]`);
+  await planHit.click({ position: { x: 10, y: 10 } });
+  const numbersLayer = page.locator('.dc-inspector [data-layer="numbers"]');
+  check(await numbersLayer.isChecked(), 'the plan\'s inspector has the Door and window numbers layer, on');
+  await numbersLayer.uncheck();
+  await page.waitForFunction(id => !/>D1<\/text>/.test(document.querySelector(`.dc-paper svg g[data-vp-group="${id}"]`)?.innerHTML || '>D1</text>'), plan.id);
+  check(!marks(await planSvg()).length && /LIVING ROOM/.test(await planSvg()) && (await prop('return p.docSets[0].sheets[0].viewports[0].layers.numbers')) === false, 'unchecking the layer takes the numbers off the plan and keeps the rooms, and the view keeps the choice');
+  await page.locator('.dc-inspector [data-layer="numbers"]').check();
+  await page.waitForFunction(id => />D1<\/text>/.test(document.querySelector(`.dc-paper svg g[data-vp-group="${id}"]`)?.innerHTML || ''), plan.id);
+  check(marks(await planSvg()).join() === 'D1,D2,W1', 'checking it again brings them back');
 
   // Move and resize the plan by dragging; the sheet snaps to 1/8 inch.
   const hit = page.locator(`.dc-vp-hit[data-vp="${plan.id}"]`);

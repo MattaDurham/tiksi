@@ -1,7 +1,7 @@
 // PHOTOS view: gallery of a property's site photos, reference images and 360 panoramas.
 // Photos are first-class workspace objects: they link to rooms, model elements and scope
 // items (so cut sheets can pull site conditions per element), can be pinned in the 3D
-// model, used as the plan underlay, as the sky for lighting, or as a photo-based material.
+// model, used as the sky for lighting, or as a photo-based material.
 // With the Mac's server the gallery is the project folder: every picture in it and its
 // subfolders, read where it is (photos-store.js); Tiksi keeps a record only of the photos it
 // knows something about. Pictures fall in groups that can each be hidden: photos, panoramas,
@@ -9,7 +9,7 @@
 
 import {
   ws, activeProperty, touch, escapeHtml, allScopeItems, elementInfo, materialById, fmtLen, fmtDate,
-  activeLevel, levelOfRoom,
+  levelOfRoom,
 } from './store.js';
 import {
   addPhotoFromFile, photoUrl, photoBytes, photoById, deletePhoto, isPanoramaAspect, revokePhotoUrls,
@@ -23,7 +23,6 @@ import { ROLE_LABELS } from './positions.js';
 import { addCustomMaterial } from './materials.js';
 import { isVideoFile, importVideos } from './videos.js';
 
-const PLAN_MAX_PX = 4096;   // detailed tracing without unbounded canvas memory
 const MATERIAL_KINDS = ['wall', 'floor', 'ceiling', 'trim', 'any'];
 
 // The groups a picture falls in, in the order the filter shows them; each can be hidden.
@@ -243,30 +242,6 @@ function onDrop(e) {
 }
 
 // ---------- actions ----------
-// The image becomes the tracing underlay of the level the PLAN editor is showing.
-async function useAsUnderlay(p) {
-  const lvl = activeLevel(prop);
-  if (lvl.plan && lvl.plan.img && !confirm('Replace the plan underlay on "' + lvl.name + '" with "' + p.name + '"?')) return;
-  const url = await photoUrl(p.id);
-  if (!url) { alert('The full-resolution file for this photo is not in this browser (it came from a JSON-only export). Re-upload it to use it as an underlay.'); return; }
-  let img;
-  try { img = await loadImage(url); } catch (e) { alert(e.message); return; }
-  const scale = Math.min(1, PLAN_MAX_PX / Math.max(img.width, img.height));
-  const cw = Math.round(img.width * scale), ch = Math.round(img.height * scale);
-  const c = document.createElement('canvas');
-  c.width = cw; c.height = ch;
-  c.getContext('2d').drawImage(img, 0, 0, cw, ch);
-  const isPng = p.mime === 'image/png';
-  lvl.plan = {
-    img: isPng ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.92),
-    imgW: cw, imgH: ch,
-    mPerPx: 18 / cw,            // assume ~18 m wide until calibrated (plan2d convention)
-    opacity: 0.55, offsetX: 0, offsetY: 0, calibrated: false,
-  };
-  touch();
-  location.hash = '#/plan';
-}
-
 async function useAsSky(p) {
   if (p.kind !== 'pano') return;
   // The viewer needs the full-resolution bytes for the equirect texture; a thumbnail-only
@@ -591,7 +566,7 @@ function emptyStateHtml() {
       <div class="ph-empty-tile"><b>SITE CONDITIONS</b><span>Document what is there today. Link a photo to a wall, a room or a scope item and it prints on that item's cut sheet.</span></div>
       <div class="ph-empty-tile"><b>REFERENCE IMAGES</b><span>Inspiration and product shots. Pin any photo in the 3D model where it belongs.</span></div>
       <div class="ph-empty-tile"><b>360 PANORAMAS</b><span>An equirectangular pano (2:1) becomes the sky: real light and reflections from your own site.</span></div>
-      <div class="ph-empty-tile"><b>TEXTURES</b><span>A close-up of brick, tile or wood becomes a photo-based material, or a floorplan photo becomes the plan underlay.</span></div>
+      <div class="ph-empty-tile"><b>TEXTURES</b><span>A close-up of brick, tile or wood becomes a photo-based material.</span></div>
     </div>
     <div class="ph-empty-actions">
       <button class="btn primary" data-act="upload">UPLOAD PHOTOS</button>
@@ -823,7 +798,6 @@ function renderDetail() {
       </div>`}
       <div class="field"><label>Send to</label>
         <div class="ph-send">
-          <button class="btn" data-act="underlay" title="Trace walls over this image in PLAN">PLAN UNDERLAY</button>
           ${isSky
             ? '<button class="btn on" data-act="clear-sky" title="Stop lighting the model with this panorama">SKY: ON</button>'
             : `<button class="btn" data-act="sky" title="${p.kind === 'pano' ? 'Light the 3D model with this panorama' : 'Set the kind to 360 panorama first'}" ${p.kind === 'pano' ? '' : 'disabled'}>USE AS SKY</button>`}
@@ -904,7 +878,6 @@ function renderDetail() {
   act('zoom', () => openLightbox(p.id));
   act('select', () => toggleSelected(p.id));
   act('finder', showInFinder);
-  actKept('underlay', useAsUnderlay);
   actKept('sky', useAsSky);
   act('clear-sky', clearSky);
   actKept('pin', pinIn3d);

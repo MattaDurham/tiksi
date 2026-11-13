@@ -48,17 +48,6 @@ async function fileTab(tab) {
   await settle(250);
 }
 async function closeFile() { await page.locator('[data-close-file]').click(); }
-async function selectWall() {
-  await page.locator('[data-act="fit"]').click();
-  await settle(100);
-  const box = await page.locator('.plan-canvas canvas').boundingBox();
-  const w = box.width - 22, h = box.height - 22, z = Math.min(w / (8.4 * 1.22), h / (5.4 * 1.22), 250);
-  const px = -(w / z - 8.4) / 2 - 22 / z, py = -(h / z - 5.4) / 2 - 22 / z;
-  const point = { x: box.x + (4.8 - px) * z, y: box.y + (1.8 - py) * z };
-  await page.mouse.click(point.x, point.y);
-  await page.locator('.inspector [data-len="h"]').waitFor();
-  return point;
-}
 
 async function overlay(caption, point) {
   await page.evaluate(({ caption, point }) => {
@@ -148,7 +137,6 @@ try {
   await settle();
   if (!demosOnly && (!only || only === 'tags')) await tagsShot();
   if (!demosOnly && !only) {
-  await go('plan'); await selectWall(); await shot('plan');
   await go('model'); await page.locator('[data-act="iso"]').click(); await settle(1500);
   await shot('start'); await shot('model');
   await fileTab('exchange'); await shot('exchange');
@@ -178,7 +166,7 @@ try {
   }
 
   if (!stillsOnly && !only) {
-    await go('plan');
+    await go('model');
     await clip('files', async frame => {
       await frame('1. Open FILE for saving, importing and settings', '#btn-file');
       await frame('2. Project: save or open a .tiksi project', '#btn-file', () => fileTab('project'));
@@ -187,15 +175,6 @@ try {
       await frame('5. Settings: display, folders and backups', '[data-file-tab="settings"]', () => fileTab('settings'));
     });
     await closeFile();
-    await go('plan');
-    await clip('plan', async frame => {
-      await frame('1. Select a wall in PLAN', await selectWall());
-      await frame('2. Set a precise wall height in the inspector', '.inspector [data-len="h"]');
-      await frame('3. Change the height to 8 feet', '.inspector [data-len="h"]', async () => { await page.locator('.inspector [data-len="h"]').fill('8ft'); await page.locator('.inspector [data-len="h"]').press('Tab'); });
-      await frame('4. Open MODEL to inspect the edit', '#rail [data-view="model"]', async () => { await go('model'); await settle(1200); });
-    });
-    // Restore the fixture's height through the actual inspector before comparison.
-    await go('plan'); await selectWall(); await page.locator('.inspector [data-len="h"]').fill('2.7m'); await page.locator('.inspector [data-len="h"]').press('Tab');
     await go('model'); await page.locator('[data-act="iso"]').click(); await settle(1200);
     await clip('exchange', async frame => {
       await frame('1. BEFORE: the preserved existing conditions', '[data-act="before"]', () => page.locator('[data-act="before"]').click());

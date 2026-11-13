@@ -28,7 +28,7 @@ page.on('pageerror', e => errors.push(e.message));
 const check = (ok, label) => { assert.ok(ok, label); console.log('  ok   ' + label); };
 
 try {
-  await page.goto(url + '/#/plan');
+  await page.goto(url + '/#/budget');
   await page.waitForSelector('#btn-file', { state: 'attached' });
 
   // Shared helpers inside the page: OPFS folders, a listing, and a sync that never races the timer.

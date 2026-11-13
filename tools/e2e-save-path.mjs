@@ -44,10 +44,12 @@ async function openPage(context, hash = '') {
 }
 const errors = [];
 
-// A SketchUp save is read back and merged while PLAN is open. An edit then made in that same
-// open page must reach the Mac, not vanish into the record the page was built with.
+// A SketchUp save is read back and merged while MODEL is open. An edit then made in that same
+// open page (DIMENSIONS, kept with the property) must reach the Mac, not vanish into the record
+// the page was built with.
 async function sketchupSaveUnderAnOpenPage() {
   const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
+  await context.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's mode bar on the screen (tiksi-menu.js)
   // Stand in for SketchUp: the conversion service says it is installed, writes a small file
   // for the model, and reads it back as whatever `skpHolds` says the model now contains.
   let skpHolds = { walls: [] }, writes = 0;
@@ -70,22 +72,23 @@ async function sketchupSaveUnderAnOpenPage() {
     return { path: disk.paths[p.id], level: L, east };
   });
   assert(writes > 0, 'the model file was written beside the project');
-  await page.goto(url + '/#/plan');
-  await page.locator('[data-prop-name]').waitFor();
+  await page.goto(url + '/#/model');
+  await page.locator('[data-annot="dims"]').waitFor();
+  assert.equal(await page.locator('[data-annot="dims"]').getAttribute('aria-pressed'), 'false');
   // "Save in SketchUp": the east wall is now half a metre further east, and the file changed.
   skpHolds = { model: { propertyId: 'prop-open-page', elements: {} }, walls: [{ id: 'w-e', level: made.level, base: made.east, now: { ...made.east, ax: 5.5, bx: 5.5 }, openings: [] }] };
   await writeFile(made.path.replace(/\.tiksi$/i, '.skp'), 'synthetic model, saved in SketchUp with a moved wall');
   await page.waitForFunction(() => window.saveTestStore.ws.data.properties.find(p => p.id === 'prop-open-page')?.walls.find(w => w.id === 'w-e')?.ax === 5.5, null, { timeout: 40000 });
   // The person keeps working in the page that was already open.
-  await page.locator('[data-prop-name]').fill('Renamed after the SketchUp save');
-  await page.locator('[data-prop-name]').blur();
+  await page.locator('[data-annot="dims"]').click();
+  await page.waitForFunction(() => document.querySelector('[data-annot="dims"]')?.getAttribute('aria-pressed') === 'true');
   await page.waitForFunction(SAVED);
   await page.evaluate(async () => (await import('/js/disk-workspace.js')).diskWorkspace.sync());
   const saved = (await onTheMac()).data.properties.find(p => p.id === 'prop-open-page');
   assert.equal(saved.walls.find(w => w.id === 'w-e').ax, 5.5, 'the SketchUp move is on the Mac');
-  assert.equal(saved.name, 'Renamed after the SketchUp save', 'an edit made in the already-open page after the SketchUp save reaches the Mac');
+  assert.equal(saved.env.showDims, true, 'an edit made in the already-open page after the SketchUp save reaches the Mac');
   await context.close();
-  console.log('ok   an open PLAN page keeps saving after a SketchUp save is merged');
+  console.log('ok   an open MODEL page keeps saving after a SketchUp save is merged');
 }
 
 // A file transfer has no limit on its whole duration, only on how long nothing moves; and a

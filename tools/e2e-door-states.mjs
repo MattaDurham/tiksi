@@ -1,8 +1,8 @@
 // Doors shown open or closed in MODEL. Right-clicking a door offers CLOSE DOOR or OPEN DOOR;
 // CLOSE ALL DOORS (the right-click menu's lower part and the Tiksi menu's Display group) shuts
-// every interior door and OPEN ALL DOORS stands them ajar again; each is one UNDO step. The
-// opening inspectors show the state and no longer have a position slider. Real clicks on the
-// rendered view. Synthetic project and temporary runtime only; never uses the owner's stores.
+// every interior door and OPEN ALL DOORS stands them ajar again; each is one UNDO step. MODEL's
+// door panel shows the state, sets it with Shown, and has no position slider. Real clicks on
+// the rendered view. Synthetic project and temporary runtime only; never uses the owner's stores.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -22,7 +22,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto('http://127.0.0.1:' + port + '/#/plan');
+  await page.goto('http://127.0.0.1:' + port + '/#/budget');
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   // One wall along plan y = 0 with rooms on both sides of its left part (an interior door at
   // x = -1) and a room on one side only of its right part (an exterior door at x = 2). No other
@@ -153,38 +153,14 @@ try {
   await shown.selectOption('closed');
   await waitUntil(async () => (await doorState('inner')) === 'closed', 'Shown: Closed shuts the door');
 
-  // ---------- PLAN ----------
-  await page.locator('#rail [data-view=plan]').click();
-  const canvas = page.locator('.plan-canvas canvas').first();
-  await canvas.waitFor();
-  // The view slides in by 4 px (css view-in); the screen positions below assume it has landed.
-  await page.evaluate(() => Promise.all(document.getAnimations().filter(a => a.animationName === 'view-in').map(a => a.finished)));
-  await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
-  await page.keyboard.press('f');
-  await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
-  // Screen position of a plan point, from FIT VIEW's rule (plan2d.js fitFor): the rooms run
-  // from (-3, -3) to (3, 3); the rulers take 22 px along the top and left.
-  const box = await canvas.boundingBox(), RULER = 22;
-  const wrap = await page.locator('.plan-canvas').evaluate(e => ({ w: e.clientWidth, h: e.clientHeight }));
-  const pw = wrap.w - RULER, ph = wrap.h - RULER, zoom = Math.min(pw / (6 * 1.22), ph / (6 * 1.22), 250);
-  const panX = -3 - (pw / zoom - 6) / 2 - RULER / zoom, panY = -3 - (ph / zoom - 6) / 2 - RULER / zoom;
-  const at = (x, y) => [box.x + (x - panX) * zoom, box.y + (y - panY) * zoom];
-  await page.mouse.click(...at(-1, 0));
-  await page.locator('.inspector [data-door-state]').waitFor({ timeout: 10000 });
-  assert.equal(await page.locator('.inspector [data-door-state]').inputValue(), 'closed', 'PLAN\'s door panel shows the same state');
-  assert.equal(await page.locator('.inspector input[type=range]').count(), 0, 'and has no position slider either');
-  await page.locator('.inspector [data-door-state]').selectOption('open');
-  await waitUntil(async () => (await doorState('inner')) === null, 'Open in PLAN stands it ajar again');
-  // An opening still moves along its wall by dragging it in PLAN.
-  const tOf = () => page.evaluate(() => window.testStore.activeProperty().openings.find(o => o.id === 'inner').t);
-  assert.equal(await tOf(), 0.5);
-  await page.mouse.move(...at(-1, 0));
-  await page.mouse.down();
-  await page.mouse.move(...at(-0.5, 0), { steps: 12 });
-  await page.mouse.up();
-  await waitUntil(async () => Math.abs((await tOf()) - 0.625) < 0.02, 'dragging the door 0.5 m along its 4 m wall moves it there (t ' + (await tOf()) + ')');
+  // The panel follows: Open again, and the door stands ajar.
+  await idle();
+  assert.equal(await shown.inputValue(), 'closed', 'the panel shows the door it shut');
+  await shown.selectOption('open');
+  await waitUntil(async () => (await doorState('inner')) === null, 'Shown: Open stands it ajar again');
+  assert.deepEqual(await turn('inner'), [25]);
   assert.deepEqual(errors, [], 'no page errors');
-  console.log('ok   a door opens and closes by right-click, every interior door at once, and from both inspectors, each one UNDO step');
+  console.log('ok   a door opens and closes by right-click, every interior door at once, and from MODEL\'s door panel, each one UNDO step');
 } finally {
   if (browser) await browser.close();
   child.kill('SIGTERM');

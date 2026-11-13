@@ -1,5 +1,5 @@
-// Review artefacts an owner corrects quickly: PLAN's numbered opening schedule (edit, undo,
-// print, PNG) and MODEL's MATCH PHOTO (fly to the photo's view, overlay, save the view).
+// Review artefacts in MODEL: the door and window numbers (NUMBERS, the schedule's marks on the
+// openings) and MATCH PHOTO (fly to the photo's view, overlay, save the view).
 // Synthetic project and temporary runtime only; never uses the owner's stores.
 // E2E_SHOTS=<dir> also writes screenshots of both features there.
 import assert from 'node:assert/strict';
@@ -16,7 +16,7 @@ const socket = net.createServer(); await new Promise(r => socket.listen(0, '127.
 const port = socket.address().port; await new Promise(r => socket.close(r));
 const child = spawn('python3', ['tools/serve.py', '--host', '127.0.0.1', '--port', String(port), '--state-dir', state, '--projects-dir', state + '/projects'], { stdio: 'ignore' });
 let browser, page;
-const IN = 0.0254, errors = [];
+const errors = [];
 // A disk save remounts the view; under software GL on a CI runner that can take a while.
 async function savedToDisk() {
   try { await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK', null, { timeout: 120000 }); }
@@ -29,7 +29,7 @@ try {
   await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   page.on('pageerror', e => errors.push(e.message));
   page.setDefaultTimeout(120000);   // MODEL under software GL on a CI runner is slow
-  await page.goto('http://127.0.0.1:' + port + '/#/plan');
+  await page.goto('http://127.0.0.1:' + port + '/#/model');
   await savedToDisk();
   await page.evaluate(async () => {
     const s = window.reviewStore = await import('/js/store.js');
@@ -62,58 +62,30 @@ try {
   const prop = () => page.evaluate(() => window.reviewStore.activeProperty());
   const before = JSON.stringify((await prop()).openings);
 
-  // ---------- PLAN: opening schedule ----------
-  const panel = page.locator('.plan-schedule');
-  assert.equal(await panel.isHidden(), true, 'the schedule is hidden by default');
-  await page.locator('[data-chk=numbers]').check();
-  await panel.waitFor();
-  assert.deepEqual(await panel.locator('.ps-num').allTextContents(), ['D1', 'D2', 'W1', 'W2', 'D3'], 'reading order: top band first, left to right');
-  assert.match(await panel.locator('.ps-row[data-id=o-mid] .ps-what').textContent(), /Kitchen \/ Living/);
-  assert.match(await panel.locator('.ps-row[data-id=o-front] .ps-what').textContent(), /Kitchen \/ Exterior/);
-  assert.equal(JSON.stringify((await prop()).openings), before, 'numbering changes nothing saved');
-  assert.equal(await page.locator('#btn-undo').isDisabled(), true);
-  if (shots) await page.screenshot({ path: shots + '/opening-schedule.png' });
-  // Corrections typed by number, Enter moving down the width column.
-  const width = id => panel.locator(`.ps-row[data-id=${id}] [data-ps-len=width]`);
-  const focusedRow = id => page.waitForFunction(id => document.activeElement?.closest('.ps-row')?.dataset.id === id, id, { timeout: 3000 });
-  await width('o-mid').fill('32"'); await width('o-mid').press('Enter');
-  await focusedRow('o-w2');   // Enter moves down the column
-  await page.keyboard.type('30"'); await page.keyboard.press('Enter');
-  let p = await prop();
-  assert.ok(Math.abs(p.openings.find(o => o.id === 'o-mid').width - 32 * IN) < 1e-6);
-  assert.ok(Math.abs(p.openings.find(o => o.id === 'o-w2').width - 30 * IN) < 1e-6);
-  await focusedRow('o-w1');
-  assert.match(await page.locator('.inspector h3').textContent(), /WINDOW W2/, 'focusing a row selects its opening');
-  await width('o-front').fill('wide'); await width('o-front').press('Tab');
-  assert.equal((await prop()).openings.find(o => o.id === 'o-front').width, 0.9, 'an unreadable size changes nothing');
-  assert.match(await page.locator('.canvas-hint').textContent(), /^[DW]\d+ width: "wide" is not a length\./, 'the hint names the opening and says why');
-  await width('o-front').fill('40\''); await width('o-front').press('Tab');
-  p = await prop(); const front = p.openings.find(o => o.id === 'o-front');
-  assert.ok(Math.abs(front.width - 6.96) < 1e-6 && Math.abs(front.t - 0.5) < 1e-6, 'a too-wide door is held to its wall');
-  await page.keyboard.press('ControlOrMeta+z');
-  assert.equal((await prop()).openings.find(o => o.id === 'o-front').width, 0.9, 'undo reverts the clamped edit');
-  assert.equal(await width('o-front').inputValue(), '2\'-11 7/16"', 'the panel follows undo');
-  await page.keyboard.press('ControlOrMeta+z'); await page.keyboard.press('ControlOrMeta+z');
-  assert.equal(JSON.stringify((await prop()).openings), before, 'each schedule edit is one undo step');
-  await page.keyboard.press('ControlOrMeta+Shift+z');
-  assert.ok(Math.abs((await prop()).openings.find(o => o.id === 'o-mid').width - 32 * IN) < 1e-6, 'redo replays it');
-  await panel.locator('.ps-row[data-id=o-back] .ps-what').click();
-  assert.match(await page.locator('.inspector h3').textContent(), /DOOR D3/);
-  assert.match(await page.locator('.inspector').textContent(), /Living \/ Exterior/);
-  // Print: the numbered plan and the table, through the app's print root.
-  await page.evaluate(() => { window.printed = 0; window.print = () => { window.printed++; }; });
-  await panel.locator('[data-ps=print]').click();
-  assert.equal(await page.evaluate(() => window.printed), 1);
-  assert.equal(await page.locator('#print-root .opening-sheet tbody tr').count(), 5);
-  assert.match(await page.locator('#print-root .opening-sheet img.s-plan').getAttribute('src'), /^data:image\/png;base64,/);
-  assert.match(await page.locator('#print-root .opening-sheet tbody tr').nth(1).textContent(), /D2.*Door.*Kitchen \/ Living.*2'-8"/);
-  const [download] = await Promise.all([page.waitForEvent('download'), panel.locator('[data-ps=png]').click()]);
-  assert.match(download.suggestedFilename(), /^opening-schedule-synthetic-cottage-.*\.png$/);
-  const png = await (await import('node:fs/promises')).readFile(await download.path());
-  assert.equal(png.subarray(1, 4).toString(), 'PNG'); assert.ok(png.length > 20000, 'the PNG holds a drawn plan');
-  if (shots) await (await import('node:fs/promises')).writeFile(shots + '/opening-schedule-export.png', png);
-  await page.locator('[data-chk=numbers]').uncheck();
-  assert.equal(await panel.isHidden(), true);
+  // ---------- MODEL: door and window numbers ----------
+  // NUMBERS puts the schedule's marks (D1, W1...) on the openings; showing them changes no opening.
+  await page.locator('canvas.v-canvas').waitFor();
+  const numbers = page.locator('[data-annot="numbers"]');
+  assert.equal(await numbers.getAttribute('aria-pressed'), 'false', 'NUMBERS is off by default');
+  assert.equal(await page.locator('.v-annot-num').count(), 0);
+  await numbers.click();
+  await page.locator('.v-annot-num').first().waitFor({ state: 'attached' });
+  const marks = await page.evaluate(async () => {
+    const { openingSchedule } = await import('/js/opening-schedule.js');
+    return { byId: Object.fromEntries(openingSchedule(window.reviewStore.activeProperty()).map(r => [r.id, r.number])),
+      doors: [...document.querySelectorAll('.v-annot-num.door')].map(e => e.textContent).sort(),
+      windows: [...document.querySelectorAll('.v-annot-num.window')].map(e => e.textContent).sort() };
+  });
+  assert.deepEqual(marks.doors, ['D1', 'D2', 'D3'], 'every door carries its mark');
+  assert.deepEqual(marks.windows, ['W1', 'W2'], 'every window carries its mark');
+  assert.equal(marks.byId['o-mid'], 'D2', 'the marks are the schedule\'s: reading order, top band first, left to right');
+  assert.equal(marks.byId['o-back'], 'D3');
+  assert.equal(await numbers.getAttribute('aria-pressed'), 'true');
+  assert.equal(JSON.stringify((await prop()).openings), before, 'numbering changes no opening');
+  if (shots) await page.screenshot({ path: shots + '/opening-numbers.png' });
+  await numbers.click();
+  assert.equal(await page.locator('.v-annot-num').count(), 0, 'NUMBERS again takes them off');
+  let p;
 
   // ---------- MODEL: match photo ----------
   await page.locator('#rail [data-view=model]').click();
@@ -169,7 +141,7 @@ try {
   const reloaded = await page.evaluate(async () => (await import('/js/store.js')).activeProperty().photos.map(ph => ph.view && ph.view.fov));
   assert.deepEqual(reloaded, [70, 60]);
   assert.deepEqual(errors, []);
-  console.log('ok   opening schedule numbers, edits, undo, print and PNG; MATCH PHOTO overlay, saved views from MODEL and PHOTOS');
+  console.log('ok   door and window numbers in MODEL; MATCH PHOTO overlay, saved views from MODEL and PHOTOS');
 } catch (e) {
   if (shots && page) await page.screenshot({ path: shots + '/failure.png' }).catch(() => {});
   if (errors.length) console.error('page errors:', errors);

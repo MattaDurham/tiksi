@@ -1,7 +1,8 @@
-// A door's LEAF choice in MODEL and PLAN (Solid panel, Glass or Half glass) and PLAN's LEAVES
-// choice of None (a cased opening). Choosing Glass on
-// a pair of outside doors saves it on the door, draws panes the sun passes, goes back with
-// UNDO, and is offered in PLAN's door inspector too. Real clicks on the rendered views.
+// A door's leaf as MODEL builds and shows it: Solid panel, Glass or Half glass, and a door with
+// no leaves (a cased opening) or a plain opening with no frame. Leaves change in SketchUp, so the
+// door's data is written here the way a SketchUp save comes back (the store, then MODEL told of
+// the changed openings); MODEL's door panel then shows the leaf as a read-only line and offers
+// no leaf or leaves choice. Glass draws panes the sun passes. Real clicks on the rendered view.
 // Synthetic project and temporary runtime only; never uses the owner's stores.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -22,10 +23,10 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto('http://127.0.0.1:' + port + '/#/plan');
+  await page.goto('http://127.0.0.1:' + port + '/#/budget');
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   // A room north of a 4 m wall at y = 0 with a 1.5 m pair of outside doors at its centre: seen
-  // from the front and drawn in plan, the doors are in the middle of the view.
+  // from the front, the doors are in the middle of the view.
   await page.evaluate(async () => {
     const s = window.testStore = await import('/js/store.js');
     const p = s.propertyTemplate('Glass doors test');
@@ -44,37 +45,38 @@ try {
     assert.fail('timed out waiting until ' + what);
   };
   const idle = () => waitUntil(() => page.evaluate(async () => (await import('/js/viewer3d.js')).viewerIdle()), 'MODEL has settled');
-  // Click up and down the middle of a view (a little to one side: the two leaves meet in the
-  // very middle) until the door's LEAF choice shows.
-  async function pickDoor(canvas, inspector) {
-    const box = await canvas.boundingBox(), leaf = page.locator(inspector + ' [data-glass]');
-    for (let dy = 0; dy <= Math.min(320, box.height / 2 - 12); dy = dy > 0 ? -dy : -dy + 6) {
+  // Click up and down the middle of the view (a little to one side: the two leaves meet in the
+  // very middle) until the door's panel shows.
+  const canvas = page.locator('canvas.v-canvas'), heading = page.locator('.inspector h3').first();
+  async function pickDoor() {
+    await idle();
+    const box = await canvas.boundingBox();
+    for (let dy = 0; dy <= 150; dy = dy > 0 ? -dy : -dy + 6) {
       await page.mouse.click(box.x + box.width / 2 + 25, box.y + box.height / 2 + dy);
       await page.waitForTimeout(150);
-      if (await leaf.count()) return leaf;
+      if (await page.locator('.inspector [data-wall]').count()) return;
     }
-    assert.fail('the door could not be selected in ' + inspector);
+    assert.fail('the door could not be selected');
   }
-
-  // ---------- MODEL ----------
-  await page.locator('#rail [data-view=model]').click();
-  await page.locator('canvas.v-canvas').waitFor();
-  await page.locator('[data-act=front]').click();
-  await page.waitForTimeout(900);
-  await idle();
-  const leaf = await pickDoor(page.locator('canvas.v-canvas'), '.inspector');
-  assert.equal(await page.locator('.inspector h3').first().innerText(), 'DOOR', 'a wide pair of doors is a door, not a cased opening');
-  assert.equal(await leaf.inputValue(), '', 'a door starts as a solid panel');
-  assert.deepEqual(await leaf.locator('option').allInnerTexts(), ['Solid panel', 'Glass', 'Half glass']);
+  // The panel's read-only line for one value.
+  const stat = label => page.locator('.inspector .stat-line', { has: page.locator('span', { hasText: new RegExp('^' + label + '$') }) }).locator('b');
+  // A change to the door as a SketchUp save brings it: written to the store, MODEL told.
+  const fromSketchUp = change => page.evaluate(async change => {
+    const o = window.testStore.activeProperty().openings.find(o => o.id === 'french');
+    for (const [k, v] of Object.entries(change)) { if (v === undefined) delete o[k]; else o[k] = v; }
+    window.testStore.touch();
+    (await import('/js/viewer3d.js')).sharedChange(['openings']);
+  }, change);
 
   // What MODEL builds for the wall, in the page (the real browser build, textures and all).
   const built = () => page.evaluate(async () => {
     const g = await import('/js/geometry.js'), p = window.testStore.activeProperty();
     const w = p.walls.find(w => w.id === 'front');
     const group = g.buildWallGroup(w, p.openings, { walls: p.walls, rooms: p.rooms, wallHeight: 2.44 }, {});
-    const out = { panes: 0, paneShadows: 0, solid: 0, lowest: null };
+    const out = { panes: 0, paneShadows: 0, solid: 0, lowest: null, meshes: 0 };
     group.traverse(o => {
       if (!o.isMesh || !o.userData || o.userData.id !== 'french') return;
+      out.meshes++;
       if (o.userData.glass) {
         out.panes++; if (o.castShadow) out.paneShadows++;
         o.geometry.computeBoundingBox(); out.lowest = Math.round(o.geometry.boundingBox.min.y * 100) / 100;
@@ -82,60 +84,61 @@ try {
     });
     return out;
   });
-  assert.deepEqual(await built(), { panes: 0, paneShadows: 0, solid: 2, lowest: null }, 'two solid leaves to start with');
+  const leaves = async () => { const b = await built(); return { panes: b.panes, paneShadows: b.paneShadows, solid: b.solid, lowest: b.lowest }; };
 
-  await leaf.selectOption('full');
-  await waitUntil(async () => (await door()).glass === 'full', 'the door is saved as glass');
-  assert.deepEqual(await built(), { panes: 2, paneShadows: 0, solid: 0, lowest: 0.2 }, 'Glass: a pane in each leaf, none casting a shadow');
-  await idle();
-  assert.equal(await page.locator('.inspector [data-glass]').inputValue(), 'full', 'the inspector shows the choice after the model is rebuilt');
-  await waitUntil(async () => !(await page.locator('#btn-undo').isDisabled()), 'UNDO is offered');
-  await page.keyboard.press('ControlOrMeta+z');
-  await waitUntil(async () => !(await door()).has, 'UNDO takes the glass away');
-  assert.equal((await built()).panes, 0, 'and the leaves are solid again');
-  await page.keyboard.press('ControlOrMeta+Shift+z');
-  await waitUntil(async () => (await door()).glass === 'full', 'REDO brings it back');
+  await page.locator('#rail [data-view=model]').click();
+  await canvas.waitFor();
+  await page.locator('[data-act=front]').click();
+  await page.waitForTimeout(900);
 
-  await idle();
-  const again = await pickDoor(page.locator('canvas.v-canvas'), '.inspector');
-  await again.selectOption('half');
-  await waitUntil(async () => (await door()).glass === 'half', 'Half glass is saved');
-  assert.deepEqual(await built(), { panes: 2, paneShadows: 0, solid: 0, lowest: 0.95 }, 'Half glass: the panes start at waist height');
+  // ---------- a solid pair ----------
+  await pickDoor();
+  assert.equal(await heading.innerText(), 'DOOR', 'a wide pair of doors is a door, not a cased opening');
+  assert.equal(await stat('Leaf').innerText(), 'Solid panel', 'a door starts as a solid panel, shown as a line');
+  assert.equal(await page.locator('.inspector [data-glass]').count(), 0, 'and the leaf is not offered as a choice');
+  assert.equal(await page.locator('.inspector [data-leaves]').count(), 0, 'nor are the leaves');
+  assert.equal(await page.locator('.inspector [data-door-state]').count(), 1, 'Shown open or closed is still offered');
+  assert.deepEqual(await leaves(), { panes: 0, paneShadows: 0, solid: 2, lowest: null }, 'two solid leaves to start with');
+
+  // ---------- Glass ----------
+  await fromSketchUp({ glass: 'full' });
+  assert.deepEqual(await leaves(), { panes: 2, paneShadows: 0, solid: 0, lowest: 0.2 }, 'Glass: a pane in each leaf, none casting a shadow');
+  await pickDoor();
+  assert.equal(await stat('Leaf').innerText(), 'Glass', 'the panel shows Glass after the model is rebuilt');
+
+  // ---------- Half glass ----------
+  await fromSketchUp({ glass: 'half' });
+  assert.deepEqual(await leaves(), { panes: 2, paneShadows: 0, solid: 0, lowest: 0.95 }, 'Half glass: the panes start at waist height');
+  await pickDoor();
+  assert.equal(await stat('Leaf').innerText(), 'Half glass', 'the panel shows Half glass');
   assert.equal((await door()).leaves, 2, 'the door is still a pair');
 
-  // ---------- PLAN ----------
-  await page.locator('#rail [data-view=plan]').click();
-  await page.locator('.plan-canvas canvas').first().waitFor();
-  await page.waitForTimeout(500);
-  const planLeaf = await pickDoor(page.locator('.plan-canvas canvas').first(), '.inspector');
-  assert.equal(await planLeaf.inputValue(), 'half', 'PLAN shows the same choice');
-  await planLeaf.selectOption('');
-  await waitUntil(async () => !(await door()).has, 'Solid panel in PLAN removes the choice from the door');
-  assert.equal((await built()).solid, 2, 'and the leaves are solid');
-  // LEAVES: None makes it a cased opening, with no leaf to hang or to choose.
-  await page.locator('.inspector [data-leaves]').selectOption('0');
-  await waitUntil(async () => (await door()).leaves === 0, 'None is saved on the door as no leaf');
+  // ---------- back to solid ----------
+  await fromSketchUp({ glass: undefined });
+  assert.equal((await built()).solid, 2, 'with no glass the leaves are solid again');
+
+  // ---------- no leaves: a cased opening ----------
+  await fromSketchUp({ leaves: 0 });
   const cased = await built();
   assert.deepEqual([cased.solid, cased.panes], [0, 0], 'a cased opening hangs no leaf');
-  assert.equal(await page.locator('.inspector [data-leaves]').inputValue(), '0', 'PLAN shows None');
-  assert.equal(await page.locator('.inspector [data-glass]').count(), 0, 'and offers no leaf material');
-  // LEAVES: None (plain opening) takes the frame away too, and Single brings a door back.
-  const frame = () => page.evaluate(async () => {
-    const g = await import('/js/geometry.js'), p = window.testStore.activeProperty();
-    const group = g.buildWallGroup(p.walls.find(w => w.id === 'front'), p.openings, { walls: p.walls, rooms: p.rooms, wallHeight: 2.44 }, {});
-    let meshes = 0; group.traverse(o => { if (o.isMesh && o.userData && o.userData.id === 'french') meshes++; });
-    return meshes;
-  });
-  assert.ok(await frame() > 0, 'a cased opening keeps its jambs, head and casing');
-  await page.locator('.inspector [data-leaves]').selectOption('plain');
-  await waitUntil(async () => page.evaluate(() => window.testStore.activeProperty().openings.find(o => o.id === 'french').plain === true), 'the plain opening is saved on the door');
-  assert.equal(await frame(), 0, 'a plain opening builds no frame and no leaf');
-  assert.equal(await page.locator('.inspector [data-leaves]').inputValue(), 'plain', 'PLAN shows the plain opening');
-  await page.locator('.inspector [data-leaves]').selectOption('1');
-  await waitUntil(async () => page.evaluate(() => { const o = window.testStore.activeProperty().openings.find(o => o.id === 'french'); return o.leaves === 1 && !('plain' in o); }), 'Single hangs a door again');
+  assert.ok(cased.meshes > 0, 'a cased opening keeps its jambs, head and casing');
+  await pickDoor();
+  assert.equal(await heading.innerText(), 'CASED OPENING', 'the panel names it a cased opening');
+  assert.equal(await stat('Leaf').count(), 0, 'and shows no leaf');
+  assert.equal(await page.locator('.inspector [data-door-state]').count(), 0, 'and nothing to open or close');
+
+  // ---------- a plain opening ----------
+  await fromSketchUp({ plain: true });
+  assert.equal((await built()).meshes, 0, 'a plain opening builds no frame and no leaf (so there is nothing in the view to click)');
+
+  // ---------- a single door again ----------
+  await fromSketchUp({ plain: undefined, leaves: 1 });
   assert.equal((await built()).solid, 1, 'one solid leaf');
+  await pickDoor();
+  assert.equal(await heading.innerText(), 'DOOR');
+  assert.equal(await stat('Leaf').innerText(), 'Solid panel');
   assert.deepEqual(errors, [], 'no page errors');
-  console.log('ok   a door can be glass or half glass, from MODEL and from PLAN, a cased opening, or a plain opening with no frame');
+  console.log('ok   a door built as solid, glass or half glass, a cased opening or a plain one, and MODEL shows its leaf read-only');
 } finally {
   if (browser) await browser.close();
   child.kill('SIGTERM');

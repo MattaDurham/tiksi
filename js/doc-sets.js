@@ -132,7 +132,7 @@ export function normalizeViewport(v) {
     out.cut = fin(v.cut) ? clamp(num(v.cut), 0.05, 20) : 1.2;
     out.center = vec(v.center, 2) || [0, 0];
     const l = v.layers && typeof v.layers === 'object' ? v.layers : {};
-    out.layers = { model: l.model !== false, dims: l.dims !== false, rooms: l.rooms !== false };
+    out.layers = { model: l.model !== false, dims: l.dims !== false, rooms: l.rooms !== false, numbers: l.numbers !== false };
   } else if (v.kind === 'section' || v.kind === 'elevation') {
     out.line = vec(v.line, 4) || [0, 0, 4, 0];
     out.flip = !!v.flip;

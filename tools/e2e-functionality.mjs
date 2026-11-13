@@ -1,4 +1,10 @@
 // Isolated end-to-end audit. Uses an ephemeral HTTP origin and browser profile; no live state.
+// Covers: the eight desktop and phone routes (MODEL, MATERIALS, PHOTOS, PROJECTS, PRODUCTS,
+// BUDGET, SCHEDULE, SHEETS) mount without errors and do not widen the phone screen; projects,
+// item and product prices, budget report, schedule, cut sheets; stored plan images kept per
+// property and replaced across reloads; the portable project file round trip with scans,
+// photos and sourced materials; JSON open; a failed or edited-during save; folder backup and
+// conflict; a full IndexedDB keeping a browser copy of a plan image.
 // Run: node tools/e2e-functionality.mjs (Playwright + Chromium installed).
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -18,7 +24,7 @@ await new Promise(r => server.listen(0, 'localhost', r));
 const url = `http://localhost:${server.address().port}`;
 const browser = await chromium.launch({ headless: true });
 const viewMarkers = {
-  plan: '.plan-canvas canvas', model: 'canvas.v-canvas', materials: '.mv-grid',
+  model: 'canvas.v-canvas', materials: '.mv-grid',
   photos: '.ph-grid', projects: '#new-project', products: '#new-prod',
   budget: '#cap-input', schedule: '#prog-start', sheets: '#sheet-view',
 };
@@ -85,22 +91,15 @@ try {
   await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   page.on('dialog', d => d.accept(d.type() === 'prompt' ? 'Synthetic audit project' : undefined));
-  await page.goto(url); await page.locator('[data-prop-name]').waitFor();
-  for (const view of ['plan','model','materials','photos','projects','products','budget','schedule','sheets']) {
+  await page.goto(url); await page.locator('#btn-file').waitFor();
+  // The app opens on MODEL; there is no PLAN link.
+  assert.equal(await page.evaluate(() => document.querySelector('#rail a.active')?.dataset.view), 'model', 'the desktop opens on MODEL');
+  assert.equal(await page.locator('#rail a[data-view="plan"]').count(), 0, 'the rail has no PLAN link');
+  for (const view of ['model','materials','photos','projects','products','budget','schedule','sheets']) {
     await navigateToView(page, view);
     console.log('route checked:', view);
   }
-  assert.deepEqual(errors, [], 'all nine desktop routes mount without exceptions');
-  await navigateToView(page, 'plan'); await page.locator('.plan-canvas canvas').waitFor();
-  const beforeWalls=await page.evaluate(async()=>{const s=await import('/js/store.js');return s.activeProperty().walls.length;});
-  const canvas=await page.locator('.plan-canvas canvas').boundingBox();
-  await page.locator('[data-tool=wall]').click();
-  await page.mouse.click(canvas.x+canvas.width*0.30,canvas.y+canvas.height*0.90);
-  await page.mouse.click(canvas.x+canvas.width*0.60,canvas.y+canvas.height*0.90);
-  await page.keyboard.press('Escape');
-  assert.equal(await page.evaluate(async()=>{const s=await import('/js/store.js');return s.activeProperty().walls.length;}),beforeWalls+1,'canvas tracing creates a wall');
-  await page.keyboard.press('ControlOrMeta+z');
-  assert.equal(await page.evaluate(async()=>{const s=await import('/js/store.js');return s.activeProperty().walls.length;}),beforeWalls,'undo restores traced geometry');
+  assert.deepEqual(errors, [], 'all eight desktop routes mount without exceptions');
   await navigateToView(page, 'projects'); await page.locator('#new-project').waitFor();
   await page.locator('#new-project').click();
   await page.locator('#proj-detail [data-f=name]').fill('Synthetic audit project'); await page.locator('#proj-detail [data-f=name]').press('Enter');
@@ -158,15 +157,15 @@ try {
       (await s.getFile(s.planKey(p.levels[0].id, p.id)))?.img === p.levels[0].plan.img));
     return matches.every(Boolean);
   }), 'both property-scoped underlays persist before reload');
-  await page.goto(url + '/#/plan'); await page.reload(); await page.locator('[data-prop-name]').waitFor();
-  assert.deepEqual(await page.evaluate(async () => { const s=await import('/js/store.js');return s.ws.data.properties.map(p=>p.levels[0].plan.img); }),images,'two properties retain their own underlays after storage reload');
+  await page.goto(url + '/#/model'); await page.reload(); await page.locator('#btn-file').waitFor();
+  assert.deepEqual(await page.evaluate(async () => { const s=await import('/js/store.js');await s.whenHydrated();return s.ws.data.properties.map(p=>p.levels[0].plan.img); }),images,'two properties retain their own underlays after storage reload');
   await page.evaluate(async image=>{const s=await import('/js/store.js');s.ws.data.properties[0].levels[0].plan.img=image;s.save();},images[1]);
   await waitUntil(() => page.evaluate(async () => {
     const s = await import('/js/store.js'); const p = s.ws.data.properties[0];
     return (await s.getFile(s.planKey(p.levels[0].id, p.id)))?.img === p.levels[0].plan.img;
   }), 'replacement underlay persists before reload');
-  await page.goto(url + '/#/plan'); await page.reload(); await page.locator('[data-prop-name]').waitFor();
-  assert.equal(await page.evaluate(async()=>{const s=await import('/js/store.js');return s.ws.data.properties[0].levels[0].plan.img;}),images[1],'replacement underlay survives reload');
+  await page.goto(url + '/#/model'); await page.reload(); await page.locator('#btn-file').waitFor();
+  assert.equal(await page.evaluate(async()=>{const s=await import('/js/store.js');await s.whenHydrated();return s.ws.data.properties[0].levels[0].plan.img;}),images[1],'replacement underlay survives reload');
 
   const portable = await page.evaluate(async () => {
     const s=await import('/js/store.js');const p=s.ws.data.properties[0];p.name='Portable fixture';
@@ -227,27 +226,10 @@ try {
   });
   assert.equal(workspaceJson.message,'');assert.equal(workspaceJson.properties,3,'workspace JSON adds/updates without warning or deleting an unrelated property');
   console.log('project and file regression checks passed');
-  await navigateToView(page, 'plan'); await page.locator('.tool-col input[type=file]').waitFor({state:'attached'});
-  const upload=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=5000;c.height=1000;const ctx=c.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,5000,1000);ctx.fillStyle='#000';ctx.fillRect(100,100,4800,3);return c.toDataURL('image/png').split(',')[1];});
-  await page.evaluate(()=>{window.auditRevocations=0;const orig=URL.revokeObjectURL.bind(URL);URL.revokeObjectURL=url=>{window.auditRevocations++;orig(url);};});
-  await page.locator('.tool-col input[type=file]').setInputFiles({name:'high-resolution-plan.png',mimeType:'image/png',buffer:Buffer.from(upload,'base64')});
-  await waitUntil(() => page.evaluate(async () => {
-    const s = await import('/js/store.js');
-    return s.activeProperty().levels[0].plan.imgW === 4096;
-  }), 'uploaded plan reaches its full 4096px width');
-  assert.equal(await page.evaluate(async () => {
-    const s = await import('/js/store.js'); return s.activeProperty().levels[0].plan.imgW;
-  }), 4096, 'uploaded plan retains its expected resolution');
-  assert.equal(await page.evaluate(()=>window.auditRevocations),1,'uploaded plan releases its object URL');
-  const calibrationCanvas=await page.locator('.plan-canvas canvas').boundingBox();
-  await page.mouse.click(calibrationCanvas.x+calibrationCanvas.width*0.25,calibrationCanvas.y+calibrationCanvas.height*0.50);
-  await page.mouse.click(calibrationCanvas.x+calibrationCanvas.width*0.75,calibrationCanvas.y+calibrationCanvas.height*0.50);
-  await page.locator('[data-cal-input]').waitFor();await page.locator('[data-cal-input]').fill('3.8m');await page.locator('[data-cal-apply]').click();
-  assert.equal(await page.evaluate(async()=>{const s=await import('/js/store.js');return s.activeProperty().levels[0].plan.calibrated;}),true,'high-resolution uploaded plan can be calibrated to a real distance');
   const quota=await page.evaluate(async()=>{
     const s=await import('/js/store.js');await s.whenHydrated();const original=IDBObjectStore.prototype.put;let writes=0;
     IDBObjectStore.prototype.put=function(rec,...rest){if(String(rec.id).startsWith('plan-')){writes++;throw new DOMException('synthetic quota','QuotaExceededError');}return original.call(this,rec,...rest);};
-    const plan=s.activeProperty().levels[0].plan;const c=document.createElement('canvas');c.width=3;c.height=3;plan.img=c.toDataURL();s.save();await new Promise(r=>setTimeout(r,150));
+    const plan=(s.activeProperty().levels[0].plan ||= {imgW:3,imgH:3,mPerPx:1});const c=document.createElement('canvas');c.width=3;c.height=3;plan.img=c.toDataURL();s.save();await new Promise(r=>setTimeout(r,150));
     const stored=JSON.parse(localStorage.getItem('tiksi.workspace.v1'));const inline=stored.properties[0].levels[0].plan.img===plan.img;IDBObjectStore.prototype.put=original;return{writes,inline};
   });
   assert.equal(quota.writes,1,'failed IndexedDB underlay write does not recursively retry forever');assert.equal(quota.inline,true,'failed IndexedDB underlay write keeps a browser JSON backup');
@@ -259,13 +241,14 @@ try {
   mobile.on('pageerror', e => errors.push(e.message));
   // A phone opens on the model.
   await mobile.goto(url); await mobile.locator('canvas.v-canvas').waitFor();
-  for(const view of ['plan','model','materials','photos','projects','products','budget','schedule','sheets']) {
+  // The phone already shows MODEL, so it is visited last, coming back from another page.
+  for(const view of ['materials','photos','projects','products','budget','schedule','sheets','model']) {
     await navigateToView(mobile, view);
     console.log('mobile route checked:', view);
     assert.equal(await mobile.evaluate(()=>document.body.scrollWidth),402,`${view} does not widen mobile viewport`);
-    if(view==='plan'||view==='model') assert.ok(await mobile.locator(view==='plan'?'.plan-canvas canvas':'canvas.v-canvas').isVisible(),`${view} has a visible mobile canvas`);
+    if(view==='model') assert.ok(await mobile.locator('canvas.v-canvas').isVisible(),`${view} has a visible mobile canvas`);
   }
-  assert.deepEqual(errors, [], 'all nine mobile routes mount without exceptions');
+  assert.deepEqual(errors, [], 'all eight mobile routes mount without exceptions');
   await mobile.close();
-  console.log('Browser audit passed: nine desktop/mobile routes; projects, products, budget/report, schedule, cut sheets; underlay isolation/replacement; portable scan/photo project roundtrip; JSON open; atomic file failure and edit-during-save; folder backup/conflict safety.');
+  console.log('Browser audit passed: eight desktop/mobile routes; projects, products, budget/report, schedule, cut sheets; underlay isolation/replacement; portable scan/photo project roundtrip; JSON open; atomic file failure and edit-during-save; folder backup/conflict safety.');
 } finally { await browser.close(); await new Promise(r=>server.close(r)); }

@@ -1,6 +1,6 @@
 // PROJECTS tab: search through scope items, status chips with counts, the VIEW menu's filters,
 // sort and grouping (remembered after a reload), the board and its drag and keyboard moves,
-// the summary line, scope item status, the scope item panel and its links into PLAN, PRODUCTS
+// the summary line, scope item status, the scope item panel and its links into MODEL, PRODUCTS
 // and PHOTOS, and naming a new project in place. Synthetic workspace only.
 // Run: node tools/e2e-projects-tab.mjs (Playwright + Chromium installed).
 import assert from 'node:assert/strict';
@@ -20,7 +20,7 @@ const server = createServer(async (req, res) => {
 });
 await new Promise(r => server.listen(+(process.env.E2E_APP_PORT || 0), 'localhost', r));
 const url = `http://localhost:${server.address().port}`;
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({ headless: true, args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });   // the room link opens MODEL
 const page = await (await browser.newContext({ viewport: { width: 1440, height: 950 } })).newPage();
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));
@@ -31,7 +31,7 @@ const cards = () => page.locator('#proj-list .proj-card b').allTextContents();
 const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 try {
-  await page.goto(url + '/#/plan');
+  await page.goto(url + '/#/projects');
   await page.waitForSelector('#btn-file', { state: 'attached' });
   await page.evaluate(async pixel => {
     const s = await import('/js/store.js');
@@ -167,10 +167,12 @@ try {
   check((await store(`return s.projectById('proj-kitchen').items[0].elementIds.join()`)) === 'r-kitchen', 'unlinking removes it again');
   check(await page.locator('tr[data-more="it-tile"] .ip-photos img').count() === 1, 'the linked photo shows as a thumbnail');
 
-  console.log('\n[links] chips open PLAN, PRODUCTS and PHOTOS on the record');
-  await page.locator('tr[data-more="it-tile"] .link-chip a', { hasText: 'Kitchen' }).click();
+  console.log('\n[links] chips open MODEL, PRODUCTS and PHOTOS on the record');
+  const roomChip = page.locator('tr[data-more="it-tile"] .link-chip a', { hasText: 'Kitchen' });
+  check(await roomChip.getAttribute('href') === '#/model?select=r-kitchen' && await roomChip.getAttribute('title') === 'Open in MODEL', 'the room chip links to MODEL with the room selected');
+  await roomChip.click();
   await page.waitForSelector('.inspector [data-name]');
-  check(await page.inputValue('.inspector [data-name]') === 'Kitchen' && await page.evaluate(() => location.hash) === '#/plan', 'PLAN opens with Kitchen selected, and the address is plain #/plan');
+  check(await page.inputValue('.inspector [data-name]') === 'Kitchen' && await page.evaluate(() => location.hash) === '#/model', 'MODEL opens with Kitchen selected, and the address is plain #/model');
   await page.goBack();
   await page.waitForSelector('tr[data-more="it-tile"]');
   check(true, 'Back returns to PROJECTS with the panel still open');

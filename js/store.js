@@ -478,6 +478,8 @@ export function defaultEnv() {
     sky: 'dynamic', panoPhotoId: null,
     showCeilings: true, showGround: true, showGrid: false,
     showPins: true, showNotes: true,
+    // MODEL's DIMENSIONS, ROOMS and NUMBERS switches (model-annotations.js).
+    showDims: false, showRoomLabels: false, showOpeningNumbers: false,
     // Sun strength, fill light, corner shading, room lights and the camera light (lighting.js).
     ...LIGHTING_DEFAULTS,
   };

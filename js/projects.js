@@ -586,13 +586,13 @@ function sitePhotosFor(item) {
 const productsFor = it => ws.data.products.filter(pr => (pr.itemIds || []).includes(it.id));
 
 // A linked element as a label and the address that opens it: rooms, walls and openings open
-// in PLAN with the element selected; scans and fixtures open MODEL.
+// in MODEL with the element selected, as do scans and fixtures.
 function elementLink(p, id) {
   const prop = propOf(p);
   if (!prop) return { label: 'Missing element', href: '' };
   const multi = prop.levels.length > 1;
   const info = elementInfo(prop.id, id);
-  const plan = '#/plan?select=' + encodeURIComponent(id);
+  const plan = '#/model?select=' + encodeURIComponent(id);
   if (info) {
     const where = multi ? ' · ' + info.level : '';
     return info.kind === 'room'
@@ -649,7 +649,7 @@ function itemPanel(p, it) {
   const prop = propOf(p);
   const linked = new Set(it.elementIds || []);
   const chip = (link, attr, id) => `<span class="link-chip ${link.href ? '' : 'missing'}">${link.href
-      ? `<a href="${escapeHtml(link.href)}" title="Open ${escapeHtml(link.href.startsWith('#/plan') ? 'in PLAN' : link.href.startsWith('#/model') ? 'in MODEL' : link.href.startsWith('#/products') ? 'in PRODUCTS' : '')}">${escapeHtml(link.label)}</a>`
+      ? `<a href="${escapeHtml(link.href)}" title="Open ${escapeHtml(link.href.startsWith('#/model') ? 'in MODEL' : link.href.startsWith('#/products') ? 'in PRODUCTS' : '')}">${escapeHtml(link.label)}</a>`
       : `<span>${escapeHtml(link.label)}</span>`}<button type="button" ${attr}="${escapeHtml(id)}" title="Unlink" aria-label="Unlink ${escapeHtml(link.label)}">${icon('close', { size: 11 })}</button></span>`;
   const els = (it.elementIds || []).map(id => chip(elementLink(p, id), 'data-unlink-el', id)).join('');
   let elOpts = '';

@@ -31,7 +31,7 @@ const data = () => page.evaluate(async () => {
 });
 
 try {
-  await page.goto(url + '/#/plan');
+  await page.goto(url + '/#/projects');
   await page.waitForSelector('#btn-file', { state: 'attached' });
   await page.evaluate(async () => {
     const s = await import('/js/store.js');

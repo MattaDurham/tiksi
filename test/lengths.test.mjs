@@ -127,15 +127,13 @@ test('typed lengths: the forms people type are read, anything else is refused wi
 });
 
 // What a number typed on its own meant in each length field before this reader, field by
-// field. A field may not quietly start reading 12 as 12 inches where it read 12 feet.
+// field. A field may not quietly start reading 12 as 12 inches where it read 12 feet. PLAN, MODEL's
+// wall and opening size fields and its moved-object fields went with hand editing (2026-11-13).
 const BARE_UNIT_BEFORE = {
-  'js/plan2d.js': ['feet', 'feet', 'feet'],   // calibration, schedule sizes, every inspector field (typedLength)
-  'js/viewer3d.js': ['inches', 'feet', 'feet', 'feet'],
   'js/documentcenter.js': ['feet'],
   'js/fixtures-ui.js': ['feet'],
   'js/materialsview.js': ['feet'],
   'js/measurements.js': ['inches'],
-  'js/object-panel.js': ['feet'],   // how far a moved object stands from its place (new 2026-11-12; feet like the other MODEL fields)
   'js/markup-layer.js': ['feet'],
   'js/trim-panel.js': ['inches', 'inches', 'inches'],   // trim heights, box widths and row heights (new 2026-11-13): trim is sized in inches   // the LINE tool's typed length (new 2026-11-12; feet like the other MODEL fields, as SketchUp's model units)
 };

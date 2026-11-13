@@ -1,9 +1,8 @@
-// Markup mode on MODEL and PLAN, in a real browser on a synthetic property: a mouse, a pen
-// (with pressure) and fingers each draw; while one draws, the view holds still and the page
-// selects nothing; a second finger, the wheel and the MOVE tool still move the view; a hand
-// resting beside the pen is ignored; notes are pinned and numbered; undo, redo and the eraser
-// work; ink over the model goes with its camera and comes back with it; ink on the plan stays
-// on the plan through pan and zoom; and a markup's picture can be saved.
+// Markup mode on MODEL, in a real browser on a synthetic property: a mouse, a pen (with
+// pressure) and fingers each draw; while one draws, the view holds still and the page selects
+// nothing; a second finger and the wheel still move the view; a hand resting beside the pen is
+// ignored; notes are pinned and numbered; undo, redo and the eraser work; ink over the model goes
+// with its camera and comes back with it; and a markup's picture can be saved.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -34,7 +33,7 @@ async function open(context, view) {
   const page = await context.newPage();
   await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // the tool columns on the screen
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto(url); await page.locator('[data-prop-name]').waitFor();
+  await page.goto(url + '/#/budget'); await page.locator('#cap-input').waitFor();   // seeded before MODEL mounts
   await page.evaluate(async () => {
     const store = await import('/js/store.js');
     store.ws.data = store.emptyWorkspace();
@@ -46,12 +45,11 @@ async function open(context, view) {
     store.ws.data.properties.push(p); store.ws.data.settings.activePropertyId = p.id;
   });
   await page.locator(`#rail a[data-view="${view}"]`).click({ noWaitAfter: true });
-  await page.locator(view === 'model' ? 'canvas.v-canvas' : '.plan-canvas > canvas').first().waitFor();
+  await page.locator('canvas.v-canvas').first().waitFor();
   return { page, errors };
 }
 const markups = page => page.evaluate(async () => JSON.parse(JSON.stringify((await import('/js/store.js')).activeProperty().markups)));
 const modelState = page => page.evaluate(async () => (await import('/js/viewer3d.js')).markupState());
-const planState = page => page.evaluate(async () => (await import('/js/plan2d.js')).markupState());
 const sameCam = (a, b) => a.position.concat(a.target).every((v, i) => Math.abs(v - b.position.concat(b.target)[i]) < 1e-3);
 // The opacity of the ink canvas at a point of the page (0 where nothing is drawn).
 const inkAt = (page, x, y) => page.evaluate(([x, y]) => {
@@ -339,101 +337,7 @@ try {
     await context.close();
   }
 
-  // ---------- 3. PLAN with a mouse, a pen and a finger ----------
-  {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, hasTouch: true, acceptDownloads: true });
-    const { page, errors } = await open(context, 'plan');
-    const cdp = await context.newCDPSession(page);
-    const touch = touchOf(cdp), pen = penOf(cdp);
-    await delay(300);   // the first fit
-    const box = await page.locator('.plan-canvas > canvas').first().boundingBox();
-    const view0 = (await planState(page)).view;
-    const at = (v, x, y) => [box.x + (x - v.panX) * v.zoom, box.y + (y - v.panY) * v.zoom];   // plan metres -> page px
-
-    await page.keyboard.press('u');
-    await page.locator('.mk-bar').waitFor();
-    assert.equal((await planState(page)).on, true);
-    assert.equal(await page.locator('.tool-col [data-act=markup]').evaluate(b => b.classList.contains('active')), true);
-
-    // A drag across the kitchen is stored in metres, and moves no wall.
-    const [x0, y0] = at(view0, 1, 2), [x1, y1] = at(view0, 5, 2);
-    await page.mouse.move(x0, y0); await page.mouse.down(); await page.mouse.move((x0 + x1) / 2, y0 + 1, { steps: 5 }); await page.mouse.move(x1, y1, { steps: 5 }); await page.mouse.up();
-    let list = await markups(page);
-    assert.equal(list.length, 1);
-    assert.equal(list[0].on, 'plan');
-    assert.equal(list[0].view, undefined);
-    const s = list[0].strokes[0];
-    assert.ok(Math.abs(s.pts[0] - 1) < 0.03 && Math.abs(s.pts[1] - 2) < 0.03 && Math.abs(s.pts.at(-3) - 5) < 0.03, 'plan metres: ' + s.pts.slice(0, 2) + ' to ' + s.pts.slice(-3, -1));
-    assert.ok(Math.abs(s.width * view0.zoom - 5) < 0.01, 'the line is as wide as it was drawn, kept in metres');
-    const walls = await page.evaluate(async () => (await import('/js/store.js')).activeProperty().walls.map(w => [w.ax, w.ay, w.bx, w.by]));
-    assert.deepEqual(walls, [[0, 0, 6, 0], [6, 0, 6, 4], [6, 4, 0, 4], [0, 4, 0, 0]]);
-    assert.deepEqual((await planState(page)).view, view0, 'drawing does not pan the plan');
-    assert.ok(await inkAt(page, ...at(view0, 3, 2)) > 0 || await inkAt(page, at(view0, 3, 2)[0], at(view0, 3, 2)[1] + 1) > 0);
-
-    // Space-drag pans; the ink stays on the plan, not on the glass.
-    await page.keyboard.down(' ');
-    await page.mouse.move(box.x + 300, box.y + 500); await page.mouse.down(); await page.mouse.move(box.x + 380, box.y + 440, { steps: 4 }); await page.mouse.up();
-    await page.keyboard.up(' ');
-    const view1 = (await planState(page)).view;
-    assert.ok(Math.abs((view1.panX - view0.panX) * view0.zoom + 80) < 2 && Math.abs((view1.panY - view0.panY) * view0.zoom - 60) < 2, 'the plan panned');
-    assert.equal((await markups(page))[0].strokes.length, 1, 'panning draws nothing');
-    await waitUntil(async () => await inkAt(page, ...at(view1, 3, 2)) > 0 || await inkAt(page, at(view1, 3, 2)[0], at(view1, 3, 2)[1] + 1) > 0, 'the ink moved with the plan');
-    assert.equal(await inkAt(page, at(view0, 1.2, 2)[0] - 60, at(view0, 1.2, 2)[1] + 60), 0);
-
-    // A pencil line with pressure, then a note, both into the same markup.
-    await pen.line([at(view1, 1, 3), at(view1, 2, 3.05), at(view1, 3, 3)], [0.2, 0.9, 0.3]);
-    await page.keyboard.press('n');
-    await page.mouse.click(...at(view1, 4.5, 1));
-    await page.locator('.mk-edit textarea').waitFor();
-    await page.locator('.mk-edit textarea').fill('Pocket door here');
-    await page.locator('.mk-edit [data-ok]').click();
-    list = await markups(page);
-    assert.equal(list.length, 1);
-    assert.equal(list[0].strokes.length, 2);
-    assert.ok(list[0].strokes[1].pts.some((v, i) => i % 3 === 2 && v > 0.8));
-    assert.equal(list[0].notes[0].text, 'Pocket door here');
-    assert.ok(Math.abs(list[0].notes[0].at[0] - 4.5) < 0.03 && Math.abs(list[0].notes[0].at[1] - 1) < 0.03);
-    assert.equal(list[0].notes[0].anchor, undefined);
-
-    // After the pencil, one finger pans the plan; with the finger button on it draws instead.
-    await delay(600);
-    const [fx, fy] = at(view1, 3, 3.5);
-    await touch('touchStart', [[fx, fy]]); await touch('touchMove', [[fx + 20, fy]]); await touch('touchMove', [[fx + 50, fy]]); await touch('touchEnd', []);
-    const view2 = (await planState(page)).view;
-    assert.ok(Math.abs((view2.panX - view1.panX) * view1.zoom + 50) < 3, 'a finger pans once a pencil has been used');
-    assert.equal((await markups(page))[0].strokes.length, 2);
-    await page.locator('.mk-bar [data-act=finger]').click();
-    await page.keyboard.press('p');
-    const [gx, gy] = at(view2, 2, 1);
-    await touch('touchStart', [[gx, gy]]); await touch('touchMove', [[gx + 30, gy]]); await touch('touchMove', [[gx + 70, gy]]); await touch('touchEnd', []);
-    assert.equal((await markups(page))[0].strokes.length, 3, 'now the finger draws');
-    assert.deepEqual((await planState(page)).view, view2, 'and does not pan');
-
-    // The other level shows none of it; coming back shows it again.
-    await page.locator('.tool-col [data-level]').nth(1).click();
-    await waitUntil(async () => (await page.locator('.mk-note').count()) === 0, 'the other level has no notes');
-    list = await markups(page);
-    assert.equal(list.length, 1);
-    await page.locator('.tool-col [data-level]').first().click();
-    await waitUntil(async () => (await page.locator('.mk-note').count()) === 1, 'the note is back on its level');
-
-    // The picture is the level with the ink on it.
-    await page.locator('.mk-bar [data-act=list]').click();
-    const [download] = await Promise.all([page.waitForEvent('download'), page.locator('.mk-row [data-picture]').click()]);
-    const png = await readFile(await download.path());
-    assert.ok(png.length > 3000 && png.subarray(1, 4).toString() === 'PNG');
-
-    // Leaving for another page ends markup mode; the ink is still on the plan on return.
-    await page.locator('#rail a[data-view="materials"]').click({ noWaitAfter: true });
-    await delay(1700);
-    await page.locator('#rail a[data-view="plan"]').click({ noWaitAfter: true });
-    await page.locator('.plan-canvas > canvas').first().waitFor();
-    assert.equal((await planState(page)).on, false);
-    await waitUntil(async () => (await page.locator('.mk-note').count()) === 1, 'markups show on the plan outside markup mode too');
-    assert.deepEqual(errors, []);
-    await context.close();
-  }
-  console.log('markup mode: mouse, pen and fingers draw on MODEL and PLAN; notes, undo, eraser, pictures and the view rules hold.');
+  console.log('markup mode: mouse, pen and fingers draw on MODEL; notes, undo, eraser, pictures and the view rules hold.');
 } finally {
   await browser.close();
   server.close();

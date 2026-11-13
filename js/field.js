@@ -296,7 +296,7 @@ function onPanelClick(e) {
   if (t.dataset.capture === 'photo') { close(); els.camera.click(); return; }
   if (t.dataset.capture === 'note') { startNote(); return; }
   if (t.dataset.file != null) { close(); document.getElementById('btn-file')?.click(); return; }
-  if (t.dataset.page) { close(); return; }      // an ordinary link; the router does the rest
+  if (t.dataset.page != null) { close(); return; }      // an ordinary link; the router does the rest
   const act = t.dataset.act;
   if (!act) return;
   // Renaming asks for the name; deleting asks first.

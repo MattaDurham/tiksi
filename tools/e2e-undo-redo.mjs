@@ -1,4 +1,8 @@
-// Real MODEL gizmo gesture, shared-file acknowledgments and touch-sized controls.
+// UNDO and REDO for the edits MODEL still makes (a wall's finishes, chosen in its panel), shared
+// by MODEL and MEASURE: one change is one undo, saves to disk keep the history, each project
+// keeps its own, the keyboard shortcuts work, an independent change from another device keeps
+// the redo, and reopening the project clears it. A phone's Undo and Redo (on MEASURE) are
+// touch-sized, fit the header and undo the phone's own change; the header fits at every width.
 // Synthetic projects and temporary runtime only; never uses the owner's stores.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -18,7 +22,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto('http://127.0.0.1:' + port + '/#/plan');
+  await page.goto('http://127.0.0.1:' + port + '/#/budget');
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   await page.evaluate(async () => {
     const s = window.undoStore = await import('/js/store.js');
@@ -35,69 +39,60 @@ try {
   await page.waitForTimeout(900); // finish the camera tween, as in the MODEL interaction checks
   const canvas = page.locator('canvas.v-canvas'), box = await canvas.boundingBox();
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  await page.locator('.inspector [data-th]').waitFor();
-  await page.locator('[data-act=move]').click();
-  // Locate the visible blue Z handle in the rendered canvas, then drag it through
-  // real pointer events. No exported test hook bypasses the gizmo's commit path.
-  const png = await canvas.screenshot();
-  const handle = await page.evaluate(async base64 => {
-    const image = new Image(); image.src = 'data:image/png;base64,' + base64; await image.decode();
-    const c = document.createElement('canvas'); c.width = image.width; c.height = image.height;
-    const g = c.getContext('2d'); g.drawImage(image, 0, 0);
-    const pixels = g.getImageData(0, 0, c.width, c.height).data, points = [];
-    for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) {
-      const i = (y * c.width + x) * 4, [r, green, b] = pixels.slice(i, i + 3);
-      if (b > 100 && b > r * 1.8 && b > green * 1.8) points.push([x, y]);
-    }
-    if (!points.length) return null;
-    const y = points[Math.floor(points.length / 4)][1], row = points.filter(p => Math.abs(p[1] - y) < 2);
-    return [row.reduce((sum, p) => sum + p[0], 0) / row.length, y];
-  }, png.toString('base64'));
-  assert(handle, 'MODEL exposes a visible wall translation handle');
-  await page.mouse.move(box.x + handle[0], box.y + handle[1]); await page.mouse.down();
-  await page.mouse.move(box.x + handle[0], box.y + handle[1] + 55, { steps: 8 }); await page.mouse.up();
-  await page.waitForFunction(() => Math.abs(window.undoStore.activeProperty().walls[0].ay) > .01);
-  const moved = await page.evaluate(() => window.undoStore.activeProperty().walls[0].ay);
+  await page.locator('.inspector [data-mat]').waitFor();
+  assert.equal(await page.locator('.inspector h3').first().innerText(), 'WALL', 'a click selects the wall');
+  const wallField = (pg, k) => pg.evaluate(k => window.undoStore.activeProperty().walls[0][k] ?? null, k);
+  // Two wall materials other than the one the wall has: one for the computer, one for the phone.
+  const [chosen, inner] = await page.locator('.inspector [data-mat] option').evaluateAll(os => os.map(o => o.value).filter(v => v && v !== 'mat-drywall').slice(0, 2));
+  assert.ok(chosen && inner, 'the wall panel offers other materials');
+  await page.locator('.inspector [data-mat]').selectOption(chosen);
+  await page.waitForFunction(m => window.undoStore.activeProperty().walls[0].material === m, chosen);
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   assert.equal(await page.locator('#btn-undo').isEnabled(), true, 'self-save keeps history');
+  await page.locator('#btn-undo').click();
+  assert.equal(await wallField(page, 'material'), 'mat-drywall');
+  assert.equal(await page.locator('#btn-undo').isDisabled(), true, 'one change is one undo');
+  await page.locator('#rail [data-view=measure]').click();
+  await page.locator('.ms-layout').waitFor();   // MEASURE loads on first use; its REDO works once it is open
+  await page.locator('#btn-redo').click();
+  assert.equal(await wallField(page, 'material'), chosen, 'MEASURE redoes the MODEL change');
+  await page.selectOption('#property-select', 'other-house'); assert.equal(await page.locator('#btn-undo').isDisabled(), true);
+  await page.selectOption('#property-select', 'undo-house'); assert.equal(await page.locator('#btn-undo').isEnabled(), true);
+  await page.locator('.ms-layout').waitFor();   // MEASURE opens again for the project
   await page.keyboard.press('ControlOrMeta+z');
-  assert.equal(await page.evaluate(() => window.undoStore.activeProperty().walls[0].ay), 0);
-  assert.equal(await page.locator('#btn-undo').isDisabled(), true, 'one gesture is one undo');
-  await page.locator('#rail [data-view=plan]').click();
+  assert.equal(await wallField(page, 'material'), 'mat-drywall');
   await page.keyboard.press('ControlOrMeta+Shift+z');
-  assert.equal(await page.evaluate(() => window.undoStore.activeProperty().walls[0].ay), moved, 'PLAN redoes the MODEL move');
-  await page.click('#tiksi-menu'); await page.selectOption('#property-select', 'other-house'); assert.equal(await page.locator('#btn-undo').isDisabled(), true);
-  await page.click('#tiksi-menu'); await page.selectOption('#property-select', 'undo-house'); assert.equal(await page.locator('#btn-undo').isEnabled(), true);
-  await page.keyboard.press('ControlOrMeta+z');
-  assert.equal(await page.evaluate(() => window.undoStore.activeProperty().walls[0].ay), 0);
-  await page.keyboard.press('ControlOrMeta+Shift+z');
-  assert.equal(await page.evaluate(() => window.undoStore.activeProperty().walls[0].ay), moved);
-  await page.keyboard.press('ControlOrMeta+z');
+  assert.equal(await wallField(page, 'material'), chosen);
+  await page.locator('#btn-undo').click();
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
 
+  // A phone: its own change to the same wall's interior face, undone and redone by touch. A phone
+  // shows UNDO and REDO on MEASURE (its MODEL is for looking and capturing, with no panel to
+  // change a finish in), so the change is recorded there as the wall panel records it.
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   const phone = await context.newPage(); phone.on('pageerror', e => errors.push(e.message));
   await phone.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
-  await phone.goto('http://localhost:' + port + '/#/plan');
+  await phone.goto('http://localhost:' + port + '/#/measure');
   await phone.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
+  await phone.locator('.ms-layout').waitFor();
   await phone.evaluate(async () => { window.undoStore = await import('/js/store.js'); });
   const mobileUndo = await phone.locator('#btn-undo').boundingBox(), mobileRedo = await phone.locator('#btn-redo').boundingBox();
   for (const rect of [mobileUndo, mobileRedo]) { assert(rect && rect.height >= 44 && rect.y >= 0 && rect.y + rect.height < 200); assert(rect.x >= 0 && rect.x + rect.width <= 390); }
-  const plan = phone.locator('.plan-canvas'), pbox = await plan.boundingBox();
-  const zoom = Math.min((pbox.width - 22) / (4 * 1.22), (pbox.height - 22) / 1.22, 250);
-  await phone.touchscreen.tap(pbox.x + pbox.width / 2, pbox.y + pbox.height / 2 - zoom / 2 + 11);
-  const thickness = phone.locator('.inspector [data-len=th]'); await thickness.fill('8"'); await thickness.press('Tab');
+  await phone.evaluate(async m => {
+    const { beginGeometryEdit } = await import('/js/edit-history.js'), s = window.undoStore, p = s.activeProperty();
+    beginGeometryEdit(p, 'change interior finish'); p.walls[0].materialIn = m; s.touch();
+  }, inner);
   await phone.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   await phone.locator('#btn-undo').tap();
-  assert.equal(await phone.evaluate(() => window.undoStore.activeProperty().walls[0].thickness), .15);
+  assert.equal(await wallField(phone, 'materialIn'), null);
   await phone.locator('#btn-redo').tap();
-  assert.equal(await phone.evaluate(() => window.undoStore.activeProperty().walls[0].thickness), .2032);
+  assert.equal(await wallField(phone, 'materialIn'), inner);
   await phone.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
-  await page.waitForFunction(() => window.undoStore.activeProperty().walls[0].thickness === .2032);
-  assert.equal(await page.locator('#btn-redo').isEnabled(), true, 'independent remote material/width edits preserve redo');
-  await page.keyboard.press('ControlOrMeta+Shift+z');
-  assert.equal(await page.evaluate(() => window.undoStore.activeProperty().walls[0].thickness), .2032);
-  assert.equal(await page.evaluate(() => window.undoStore.activeProperty().walls[0].ay), moved);
+  await page.waitForFunction(m => window.undoStore.activeProperty().walls[0].materialIn === m, inner);
+  assert.equal(await page.locator('#btn-redo').isEnabled(), true, 'an independent change from another device keeps the redo');
+  await page.locator('#btn-redo').click();
+  assert.equal(await wallField(page, 'materialIn'), inner, 'the redo keeps the other device\'s change');
+  assert.equal(await wallField(page, 'material'), chosen);
   await page.evaluate(async () => { const s = window.undoStore; s.mergeWorkspace(JSON.parse(JSON.stringify(s.ws.data))); });
   assert.equal(await page.locator('#btn-undo').isDisabled(), true, 'opening/reimporting a project clears its previous session history');
   // On the desktop UNDO and REDO are in the Tiksi menu, beside FILE, not on the top bar.
@@ -113,7 +108,7 @@ try {
     assert.equal(await page.locator('#topbar').evaluate(el => el.scrollWidth <= el.clientWidth), true, 'the top bar fits at ' + width);
   }
   assert.deepEqual(errors, []);
-  console.log('ok   MODEL wall gesture, PLAN/MODEL shared undo, disk saves, independent shared edits, project isolation, mobile Undo/Redo and shortcuts');
+  console.log('ok   MODEL finish change, MODEL/MEASURE shared undo, disk saves, independent shared edits, project isolation, mobile Undo/Redo and shortcuts');
 } finally {
   if (browser) await browser.close(); child.kill();
   await new Promise(resolve => child.exitCode !== null ? resolve() : child.once('exit', resolve));

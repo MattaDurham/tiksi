@@ -64,11 +64,23 @@ export function zoomTarget(cameraPos, target, hitPoint, zoomingIn, minDistance =
 }
 
 // Wire it up. `pickPoint(event)` returns the world point under the cursor or null; `canOrbit()`
-// says whether the current mode allows orbiting; `leftFree()` gives the left button to the page. Returns a function that removes it all.
-export function attachSketchupNavigation(controls, { pickPoint, canOrbit = () => true, leftFree = () => false, oneFinger = () => true, onChange }) {
+// says whether the current mode allows orbiting; `leftFree()` gives the left button to the page;
+// `keepDistance()` true (a parallel view, whose size is the camera's distance to the target)
+// moves the camera with the target when a gesture re-aims, so re-aiming never resizes the
+// picture. Returns a function that removes it all.
+export function attachSketchupNavigation(controls, { pickPoint, canOrbit = () => true, leftFree = () => false, oneFinger = () => true, keepDistance = () => false, onChange }) {
   const el = controls.domElement;
   let drag = null;                        // { base, x, y } while a mouse button is down
   controls.zoomToCursor = true;
+  // Aim the orbit target at `next`, a point on the view axis.
+  function retarget(next) {
+    const cam = controls.object;
+    const d = keepDistance() ? cam.position.distanceTo(controls.target) : 0;
+    const axis = next.clone().sub(cam.position);
+    if (d > 0 && axis.lengthSq() > 0) cam.position.copy(next).addScaledVector(axis.normalize(), -d);
+    controls.target.copy(next);
+    cam.lookAt(next);
+  }
   controls.screenSpacePanning = true;
 
   function setButtons() {
@@ -93,7 +105,7 @@ export function attachSketchupNavigation(controls, { pickPoint, canOrbit = () =>
     const cam = controls.object.position;
     const hit = pickPoint({ clientX: (p.x + q.x) / 2, clientY: (p.y + q.y) / 2 });
     const next = zoomTarget(cam, controls.target, hit, true, controls.minDistance);
-    if (next) { controls.target.copy(next); controls.object.lookAt(next); }
+    if (next) retarget(next);
   }
   function onFingerMove(e) { const f = fingers.get(e.pointerId); if (f) { f.x = e.clientX; f.y = e.clientY; } }
   function onFingerUp(e) { fingers.delete(e.pointerId); }
@@ -122,7 +134,7 @@ export function attachSketchupNavigation(controls, { pickPoint, canOrbit = () =>
     // drag then turns about the pressed point itself; OrbitControls only pans and zooms meanwhile.
     const onAxis = hit && pivotOnViewAxis(controls.object.position, controls.target, hit, controls.minDistance);
     if (!onAxis) return;
-    controls.target.copy(onAxis);
+    retarget(onAxis);
     controls._sphericalDelta.set(0, 0, 0);
     controls.enableRotate = false;
     drag.pivot = hit.clone(); drag.last = { x: e.clientX, y: e.clientY };
@@ -160,7 +172,7 @@ export function attachSketchupNavigation(controls, { pickPoint, canOrbit = () =>
     if (same && !near) return;
     const hit = same ? null : pickPoint(e);
     const next = zoomTarget(cam, controls.target, hit, e.deltaY < 0, controls.minDistance);
-    if (next) { controls.target.copy(next); controls.object.lookAt(next); }
+    if (next) retarget(next);
   }
 
   // Shift down or up mid-drag swaps orbit and pan from where the pointer is now.

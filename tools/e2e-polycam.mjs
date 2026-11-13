@@ -2,10 +2,11 @@
 // End-to-end check of the share-link flow in a headless browser, against a mock of a
 // Polycam share page so the run is deterministic and offline:
 //
-//   open     the mock allows cross-origin reads: link -> page -> model -> plan, all direct
+//   open     the mock allows cross-origin reads: link -> page -> model -> proposed walls and
+//            rooms, all direct; OPEN MODEL shows the scan
 //   relay    the mock refuses them: the browser falls back to a (local) relay
 //   blocked  no relay: the property is made, the dialog offers the drop zone, a file is
-//            dropped, the plan follows
+//            dropped, the proposed walls and rooms follow
 //   deeplink #/import?url=... starts the import by itself
 //
 // Needs Playwright with Chromium (npx playwright install chromium). Serves the repo root on
@@ -115,7 +116,7 @@ async function freshApp() {
   await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
   page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
-  await page.goto(APP + '#/plan', { waitUntil: 'load' });
+  await page.goto(APP + '#/budget', { waitUntil: 'load' });   // a page without 3D: MODEL opens once there is a property
   await page.waitForSelector('#property-select option', { state: 'attached' });
 }
 async function workspace() {
@@ -228,13 +229,12 @@ try {
   check(!mock.hits.includes('/relay'), 'open: no relay used');
 
   // Screenshots of the result.
-  await page.click('#np-dialog [data-np-go="plan"]');
-  await sleep(1500);
-  mkdirSync(outDir, { recursive: true });
-  await page.screenshot({ path: resolve(outDir, 'e2e-plan.png') });
   await useFunctionalViewerQuality();
-  await page.goto(APP + '#/model');
+  check(await page.locator('#np-dialog [data-np-go]').evaluateAll(bs => bs.map(b => b.dataset.npGo).join()) === 'model', 'open: the dialog offers OPEN MODEL only');
+  await page.click('#np-dialog [data-np-go="model"]');
   await page.waitForSelector('.v-scan-row', { timeout: 60000 });
+  check((await page.evaluate(() => location.hash)) === '#/model', 'open: OPEN MODEL goes to MODEL');
+  mkdirSync(outDir, { recursive: true });
   check(await page.inputValue('[data-env="quality"]') === 'low', 'open: model capture uses Low render quality');
   await page.waitForFunction(() => document.querySelector('.v-scan-row .key')?.textContent.trim() === 'MESH', null, { timeout: 60000 });
   await sleep(300);
@@ -287,7 +287,7 @@ try {
   await page.goto(APP + '#/import?url=' + encodeURIComponent(LINK));
   state = await waitState(['done', 'blocked', 'failed']);
   check(state === 'done', 'deeplink: finished (' + state + ')');
-  check((await page.evaluate(() => location.hash)) === '#/plan', 'deeplink: hash consumed');
+  check((await page.evaluate(() => location.hash)) === '#/model', 'deeplink: hash consumed');
   ws = await workspace(); prop = findProp(ws);
   check(!!prop && prop.walls.length >= 5, 'deeplink: plan proposed');
   // A second visit of the same link reuses the property instead of duplicating it.
@@ -306,6 +306,8 @@ try {
   await useFunctionalViewerQuality();
   await page.click('#np-dialog [data-np-cancel]');
   page.once('dialog', d => d.accept());
+  // The import link rewrote the address to #/model and left the page it was opened on showing.
+  await page.goto(APP + '#/budget');
   await page.goto(APP + '#/model');
   await page.waitForSelector('.v-scan-row', { timeout: 60000 });
   check(await page.inputValue('[data-env="quality"]') === 'low', 'viewer: functional fixture uses Low render quality');
@@ -359,7 +361,7 @@ try {
   // ---- every view still mounts on the new property ----
   console.log('\n[views] every view mounts on the property');
   const before = errors.filter(e => e.startsWith('pageerror')).length;
-  for (const v of ['plan', 'materials', 'photos', 'projects', 'products', 'budget', 'schedule', 'sheets', 'model']) {
+  for (const v of ['materials', 'photos', 'projects', 'products', 'budget', 'schedule', 'sheets', 'model']) {
     await page.goto(APP + '#/' + v);
     await sleep(v === 'model' ? 3000 : 500);
   }

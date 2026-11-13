@@ -3,7 +3,8 @@
 // of one component, each with a handle inside; two chairs; an island that is one group drawn
 // in two materials). One click picks one whole object; the panel on the right shows that
 // object only; its tag changes alone; hiding it hides it alone and SHOW ALL HIDDEN brings it
-// back; moving it moves it alone; all of it survives a reload.
+// back; an object an earlier Tiksi moved shows a MOVED note with PUT IT BACK and no way to move
+// it here; all of it survives a reload.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -38,7 +39,7 @@ const shot = process.env.E2E_SHOTS;
 try {
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto(url + '/#/plan');
+  await page.goto(url + '/#/materials');
   await page.locator('#btn-file').waitFor({ state: 'attached' });
   await page.evaluate(async () => {
     const s = await import('/js/store.js');
@@ -178,64 +179,40 @@ try {
   await list.waitFor();
   assert.equal(await list.locator('.ol-row.active').count(), 1);
 
-  // Move it: half a metre along X. It alone moves; PUT IT BACK returns it.
+  // An object moved by an earlier version of Tiksi: the panel says how far and offers PUT IT
+  // BACK, with no way to move it here (things move in SketchUp). It alone stands moved, and
+  // stays moved across a reload until PUT IT BACK.
   const centre = key => viewer(page, 'return v.partCentre(arg)', key);
+  const panelNow = await page.locator('.inspector').innerText();
+  assert.ok(!/MOVED|PUT IT BACK/.test(panelNow), 'an object that was never moved has no MOVED note: ' + panelNow.slice(0, 200));
+  assert.equal(await page.locator('.inspector [data-obj-off]').count(), 0, 'no offset fields');
+  assert.equal(await page.locator('.inspector [data-obj-move]').count(), 0, 'no MOVE IT IN THE VIEW');
   const before = await centre(chairs[0]), other = await centre(chairs[2]);
-  await page.locator('.inspector [data-obj-off="0"]').fill('0.5 m');
-  await page.locator('.inspector [data-obj-off="0"]').press('Enter');
-  await waitUntil(async () => Math.abs((await centre(chairs[0]))[0] - before[0] - 0.5) < 1e-3, 'the chair moved half a metre');
-  assert.ok(Math.abs((await centre(chairs[1]))[0] - (await centre(chairs[0]))[0]) < 0.3, 'both of its meshes moved together');
-  assert.deepEqual(await centre(chairs[2]), other, 'the other chair stayed');
-  assert.ok(Object.keys(await prop(page, 'return p.scans[0].partOffsets')).length === 1, 'the move is kept on the model record');
-  await idle(page);
-  if (shot) await page.screenshot({ path: shot + '/objects-moved.png' });
-  // The move tool puts a handle on it.
-  await page.locator('.inspector [data-obj-move]').click();
-  assert.equal(await viewer(page, 'return v.moveHandle()'), 1, 'the MOVE tool holds the chair');
-  // Drag its X arrow: the chair follows along X only, and the panel shows the new distance.
-  await idle(page);
-  const toScreen = async world => {
-    const at = await page.evaluate(async world => {
-      const THREE = await import('three'), v = await import('/js/viewer3d.js');
-      const cam = v.drawStats({}).camera;
-      const q = new THREE.Vector4(world[0], world[1], world[2], 1).applyMatrix4(new THREE.Matrix4().fromArray(cam.inverse)).applyMatrix4(new THREE.Matrix4().fromArray(cam.projection));
-      return [q.x / q.w, q.y / q.w];
-    }, world);
-    return [rect.x + (at[0] + 1) / 2 * rect.width, rect.y + (1 - at[1]) / 2 * rect.height];
-  };
-  const handle = await viewer(page, 'return v.moveHandleGrip("X")');
-  assert.ok(handle, 'the handle has an X arrow');
-  const grip = await toScreen(handle.grip), mid = await toScreen(handle.middle);
-  const step = [(grip[0] - mid[0]) / 4, (grip[1] - mid[1]) / 4];
-  const dragFrom = await centre(chairs[0]);
-  await page.mouse.move(grip[0], grip[1]);
-  await page.mouse.down();
-  for (let i = 1; i <= 8; i++) await page.mouse.move(grip[0] + step[0] * i, grip[1] + step[1] * i, { steps: 2 });
-  await page.mouse.up();
-  const dragTo = await centre(chairs[0]);
-  // The arrow is drawn on the side of the handle that faces the camera, so it may point either way along X.
-  const way = Math.sign(handle.grip[0] - handle.middle[0]);
-  assert.ok((dragTo[0] - dragFrom[0]) * way > 0.1, 'dragging the X arrow moved the chair along X, the way it was dragged (' + (dragTo[0] - dragFrom[0]).toFixed(3) + ' m)');
-  assert.ok(Math.abs(dragTo[1] - dragFrom[1]) < 1e-6 && Math.abs(dragTo[2] - dragFrom[2]) < 1e-6, 'and along nothing else');
-  assert.deepEqual(await centre(chairs[2]), other, 'the other chair still stayed');
-  const kept = await prop(page, 'return Object.values(p.scans[0].partOffsets)[0]');
-  assert.ok(Math.abs(kept[0] - 0.5 - (dragTo[0] - dragFrom[0])) < 2e-3, 'the record holds the whole distance');
-  // Typing puts it back at half a metre for the steps below.
-  await page.keyboard.press('Escape');
-  await page.locator('.inspector [data-obj-off="0"]').fill('0.5 m');
-  await page.locator('.inspector [data-obj-off="0"]').press('Enter');
-  await waitUntil(async () => Math.abs((await centre(chairs[0]))[0] - before[0] - 0.5) < 1e-3, 'back at half a metre');
+  const chairPath = chairs[0].split('#')[1].split('/').slice(0, -1).join('/');
+  await page.evaluate(async path => {
+    const s = await import('/js/store.js');
+    s.activeProperty().scans[0].partOffsets = { [path]: [0.5, 0, 0] };
+    s.touch();
+  }, chairPath);
   await waitUntil(async () => (await page.locator('#save-status').innerText()).includes('SAVED'), 'saved');
   await delay(700);
   await page.reload();
   await page.locator('canvas.v-canvas').waitFor();
   await waitUntil(async () => (await viewer(page, 'return v.scanStates()'))?.['scan-kit']?.state === 'ready', 'the model is back');
-  assert.ok(Math.abs((await centre(chairs[0]))[0] - before[0] - 0.5) < 1e-3, 'the chair is still where it was moved after a reload');
   await idle(page);
+  assert.ok(Math.abs((await centre(chairs[0]))[0] - before[0] - 0.5) < 1e-3, 'the moved chair stands half a metre along X');
+  assert.ok(Math.abs((await centre(chairs[1]))[0] - (await centre(chairs[0]))[0]) < 0.3, 'both of its meshes moved together');
+  assert.deepEqual(await centre(chairs[2]), other, 'the other chair stayed');
   await list.locator('.ol-row', { hasText: 'Dining chair' }).first().locator('[data-ol-pick]').click();
+  await page.locator('.inspector [data-obj-reset]').waitFor();
+  const movedPanel = await page.locator('.inspector').innerText();
+  assert.ok(/MOVED/.test(movedPanel) && /Move things in SketchUp/.test(movedPanel), 'the panel says it was moved: ' + movedPanel.slice(0, 300));
+  assert.equal(await page.locator('.inspector [data-obj-off]').count(), 0, 'and still offers no offset fields');
+  if (shot) await page.screenshot({ path: shot + '/objects-moved.png' });
   await page.locator('.inspector [data-obj-reset]').click();
   await waitUntil(async () => Math.abs((await centre(chairs[0]))[0] - before[0]) < 1e-3, 'PUT IT BACK returns it');
   assert.equal(await prop(page, 'return p.scans[0].partOffsets'), undefined);
+  assert.equal(await page.locator('.inspector [data-obj-reset]').count(), 0, 'and the MOVED note goes');
 
   // Going inside: the cabinet's handle from the panel; the way back up from its breadcrumb.
   await list.locator('.ol-row').nth(1).locator('[data-ol-pick]').click();   // the second cabinet
@@ -278,7 +255,7 @@ try {
   assert.equal(await page.locator('.inspector h3').first().innerText(), 'WALL');
 
   assert.deepEqual(errors, [], 'no page errors: ' + errors.join(' | '));
-  console.log('model objects: component list, one-object panel, tag, hide, show, move OK');
+  console.log('model objects: component list, one-object panel, tag, hide, show, moved note and PUT IT BACK OK');
 } finally {
   await browser.close();
   server.close();

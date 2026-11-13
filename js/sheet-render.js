@@ -13,6 +13,7 @@ import { pendingTextureJobs } from './textures.js';
 import { wallsOn, roomsOn, openingsOn, levelHeight, polyArea, fmtLen, fmtArea, escapeHtml } from './store.js';
 import { orthoFrame, sectionPlane, lineFrame } from './doc-sets.js';
 import { doorSwings } from './wall-solids.js';
+import { openingSchedule, openingFrame } from './opening-schedule.js';
 
 let renderer = null;
 const scene = new THREE.Scene();
@@ -333,6 +334,18 @@ export function planVectorSvg(prop, v) {
       const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
       out.push(`<line x1="${n3(x1)}" y1="${n3(y1)}" x2="${n3(x2)}" y2="${n3(y2)}" stroke="#333" stroke-width="0.4"/>`, tick(x1, y1), tick(x2, y2),
         `<text x="${n3(mx)}" y="${n3(my - 2)}" transform="rotate(${n3(ang)} ${n3(mx)} ${n3(my)})" text-anchor="middle" font-size="6.5" font-family="Helvetica, Arial, sans-serif" fill="#222">${escapeHtml(fmtLen(L))}</text>`);
+    }
+  }
+  // Door and window numbers: each opening's mark from the door and window schedule (D1, W1...),
+  // in a circle on the wall, so the drawing and the schedule sheet read together.
+  if (v.layers.numbers) {
+    const marks = new Map(openingSchedule(prop, lvl.id).map(r => [r.id, r]));
+    for (const o of openingsOn(prop, lvl.id)) {
+      const row = marks.get(o.id), f = row && openingFrame(prop, o);
+      if (!f) continue;
+      const x = m.X(f.cx), y = m.Y(f.cy), r = 6.5;
+      out.push(`<circle cx="${n3(x)}" cy="${n3(y)}" r="${r}" fill="#fff" stroke="#1d1d1d" stroke-width="0.6"/>`,
+        `<text x="${n3(x)}" y="${n3(y + 2.2)}" text-anchor="middle" font-size="6" font-weight="700" font-family="Helvetica, Arial, sans-serif" fill="#111">${escapeHtml(row.number)}</text>`);
     }
   }
   if (v.layers.rooms) {

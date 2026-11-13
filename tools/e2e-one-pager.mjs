@@ -43,7 +43,7 @@ const until = async (fn, label, ms = 90000) => { const end = Date.now() + ms; wh
 const docs = () => prop("return p.photos.filter(x => x.kind === 'document').map(d => ({ name: d.name, mime: d.mime, pages: d.pageCount, bytes: d.byteLength }))");
 
 try {
-  await page.goto(url + '/#/plan');
+  await page.goto(url + '/#/model');
   await page.waitForSelector('#btn-file', { state: 'attached' });
   await page.evaluate(async () => {
     const s = await import('/js/store.js'), ps = await import('/js/photos-store.js');
@@ -83,7 +83,7 @@ try {
   await page.goto(url + '/#/schedule');
   await page.locator('#prog-start').waitFor();
   check((await page.locator('.kpi.accent .k-label').textContent()) === 'Last day of work' && (await page.locator('.kpi.accent .k-value').textContent()) === 'Nov 22, 2026' && /13 calendar days/.test(await page.locator('.kpi.accent .k-sub').textContent()), 'SCHEDULE\'s last day of work is Nov 22, 2026, the 13th calendar day');
-  await page.goto(url + '/#/plan');
+  await page.goto(url + '/#/model');
   await page.waitForSelector('#btn-file', { state: 'attached' });
 
   // ---- the editor ----
@@ -239,7 +239,7 @@ try {
 
   // ---- a reload keeps everything ----
   // The room renamed while the setting was Never left the one-pager behind: bring it up to date first.
-  await page.goto(url + '/#/plan');
+  await page.goto(url + '/#/model');
   await page.waitForSelector('#btn-file', { state: 'attached' });
   check((await state()) === 'behind' && (await fireClose()) === false, 'the room renamed earlier left the one-pager behind, but NOT NOW still holds');
   await prop("p.address = '2 Synthetic Way'; s.touch();");
@@ -260,7 +260,7 @@ try {
 
   // ---- a real close: the browser's own question first, then Tiksi's ----
   await prop("p.address = '3 Synthetic Way'; s.touch();");
-  await page.click('#rail a[data-view="plan"]');   // Chrome asks only after the person used the page
+  await page.click('#rail a[data-view="model"]');   // Chrome asks only after the person used the page
   await page.close({ runBeforeUnload: true });
   await page.locator('.op-prompt').waitFor({ timeout: 5000 });
   check(dialogs.length === 1 && /Save version 4 before you close\?/.test(await page.locator('[data-op-prompt-text]').textContent()), 'a real close shows the browser\'s Leave site? question; staying brings up Tiksi\'s');

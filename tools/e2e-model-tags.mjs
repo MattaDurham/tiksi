@@ -60,7 +60,7 @@ const redInView = (page, id) => page.evaluate(async id => {
 try {
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto(url + '/#/plan');
+  await page.goto(url + '/#/budget');
   await page.locator('#btn-file').waitFor({ state: 'attached' });
   // A 4 x 3 m room, and a model of the same room: a red roof slab above the storey, a blue
   // chair in the middle and a grey floor. The model's parts have no telling names.
