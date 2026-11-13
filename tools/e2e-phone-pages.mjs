@@ -90,9 +90,9 @@ const MEASURE = () => {
 // page, at the size it is drawn (text in a drawing scaled to fit counts at its drawn size). Left
 // out, as not reading text: the drawing sheets themselves (DOCUMENTS' paper and CUT SHEETS' sheet
 // previews are pictures of printed pages, zoomed by the viewer), the printable one-pager preview,
-// and the 3D view and plan (MODEL and PLAN are not this page set's). A label kept for screen
-// readers only is not on screen to read.
-const TEXT_ALLOW = '.dc-paper, .dc-viewer-page, .sheet, .rs-sheet, canvas, #viewer, .plan-wrap';
+// and the 3D view (MODEL is not this page set's). A label kept for screen readers only is not on
+// screen to read.
+const TEXT_ALLOW = '.dc-paper, .dc-viewer-page, .sheet, .rs-sheet, canvas, #viewer';
 const SMALL_TEXT = ([roots, allow]) => {
   const seen = new Map();
   for (const root of document.querySelectorAll(roots)) {
@@ -160,7 +160,7 @@ async function run(label, engine, profile) {
     check(await page.evaluate(() => document.documentElement.classList.contains('touch') && document.documentElement.classList.contains('phone')), label + ': a touch phone is marked touch and gets the phone layout');
 
     // ---------- messages with no property yet ----------
-    for (const v of ['photos', 'measure', 'model', 'plan', 'reconstruct']) await part(label, v + ' with no property', async () => {
+    for (const v of ['photos', 'measure', 'model', 'reconstruct']) await part(label, v + ' with no property', async () => {
       await go(page, url, v);
       const text = await page.locator('#view').innerText();
       check(!/top bar/i.test(text) && /NEW PROPERTY under FILE/.test(text), label + ': ' + v.toUpperCase() + ' with no property points at FILE, not the hidden top bar (' + text.replace(/\s+/g, ' ').slice(0, 80) + ')');

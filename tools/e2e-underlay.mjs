@@ -157,22 +157,25 @@ try {
   console.log('Helper failures passed: one that dies mid-job is reported; one that could not load runs the job in the page.');
   await page.goto(`http://localhost:${server.address().port}/#/model`);
   await page.locator('canvas.v-canvas').waitFor();
-  await page.locator('#rail a[data-view=plan]').click({ noWaitAfter: true });
-  const review = page.locator('[data-floor-review]');
-  await review.waitFor();
-  assert.match(await review.locator('summary').innerText(), /Review floor datums/);
-  await review.locator('summary').click();
-  assert.match(await review.innerText(), /-2.15/);
-  assert.match(await review.innerText(), /floor datum/);
-  assert.match(await review.innerText(), /ceiling/);
-  await page.reload(); await review.waitFor();
-  assert.match(await review.locator('summary').innerText(), /Review floor datums/, 'Review remains visible after reload');
-  if (process.env.E2E_SHOTS) {
-    await review.locator('summary').click();
-    await page.screenshot({ path: process.env.E2E_SHOTS + '/mixed-floor-review.png' });
-  }
+  // The floor-datum review was shown in PLAN's scan card, which went with PLAN; the review report
+  // itself stays with the scan, and a reload of the saved project brings it back whole.
+  await page.reload(); await page.locator('canvas.v-canvas').waitFor();
+  const kept = await page.evaluate(async () => {
+    const store = await import('/js/store.js'), { floorReviewText } = await import('/js/scan-surfaces.js');
+    await store.whenHydrated();
+    const report = store.activeProperty().scans.find(s => s.id === 'mixed-source')?.floorDetection;
+    return report && { report, text: floorReviewText(report),
+      elevations: report.surfaces.flatMap(s => [s.elevation, s.minElevation, s.maxElevation].map(v => v.toFixed(2))),   // as PLAN's review table listed them
+      datum: report.levels.some(l => report.surfaces.some(s => s.id === l.datum.surfaceId)),
+      ceiling: report.levels.some(l => report.surfaces.some(s => s.id === l.datum.ceilingSurfaceId)) };
+  });
+  assert.ok(kept, 'the scan keeps its floor-datum review after a reload');
+  assert.deepEqual(kept.report, mixed.report, 'the review report reloads unchanged');
+  assert.match(kept.text, /^Review floor datums/, 'and still asks for a review');
+  assert.ok(kept.elevations.includes('-2.15'), 'the lower landing at -2.15 m is in the report: ' + kept.elevations);
+  assert.ok(kept.datum && kept.ceiling, 'a level names its floor datum and ceiling surfaces');
   assert.deepEqual(errors, [], 'no page errors');
-  console.log('Mixed underlay passed: indoor floor, yard and lower landing pixels retained; review report persists.');
+  console.log('Mixed underlay passed: indoor floor, yard and lower landing pixels retained; review report persists through a reload.');
 
 } finally {
   if (browser) await browser.close();
