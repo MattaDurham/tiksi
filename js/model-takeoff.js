@@ -1,3 +1,4 @@
+import { sourceRevision } from './source-revision.js';
 // Measured mesh surface areas per model material (model-materials.js: each material once, shared
 // by its parts), and counts per component definition (model-components.js). No waste, labour,
 // assembly inference or product equivalence is silently added.
@@ -59,7 +60,7 @@ export function createModelEstimate(prop,scan,root) {
   if(!takeoff.length)throw new Error('Map at least one finish surface to a Tiksi material first.');
   const existing=ws.data.projects.find(p=>p.modelTakeoffId===scan.id);
   if(existing)throw new Error('A takeoff already exists for this model. Edit it in Scope, or delete it before regenerating.');
-  const pr={id:uid('proj'),propertyId:prop.id,name:'Model finishes — '+scan.name,category:'interior',status:'idea',selected:true,startDate:isoToday(),notes:'Measured triangle surface area. Review finish coverage, openings, overlap, waste, labour and current product prices before ordering.',modelTakeoffId:scan.id,items:[]};
+  const pr={sourceRevision:sourceRevision(scan),id:uid('proj'),propertyId:prop.id,name:'Model finishes — '+scan.name,category:'interior',status:'idea',selected:true,startDate:isoToday(),notes:'Measured triangle surface area. Review finish coverage, openings, overlap, waste, labour and current product prices before ordering.',modelTakeoffId:scan.id,items:[]};
   for(const slot of takeoff){
     const mat=materialById(scan.materialBindings?.[slot.key] || scan.materialIdentities?.[slot.key]),qty=slot.areaM2/SQFT;
     const products=ws.data.products.filter(p=>p.materialIds?.includes(mat.id));
@@ -82,7 +83,7 @@ export function createComponentEstimate(prop,scan,root) {
   const rows=componentSchedule(ws.data,scan,root);
   if(!rows.length)throw new Error('This model has no components. Groups are unique; only component definitions are counted.');
   if(ws.data.projects.some(p=>p.modelComponentsId===scan.id))throw new Error('A component estimate already exists for this model. Edit it in Scope, or delete it before regenerating.');
-  const pr={id:uid('proj'),propertyId:prop.id,name:'Model components — '+scan.name,category:'interior',status:'idea',selected:true,startDate:isoToday(),
+  const pr={sourceRevision:sourceRevision(scan),id:uid('proj'),propertyId:prop.id,name:'Model components — '+scan.name,category:'interior',status:'idea',selected:true,startDate:isoToday(),
     notes:'Counted component instances from the model, nested ones multiplied through. Review spares, waste, labour and current prices before ordering.',modelComponentsId:scan.id,items:[]};
   for(const r of rows){
     const product=r.productId?ws.data.products.find(p=>p.id===r.productId):null;

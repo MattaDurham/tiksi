@@ -201,7 +201,7 @@ try {
     assert.ok(Math.abs(Math.hypot(bx - ax, by - ay) - v) < TOL, `${typed}: stored length ${Math.hypot(bx - ax, by - ay)} m, typed ${v} m`);
     assert.equal(shown, text, `${typed}: the field shows the typed length`);
   }
-  assert.equal(await page.locator('.inspector [data-len=len]').inputValue(), '2.437 m');
+  assert.equal(await page.locator('.inspector [data-len=len]').inputValue(), '2437 mm');
   await page.evaluate(async () => { const s = await import('/js/store.js'); s.ws.data.settings.units = 'imperial'; s.touch(); });
 
   assert.deepEqual(errors, [], 'no page errors');

@@ -71,9 +71,13 @@ test('migration keeps good fixtures, repairs references and drops what cannot be
   const app = got[2];
   assert.match(app.id, /^fx-/, 'an id that does not look like one is regenerated');
   assert.equal(app.level, store.ws.data.properties[0].levels[0].id, 'a stale level falls to the lowest');
-  assert.equal(app.subtype, 'range', 'an unknown subtype becomes the first of its kind');
+  assert.equal(app.subtype, 'toaster', 'an unknown subtype retains its identity');
   assert.equal(app.x, 1.5);
-  assert.deepEqual(app.provenance, { source: 'user', confidence: 1 });
+  assert.equal(app.provenance.source, 'unknown');
+  assert.equal(app.provenance.confidence, null);
+  assert.equal(app.provenance.rawSource, 'guess');
+  assert.equal(app.provenance.rawConfidence, 7);
+  assert.deepEqual(app.provenance.defaultedFields, ['w','d','h']);
   const slice = store.projectSlice('prop-k', store.ws.data);
   assert.ok(slice.materials.some(m => m.id === 'mat-mine'), 'a custom finish on a fixture travels with the project file');
 });

@@ -1,3 +1,5 @@
+// Network fault injection uses Playwright routing, which service workers bypass.
+// The real service-worker/offline journey is covered in e2e-audit-repairs.mjs.
 // Isolated synthetic/demo browser checks. All images stay under ignored tools/fixtures.
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -69,7 +71,7 @@ async function captureFrame(page, name, timeout = 90000) {
   console.log('Captured rendered canvas:', name, capture.width + 'x' + capture.height);
 }
 try {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, acceptDownloads: true });
+  const page = await browser.newPage({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 }, acceptDownloads: true });
   await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true,"model.objects":false}'));   // MODEL's tools on the screen (tiksi-menu.js); the component list off it, since this suite clicks the model at fixed places
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });

@@ -148,7 +148,7 @@ class NativeMirrorTests(unittest.TestCase):
         self.assertEqual(sorted(map(tuple, room['now']['pts'])), sorted(map(tuple, room['base']['pts'])))
         self.assertEqual(got['untagged'], {'faces': 0, 'groups': 0, 'instances': 0})
 
-    def test_sketchup_edits_are_read_and_rewrite_keeps_sketchup_geometry(self):
+    def test_sketchup_edits_are_read_and_changed_local_faces_block_rewrite(self):
         skp = self.write(SPEC)
         edited = self.root / 'edited.skp'
         edit_like_sketchup(skp, edited)
@@ -163,11 +163,18 @@ class NativeMirrorTests(unittest.TestCase):
         self.assertAlmostEqual(north['now']['height'], 3.0, places=4)
         self.assertEqual(got['rooms'], [], 'the room group was deleted in SketchUp')
         self.assertEqual(got['untagged']['faces'], 1)
-        # Writing Tiksi's state over the edited file replaces Tiksi groups and keeps the face.
-        again = self.read(self.write(SPEC, existing=edited))
-        self.assertEqual(sorted(w['id'] for w in again['walls']), ['w-e', 'w-n', 'w-s', 'w-w'])
-        self.assertEqual(len(again['rooms']), 1)
-        self.assertEqual(again['untagged']['faces'], 1)
+        # The helper's copied wall is a single face, not the original wall solid.
+        # Its inherited evidence must flag that difference rather than overwrite it.
+        self.assertIn('w-e', got['unsupportedGeometry'])
+        job = self.root / 'refused'; job.mkdir()
+        (job / 'mirror.json').write_text(json.dumps(SPEC))
+        shutil.copy(edited, job / 'existing.skp')
+        before = (job / 'existing.skp').read_bytes()
+        result = subprocess.run([sys.executable, str(WORKER), 'write', str(job)], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Local SketchUp face edits need review', result.stderr)
+        self.assertEqual((job / 'existing.skp').read_bytes(), before)
+        self.assertFalse((job / 'model.skp').exists())
 
     @unittest.skipUnless(shutil.which('node'), 'Node not installed')
     def test_browser_spec_and_merge_agree_with_native_files(self):

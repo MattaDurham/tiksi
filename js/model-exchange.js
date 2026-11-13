@@ -1,11 +1,11 @@
-// Static mesh interchange. No viewport helpers, private photos, scope or project metadata
-// are written to exchange files. Save .tiksi separately to keep the editable floorplan.
+// Static mesh interchange excludes viewport helpers and photograph bytes. Evidence and
+// linked specifications travel in the manifest. Save .tiksi for the editable floorplan.
 import { nativeConvert } from './native-conversion.js';
 import * as THREE from 'three';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { zipSync, strToU8 } from 'three/addons/libs/fflate.module.js';
 import { buildPropertyGroup, disposeBuilt } from './geometry.js';
-import { getFile, materialById } from './store.js';
+import { getFile, materialById, projectSlice } from './store.js';
 import { loadMesh, applyScanTransform, disposeScanObject } from './scans.js';
 import { applyModelMaterials } from './model-materials.js';
 import { stampTags, partKeyForObject } from './tags-scene.js';
@@ -85,7 +85,22 @@ function cleanExport(root) {
   return clone;
 }
 
-export async function exportModel(prop, { format = 'glb', source = 'design', scanId, includeModels = false } = {}) {
+export function exchangeEvidence(prop, options = {}) {
+  const slice = projectSlice(prop.id) || { products: [], materials: [] };
+  const scans = (prop.scans || []).filter(s => options.source === 'model' ? s.id === options.scanId : options.includeModels && s.visible !== false);
+  const fields = s => ({ id:s.id, sourceFile:s.originalName || s.name, componentProducts:s.componentProducts || {}, objectEvidence:s.objectEvidence || {}, materialIdentities:s.materialIdentities || {}, materialBindings:s.materialBindings || {}, importedEvidence:s.importedEvidence || null });
+  return { format:'tiksi-model-evidence', version:1, route:'static-mesh', lighting:'illustrative',
+    limitations:['Static triangles are not editable parametric assemblies.','A product link does not establish installed identity.','Unknown geometry is retained.'],
+    elements:options.source === 'model' ? [] : ['walls','openings','rooms','fixtures'].flatMap(kind => (prop[kind] || []).map(record => ({kind, ...structuredClone(record)}))),
+    scans:scans.map(fields), products:structuredClone(slice.products), materials:structuredClone(slice.materials) };
+}
+export async function exportModel(prop, options = {}) {
+  const manifest = exchangeEvidence(prop,options);
+  const result = await exportModelGeometry(prop,{...options, manifest});
+  return {...result, evidence:{name:result.name+'.evidence.json',blob:new Blob([JSON.stringify(manifest,null,2)],{type:'application/json'})}};
+}
+
+async function exportModelGeometry(prop, { format = 'glb', source = 'design', scanId, includeModels = false, manifest } = {}) {
   if (!EXCHANGE_FORMATS.some(f => f[0] === format)) throw new Error('Unsupported export format');
   const root = new THREE.Group(), disposable = []; let built, clone;
   try {
@@ -105,6 +120,7 @@ export async function exportModel(prop, { format = 'glb', source = 'design', sca
     const deadline = performance.now() + 30000;
     while (pendingTextureJobs()) { if (performance.now() > deadline) throw new Error('Material textures are still loading. Retry when ready.'); await new Promise(r => setTimeout(r, 50)); }
     clone = cleanExport(root);
+    clone.userData.tiksiEvidenceManifest = manifest;
     let vertices = 0; clone.traverse(o => { if (o.isMesh) vertices += o.geometry.getAttribute('position')?.count || 0; });
     if (!vertices) throw new Error('There is no mesh geometry to export');
     const base = String(prop.name || 'model').replace(/[^\p{L}\p{N}_ -]/gu, '').trim() || 'model';
@@ -129,7 +145,7 @@ export async function exportModel(prop, { format = 'glb', source = 'design', sca
       const split=format==='skp'?componentsForExport(clone):{components:[],instances:[]};
       const meshes=[];for(const part of triangles(clone,{skip:split.inside}))meshes.push(await toJson(part));
       const components=[];
-      for(const d of split.components){const parts=[];for(const part of triangles(d.node,{frame:d.frame,only:d.own}))parts.push(await toJson(part));components.push({id:d.id,name:d.name,description:d.description,instances:d.instances,meshes:parts.map(({tag,tagVisible,...p})=>!tag||tag===d.tag?p:{...p,tag,tagVisible})});}
+      for(const d of split.components){const parts=[];for(const part of triangles(d.node,{frame:d.frame,only:d.own}))parts.push(await toJson(part));components.push({id:d.id,sourceDefinitionId:d.node.userData.sketchupDefinitionId || '',name:d.name,description:d.description,instances:d.instances,meshes:parts.map(({tag,tagVisible,...p})=>!tag||tag===d.tag?p:{...p,tag,tagVisible})});}
       const payload={meshes};if(components.length){payload.components=components;payload.instances=split.instances;}
       const converted=await nativeConvert(new TextEncoder().encode(JSON.stringify(payload)),'.json',format);
       return {name:base+'.'+format,blob:new Blob([converted.buffer]),warnings:converted.warnings};
