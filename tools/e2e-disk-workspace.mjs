@@ -36,7 +36,7 @@ try {
   });
   // (Not PHOTOS: opening it moves a held photo into the project folder, e2e-project-photos.mjs.
   // This suite is about an original Tiksi holds reaching every device.)
-  await phone.goto('http://localhost:' + port + '/#/plan');
+  await phone.goto('http://localhost:' + port + '/#/budget');
   await phone.evaluate(async () => { window.diskTestStore = await import('/js/store.js'); });
   await phone.waitForFunction(() => window.diskTestStore.ws.data.properties.some(p => (p.photos || []).some(ph => ph.id === 'photo-shared')));
   const evidence = await phone.evaluate(async () => {
@@ -106,7 +106,7 @@ try {
   const delayed = new Promise(resolve => { releaseDownload = resolve; });
   let requested; const requestStarted = new Promise(resolve => { requested = resolve; });
   await slow.route('**/api/workspace/blobs/' + oldHash, async route => { requested(); await delayed; await route.continue(); });
-  await slow.goto('http://127.0.0.1:' + port + '/#/plan');
+  await slow.goto('http://127.0.0.1:' + port + '/#/budget');
   await slow.evaluate(async () => { window.diskTestStore = await import('/js/store.js'); });
   await slow.waitForFunction(() => window.diskTestStore.ws.data.properties.some(p => (p.photos || []).some(ph => ph.id === 'photo-shared')));
   await slow.evaluate(() => { window.oldPhotoDownload = window.diskTestStore.getFile('photo-shared'); });

@@ -160,7 +160,7 @@ const seed = (page, quality, options = {}) => page.evaluate(async ([quality, opt
 }, [quality, options]);
 
 async function openModel(page, quality, options, before) {
-  await page.goto(url + '/#/plan');
+  await page.goto(url + '/#/budget');
   await page.locator('#btn-file').waitFor({ state: 'attached' });
   await seed(page, quality, options);
   if (before) await before(page);
@@ -169,7 +169,7 @@ async function openModel(page, quality, options, before) {
   await settled(page, 'first open');
 }
 async function reopenModel(page, what) {
-  await page.evaluate(() => { location.hash = '#/plan'; });
+  await page.evaluate(() => { location.hash = '#/budget'; });
   await page.locator('canvas.v-canvas').waitFor({ state: 'detached' });
   await page.evaluate(() => { location.hash = '#/model'; });
   await page.locator('canvas.v-canvas').waitFor({ state: 'attached' });
@@ -485,7 +485,7 @@ async function computerChecks(browser, say) {
   const errors = [], requested = [];
   desk.on('pageerror', e => errors.push(e.message));
   desk.on('request', r => requested.push(new URL(r.url()).pathname));
-  await desk.goto(url + '/#/plan');
+  await desk.goto(url + '/#/budget');
   await desk.locator('#btn-file').waitFor({ state: 'attached' });
   await delay(500);
   assert.deepEqual(requested.filter(u => /pick-(index|tree)\.js/.test(u)), [], 'the picking files are not part of the first load');
@@ -703,7 +703,7 @@ async function reducedChecks(browser, say) {
     const saved = async page => { await page.locator('#save-status').waitFor({ state: 'attached' }); await page.waitForFunction(() => document.querySelector('#save-status')?.textContent === 'SAVED TO DISK', null, { timeout: 120000 }); };
     // A house with three photos pinned on its back wall, the second stored on its side, saved to the Mac.
     const first = await context.newPage();
-    await first.goto(mac + '/#/plan');
+    await first.goto(mac + '/#/budget');
     await saved(first);
     await first.evaluate(async () => {
       const s = await import('/js/store.js'), photos = await import('/js/photos-store.js');
@@ -739,7 +739,7 @@ async function reducedChecks(browser, say) {
     // function this needs in js/disk-workspace.js, stood in for here with the same requests).
     const open = async (reader, from = context) => {
       const page = await from.newPage();
-      await page.goto(mac + '/#/plan');
+      await page.goto(mac + '/#/budget');
       await saved(page);
       const hashes = await page.evaluate(async reader => {
         const dw = await import('/js/disk-workspace.js'), s = await import('/js/store.js');

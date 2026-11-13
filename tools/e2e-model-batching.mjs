@@ -61,7 +61,7 @@ const same = (a, b, what) => {
 try {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto(url + '/#/plan');
+  await page.goto(url + '/#/budget');
   await page.locator('#btn-file').waitFor();
   await page.evaluate(async () => {
     const s = await import('/js/store.js');
@@ -187,7 +187,7 @@ try {
     s.ws.data.properties.push(p); s.ws.data.settings.activePropertyId = p.id;
     s.touch();
   });
-  await page.locator('#rail a[data-view="plan"]').click({ noWaitAfter: true });
+  await page.locator('#rail a[data-view="budget"]').click({ noWaitAfter: true });
   await page.locator('#rail a[data-view="model"]').click({ noWaitAfter: true });
   await page.locator('canvas.v-canvas').waitFor();
   const partsOf = 'return Object.keys(p.tagOf || {}).filter(k => k.startsWith("node:scan-components"))';

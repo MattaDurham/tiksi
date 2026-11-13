@@ -78,7 +78,7 @@ try {
   await context.route('**/__perf/model.glb', route => route.fulfill({ body: glb, headers: { 'content-type': 'model/gltf-binary' } }));
   const page = await context.newPage();
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto(base + '/#/plan');
+  await page.goto(base + '/#/budget');
   await page.locator('#btn-file').waitFor();
   await page.evaluate(async quality => {
     const s = await import('/js/store.js');

@@ -280,7 +280,7 @@ async function theBarFits(name, profile) {
   const id = 'prop-bar-' + name; await makeProperty(id);
   for (const width of [375, 390]) {
     const context = await browser.newContext({ serviceWorkers: 'block', ...profile, viewport: { width, height: 667 } });
-    const phone = await openPage(context, { hash: '#/plan' });
+    const phone = await openPage(context, { hash: '#/measure' });   // MEASURE has UNDO and REDO in the phone's bar (MODEL keeps them off it)
     await look(phone, id);
     await phone.locator('#btn-undo').waitFor();
     await context.setOffline(true);

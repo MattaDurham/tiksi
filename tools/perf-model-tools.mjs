@@ -94,7 +94,7 @@ async function open(profile, build, arg, before) {
   const context = await browser.newContext(PROFILES[profile]);
   await context.addInitScript(INIT);
   const page = await context.newPage();
-  await page.goto(url + '/#/plan');
+  await page.goto(url + '/#/budget');
   await page.locator('#btn-file').waitFor({ state: 'attached' });
   await page.evaluate(new Function('arg', `return (async () => {
     const s = await import('/js/store.js'), syn = await import('/tools/synthetic-model.mjs');

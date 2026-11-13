@@ -169,7 +169,7 @@ const seed = (page, shared, options = {}) => page.evaluate(async ([shared, optio
 }, [shared, options]);
 
 async function openModel(page, shared, options) {
-  await page.goto(url + '/#/plan');
+  await page.goto(url + '/#/budget');
   await page.locator('#btn-file').waitFor({ state: 'attached' });
   const made = await seed(page, shared, options);
   await page.evaluate(() => { location.hash = '#/model'; });
@@ -178,7 +178,7 @@ async function openModel(page, shared, options) {
   return made;
 }
 async function reopenModel(page, what) {
-  await page.evaluate(() => { location.hash = '#/plan'; });
+  await page.evaluate(() => { location.hash = '#/budget'; });
   await page.locator('canvas.v-canvas').waitFor({ state: 'detached' });
   await page.evaluate(() => { location.hash = '#/model'; });
   await page.locator('canvas.v-canvas').waitFor({ state: 'attached' });
@@ -429,7 +429,7 @@ async function computerChecks(browser, say) {
   const desk = await context.newPage();
   desk.on('pageerror', e => errors.push(e.message));
   // A device choice left in this browser's storage must be ignored by a computer.
-  await desk.goto(url + '/#/plan');
+  await desk.goto(url + '/#/budget');
   await desk.evaluate(() => localStorage.setItem('tiksi.device.quality', 'low'));
   const made = await openModel(desk, 'ultra');
   assert.ok(!(await desk.evaluate(() => document.documentElement.classList.contains('phone'))), 'a desktop-sized page gets the desktop layout');
@@ -567,7 +567,7 @@ async function queueChecks(browser, say) {
   await context.addInitScript(PARSER_PROBE);
   const page = await context.newPage();
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto(url + '/#/plan');
+  await page.goto(url + '/#/budget');
   await page.locator('#btn-file').waitFor({ state: 'attached' });
   await seed(page, 'low', { cloudShown: true });
   // The first visit's point cloud never finishes parsing.
@@ -576,7 +576,7 @@ async function queueChecks(browser, say) {
   await waitUntil(() => page.evaluate(() => window.__parser.held > 0), 'the first visit is stuck parsing its point cloud');
   assert.equal((await viewer(page, 'return v.scanStates()'))['scan-points'].state, 'loading');
   // Leave and come back (as a save from another device, or another property, does).
-  await page.evaluate(() => { window.__parser.hold = false; location.hash = '#/plan'; });
+  await page.evaluate(() => { window.__parser.hold = false; location.hash = '#/budget'; });
   await page.locator('canvas.v-canvas').waitFor({ state: 'detached' });
   await page.evaluate(() => { location.hash = '#/model'; });
   await page.locator('canvas.v-canvas').waitFor({ state: 'attached' });
@@ -605,7 +605,7 @@ async function no3dChecks(browser, say) {
   });
   const blank = await none.newPage();
   const blankErrors = []; blank.on('pageerror', e => blankErrors.push(e.message));
-  await blank.goto(url + '/#/plan');
+  await blank.goto(url + '/#/budget');
   await blank.locator('#btn-file').waitFor({ state: 'attached' });
   await seed(blank, 'high');
   await blank.evaluate(() => { location.hash = '#/model'; });
@@ -614,9 +614,9 @@ async function no3dChecks(browser, say) {
   assert.match(await failed.innerText(), /could not start 3D graphics/i, 'MODEL says 3D could not start');
   assert.equal(await failed.locator('[data-reload]').count(), 1, 'and offers a reload');
   // The other pages still open, and MODEL can be tried again.
-  await blank.evaluate(() => { location.hash = '#/plan'; });
+  await blank.evaluate(() => { location.hash = '#/budget'; });
   await failed.waitFor({ state: 'detached' });
-  await waitUntil(async () => (await blank.locator('#view').innerText()).trim().length > 0, 'PLAN opens after MODEL failed');
+  await waitUntil(async () => (await blank.locator('#view').innerText()).trim().length > 0, 'BUDGET opens after MODEL failed');
   await blank.evaluate(() => { location.hash = '#/model'; });
   await failed.waitFor({ timeout: 15000 });
   assert.deepEqual(blankErrors, [], 'a MODEL that cannot open throws nothing uncaught');
