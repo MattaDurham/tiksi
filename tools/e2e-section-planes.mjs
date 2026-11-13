@@ -100,7 +100,7 @@ try {
   assert.deepEqual([sc.sheets, sc.sheetsShown, sc.clip, sc.handles], [1, true, 1, 2], 'one transparent plane, clipping, with its move and turn handles');
   assert.ok(sc.fillOpacity[0] > 0 && sc.fillOpacity[0] < 0.3, 'the floating plane is see-through');
   assert.match(await bar.innerText(), /1 UP\/DOWN[\s\S]*\+ UP AND DOWN[\s\S]*\+ SIDE TO SIDE[\s\S]*\+ FRONT TO BACK[\s\S]*\+ CUSTOM/);
-  assert.match(await bar.locator('.v-section-val').innerText(), /1\.2 m/);
+  assert.match(await bar.locator(".v-section-val").innerText(), /1200 mm/);
 
   // SIDE TO SIDE: a second, upright cut; both clip at once.
   await page.locator('[data-cut-add=side]').click();
@@ -153,7 +153,7 @@ try {
   await bar.locator('.v-section-range').evaluate(el => { el.value = '2'; el.dispatchEvent(new Event('input', { bubbles: true })); });
   st = await state();
   assert.ok(Math.abs(st.planes[0].d - 2) < 1e-9 && Math.abs(st.planes[0].pos[1] - 2) < 1e-9, 'the slider moves the flat cut to 2 m');
-  assert.match(await bar.locator('.v-section-val').innerText(), /^2 m$/);
+  assert.match(await bar.locator('.v-section-val').innerText(), /^2000 mm$/);
 
   // CUSTOM: an upright cut facing the camera, on a 15 degree compass angle while SNAP is on.
   await page.locator('[data-cut-add=custom]').click();

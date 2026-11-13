@@ -1261,6 +1261,9 @@ html.touch #view .guide-view-map a:not([hidden]) { display: inline-flex; align-i
 .file-dialog .btn { min-height:44px; margin:4px 4px 4px 0; }
 .file-dialog label { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin:16px 0; }
 .file-dialog select { min-width:0; max-width:100%; padding:8px; }
+.file-dialog .file-units { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin:16px 0; }
+.file-dialog .file-units .seg-btn { min-height:36px; padding:6px 14px; }
+html.touch .file-dialog .file-units .seg-btn { min-height:44px; }
 .file-dialog details { border-top:1px solid var(--line); margin-top:20px; padding-top:12px; }
 .file-dialog summary { cursor:pointer; min-height:44px; display:flex; align-items:center; color:var(--dim); font-size:13px; }
 .file-dialog [hidden] { display:none; }
@@ -1310,5 +1313,11 @@ html.touch #view .guide-view-map a:not([hidden]) { display: inline-flex; align-i
 .tk-item:disabled { color: var(--faint); cursor: default; }
 .tk-item kbd { font-family: var(--mono); font-size: 10px; color: var(--faint); border: 1px solid var(--line-2); border-radius: 4px; padding: 0 5px; }
 .tk-foot { margin: 6px 14px 4px; font-size: 11px; line-height: 1.45; color: var(--faint); }
+.tk-menu .tk-last { border-top: 1px solid var(--line); border-bottom: 0; padding: 4px 0 2px; }
+/* RESTART TIKSI: the page waits under this cover until the Mac's server is back. */
+.tk-restarting {
+  position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; padding: 24px; text-align: center;
+  background: rgba(8, 10, 14, 0.82); color: var(--ink); font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em;
+}
 @media (min-width: 761px) { #app.no-rail { grid-template-columns: 0 1fr; } }
 #app.no-rail #rail { display: none; }

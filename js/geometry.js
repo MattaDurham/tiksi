@@ -596,7 +596,7 @@ export function buildWallGroup(wall, openings, property, ctx) {
 
   // Each face's finish (wall-solids.js wallFaceMaterialIds, shared with the SketchUp mirror):
   // its own if set, else the interior finish where it looks into a room, the exterior grey on an
-  // exterior wall's unrecorded outside, and the wall's own finish on ends, top and reveals.
+  // exterior wall's unrecorded outside, and the interior finish on ends, top and reveals.
   const faceIds = wallFaceMaterialIds(wall, rooms);
   const mats = new Map();
   const matOf = id => {

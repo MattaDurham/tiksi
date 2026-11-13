@@ -538,7 +538,7 @@ function renderForm() {
   setTimeout(() => { draft = null; }, 0);
   const echo = () => {
     const raw = q('[data-f=input]').value, value = parseReading(raw), bare = /^[\d\s./½¼¾⅛⅜⅝⅞-]+$/.test(raw.trim());
-    q('[data-echo]').textContent = !raw.trim() ? '' : Number.isFinite(value) ? '= ' + fmtReading(value) + (bare ? ' (bare numbers are ' + (units() === 'metric' ? 'metres' : 'inches') + ')' : '') : 'not a length';
+    q('[data-echo]').textContent = !raw.trim() ? '' : Number.isFinite(value) ? '= ' + fmtReading(value) + (bare ? ' (bare numbers are ' + (units() === 'metric' ? 'millimetres' : 'inches') + ')' : '') : 'not a length';
     q('[data-echo]').classList.toggle('bad', !!raw.trim() && !Number.isFinite(value));
   };
   q('[data-f=input]').oninput = echo; echo();

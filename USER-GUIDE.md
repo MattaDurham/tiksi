@@ -286,6 +286,7 @@ The Tiksi menu is open over MODEL. Roof is hidden in the TAGS tab of the compone
 6. Open the TAGS tab of the list for the tags themselves, with how many objects each holds. Click an eye to hide or show a whole tag. Rename a tag by typing over its name, change its colour with the swatch, add one with ADD TAG, or delete one with the X: its objects move to Untagged.
 7. Choose the + at the top left of the model to save the current camera, with the tags shown now, as a view. Click a tab to go back to it; double-click to rename; right-click to update it, move it or delete it. Page Up and Page Down step through the tabs.
 8. Click the Tiksi logo for every tool and view. Tick ON SCREEN on a group to keep it beside the model; untick it to put it back in the menu.
+9. RESTART TIKSI at the bottom of that menu saves what is waiting, then starts the Mac's Tiksi server again with the newest code (after a merge, say). The page reloads by itself when the server is back, in a few seconds. If photo to 3D or another long job is running on the Mac, Tiksi names it and asks before stopping it.
 
 ### Other features here
 
@@ -448,7 +449,7 @@ A phone video of someone holding a tape against cabinets, doors, appliances and 
 2. With the local Tiksi server and ffmpeg on the Mac, the video is analysed once: a strip of one thumbnail per second appears under the frame, and seconds where a long yellow strip (a tape blade) is visible are outlined in yellow.
 3. Use TAPE ▶ (Shift+→) to jump between those seconds. Each jump looks at the frames around that moment and shows the sharpest one in which the blade is still visible. → and ← step one second; . and , step a tenth; B looks for the sharpest frame near any moment.
 4. Scroll to zoom and drag to pan. Shift+drag (or CROP) draws a box around the numbers; the box is kept with the reading.
-5. Type the value as the tape shows it: 33 1/2, 33-1/2", 2'-9 1/2" or 85 cm. In imperial units a bare number means inches; the field shows how it was read. Add what was measured, the direction (width, height, depth) and how sure you are (clear, probable, unreadable).
+5. Type the value as the tape shows it: 33 1/2, 33-1/2", 2'-9 1/2" or 850 mm. A bare number means inches, or millimetres when Settings shows millimetres; the field shows how it was read. Add what was measured, the direction (width, height, depth) and how sure you are (clear, probable, unreadable).
 6. Attach the reading to a door or window width or height or a wall length, or keep it as a note. SAVE READING stores it with its frame. APPLY changes the model the same way a typed edit in PLAN does, so UNDO in the top bar reverts it.
 7. Readings nobody has explained yet (no element, nothing said about what was measured, or unreadable numbers) collect in ASK THE OWNER with their frames. COPY LIST copies the questions as text to send.
 
@@ -771,7 +772,7 @@ Settings groups display, model environment and workspace maintenance. This synth
 
 ### Try it
 
-1. Open FILE → Settings to choose feet/square feet or metres/square metres.
+1. Open FILE → Settings and choose INCHES (feet and inches, square feet) or MILLIMETRES (square metres). Precision sets how finely lengths show: 1/16" and 1 mm unless you change it. Stored lengths are never rounded.
 2. For rendering, open MODEL first, then FILE → Settings → Model environment. Adjust quality, lighting and the offered view settings.
 3. With the local server, Where this project is kept shows its canonical .tiksi path on the Mac. Desktop and Tailscale clients share those files and originals.
 4. In the static edition, CHOOSE FOLDER links the open project to a folder. OPEN FROM FOLDER reopens a saved copy, and KEEP THEM IN ONE FOLDER links projects without a folder of their own. These controls depend on browser folder permission.

@@ -47,7 +47,8 @@ GLASS = {'id': 'mat-glass', 'name': 'Glass, clear', 'color': '#d2e7ee'}
 def finished(sage=SAGE):
     spec = copy.deepcopy(SPEC)
     for w in spec['walls']:
-        w['materials'] = {'pos': dict(sage if w['id'] == 'w-s' else DRYWALL), 'neg': dict(BRICK), 'other': dict(BRICK)}
+        inside = sage if w['id'] == 'w-s' else DRYWALL
+        w['materials'] = {'pos': dict(inside), 'neg': dict(BRICK), 'other': dict(inside)}
         for h in w['holes']:
             h['material'] = dict(GLASS if h['type'] == 'window' else TRIM)
     spec['rooms'][0]['material'] = dict(OAK)
@@ -222,13 +223,13 @@ else {
     def test_written_faces_wear_their_finishes(self):
         faces = painted_faces(self.write(finished()))
         south = [f for f in faces if f['id'] == 'w-s']
-        sage, = [f for f in south if 'Tiksi: Sage paint' in (f['front'][0], f['back'][0])]
+        sage, = [f for f in south if 'Tiksi: Sage paint' in (f['front'][0], f['back'][0]) and abs(abs(f['plan'][1]) - 0.05) < 1e-3]
         self.assertAlmostEqual(sage['plan'][1], 0.05, places=3, msg='the pos face is the one inside the room')
         self.assertEqual(sage['seen from'](0, 1), ('Tiksi: Sage paint', rgb(SAGE['color'])), 'painted on the side that faces the room')
         brick, = [f for f in south if abs(f['plan'][1] + 0.05) < 1e-3]
         self.assertEqual(brick['seen from'](0, -1), ('Tiksi: Brick, red', rgb(BRICK['color'])))
         ends = [f for f in south if abs(abs(f['plan'][1]) - 0.05) > 1e-3]
-        self.assertTrue(ends and all(f['front'][0] == f['back'][0] == 'Tiksi: Brick, red' for f in ends), 'ends, top and reveals')
+        self.assertTrue(ends and all(f['front'][0] == f['back'][0] == 'Tiksi: Sage paint' for f in ends), 'ends, top and reveals wear the interior finish')
         north_inside, = [f for f in faces if f['id'] == 'w-n' and abs(f['plan'][1] - 2.95) < 1e-3]
         self.assertEqual(north_inside['seen from'](0, -1)[0], 'Tiksi: Drywall, painted')
         floor, = [f for f in faces if f['id'] == 'r-1']

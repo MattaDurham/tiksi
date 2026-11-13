@@ -6,6 +6,7 @@ import {
   ws, load, save, touch, onChange, activeProperty, replaceWorkspace, mergeWorkspace,
   exportBundle, importBundle, listAllFileIds, orphanFiles, deleteFiles, whenHydrated,
   setSaveStatus, fmtBytes, escapeHtml, projectSlice, unreadableWorkspace, setAsideUnreadableWorkspace,
+  units, fmtLen, INCH_PRECISIONS, MM_PRECISIONS, inchPrecision, mmPrecision, inchPrecisionLabel, mmPrecisionLabel, precisionLabel,
 } from './store.js';
 import { openExchangeDialog } from './exchange-dialog.js';
 import { SCAN_ACCEPT, importScanFile } from './scans.js';
@@ -18,7 +19,8 @@ import { connectDiskWorkspace, diskWorkspace } from './disk-workspace.js';
 import { editHistoryState, onEditHistoryChange } from './edit-history.js';
 import { icon } from './icons.js';
 import { initPaneResize } from './pane-resize.js';
-import { initTiksiMenu } from './tiksi-menu.js';
+import { initTiksiMenu, setRestartAction } from './tiksi-menu.js';
+import { restartTiksi } from './restart.js';
 import { initField, fieldRouted, phoneLayout } from './field.js';
 import * as plan2d from './plan2d.js';
 import * as viewer3d from './viewer3d.js';
@@ -116,6 +118,7 @@ async function boot() {
 
   bindTopbar();
   initTiksiMenu();
+  if (diskWorkspace && diskWorkspace.canRestart()) setRestartAction(() => restartTiksi(diskWorkspace));
   initField();
   initPaneResize(document.getElementById('view'));
   bindHistoryControls();
@@ -436,7 +439,7 @@ function openFileMenu(initialTab = 'project', selected) {
       <p class="op-file-status" data-op-file-status></p><div class="file-actions"><button class="btn primary" data-one-pager>OPEN ONE-PAGER</button></div></section>
     <section data-file-panel="capture" hidden><h3>Bring your room into Tiksi</h3><p>Choose photos, a walk-through video, a scan, a 3D model or a saved project. Imported projects add or update properties here.</p><button class="btn primary" data-capture-open>CHOOSE FILES…</button><button class="btn" data-polycam>POLYCAM LINK</button><button class="btn" data-photo3d>PHOTOS → 3D</button></section>
     <section data-file-panel="exchange" hidden data-file-exchange></section>
-    <section data-file-panel="settings" hidden><h3>Display</h3><label>Units <select data-file-units><option value="imperial">Feet / square feet</option><option value="metric">Metres / square metres</option></select></label><details><summary>Model environment</summary><div data-file-env></div></details><div data-unavailable-list></div><h3>Where this project is kept</h3><p data-own-folder-label></p><div class="file-actions"><button class="btn primary" data-own-folder-link>CHOOSE FOLDER</button><button class="btn" data-folder-open>OPEN FROM FOLDER</button><button class="btn" data-own-folder-unlink>STOP KEEPING IT IN A FOLDER</button></div>
+    <section data-file-panel="settings" hidden><h3>Display</h3><div class="file-units"><span id="file-units-label">Units</span><div class="seg" role="group" aria-labelledby="file-units-label"><button type="button" class="seg-btn" data-units-choice="imperial">INCHES</button><button type="button" class="seg-btn" data-units-choice="metric">MILLIMETRES</button></div></div><label>Precision <select data-file-precision></select></label><p data-units-example></p><details><summary>Model environment</summary><div data-file-env></div></details><div data-unavailable-list></div><h3>Where this project is kept</h3><p data-own-folder-label></p><div class="file-actions"><button class="btn primary" data-own-folder-link>CHOOSE FOLDER</button><button class="btn" data-folder-open>OPEN FROM FOLDER</button><button class="btn" data-own-folder-unlink>STOP KEEPING IT IN A FOLDER</button></div>
       <label>Keep a SketchUp mirror (.skp) beside each project <input type="checkbox" data-mirror-on></label><p data-mirror-label></p>
       <h3>One-pager</h3><label>Ask to update the one-pager when Tiksi closes <select data-op-prompt>${PROMPT_MODES.map(([id,label])=>`<option value="${id}">${escapeHtml(label)}</option>`).join('')}</select></label><p>Closing Tiksi first shows the browser's own Leave site? question. Choose Cancel to stay and Tiksi asks whether to save the next version; choose Leave to close without it.</p>
       <details><summary>Workspace backup & maintenance</summary><h3>Projects without their own folder</h3><p data-folder-label></p><div class="file-actions"><button class="btn" data-folder-link>KEEP THEM IN ONE FOLDER</button><button class="btn" data-folder-unlink>UNLINK</button></div><p>Project saves are usually enough. A workspace backup carries every property.</p><button class="btn" data-workspace-save>SAVE WORKSPACE BACKUP</button><button class="btn" data-demo>ADD DEMO PROJECTS</button><button class="btn" data-storage>CLEAN UNUSED STORAGE</button><div data-mac-cleanup hidden><button class="btn" data-mac-cleanup-list>CLEAN UNUSED STORAGE ON THE MAC</button><p data-mac-cleanup-plan></p><button class="btn" data-mac-cleanup-remove hidden>REMOVE</button></div><p>Replace workspace is available only when you intentionally want to restore a full backup.</p><button class="btn" data-workspace-replace>REPLACE FROM BACKUP…</button></details></section>
@@ -508,8 +511,18 @@ function openFileMenu(initialTab = 'project', selected) {
   dialog.querySelector('[data-op-prompt]').onchange=e=>{ws.data.settings.onePagerPrompt=e.target.value;touch();};
   on('[data-polycam]',()=>{dialog.close();openNewPropertyDialog({into:prop?.id});});
   on('[data-photo3d]',()=>{dialog.close();location.hash='#/reconstruct';});
-  dialog.querySelector('[data-file-units]').value=ws.data.settings.units;
-  dialog.querySelector('[data-file-units]').onchange=e=>{ws.data.settings.units=e.target.value;touch();remountView();};
+  // Units and precision: inches (feet and inches, to 1/16" unless changed) or millimetres.
+  const showUnits=()=>{
+    const metric=units()==='metric', s=ws.data.settings;
+    dialog.querySelectorAll('[data-units-choice]').forEach(b=>{const on=b.dataset.unitsChoice===s.units;b.classList.toggle('active',on);b.setAttribute('aria-pressed',String(on));});
+    const pick=dialog.querySelector('[data-file-precision]');
+    pick.innerHTML=metric?MM_PRECISIONS.map(n=>`<option value="${n}">${escapeHtml(mmPrecisionLabel(n))}</option>`).join(''):INCH_PRECISIONS.map(n=>`<option value="${n}">${escapeHtml(inchPrecisionLabel(n))}</option>`).join('');
+    pick.value=String(metric?mmPrecision():inchPrecision());
+    dialog.querySelector('[data-units-example]').textContent='Lengths show like '+fmtLen(0.8509)+' and '+fmtLen(3.81)+', to the nearest '+precisionLabel()+'. Areas show in '+(metric?'square metres.':'square feet.');
+  };
+  dialog.querySelectorAll('[data-units-choice]').forEach(b=>b.onclick=()=>{if(ws.data.settings.units===b.dataset.unitsChoice)return;ws.data.settings.units=b.dataset.unitsChoice;touch();showUnits();remountView();});
+  dialog.querySelector('[data-file-precision]').onchange=e=>{ws.data.settings[units()==='metric'?'mmPrecision':'inchPrecision']=Number(e.target.value);touch();showUnits();remountView();};
+  showUnits();
   on('[data-folder-link]',()=>run(async()=>{
     if(filesState().folderNeedsPermission)return await reconnectFolder(true)?'Reconnected '+filesState().folderName+'.':'Permission was not given; nothing changed.';
     const dir=await linkFolder();return dir?'Projects without their own folder are now saved in '+dir.name+'.':'No folder chosen; nothing changed.';}));

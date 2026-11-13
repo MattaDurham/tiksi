@@ -33,6 +33,7 @@ class WorkflowTests(unittest.TestCase):
         shutil.copy(ROOT / 'server/peers.py', self.root / 'server/peers.py')
         shutil.copy(ROOT / 'server/ranges.py', self.root / 'server/ranges.py')
         shutil.copy(ROOT / 'server/code_version.py', self.root / 'server/code_version.py')
+        shutil.copy(ROOT / 'server/restart.py', self.root / 'server/restart.py')
         (self.root / 'server/__init__.py').write_text('', encoding='utf-8')
         (self.root / 'scripts/preflight.sh').write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
         (self.root / 'index.html').write_text('<html><body>fixture</body></html>', encoding='utf-8')
