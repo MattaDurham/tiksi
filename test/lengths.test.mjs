@@ -130,7 +130,7 @@ test('typed lengths: the forms people type are read, anything else is refused wi
 // field. A field may not quietly start reading 12 as 12 inches where it read 12 feet.
 const BARE_UNIT_BEFORE = {
   'js/plan2d.js': ['feet', 'feet', 'feet'],   // calibration, schedule sizes, every inspector field (typedLength)
-  'js/viewer3d.js': ['feet', 'feet', 'feet'],
+  'js/viewer3d.js': ['inches', 'feet', 'feet', 'feet'],
   'js/documentcenter.js': ['feet'],
   'js/fixtures-ui.js': ['feet'],
   'js/materialsview.js': ['feet'],

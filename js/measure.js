@@ -593,7 +593,7 @@ function readingRow(m) {
     <span class="ms-reading-side">${stateChip(state)}${applyBtn}</span></div>`;
 }
 function askRow(m) {
-  const why = m.confidence === 'unreadable' ? 'Numbers not readable' : !m.text.trim() ? 'What was measured?' : readingState(prop, m) === 'missing' ? 'Its element is gone' : 'Which element is this?';
+  const why = readingState(prop,m) === 'changed' ? 'Model changed since this reading' : m.confidence === 'unreadable' ? 'Numbers not readable' : !m.text.trim() ? 'What was measured?' : readingState(prop, m) === 'missing' ? 'Its element is gone' : 'Which element is this?';
   const name = videos().find(v => v.id === m.videoId)?.name || 'video removed';
   return `<button class="ms-ask-row" data-edit="${escapeHtml(m.id)}"><span class="ms-ask-frame" data-frame="${escapeHtml(m.id)}"></span>
     <span><b>${escapeHtml(why)}</b><small>${escapeHtml(name)} at ${fmtTime(m.seconds)} · ${Number.isFinite(m.value) ? escapeHtml(fmtReading(m.value)) : 'no value'}${m.text ? ' · ' + escapeHtml(m.text) : ''}</small></span></button>`;

@@ -1,3 +1,5 @@
+// Network fault injection uses Playwright routing, which service workers bypass.
+// The real service-worker/offline journey is covered in e2e-audit-repairs.mjs.
 // CLEAN UNUSED STORAGE on the Mac, in FILE → Settings → Workspace backup & maintenance: a press
 // lists what a clean-up would remove before anything goes; nothing to remove offers no REMOVE;
 // REMOVE sends back exactly that list, and a list that changed meanwhile is shown again to be
@@ -50,7 +52,7 @@ try {
   browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   const errors = [];
   const open = async (options = {}, prepare) => {
-    const context = await browser.newContext(options);
+    const context = await browser.newContext({ ...options, serviceWorkers: 'block' });
     const page = await context.newPage();
     page.on('pageerror', error => errors.push(error.message));
     if (prepare) await prepare(page);

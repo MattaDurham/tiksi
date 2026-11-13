@@ -1,3 +1,4 @@
+import { productEvidence } from './evidence.js';
 // An imported model's components, the SketchUp way. server/sketchup_convert.py writes each
 // component definition's geometry once and each instance as a glTF node whose extras name the
 // definition (sketchupComponent, sketchupDefinitionId, sketchupInstance...). Nested instances are
@@ -87,11 +88,12 @@ export function modelComponents(root) {
 // ---------- products ----------
 export function normalizeComponentProduct(p) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
-  const out = { productId: typeof p.productId === 'string' && ID_OK.test(p.productId) ? p.productId : null, brand: text(p.brand, 120), model: text(p.model, 120), name: text(p.name, 200) };
-  return out.productId || out.brand || out.model ? out : null;
+  const out = { ...productEvidence(p), productId: typeof p.productId === 'string' && ID_OK.test(p.productId) ? p.productId : null, brand: text(p.brand, 120), model: text(p.model, 120), name: text(p.name, 200) };
+  return out.productId || out.brand || out.model || out.proposedProduct ? out : null;
 }
 export function componentProductRecord(data, scan, key) {
-  const p = scan && scan.componentProducts && scan.componentProducts[key];
+  const link = scan && scan.componentProducts && scan.componentProducts[key];
+  const p = link?.proposedProduct || link;
   if (!p || !data || !Array.isArray(data.products)) return null;
   if (p.productId) { const r = data.products.find(x => x.id === p.productId); if (r) return r; }
   if (!p.brand || !p.model) return null;
@@ -102,6 +104,7 @@ export function componentProductRecord(data, scan, key) {
 // maker and model number name (found, else made). The record is kept with the property, so it
 // travels in the project file. Returns { record, created }.
 export function linkComponentProduct(data, prop, scan, component, fields, newId) {
+  if (fields.identityStatus === 'observed' && !fields.evidence?.identity?.source?.trim()) throw new Error('An observed identity needs a source reference.');
   let record = null, created = false;
   if (fields.productId) {
     record = data.products.find(r => r.id === fields.productId) || null;
@@ -120,11 +123,14 @@ export function linkComponentProduct(data, prop, scan, component, fields, newId)
   }
   if (prop) { record.propertyIds = Array.isArray(record.propertyIds) ? record.propertyIds : []; if (!record.propertyIds.includes(prop.id)) record.propertyIds.push(prop.id); }
   scan.componentProducts = scan.componentProducts || {};
-  scan.componentProducts[component.key] = normalizeComponentProduct({ productId: record.id, brand: record.brand, model: record.model, name: component.name });
+  const previous = scan.componentProducts[component.key] || {};
+  const link = normalizeComponentProduct({ ...fields, productId: record.id, brand: record.brand, model: record.model, name: component.name });
+  scan.componentProducts[component.key] = fields.identityStatus === 'proposed' ? { ...previous, proposedProduct: link } : { ...link, ...(previous.proposedProduct ? { proposedProduct: previous.proposedProduct } : {}) };
   return { record, created };
 }
-export function unlinkComponentProduct(scan, key) {
-  if (scan && scan.componentProducts) delete scan.componentProducts[key];
+export function unlinkComponentProduct(scan, key, aspect = 'all') {
+  if (aspect === 'proposed') { if (scan?.componentProducts?.[key]) delete scan.componentProducts[key].proposedProduct; }
+  else if (scan && scan.componentProducts) delete scan.componentProducts[key];
 }
 
 // ---------- schedule ----------

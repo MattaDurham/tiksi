@@ -32,11 +32,14 @@ const result = {
   sourceEvidence: [{ url: 'https://example.com/specification', title: 'Synthetic manufacturer sheet', relevance: 'Fixture evidence for thickness', checkedAt: '2026-01-01T00:00:00Z', sourceStatus: 'opened' }],
   fitNotes: ['Synthetic fit note'], unknowns: ['Delivery date needs confirmation'], offers: [], sustainability: [], reviews: [],
 };
+const historyJob={...fixture,id:'job-history',status:'completed',request:{query:'Unrelated historical brief',mode:'focused',constraints:{}},products:[{...result,id:'history-candidate'}]};
 let posted, calls = 0, cancelCalls = 0, available = true, finish = false;
 const server = http.createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname;
   const json = (status, data) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)); };
   if (path === '/api/material-research/capabilities') return json(200, { available, reason: available ? '' : 'Local research unavailable', token: 'synthetic-test-token' });
+  if (path === '/api/material-research' && req.method === 'GET') return json(200,{jobs:[fixture,historyJob],limit:10});
+  if (path === '/api/material-research/job-history') return json(200,{job:historyJob});
   if (path === '/api/material-research' && req.method === 'POST') {
     assert.equal(req.headers['x-tiksi-token'], 'synthetic-test-token');
     let body = ''; for await (const data of req) body += data;
@@ -116,6 +119,17 @@ try {
   assert.equal(unverified.price, 0); assert.equal(unverified.url, ''); assert.equal(unverified.research.candidate.currency, 'EUR');
   assert.match(unverified.notes, /Not entered into the USD estimate/);
   assert.match(unverified.notes, /Confirm coverage and conversion/);
+  await page.click('[data-history]');
+  assert.equal(await page.locator('[data-delete-job="job-fixture"]').isDisabled(),true,'saved product evidence protects its research');
+  await page.click('[data-open-job="job-history"]');
+  await page.waitForFunction(()=>document.querySelector('#research-query').value==='Unrelated historical brief');
+  assert.equal(await page.inputValue('#research-query'),'Unrelated historical brief');
+  assert.deepEqual(await page.locator('#research-scope').evaluate(el=>[...el.selectedOptions].map(o=>o.value)),[],'history never inherits the previous job scope');
+  assert.equal(await page.locator('[data-save-candidate="0"]').isDisabled(),false,'saved state belongs to the selected job');
+  await page.click('[data-history]');await page.click('[data-open-job="job-fixture"]');
+  await page.waitForFunction(()=>!document.querySelector('dialog[open]'));
+  assert.equal(await page.locator('[data-save-candidate="0"]').isDisabled(),true);
+
   await page.evaluate(() => { location.hash = '#/products'; });
   await page.waitForSelector('[data-edit]'); await page.locator('[data-edit]').last().click();
   assert.equal(await page.inputValue('#prod-category'), 'Kitchen faucet');

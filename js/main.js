@@ -1,3 +1,5 @@
+import { saveOfflineSnapshot, readOfflineSnapshot } from './offline-store.js';
+import { showOfflineWorkspace } from './offline-view.js';
 // App shell: routing, topbar, property management, persistence wiring.
 
 import {
@@ -21,19 +23,19 @@ import { initTiksiMenu } from './tiksi-menu.js';
 import { initField, fieldRouted, phoneLayout } from './field.js';
 import * as plan2d from './plan2d.js';
 import * as viewer3d from './viewer3d.js';
-import * as materialsview from './materialsview.js';
-import * as photos from './photos.js';
-import * as measure from './measure.js';
+const materialsview = lazyView(() => import('./materialsview.js'));
+const photos = lazyView(() => import('./photos.js'));
+const measure = lazyView(() => import('./measure.js'));
 import { isVideoFile, addVideoFromFile } from './videos.js';
-import * as reconstruction from './reconstruction.js';
-import * as research from './research.js';
-import * as projects from './projects.js';
-import * as products from './products.js';
-import * as budget from './budget.js';
-import * as schedule from './schedule.js';
-import * as cutsheets from './cutsheets.js';
-import * as documentcenter from './documentcenter.js';
-import * as guide from './guide.js';
+const reconstruction = lazyView(() => import('./reconstruction.js'));
+const research = lazyView(() => import('./research.js'));
+const projects = lazyView(() => import('./projects.js'));
+const products = lazyView(() => import('./products.js'));
+const budget = lazyView(() => import('./budget.js'));
+const schedule = lazyView(() => import('./schedule.js'));
+const cutsheets = lazyView(() => import('./cutsheets.js'));
+const documentcenter = lazyView(() => import('./documentcenter.js'));
+const guide = lazyView(() => import('./guide.js'));
 import { initNewProperty, openNewPropertyDialog, dialogOpen } from './newproperty.js';
 import { initOnePager, openOnePagerEditor, promptMode } from './one-pager-dialog.js';
 import { draftOnePager, onePagerStatus, PROMPT_MODES } from './one-pager.js';
@@ -44,6 +46,21 @@ import {
   listFolder, openFromFolder, scheduleFolderSync, filesState, onFilesChange, isDirty, saveTarget, FSA, FSA_DIR, mirrorStatus,
   editInSketchUp, NeedsFolder,
 } from './files.js';
+
+function lazyView(load) {
+  let module, mounted = false, token = 0;
+  return {
+    mount(root, onError) {
+      const own = ++token; root.textContent = 'Opening…';
+      load().then(value => { module = value; if (own !== token) return; root.textContent = ''; mounted = true; module.mount(root); })
+        .catch(error => { if (own === token) onError(error); });
+    },
+    unmount() { token++; if (mounted) module?.unmount?.(); mounted = false; },
+    undo() { if (mounted) module?.undo?.(); },
+    redo() { if (mounted) module?.redo?.(); },
+    sharedChange(keys) { return mounted && module?.sharedChange?.(keys); },
+  };
+}
 
 const VIEWS = {
   plan: plan2d,
@@ -66,10 +83,21 @@ let currentView = null;
 let currentName = '';
 
 async function boot() {
+  if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('/service-worker.js').then(async registration => {
+    await navigator.serviceWorker.ready;
+    const urls = performance.getEntriesByType('resource').map(r => r.name);
+    (registration.active || navigator.serviceWorker.controller)?.postMessage({ type: 'cache-shell', urls });
+  }).catch(e => console.warn('Offline shell unavailable', e));
   const had = load();
   await whenHydrated();
   try { await connectDiskWorkspace({ hadLocal: had, onRemote: sharedChange }); }
-  catch (error) { error.projectFiles = true; throw error; }
+  catch (error) {
+    try { const cached = await readOfflineSnapshot(); if (cached) ws.data = cached; } catch { /* storage may be unavailable */ }
+    if (showOfflineWorkspace(error)) return; error.projectFiles = true; throw error;
+  }
+  let offlineTimer;
+  const keepOffline = () => { clearTimeout(offlineTimer); offlineTimer = setTimeout(() => saveOfflineSnapshot(ws.data).catch(e => console.warn('Offline snapshot unavailable', e)), 350); };
+  keepOffline(); onChange(keepOffline);
   // This browser holds the workspace itself, and what it holds could not be read. Nothing is
   // loaded over it and nothing is saved until the person has decided (with the Mac's project
   // files the unreadable text was already preserved there when they were connected).
@@ -196,8 +224,7 @@ function remountView() {
 function openPage() {
   const root = document.getElementById('view');
   root.innerHTML = '';
-  try { currentView.mount(root); }
-  catch (error) {
+  const failed = error => {
     console.error(currentName + ' could not open', error);
     unmountCurrent();
     const label = document.querySelector(`#rail a[data-view="${currentName}"]`)?.textContent.trim() || currentName.toUpperCase();
@@ -205,7 +232,9 @@ function openPage() {
       <p>${escapeHtml(label)} could not open (${escapeHtml(String(error && error.message || error))}). The other pages still work, and nothing saved is affected.</p>
       <p><button class="btn primary" data-reload>RELOAD</button></p></div>`;
     root.querySelector('[data-reload]').onclick = () => location.reload();
-  }
+  };
+  try { currentView.mount(root, failed); }
+  catch (error) { failed(error); }
   refreshHistoryControls();
   fieldRouted(currentName);
 }

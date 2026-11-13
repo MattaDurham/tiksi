@@ -388,6 +388,39 @@ class WorkspaceTests(unittest.TestCase):
             with zipfile.ZipFile(path) as archive:
                 self.assertEqual(json.loads(archive.read('workspace.json'))['properties'], data['properties'])
 
+    def test_phone_documents_and_recovery_copies_are_scoped_and_readable(self):
+        self.commit(workspace())
+        folder = self.service.project_folder('prop-a')
+        document = folder / 'Product documents' / 'manual.pdf'
+        document.parent.mkdir(parents=True, exist_ok=True)
+        original = b'%PDF-1.4\nsynthetic manual\n'
+        document.write_bytes(original)
+        outside = self.root / 'outside.pdf'; outside.write_bytes(b'private outside')
+        (folder / 'escape.pdf').symlink_to(outside)
+        def get(path):
+            class Handler:
+                command = 'GET'; client_address = ('100.80.1.2', 1234); connection = Mock()
+                headers = {'Host': 'localhost:8888', 'X-Tiksi-Workspace': '1', 'X-Tiksi-Token': self.service.token}
+                wfile = io.BytesIO()
+                def send_response(self, status): self.status = status
+                def send_header(self, *args): pass
+                def end_headers(self): pass
+            h = Handler(); h.path = path; self.service.dispatch(h)
+            return h.status, h.wfile.getvalue()
+        self.assertEqual(get('/api/workspace/document/prop-a?path=Product%20documents/manual.pdf'), (200, original))
+        for path in ('../outside.pdf', '/outside.pdf', 'escape.pdf'):
+            self.assertEqual(get('/api/workspace/document/prop-a?path=' + path)[0], 400)
+        self.assertEqual(get('/api/workspace/document/not-mounted?path=manual.pdf')[0], 404)
+        snapshot = self.service.snapshot()
+        name = self.service.archive_copy({'data': snapshot['data'], 'assets': snapshot['assets']})
+        status, raw = get('/api/workspace/recovery')
+        self.assertEqual(status, 200); self.assertEqual(json.loads(raw)['copies'][0]['name'], name)
+        status, raw = get('/api/workspace/recovery/' + name + '?summary=1')
+        self.assertEqual(status, 200); self.assertEqual(json.loads(raw)['properties'][0]['id'], 'prop-a')
+        status, raw = get('/api/workspace/recovery/' + name)
+        self.assertEqual(status, 200); self.assertEqual(raw[:2], b'PK')
+        self.assertEqual(get('/api/workspace/recovery/../outside.pdf')[0], 400)
+
     def test_open_route_opens_only_paths_inside_the_project_folder_from_this_mac(self):
         self.commit(workspace())
         folder = Path(self.service.paths['prop-a']).parent
@@ -602,6 +635,9 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(model.read_bytes(), body)
         self.assertEqual(put('0', b'stale'), 409, 'a model changed meanwhile is not overwritten')
         self.assertEqual(model.read_bytes(), body)
+        self.assertEqual(put(str(model.stat().st_mtime_ns), b'revised model'), 200)
+        self.assertEqual(model.read_bytes(), b'revised model')
+        self.assertEqual([p.read_bytes() for p in model.parent.glob(model.stem + '.before-sync-*.skp')], [body])
         self.assertEqual([p.name for p in source.parent.iterdir() if p.name.endswith('.tmp')], [], 'no spare file is left')
 
     def test_http_reads_require_trusted_peer_same_origin_and_custom_header(self):

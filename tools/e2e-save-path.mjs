@@ -1,3 +1,5 @@
+// Network fault injection uses Playwright routing, which service workers bypass.
+// The real service-worker/offline journey is covered in e2e-audit-repairs.mjs.
 // The save path of the Mac's project files, as a person meets it: a SketchUp save arriving
 // under an open page, a transfer that stalls or takes long, and a save the Mac refuses.
 // One private server on a free port; every project is synthetic and lives in a temporary folder.
@@ -45,7 +47,7 @@ const errors = [];
 // A SketchUp save is read back and merged while PLAN is open. An edit then made in that same
 // open page must reach the Mac, not vanish into the record the page was built with.
 async function sketchupSaveUnderAnOpenPage() {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   // Stand in for SketchUp: the conversion service says it is installed, writes a small file
   // for the model, and reads it back as whatever `skpHolds` says the model now contains.
   let skpHolds = { walls: [] }, writes = 0;
@@ -89,7 +91,7 @@ async function sketchupSaveUnderAnOpenPage() {
 // A file transfer has no limit on its whole duration, only on how long nothing moves; and a
 // round that failed part-way sends again only what the Mac does not hold.
 async function transfersTakeAsLongAsTheyNeed() {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   const page = await openPage(context);
   // Nothing moving for 1.5 seconds is a stall here, so the check runs in seconds, not minutes.
   const limits = { stallMs: 1500, answerMs: 1500 };
@@ -122,7 +124,7 @@ async function transfersTakeAsLongAsTheyNeed() {
   assert.equal((await onTheMac()).assets['slow-upload']?.size, 1200000, 'an upload that keeps moving finishes, however long it takes');
 
   // The same for a download, in a second browser that does not have the file yet.
-  const other = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const other = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   const reader = await openPage(other);
   await reader.evaluate(async limits => { Object.assign((await import('/js/disk-workspace.js')).transferLimits, limits); }, limits);
   const otherCdp = await other.newCDPSession(reader);
@@ -170,7 +172,7 @@ async function transfersTakeAsLongAsTheyNeed() {
 // why, and is not sent again and again. A lost connection with nothing to save is not
 // reported as unsaved work.
 async function refusedAndRetriedSavesReadDifferently() {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   const page = await openPage(context);
   const statusLine = () => page.evaluate(() => { const el = document.querySelector('#save-status'); return { text: el.textContent, kind: el.dataset.saveState, detail: el.title }; });
   const puts = []; page.on('request', r => { if (r.method() === 'PUT' && new URL(r.url()).pathname === '/api/workspace') puts.push(Date.now()); });
@@ -272,7 +274,7 @@ async function refusedAndRetriedSavesReadDifferently() {
 // got and goes on from there; an original the Mac already holds is not sent at all; a Mac
 // that does not take pieces gets it the old way; and each refusal reaches the status line.
 async function largeOriginalsGoInPiecesAndResume() {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   // As on a phone's plain-http address: the browser offers no hashing, the page works it out.
   await context.addInitScript(() => { try { Object.defineProperty(crypto, 'subtle', { value: undefined, configurable: true }); } catch {} });
   const page = await openPage(context);
@@ -394,7 +396,7 @@ async function largeOriginalsGoInPiecesAndResume() {
 
   // 5. A Mac that does not take pieces and cannot say what it holds (an older Tiksi on it):
   // the original goes in one request, exactly as it always did.
-  const older = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const older = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   const answerMissing = route => route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'Workspace endpoint not found' }) });
   await older.route('**/api/workspace/blobs/held', answerMissing);
   await older.route('**/api/workspace/uploads/*', answerMissing);
@@ -428,7 +430,7 @@ async function largeOriginalsGoInPiecesAndResume() {
     store.ws.data.properties.find(p => p.id === 'prop-large').photos.push({ id, name: id, thumb: '', notes: '', kind: 'photo' });
     store.touch();
   };
-  const leaving = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const leaving = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   const gone = await openPage(leaving);
   let cut = false;
   await gone.route('**/api/workspace/uploads/*', route => {
@@ -440,7 +442,7 @@ async function largeOriginalsGoInPiecesAndResume() {
   assert.ok(cut, 'the page left while its third piece was on the way');
   await leaving.close();
   assert.equal((await onTheMac()).assets['after-leaving'], undefined, 'nothing of it is saved yet');
-  const next = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const next = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   const back = await openPage(next);
   const later = [];
   back.on('request', r => {

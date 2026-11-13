@@ -92,12 +92,12 @@ try {
   await page.click('[data-one-pager]');
   await page.locator('.op-dialog .op-preview-page .op-page').waitFor();
   check(/No one-pager saved yet/.test(await page.locator('.op-dlg-status').textContent()), 'the editor opens and says no version is saved');
-  check((await page.inputValue('[data-f="headline"]')) === 'Test House' && /2 rooms/.test(await page.inputValue('[data-f="tagline"]')), 'the headline and tagline are drafted from the property');
+  check((await page.inputValue('[data-f="headline"]')) === 'Test House' && /2 modeled floor regions/.test(await page.inputValue('[data-f="tagline"]')), 'the headline and tagline describe the modeled floor regions');
   const summary = await page.inputValue('[data-f="summary"]');
   check(/Kitchen refresh/.test(summary) && /\$32,000/.test(summary) && /13 calendar days, from Nov 10, 2026 to Nov 22, 2026\./.test(summary) && /Acme Shaker cabinets/.test(summary), 'the summary names the scope, the likely cost, the schedule and a product');
   await page.waitForFunction(() => !!document.querySelector('.op-preview-page .op-hero img'));
   const pageText = await page.locator('.op-preview-page .op-page').innerText();
-  check(/Test House/.test(pageText) && /\$32,000/.test(pageText) && /\$25,000 to \$41,000/.test(pageText) && /13 calendar days/.test(pageText) && /2 rooms/.test(pageText) && /Shaker cabinets/.test(pageText), 'the page shows the headline, budget range, schedule, rooms and products');
+  check(/Test House/.test(pageText) && /\$32,000/.test(pageText) && /\$25,000 to \$41,000/.test(pageText) && /13 calendar days/.test(pageText) && /2 modeled floor regions/.test(pageText) && /Shaker cabinets/.test(pageText) && /not independently verified site measurements/.test(pageText), 'the page shows the headline, budget range, schedule, modeled regions and products without implying verified site measurements');
   check((await page.locator('.op-preview-page .op-plan svg polygon').count()) >= 2 && /LIVING ROOM/.test(await page.locator('.op-preview-page .op-plan').innerHTML()), 'the floor plan is drawn beside the text with its rooms named');
   check(/front\.jpg/.test(await page.locator('[data-op-hero] option').first().textContent()), 'the automatic picture is the site photo');
 
@@ -198,7 +198,7 @@ try {
   await until(() => prop("return p.name === 'Second House' && p.onePager.versions.length === 1"), 'the new property\'s first one-pager');
   d = await docs();
   check(d.length === 1 && /Second House - one-pager v1/.test(d[0].name) && d[0].pages === 1, 'a property made by name starts with one-pager version 1 (' + (d[0] && d[0].name) + ')');
-  check(await prop("return /A renovation at Second House/.test(p.onePager.summary) && p.onePager.headline === 'Second House'"), 'its text is drafted from what little is known');
+  check(await prop("return /The modeled portion of Second House/.test(p.onePager.summary) && /not independently verified site measurements/.test(p.onePager.summary) && p.onePager.headline === 'Second House'"), 'its text identifies the modeled portion and unverified dimensions');
   check((await state()) === 'current', 'and it is current');
 
   // ---- DOCUMENTS shows the newest version ----
