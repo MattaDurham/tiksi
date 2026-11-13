@@ -7,7 +7,7 @@ export function evidenceSignature(record) {
   const fields = ['ax','ay','bx','by','thickness','height','pts','width','sill','t','wallId','level','x','y','rot','w','d','h','y0','depth','subtype','offsets','scale','rotation','position','componentTransforms','hiddenParts','profile','sourceVersion','assetRevision','pos','rot','rotY','bytes','convertedAgainAt','leaves','plain','glass','side','seat','counterT','toeKick','toeDepth','overhang','partOffsets'];
   // Append newly supported geometry only when present, preserving legacy signatures for
   // records that do not use it while invalidating reviewed details when they change.
-  const detailFields = ['detail','ceilingHeight','baseboardPos','baseboardNeg','floorContinuity','doorState'];
+  const detailFields = ['detail','ceilingHeight','baseboardPos','baseboardNeg','floorContinuity','doorState','materialEndA','materialEndB'];
   return JSON.stringify([...fields.map(k => [k, record?.[k] ?? null]), ...detailFields.filter(k => record?.[k] !== undefined).map(k => [k, record[k]])]);
 }
 export function evidenceState(record, aspect = 'geometry') {

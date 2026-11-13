@@ -55,6 +55,7 @@ function openingParams(o, s0, s1, L, H) {
 function wallParams(prop, w) {
   const p = { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by, thickness: w.thickness || 0.114, height: wallHeightOf(prop, w) };
   for (const key of ['profile', 'baseboardPos', 'baseboardNeg']) if (w[key] && typeof w[key] === 'object') p[key] = JSON.parse(JSON.stringify(w[key]));
+  for (const key of ['materialEndA', 'materialEndB']) if (w[key]) p[key] = w[key];
   return p;
 }
 
@@ -92,6 +93,7 @@ export function wallSig(p) { return wallSigNow(p); }
 function wallSigNow(p) {
   let sig = ['wall', tenth(p.ax), tenth(p.ay), tenth(p.bx), tenth(p.by), tenth(p.thickness), tenth(p.height)].join(',');
   for (const key of ['profile', 'baseboardPos', 'baseboardNeg']) if (p[key] && typeof p[key] === 'object') sig += '|' + key + ':' + JSON.stringify(stableDetail(p[key]));
+  for (const key of ['materialEndA', 'materialEndB']) if (p[key]) sig += '|' + key + ':' + JSON.stringify(p[key]);
   return sig + SIG_TAIL;
 }
 export function openingSig(p) { return openingSigNow(p); }
@@ -221,6 +223,7 @@ export function mirrorSpec(prop, materials, legacy = false) {
     });
     // pos: the long face on the side the plan normal (-uy, ux) of a -> b points to (in the
     // .skp, local y = -thickness/2); neg: the opposite face; other: ends, top and reveals.
+    // Optional endA/endB override only the physical vertical ends at local x=0 / x=L.
     const ids = wallFaceMaterialIds(w, roomsOn(prop, lvl.id));
     const faces = Object.fromEntries(Object.entries(ids).map(([face, id]) => [face, finish(id, 'wall', 'wall ' + w.id)]));
     const wall = Object.assign({ id: w.id, level: lvl.id, elevation: lvl.elevation, name: 'Wall ' + w.id, holes, materials: faces, tag: tag('wall:' + w.id) }, st.params);
@@ -297,8 +300,9 @@ export function hash(s) {
   return (h >>> 0).toString(36);
 }
 
-// Finishes are part of the spec, so a material change rewrites the .skp; `elements` holds
-// geometry signatures only, so the read-back never reports it as a SketchUp edit.
+// Finishes are part of the spec, so a material change rewrites the .skp. Element records
+// compare geometry and explicit endpoint IDs; repainting ordinary native faces is not
+// interpreted as a geometry edit.
 export function specSignature(spec) {
   return hash(JSON.stringify(Object.assign({}, spec, { underlays: spec.underlays.map(u => u.sig) })));
 }
@@ -441,6 +445,10 @@ export function mergeMirror(prop, read, synced, seenBefore) {
 function applyWall(prop, w, now) {
   for (const key of ['profile', 'baseboardPos', 'baseboardNeg']) {
     if (now[key] && typeof now[key] === 'object') w[key] = JSON.parse(JSON.stringify(now[key]));
+    else if (Object.hasOwn(now, key) && now[key] === null) delete w[key];
+  }
+  for (const key of ['materialEndA', 'materialEndB']) {
+    if (typeof now[key] === 'string' && now[key]) w[key] = now[key];
     else if (Object.hasOwn(now, key) && now[key] === null) delete w[key];
   }
   for (const k of ['ax', 'ay', 'bx', 'by']) w[k] = round(now[k]);

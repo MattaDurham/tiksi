@@ -232,18 +232,24 @@ def paint(api, face, mat, outward=None):
     api.call('SUFaceSetFrontMaterial' if front else 'SUFaceSetBackMaterial', face, mat)
 
 
-def paint_wall(api, entities, th, faces, materials):
-    """Wall faces by side: local y = -th/2 is the spec's `pos` face, +th/2 `neg`, the rest `other`."""
+def paint_wall(api, entities, th, faces, materials, length=None):
+    """Long faces use pos/neg; optional local x=0/x=L end finishes leave caps and reveals alone."""
     pos, neg, other = (materials.get(faces.get(k)) for k in ('pos', 'neg', 'other'))
+    ends = {key: materials.get(faces[key]) for key in ('endA', 'endB') if faces.get(key)}
     half, tol = th / 2 * IN, 1e-3
     for face in api.collection(entities, 'Faces'):
-        ys = [p[1] for p in face_ring(api, face)]
+        ring = face_ring(api, face)
+        ys = [p[1] for p in ring]
         if all(abs(y + half) < tol for y in ys):
             paint(api, face, pos, (0, -1, 0))
         elif all(abs(y - half) < tol for y in ys):
             paint(api, face, neg, (0, 1, 0))
+        elif length is not None and 'endA' in ends and all(abs(p[0]) < tol for p in ring):
+            paint(api, face, ends['endA'])
+        elif length is not None and 'endB' in ends and all(abs(p[0] - length * IN) < tol for p in ring):
+            paint(api, face, ends['endB'])
         else:
-            paint(api, face, other)      # ends, top and reveals: either side may show
+            paint(api, face, other)      # unoverridden ends, top and reveals: either side may show
 
 
 # ---------- wall solids ----------
@@ -709,8 +715,11 @@ def write_wall(api, entities, wall, layer, materials, tags=None):
     if faces:
         fill(api, inner, points, faces)
         if isinstance(wall.get('materials'), dict):
-            paint_wall(api, inner, th, wall['materials'], materials)
+            paint_wall(api, inner, th, wall['materials'], materials, length=L)
     base = {'ax': r6(ax), 'ay': r6(ay), 'bx': r6(bx), 'by': r6(by), 'thickness': r6(th), 'height': r6(H), 'elevation': r6(elev)}
+    for key in ('materialEndA', 'materialEndB'):
+        if isinstance(wall.get(key), str) and wall[key]:
+            base[key] = wall[key]
     for key in ('baseboardPos', 'baseboardNeg'):
         if isinstance(wall.get(key), dict):
             base[key] = json.loads(json.dumps(wall[key]))
@@ -1093,6 +1102,11 @@ def read_wall(api, group, data, warnings):
            'thickness': r6(dist(side0, side1) / IN), 'height': r6(dist(a, top) / IN), 'elevation': r6(a[2] / IN)}
     across_reflected = m[0]*m[5]-m[1]*m[4] < 0
     base = data.get('base') or {}
+    # End A/B follow local x-min/x-max, which are also the reported endpoints. A
+    # reflected group moves those ends; swapping the IDs would move paint twice.
+    for key in ('materialEndA', 'materialEndB'):
+        if isinstance(base.get(key), str) and base[key]:
+            now[key] = base[key]
     for key, opposite in (('baseboardPos', 'baseboardNeg'), ('baseboardNeg', 'baseboardPos')):
         source = opposite if across_reflected else key
         value = base.get(source)

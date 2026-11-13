@@ -159,7 +159,8 @@ function leafMaterials() {
 // so a wall can hand its room-facing side to a different material: FACE_POS is the long
 // +z face, FACE_NEG the long -z face, FACE_OTHER the ends, top and bottom.
 export const FACE_POS = 1, FACE_NEG = 2, FACE_OTHER = 4, FACE_ALL = 7;
-export function metricPrism(footprint, y0, y1, faces) {
+const FACE_END_A = 8, FACE_END_B = 16;
+export function metricPrism(footprint, y0, y1, faces, edgeKinds) {
   if (faces == null) faces = FACE_ALL;
   const P = [], N = [], UV = [], I = [];
   let base = 0;
@@ -174,7 +175,7 @@ export function metricPrism(footprint, y0, y1, faces) {
     const dx = bx - ax, dz = bz - az, len = Math.hypot(dx, dz);
     if (len < 1e-9) continue;
     const along = Math.abs(dz) < 1e-9;
-    const kind = along ? (dx > 0 ? FACE_POS : FACE_NEG) : FACE_OTHER;
+    const kind = edgeKinds?.[i] ?? (along ? (dx > 0 ? FACE_POS : FACE_NEG) : FACE_OTHER);
     if (!(faces & kind)) continue;
     // Long faces keep u = x so the pattern runs unbroken across the pieces of a wall;
     // end faces measure u along their own edge.
@@ -641,6 +642,8 @@ export function buildWallGroup(wall, openings, property, ctx) {
   bucket(matOf(faceIds.other), FACE_OTHER);
   bucket(matOf(faceIds.pos), FACE_POS);
   bucket(matOf(faceIds.neg), FACE_NEG);
+  if (faceIds.endA) bucket(matOf(faceIds.endA), FACE_END_A);
+  if (faceIds.endB) bucket(matOf(faceIds.endB), FACE_END_B);
 
   const baseGeos = [];
   const baseEnds = new Map();
@@ -650,8 +653,15 @@ export function buildWallGroup(wall, openings, property, ctx) {
   };
   for (const s of solids) {
     const fp = solidFootprint(s, L, h, ends);
+    // The footprint runs A+ -> B+ -> optional B tip -> B- -> A- -> optional A tip.
+    // Only pieces that reach a real wall endpoint get its override; the vertical
+    // edges at an opening remain ordinary reveals, even when their normal matches.
+    const atA = s.s0 < 0.001, atB = s.s1 > L - 0.001;
+    const negEdge = 2 + (atB && ends.b.tip ? 1 : 0);
+    const edgeKinds = fp.map((_, i) => i > 0 && i < negEdge && atB && faceIds.endB ? FACE_END_B
+      : i > negEdge && atA && faceIds.endA ? FACE_END_A : undefined);
     const y1 = s.v1 >= H - 0.001 ? H + lift : s.v1;
-    for (const b of buckets) b.geos.push(metricPrism(fp, s.v0, y1, b.mask));
+    for (const b of buckets) b.geos.push(metricPrism(fp, s.v0, y1, b.mask, edgeKinds));
     if (s.v0 < 0.001) {
       // Baseboard on every face that borders a room, only on floor-touching pieces, its
       // ends mitred like the face it sits on so it meets the neighbour's baseboard.

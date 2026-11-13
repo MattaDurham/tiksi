@@ -13,6 +13,7 @@ registerHooks({ resolve(spec, ctx, next) {
 } });
 globalThis.indexedDB = { open() { throw new Error('no IndexedDB under Node'); } };
 const { ModelMirrors, planarSurface } = await import('../js/model-mirrors.js');
+const { ModelBatches } = await import('../js/model-batch.js');
 const { materialLook, shareModelMaterials } = await import('../js/model-materials.js');
 
 const close = (a, b, message, tolerance = 2e-6) => assert.ok(a.distanceTo(b) < tolerance, message + ': ' + a.toArray() + ' versus ' + b.toArray());
@@ -72,6 +73,17 @@ test('runtime mirror vertices preserve transformed surfaces without editing impo
       const expected = new THREE.Vector3().fromBufferAttribute(sourceGeometry.attributes.position, i).applyMatrix4(s.mesh.matrixWorld);
       const actual = new THREE.Vector3().fromBufferAttribute(runtime.geometry.attributes.position, i).applyMatrix4(runtime.matrixWorld);
       close(actual, expected, 'world vertex ' + i);
+    }
+    const runtimeNormals = runtime.geometry.attributes.normal;
+    assert.equal(runtimeNormals.count, runtime.geometry.attributes.position.count, 'override passes receive a normal for every runtime vertex');
+    const triangle = [0, 1, 2].map(i => new THREE.Vector3().fromBufferAttribute(runtime.geometry.attributes.position, runtime.geometry.index.getX(i)));
+    const faceNormal = triangle[1].clone().sub(triangle[0]).cross(triangle[2].clone().sub(triangle[0])).normalize();
+    for (let i = 0; i < runtimeNormals.count; i++) {
+      const n = new THREE.Vector3().fromBufferAttribute(runtimeNormals, i);
+      assert.ok(n.toArray().every(Number.isFinite) && Math.abs(n.length() - 1) < 1e-6, 'finite unit runtime normal');
+      assert.ok(n.dot(faceNormal) > 0.999999, 'normal follows the actual baked triangle winding');
+      n.applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(runtime.matrixWorld));
+      assert.ok(Math.abs(n.dot(normal)) > 0.999999, 'world normal is perpendicular to the transformed mirror plane');
     }
     close(e.normal, normal, 'normal uses the inverse transpose, including negative scales');
     const basis = [0, 1, 2].map(column => new THREE.Vector3().setFromMatrixColumn(runtime.matrixWorld, column));
@@ -204,4 +216,94 @@ test('reflection resources are freed on model removal and disposal without dispo
   s.mirrors.dispose(); s.mirrors.dispose();
   assert.equal(s.mirrors.root.parent, null); assert.equal(s.mesh.parent, s.parent);
   assert.equal(counts.sourceGeometry, 0); assert.equal(counts.sourceMaterial, 0);
+});
+
+test('drawing a captured reflection suppresses only the original surface writes and restores exact flags', () => {
+  const s = scene();
+  const ordinary = s.mesh.material.clone(); delete ordinary.userData.tiksiMirror;
+  const other = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), ordinary); s.parent.add(other);
+  s.update(); s.mirrors.entries.get(s.mesh).captured = true;
+  const geometry = s.mesh.geometry, source = s.mesh.material;
+  const ray = new THREE.Raycaster(new THREE.Vector3(0, 0, 5), new THREE.Vector3(0, 0, -1));
+  for (const [colorWrite, depthWrite] of [[true, true], [false, true], [true, false], [false, false]]) {
+    Object.assign(source, { colorWrite, depthWrite });
+    const result = s.mirrors.draw(() => {
+      assert.equal(source.colorWrite, false, 'the source color cannot compete with the reflected image');
+      assert.equal(source.depthWrite, false, 'the source cannot occlude its own overlay');
+      assert.equal(source.visible, true); assert.equal(s.mesh.visible, true);
+      assert.equal(s.mesh.geometry, geometry); assert.equal(s.mesh.material, source);
+      assert.ok(ray.intersectObject(s.mesh).length > 0, 'the source remains pickable while rendering');
+      assert.equal(ordinary.colorWrite, true); assert.equal(ordinary.depthWrite, true);
+      return 'drawn';
+    });
+    assert.equal(result, 'drawn');
+    assert.equal(source.colorWrite, colorWrite); assert.equal(source.depthWrite, depthWrite);
+    assert.throws(() => s.mirrors.draw(() => { throw new Error('synthetic draw failure'); }), /synthetic draw failure/);
+    assert.equal(source.colorWrite, colorWrite, 'error recovery restores the original color flag');
+    assert.equal(source.depthWrite, depthWrite, 'error recovery restores the original depth flag');
+    assert.equal(source.visible, true); assert.equal(s.mesh.visible, true);
+  }
+  s.mirrors.dispose();
+});
+
+test('uncaptured, disabled and hidden reflections leave the ordinary fallback surface drawable', () => {
+  const s = scene(); s.update();
+  const source = s.mesh.material;
+  const unchanged = label => s.mirrors.draw(() => {
+    assert.equal(source.colorWrite, true, label + ' preserves color');
+    assert.equal(source.depthWrite, true, label + ' preserves depth');
+    assert.equal(source.visible, true);
+  });
+  unchanged('uncaptured');
+  s.mirrors.entries.get(s.mesh).captured = true;
+  s.update({ enabled: false }); unchanged('disabled');
+  s.parent.visible = false; s.update({ enabled: true }); unchanged('hidden ancestor');
+  s.parent.visible = true; s.mesh.material.visible = false; s.update();
+  s.mirrors.draw(() => {
+    assert.equal(source.colorWrite, true); assert.equal(source.depthWrite, true);
+    assert.equal(source.visible, false, 'the author-hidden material remains hidden');
+  });
+  s.mirrors.dispose();
+});
+
+test('a shared mirror material with unsupported geometry falls back as a whole without erasing the unsupported mesh', () => {
+  const s = scene();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 0.2), s.mesh.material); s.parent.add(box);
+  s.update();
+  assert.equal(s.mirrors.entries.size, 0, 'the material cannot be suppressed when part of it needs ordinary rendering');
+  assert.ok(s.mirrors.stats().rejected > 0);
+  s.mirrors.draw(() => {
+    assert.equal(s.mesh.material.colorWrite, true); assert.equal(box.material.depthWrite, true);
+    assert.equal(s.mesh.visible, true); assert.equal(box.visible, true);
+  });
+  s.parent.remove(box); s.update();
+  assert.equal(s.mirrors.entries.size, 1, 'removing unsupported geometry permits the valid plane again');
+  assert.equal(s.mesh.material, box.material, 'fallback did not split or rewrite source material identity');
+  s.mirrors.dispose();
+});
+
+test('reflection capture hides declared surfaces without hiding same-looking ordinary batching neighbours', () => {
+  const s = scene(), plain = s.mesh.material.clone(); plain.userData = {};
+  Object.assign(s.wrapper.userData, { scanKind: 'mesh', inner: s.parent });
+  const otherMirror = new THREE.Mesh(s.mesh.geometry, s.mesh.material); otherMirror.position.x = -0.5;
+  const ordinary = new THREE.Mesh(s.mesh.geometry, plain), otherOrdinary = ordinary.clone();
+  ordinary.position.x = 0.5; otherOrdinary.position.y = -0.5;
+  s.parent.add(otherMirror, ordinary, otherOrdinary);
+  const batches = new ModelBatches(); s.world.add(batches.root);
+  s.update(); batches.beginFrame({ model: s.wrapper });
+  const mirrorProxy = batches.members.get(s.mesh).proxy, ordinaryProxy = batches.members.get(ordinary).proxy;
+  assert.notEqual(mirrorProxy, ordinaryProxy, 'declared and ordinary copies need separate drawing materials');
+  assert.equal(batches.stats().proxies, 2, 'both pairs still batch within their own surface class');
+  let captures = 0;
+  for (const e of s.mirrors.entries.values()) e.capture = () => {
+    captures++;
+    assert.equal(mirrorProxy.material.visible, false, 'the source mirror cannot occlude its own capture');
+    assert.equal(ordinaryProxy.material.visible, true, 'same-looking ordinary surfaces stay in the reflected room');
+  };
+  const renderer = { getRenderTarget: () => null, setRenderTarget() {}, xr: { enabled: true }, shadowMap: { autoUpdate: true } };
+  try { s.mirrors.render(renderer, s.world, s.camera); }
+  finally { batches.endFrame(); }
+  assert.equal(captures, 2);
+  assert.equal(s.mesh.material.visible, true); assert.equal(plain.visible, true);
+  batches.dispose(); s.mirrors.dispose();
 });

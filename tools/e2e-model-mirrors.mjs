@@ -55,6 +55,9 @@ try {
     const ordinaryMaterial = material.clone(); ordinaryMaterial.userData = {};
     const ordinary = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.3), ordinaryMaterial);
     ordinary.position.set(2.7, 0, 0); inner.add(ordinary);
+    // Stress coplanar source/overlay drawing: any source fragments leaking through the
+    // reflection are bright white, while the reflected scene contains no white surfaces.
+    material.emissive.setHex(0xffffff);
     const target = (color, x, y, z) => {
       const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 0.3), new THREE.MeshBasicMaterial({ color }));
       mesh.position.set(x, y, z); mesh.rotation.y = Math.PI; inner.add(mesh); return mesh;
@@ -71,6 +74,7 @@ try {
     const batches = new ModelBatches(); scene.add(batches.root);
     const geometry = surface.geometry, parent = surface.parent, children = [...inner.children];
     const sourcePositions = Array.from(geometry.attributes.position.array);
+    const sourceFlags = [];
     const image = () => {
       const gl = renderer.getContext(), bytes = new Uint8Array(width * height * 4);
       gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, bytes);
@@ -82,7 +86,12 @@ try {
         }
         return { count, x: count ? x / count : null, y: count ? y / count : null };
       };
-      return { red: locate(0), green: locate(1), center: [...bytes.slice((240 * width + 320) * 4, (240 * width + 320) * 4 + 4)] };
+      let whiteInsideMirror = 0;
+      for (let y = 80; y < 400; y++) for (let x = 150; x < 490; x++) {
+        const i = (y * width + x) * 4;
+        if (bytes[i] > 200 && bytes[i + 1] > 200 && bytes[i + 2] > 200) whiteInsideMirror++;
+      }
+      return { red: locate(0), green: locate(1), whiteInsideMirror, center: [...bytes.slice((240 * width + 320) * 4, (240 * width + 320) * 4 + 4)] };
     };
     const expected = mesh => {
       const point = mesh.getWorldPosition(new THREE.Vector3());
@@ -104,8 +113,10 @@ try {
       mirrors.update(models, camera, { enabled, textureSize: 512 });
       batches.setEnabled(grouped);
       batches.beginFrame(models);
-      try { mirrors.render(renderer, scene, camera); renderer.render(scene, camera); }
+      const before = { color: material.colorWrite, depth: material.depthWrite, visible: material.visible };
+      try { mirrors.render(renderer, scene, camera); mirrors.draw(() => renderer.render(scene, camera)); }
       finally { batches.endFrame(); }
+      sourceFlags.push({ before, after: { color: material.colorWrite, depth: material.depthWrite, visible: material.visible }, ordinary: { color: ordinaryMaterial.colorWrite, depth: ordinaryMaterial.depthWrite, visible: ordinaryMaterial.visible } });
       return { ...image(), expected: { red: expected(red), green: expected(green) }, proxies: batches.stats().proxies, mirrors: mirrors.stats() };
     };
     pose(0);
@@ -133,7 +144,7 @@ try {
     mirrors = new ModelMirrors(); scene.add(mirrors.root);
     const recreated = draw();
     mirrors.dispose(); batches.dispose(); renderer.dispose();
-    return { first, plain, moved, transformed, hidden, disabled, clipped, afterClip, recreated, intact, beforeDispose, afterDispose };
+    return { first, plain, moved, transformed, hidden, disabled, clipped, afterClip, recreated, intact, beforeDispose, afterDispose, sourceFlags };
   });
   const matches = (shot, label) => {
     for (const name of ['red', 'green']) {
@@ -144,6 +155,8 @@ try {
   };
   for (const name of ['first', 'plain', 'moved', 'transformed', 'afterClip', 'recreated']) matches(result[name], name);
   assert.ok(result.first.proxies > 0, 'the grouped check actually uses drawing proxies');
+  assert.equal(result.first.whiteInsideMirror, 0, 'the bright original mirror surface does not leak coplanar ghost fragments into its reflection');
+  assert.equal(result.plain.whiteInsideMirror, 0, 'the unbatched mirror also draws only its reflection');
   assert.ok(Math.abs(result.first.red.x - result.moved.red.x) > 10, 'moving the camera changes the reflected target position');
   for (const name of ['hidden', 'disabled']) {
     assert.equal(result[name].red.count, 0, name + ': no red reflection remains');
@@ -152,6 +165,11 @@ try {
   assert.equal(result.clipped.red.count, 0, 'section clipping removes the red reflected target');
   assert.ok(result.clipped.green.count > 40, 'section clipping preserves the green reflected target');
   assert.ok(result.intact, 'source geometry, materials, hierarchy, ordinary metallic surface and export/picking identities stay intact');
+  for (const flags of result.sourceFlags) {
+    assert.deepEqual(flags.before, { color: true, depth: true, visible: true }, 'source draw flags are original before each frame');
+    assert.deepEqual(flags.after, flags.before, 'source draw flags are restored after reflection and the main render');
+    assert.deepEqual(flags.ordinary, flags.before, 'ordinary shiny material retains all draw flags');
+  }
   assert.ok(result.beforeDispose > result.afterDispose, 'disposing the mirror frees its allocated reflection texture');
 
   // The real viewer must retain the explicit material declaration through GLB parsing,

@@ -1490,7 +1490,9 @@ function renderFrame(still = false) {
   try {
     mirrors.render(renderer, scene, camera, { exclude: [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, markupRoot,
       ...sectionOverlays(), gizmo && gizmo.getHelper()] });
-    if (uncertaintyShown) withUncertainty([modelGroup, scanRoot], uncertaintyRecord, () => composer.render()); else composer.render();
+    mirrors.draw(() => {
+      if (uncertaintyShown) withUncertainty([modelGroup, scanRoot], uncertaintyRecord, () => composer.render()); else composer.render();
+    });
   }
   finally { batches.endFrame(); }
 }

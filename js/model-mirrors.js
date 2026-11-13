@@ -100,10 +100,18 @@ export class ModelMirrors {
     camera.updateWorldMatrix(true, false);
     const eye = camera.getWorldPosition(new THREE.Vector3());
     const frustum = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    const candidates = [], unsupportedMaterials = new Set();
     for (const wrapper of Object.values(models)) wrapper?.traverse(mesh => {
       if (!mesh.isMesh || !declared(mesh.material)) return;
       const surface = !mesh.isInstancedMesh && !mesh.isBatchedMesh && !mesh.isSkinnedMesh ? planarSurface(mesh.geometry) : null;
-      if (!surface) { this.rejected++; return; }
+      if (!surface) { this.rejected++; unsupportedMaterials.add(mesh.material); return; }
+      candidates.push({ mesh, surface });
+    });
+    for (const { mesh, surface } of candidates) {
+      // Suppression acts on the material also held by batching proxies. If a declaration is
+      // shared with unsupported geometry, keep that whole class in its ordinary fallback;
+      // hiding its material must never erase an unsupported neighbouring surface.
+      if (unsupportedMaterials.has(mesh.material)) { this.rejected++; continue; }
       seen.add(mesh);
       let e = this.entries.get(mesh);
       if (e && (e.surface !== surface || e.material !== mesh.material)) { this.drop(mesh); e = null; }
@@ -130,7 +138,7 @@ export class ModelMirrors {
       const side = mesh.material.side, front = eye.clone().sub(center).dot(normal) >= 0;
       reflector.visible = enabled && visible(mesh) && mesh.material.visible !== false && camera.layers.test(mesh.layers) && Math.abs(determinant) > 1e-15 &&
         (side === THREE.DoubleSide || (side === THREE.BackSide ? !front : front));
-      if (!reflector.visible) return;
+      if (!reflector.visible) continue;
       // The reflector must have an orthonormal world frame, even if imported ancestors are
       // nonuniformly scaled, sheared or reflected. Baking just this runtime surface into that
       // frame preserves the source world vertices exactly without altering the model.
@@ -145,6 +153,9 @@ export class ModelMirrors {
       const points = surface.vertices.map(v => v.clone().applyMatrix4(world));
       points.forEach((v, i) => { const q = v.clone().applyMatrix4(inv); positions.setXYZ(i, q.x, q.y, q.z); });
       positions.needsUpdate = true;
+      // The reflection shader samples its image, but AO/normal override passes still need
+      // a proper surface normal on this separate runtime geometry.
+      reflector.geometry.computeVertexNormals();
       reflector.geometry.computeBoundingBox(); reflector.geometry.computeBoundingSphere();
       reflector.visible = frustum.intersectsBox(new THREE.Box3().setFromPoints(points));
       reflector.material.clippingPlanes = mesh.material.clippingPlanes;
@@ -156,7 +167,7 @@ export class ModelMirrors {
       reflector.material.polygonOffsetFactor = mesh.material.polygonOffset ? mesh.material.polygonOffsetFactor : 0;
       reflector.material.polygonOffsetUnits = (mesh.material.polygonOffset ? mesh.material.polygonOffsetUnits : 0) - 1;
       reflector.layers.mask = mesh.layers.mask;
-    });
+    }
     for (const mesh of [...this.entries.keys()]) if (!seen.has(mesh)) this.drop(mesh);
     this.root.updateMatrixWorld(true);
   }
@@ -185,6 +196,23 @@ export class ModelMirrors {
       active.forEach(e => { e.reflector.visible = true; });
       renderer.xr.enabled = xr; renderer.shadowMap.autoUpdate = shadows;
       renderer.setRenderTarget(target);
+    }
+  }
+
+  // Draw the captured image once, not over a second coplanar source surface. Bias alone is
+  // insufficient when the source and reconstructed drawing plane round to different depth
+  // values. Keep source visibility intact: picking and override-material normal/outline
+  // passes still operate on the original object, and its flags are restored even on failure.
+  // Call only around synchronous beauty composition, after capture and shadow-map updates.
+  draw(compose) {
+    const materials = this.root.visible ? [...new Set([...this.entries.values()]
+      .filter(e => e.reflector.visible && e.captured).map(e => e.material))] : [];
+    const saved = materials.map(material => [material, material.colorWrite, material.depthWrite]);
+    try {
+      for (const [material] of saved) { material.colorWrite = false; material.depthWrite = false; }
+      return compose();
+    } finally {
+      for (const [material, colorWrite, depthWrite] of saved) { material.colorWrite = colorWrite; material.depthWrite = depthWrite; }
     }
   }
 
