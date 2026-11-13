@@ -7,6 +7,9 @@ assert.deepEqual(
   { ...c('Recessed downlight - 6 in LED trim (Halo RL6 class, proposed)') },
   { kind: 'downlight', label: 'Recessed downlight', lumens: 850, kelvin: null, cone: true, stated: false });
 assert.equal(c('4" recessed can light').lumens, 650);
+for (const name of ['Recessed light', 'Recessed lighting', 'Recessed luminaire', 'Recessed 6 in LED trim', 'Recessed LED panel']) {
+  assert.equal(c(name)?.kind, 'downlight', name);
+}
 assert.equal(c('Ceiling light - 13 in drum flush mount, brushed nickel').lumens, 1600);
 assert.equal(c('Ceiling light 1 (flush disc)').kind, 'flush');
 assert.equal(c('Ceiling light 1 (flush disc)').lumens, 1100);
@@ -25,6 +28,10 @@ assert.deepEqual([c('Pendant 1200 lm 3000K').lumens, c('Pendant 1200 lm 3000K').
 for (const name of ['Light switch (ceiling lights + LED strip)', 'Light bath tile', 'Skylight - 2x4', 'Bath | vanity top with sink', 'Light oak flooring', 'Wall', '', null]) {
   assert.equal(c(name), null, String(name));
 }
+for (const name of ['Recessed convector', 'Bedroom | recessed cabinet convector cover', 'Recessed radiator',
+  'Recessed heating cover', 'Recessed heater', 'Recessed cabinet', 'Recessed wall niche', 'Recessed grille', 'Recessed trim']) {
+  assert.equal(c(name), null, name + ' must not emit estimated light');
+}
 
 // Parts of one fixture join by where they sit; the same fixture drawn twice is two fixtures.
 const box = (name, x, y, z, w = 0.1, h = 0.1, d = 0.1) => ({ name, min: [x - w / 2, y - h / 2, z - d / 2], max: [x + w / 2, y + h / 2, z + d / 2] });
@@ -39,6 +46,9 @@ const parts = [
   box('LED strip under upper rack', 5, 1.4, 1, 1.5, 0.01, 0.02),
   box('Light switch (ceiling lights + LED strip)', 1.3, 1.2, 0, 0.07, 0.11, 0.01),
   box('Sofa', 2, 0.4, 3, 2, 0.8, 0.9),
+  box('Recessed convector cover', 2, 0.4, 2, 1.3, 0.5, 0.05),
+  box('Recessed radiator', 3.2, 0.4, 2, 0.8, 0.5, 0.05),
+  box('Recessed heating cover', 5, 0.4, 2, 1, 0.5, 0.05),
 ];
 const fx = groupFixtures(parts);
 assert.equal(fx.length, 5, JSON.stringify(fx.map(f => f.name)));
