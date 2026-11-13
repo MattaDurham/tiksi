@@ -5840,6 +5840,25 @@ function openModel(root) {
     if (photoById(prop, decodeURIComponent(mm[1]))) startMatch(decodeURIComponent(mm[1]));
     history.replaceState(null, '', '#/model');
   }
+  // #/model?select=<room, wall or opening id> (a link on a PROJECTS scope item) selects it and
+  // brings it into view, showing its level if that was hidden.
+  const ms = /[?&]select=([^&]+)/.exec(location.hash);
+  if (ms) {
+    history.replaceState(null, '', '#/model');
+    selectFromLink(decodeURIComponent(ms[1]));
+  }
+}
+function selectFromLink(id) {
+  const opening = (prop.openings || []).find(o => o.id === id);
+  const wall = prop.walls.find(w => w.id === (opening ? opening.wallId : id));
+  const room = !wall && prop.rooms.find(r => r.id === id);
+  if (!wall && !room) { toast('That element is no longer in the model.', 'warn'); return; }
+  const level = wall ? levelOfWall(prop, wall) : levelOfRoom(prop, room);
+  if (level && hiddenLevels().has(level.id)) toggleLevel(level.id);
+  const kind = opening ? 'opening' : wall ? 'wall' : 'room';
+  setSelection({ kind, id });
+  const g = findGroupFor(kind, id) || (wall && findGroupFor('wall', wall.id));
+  if (g) frameObject(g);
 }
 
 // three keys shader programs by light count, so the first time the room lights switch on
