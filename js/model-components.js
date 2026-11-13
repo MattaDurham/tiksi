@@ -91,6 +91,7 @@ export function modelComponents(root) {
 export function normalizeComponentProduct(p) {
   if (!p || typeof p !== 'object' || Array.isArray(p)) return null;
   const out = { productId: typeof p.productId === 'string' && ID_OK.test(p.productId) ? p.productId : null, brand: text(p.brand, 120), model: text(p.model, 120), name: text(p.name, 200) };
+  if (p.unlinked === true) { out.productId = null; out.unlinked = true; }
   for (const [field, limit] of [['status', 120], ['evidence', 4000], ['uncertainty', 4000]]) {
     const value = text(p[field], limit);
     if (value) out[field] = value;
@@ -130,7 +131,7 @@ export function componentIdentityStatus(p) {
 }
 export function componentProductRecord(data, scan, key) {
   const p = scan && scan.componentProducts && scan.componentProducts[key];
-  if (!p || !data || !Array.isArray(data.products)) return null;
+  if (!p || p.unlinked === true || !data || !Array.isArray(data.products)) return null;
   if (p.productId) { const r = data.products.find(x => x.id === p.productId); if (r) return r; }
   if (!p.brand || !p.model) return null;
   return data.products.find(r => same(r.brand, p.brand) && same(r.model, p.model)) || null;
@@ -161,11 +162,17 @@ export function linkComponentProduct(data, prop, scan, component, fields, newId)
   const sameIdentity = previous && (previous.productId === record.id ||
     (previous.brand && previous.model && same(previous.brand, record.brand) && same(previous.model, record.model)));
   scan.componentProducts = scan.componentProducts || {};
-  scan.componentProducts[component.key] = normalizeComponentProduct({ ...(sameIdentity ? previous : {}), productId: record.id, brand: record.brand, model: record.model, name: component.name });
+  scan.componentProducts[component.key] = normalizeComponentProduct({ ...(sameIdentity ? previous : {}), unlinked: false, productId: record.id, brand: record.brand, model: record.model, name: component.name });
   return { record, created };
 }
 export function unlinkComponentProduct(scan, key) {
-  if (scan && scan.componentProducts) delete scan.componentProducts[key];
+  if (!scan || !scan.componentProducts) return;
+  const previous = componentProductEvidence(scan, key);
+  if (previous && (previous.status || previous.evidence || previous.uncertainty || previous.dims_mm || previous.documents || previous.url)) {
+    // Removing a product association does not erase observations of the component. The explicit
+    // flag also prevents the maker/model fallback from immediately restoring the association.
+    scan.componentProducts[key] = { ...previous, productId: null, unlinked: true };
+  } else delete scan.componentProducts[key];
 }
 
 // ---------- schedule ----------
