@@ -19,6 +19,7 @@ import signal
 import socket
 import sys
 import threading
+import time
 from urllib.parse import parse_qs, unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -234,7 +235,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             try: metadata = json.loads(path.read_text(encoding='utf-8'))
             except (OSError, ValueError): pass
         result = {key: metadata[key] for key in ('slug', 'branch', 'port', 'instanceId', 'head', 'live') if key in metadata}
-        result.update({'pid': os.getpid(), 'port': self.server.server_port,
+        result.update({'pid': os.getpid(), 'port': self.server.server_port, 'started': getattr(self.server, 'started', None),
                        'live': metadata.get('live', self.server.server_port == 8642), 'activeJobs': 0})
         for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement', 'folder_intake'):
             service = getattr(self.server, name, None)
@@ -446,7 +447,10 @@ def main():
     # The first address must be served now: a port in use there stops the start, as it always has.
     first = resolve_host(hosts[0])
     if first is None: parser.error('this Mac has no Tailscale address; list an address that is on this Mac first, such as 127.0.0.1')
+    restart = None
     with bind(first, args.port) as server:
+        # When this server started: a page that asked for a restart waits for a new value.
+        server.started = time.time()
         port = server.server_port
         servers, later, stopping = [server], [], threading.Event()
         for host in hosts[1:]:
@@ -501,6 +505,9 @@ def main():
         def shutdown(signum, frame):
             stopping.set()
             for each in list(servers): threading.Thread(target=each.shutdown, daemon=True).start()
+        # RESTART TIKSI in the Tiksi menu: stop as for SIGTERM, then start again below.
+        from server.restart import Restart
+        restart = server.workspace.restart = Restart(server, lambda: shutdown(None, None))
         # A hung test asks for every thread's stack with SIGUSR1 (written to stderr).
         if hasattr(signal, 'SIGUSR1'): faulthandler.register(signal.SIGUSR1, all_threads=True)
         signal.signal(signal.SIGTERM, shutdown)
@@ -516,5 +523,7 @@ def main():
             for name in ('reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement', 'folder_intake'):
                 service = getattr(server, name, None)
                 if service: service.close()
+    # Every socket is closed now; a restart runs the same command again in this process.
+    if restart: restart.finish()
 
 if __name__ == '__main__': main()

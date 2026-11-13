@@ -12,7 +12,7 @@ import { icon } from './icons.js';
 const KEY = 'tiksi.onScreen.v1';
 const listeners = new Set();
 let prefs = readPrefs();
-let provider = null, menuEl = null, button = null;
+let provider = null, menuEl = null, button = null, restartAction = null;
 
 function readPrefs() {
   try {
@@ -44,6 +44,8 @@ export function resetScreen(all = false) {
   applyAppScreen();
 }
 export function onScreenChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+// RESTART TIKSI at the bottom of the menu, shown once the Mac's server offers it (js/main.js).
+export function setRestartAction(fn) { restartAction = fn; if (menuEl) render(); }
 export function setMenuProvider(fn) { provider = fn; if (menuEl) render(); return () => { if (provider === fn) provider = null; }; }
 
 function applyAppScreen() {
@@ -69,8 +71,11 @@ function render() {
   menuEl.innerHTML = groups.map((g, gi) => `<section class="tk-group">
       <header><span>${esc(g.title.toUpperCase())}</span>${g.screen ? `<label class="tk-pin" title="${esc(g.screen.label || 'Show this group on the screen')}"><input type="checkbox" data-screen="${esc(g.screen.id)}" ${g.screen.on ? 'checked' : ''}><span>ON SCREEN</span></label>` : ''}</header>
       ${g.items.map((it, ii) => `<button class="tk-item ${it.active ? 'active' : ''}" role="menuitem" data-item="${gi}:${ii}" ${it.disabled ? 'disabled' : ''}><span>${esc(it.label)}</span>${it.key ? `<kbd>${esc(it.key)}</kbd>` : ''}</button>`).join('')}
-    </section>`).join('') + '<p class="tk-foot">Turn a group ON SCREEN to keep it beside the view. Keyboard shortcuts work either way. <button class="link-btn" data-screen-reset>Back to the default screen</button></p>';
+    </section>`).join('') + '<p class="tk-foot">Turn a group ON SCREEN to keep it beside the view. Keyboard shortcuts work either way. <button class="link-btn" data-screen-reset>Back to the default screen</button></p>'
+    + (restartAction ? '<div class="tk-group tk-last"><button class="tk-item" role="menuitem" data-restart title="Save, then start the Mac\'s Tiksi server again with its newest code; this page reloads when it is back"><span>RESTART TIKSI</span></button></div>' : '');
   menuEl.querySelector('[data-screen-reset]').onclick = () => { resetScreen(); render(); };
+  const restart = menuEl.querySelector('[data-restart]');
+  if (restart) restart.onclick = () => { close(); restartAction(); };
   menuEl.querySelectorAll('[data-screen]').forEach(i => i.onchange = () => { setOnScreen(i.dataset.screen, i.checked); render(); });
   menuEl.querySelectorAll('[data-item]').forEach(b => b.onclick = () => {
     const [gi, ii] = b.dataset.item.split(':').map(Number), it = groups[gi] && groups[gi].items[ii];
