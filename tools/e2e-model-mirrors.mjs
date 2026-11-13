@@ -174,7 +174,8 @@ try {
 
   // The real viewer must retain the explicit material declaration through GLB parsing,
   // material sharing, its composer and a saved/reloaded project, not just the helper scene.
-  await page.goto(url + '/#/plan');
+  // Start on another page, so the MODEL link below mounts a fresh viewer on the swapped workspace.
+  await page.goto(url + '/#/materials');
   await page.locator('#btn-file').waitFor({ state: 'attached' });
   await page.evaluate(async () => {
     const s = await import('/js/store.js');
