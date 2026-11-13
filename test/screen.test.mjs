@@ -16,9 +16,9 @@ test('the phone layout and the small-screen page rules use one query', async () 
     const uses = css.split('@media ' + SMALL + ' {').length - 1;
     assert.ok(uses >= blocks, file + ' writes its small-screen rules with SMALL (' + uses + ' blocks)');
   }
-  // The shared stylesheet's main block for small screens is the one that hides the rail's foot.
+  // The shared stylesheet's main block for small screens is the one that drops the page tabs' underline.
   const consoleCss = await read('css/console.css');
-  const main = consoleCss.indexOf('#rail a::before, .rail-foot { display: none; }');
+  const main = consoleCss.indexOf('#rail a::before { display: none; }');
   assert.ok(main > consoleCss.lastIndexOf('@media ' + SMALL + ' {', main) && consoleCss.lastIndexOf('@media ' + SMALL + ' {', main) > consoleCss.lastIndexOf('@media (max-width: 760px) {', main),
     'the rules that hide the rail on a small screen sit under SMALL, not under width alone');
   assert.equal(smallScreen({ matchMedia: q => ({ matches: q === SMALL }) }), true);

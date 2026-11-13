@@ -42,38 +42,37 @@
       </svg>
       <span class="brand-mark">TIKSI</span>
     </div>
-    <div class="topbar-group">
-      <select id="property-select" class="tb-select" aria-label="Property"></select>
-    </div>
-    <div class="topbar-group">
-      <button id="btn-file" class="tb-btn" title="Open, import, save, 3D exchange and settings">FILE</button>
-      <a href="#/guide" class="tb-btn guide-entry" title="User guide, screenshots and feature walkthroughs">GUIDE</a>
-      <div id="edit-history" class="history-actions" role="group" aria-label="Undo and redo" hidden>
-        <button id="btn-undo" class="tb-btn" data-act="undo" aria-label="Undo" disabled>UNDO</button>
-        <button id="btn-redo" class="tb-btn" data-act="redo" aria-label="Redo" disabled>REDO</button>
+    <nav id="rail" aria-label="Pages" title="Right-click to show the icon alone or the icon and the word">
+      <a href="#/plan" data-view="plan">PLAN</a>
+      <a href="#/model" data-view="model">MODEL</a>
+      <a href="#/materials" data-view="materials">MATERIALS</a>
+      <a href="#/photos" data-view="photos">PHOTOS</a>
+      <a href="#/measure" data-view="measure">MEASURE</a>
+      <a href="#/reconstruct" data-view="reconstruct">PHOTO TO 3D</a>
+      <a href="#/research" data-view="research">SOURCING</a>
+      <a href="#/projects" data-view="projects">PROJECTS</a>
+      <a href="#/products" data-view="products">PRODUCTS</a>
+      <a href="#/budget" data-view="budget">BUDGET</a>
+      <a href="#/schedule" data-view="schedule">SCHEDULE</a>
+      <a href="#/sheets" data-view="sheets">CUT SHEETS</a>
+      <a href="#/documents" data-view="documents">DOCUMENTS</a>
+    </nav>
+    <span id="save-status" class="save-status">SAVED</span>
+    <div id="tk-hold" hidden>
+      <div id="tk-top" class="tk-top">
+        <label class="tk-field"><span>PROJECT</span><select id="property-select" class="tb-select" aria-label="Property"></select></label>
+        <div class="tk-row">
+          <button id="btn-file" class="tb-btn" title="Open, import, save, 3D exchange and settings">FILE</button>
+          <a href="#/guide" class="tb-btn guide-entry" title="User guide, screenshots and feature walkthroughs">GUIDE</a>
+        </div>
+        <div id="edit-history" class="history-actions" role="group" aria-label="Undo and redo" hidden>
+          <button id="btn-undo" class="tb-btn" data-act="undo" aria-label="Undo" disabled>UNDO</button>
+          <button id="btn-redo" class="tb-btn" data-act="redo" aria-label="Redo" disabled>REDO</button>
+        </div>
       </div>
-      <span id="save-status" class="save-status">SAVED</span>
     </div>
   </header>
-  <nav id="rail" aria-label="Views">
-    <a href="#/plan" data-view="plan">PLAN</a>
-    <a href="#/model" data-view="model">MODEL</a>
-    <a href="#/materials" data-view="materials">MATERIALS</a>
-    <a href="#/photos" data-view="photos">PHOTOS</a>
-    <a href="#/measure" data-view="measure">MEASURE</a>
-    <a href="#/reconstruct" data-view="reconstruct">PHOTO TO 3D</a>
-    <a href="#/research" data-view="research">SOURCING</a>
-    <a href="#/projects" data-view="projects">PROJECTS</a>
-    <a href="#/products" data-view="products">PRODUCTS</a>
-    <a href="#/budget" data-view="budget">BUDGET</a>
-    <a href="#/schedule" data-view="schedule">SCHEDULE</a>
-    <a href="#/sheets" data-view="sheets">CUT SHEETS</a>
-    <a href="#/documents" data-view="documents">DOCUMENTS</a>
-    <div class="rail-foot">
-      <a href="#/model" data-field-layout="phone" title="The phone layout: the model full screen, with one side panel for views and what shows">FIELD VIEW</a>
-      <a href="https://github.com/MattaDurham/tiksi" target="_blank" rel="noopener">GITHUB</a>
-    </div>
-  </nav>
+  <aside id="side" aria-label="Tools and views" hidden></aside>
   <main id="view"></main>
 </div>
 <div id="print-root"></div>

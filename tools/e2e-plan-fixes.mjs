@@ -438,7 +438,7 @@ try {
       await page.mouse.up();
       assert.ok(Math.abs(moved.ax - start.ax) > 0.1, `the drag at ${n} walls moved the partition (${start.ax} to ${moved.ax})`);
       if (process.env.E2E_DEBUG) console.log(n, times.map(t => t.toFixed(0)).join(' '));
-      await page.locator("#btn-undo").click();
+      await page.keyboard.press('ControlOrMeta+z');
       await page.locator('[data-chk=numbers]').uncheck();
       await page.locator('[data-chk=dims]').uncheck();
       times.sort((a, b) => a - b);

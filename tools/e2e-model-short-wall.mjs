@@ -70,7 +70,8 @@ try {
         if (b > 100 && b > r * 1.8 && b > green * 1.8) points.push([x, y]);
       }
       if (!points.length) return null;
-      const y = points[Math.floor(points.length / 4)][1], row = points.filter(p => Math.abs(p[1] - y) < 2);
+      // The middle of the blue pixels: well inside the arrow, not where it meets the wall.
+      const y = points[Math.floor(points.length / 2)][1], row = points.filter(p => Math.abs(p[1] - y) < 2);
       return [row.reduce((sum, p) => sum + p[0], 0) / row.length, y];
     }, png.toString('base64'));
     assert(h, 'MODEL shows the wall move handle');

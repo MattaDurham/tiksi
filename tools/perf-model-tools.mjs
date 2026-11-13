@@ -233,7 +233,7 @@ const scenarios = {
     });
     // Frame the model, then pick forty of its parts by Shift-click across the middle of the view.
     // Every pick redoes the selection's outline: the page looks up each selected part again.
-    await page.locator('.tool-col [data-scan="scan-cellar"]').click();
+    await page.locator('#side [data-scan="scan-cellar"]').click();
     await page.locator('.inspector [data-frame]').click();
     await delay(1200); await settled(page);
     await page.keyboard.press('Escape');

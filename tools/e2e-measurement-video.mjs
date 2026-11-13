@@ -109,7 +109,7 @@ try {
     await page.click('[data-apply]');
     await page.waitForFunction(() => /^Applied/.test(document.querySelector('[data-status]').textContent));
     assert.ok(Math.abs((await prop(page)).openings[0].width - 0.8509) < 1e-4);
-    await page.click('#btn-undo');
+    await page.keyboard.press('ControlOrMeta+z');
     await page.waitForFunction(() => window.tiksiStore.activeProperty().openings[0].width === 0.8);
     await page.locator('.ms-reading .chip', { hasText: 'NOT IN MODEL' }).waitFor();
 

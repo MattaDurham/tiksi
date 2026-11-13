@@ -61,7 +61,7 @@ try {
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto(url + '/#/plan');
-  await page.locator('#btn-file').waitFor();
+  await page.locator('#btn-file').waitFor({ state: 'attached' });
   // A 4 x 3 m room, and a model of the same room: a red roof slab above the storey, a blue
   // chair in the middle and a grey floor. The model's parts have no telling names.
   await page.evaluate(async () => {
@@ -101,17 +101,50 @@ try {
   // The tag list is the second tab of the component list over the left of the model.
   await page.locator('.v-objects [data-ol-tab="tags"]').click();
   assert.ok(await page.locator('.v-objects .v-tags [data-tag-eye="tag-roof"]').isVisible(), 'the tag list is in the TAGS tab of the component list');
-  // The Tiksi menu runs the tools, and can put a group back on the screen.
-  await page.locator('#tiksi-menu').click();
-  const heads = await page.locator('.tk-group header > span').allInnerTexts();
-  for (const h of ['SAVED VIEWS', 'VIEW', 'DISPLAY', 'TOOLS', 'TAGS', 'LEVELS', 'GO TO']) assert.ok(heads.includes(h), 'the menu has ' + h);
-  await page.locator('.tk-group', { hasText: 'TOOLS' }).locator('[data-screen]').check();
-  await page.keyboard.press('Escape');
-  assert.ok(await page.locator('.tool-col [data-act=measure]').isVisible(), 'TOOLS ON SCREEN brings the tool buttons back');
-  await page.locator('#tiksi-menu').click();
-  await page.locator('.tk-group', { hasText: 'TOOLS' }).locator('[data-screen]').uncheck();
-  await page.locator('.tk-item', { hasText: 'Top, north up' }).click();
-  assert.equal(await page.locator('.tool-col').isVisible(), false, 'and off again');
+  // The left pane runs the tools, in groups that fold to their headers; a group's eye puts its
+  // bar over the model or takes it off.
+  const heads = await page.locator('#side .sd-head span').allInnerTexts();
+  for (const h of ['SAVED VIEWS', 'STANDARD VIEWS', 'CAMERA', 'DISPLAY', 'TOOLS', 'TAGS', 'LEVELS']) assert.ok(heads.includes(h), 'the pane has ' + h);
+  assert.ok(await page.locator('#side [data-act=measure]').isVisible(), 'the tools are in the pane');
+  await page.locator('#side .sd-group[data-group="Tools"] .sd-head').click();
+  assert.equal(await page.locator('#side [data-act=measure]').count(), 0, 'TOOLS folds to its header');
+  await page.locator('#side .sd-group[data-group="Tools"] .sd-head').click();
+  assert.ok(await page.locator('#side [data-act=measure]').isVisible(), 'and opens again');
+  await page.locator('#side .sd-group[data-group="Display"] [data-screen]').click();
+  assert.ok(await page.locator('.v-modes').isVisible(), 'the eye on DISPLAY puts the view bar over the model');
+  await page.locator('#side .sd-group[data-group="Display"] [data-screen]').click();
+  assert.equal(await page.locator('.v-modes').isVisible(), false, 'and takes it off again');
+  // STANDARD VIEWS: each looks from its own side. BOTTOM looks up from under the model with the
+  // ground put away; any other view puts the ground back.
+  const cam = () => page.evaluate(async () => (await import('/js/viewer3d.js')).cameraState());
+  const settled = async () => { await delay(900); return cam(); };
+  await page.locator('#side [data-act=right]').click();
+  let cv = await settled();
+  assert.ok(cv.position[0] - cv.target[0] > Math.abs(cv.position[2] - cv.target[2]) * 5, 'RIGHT looks from +x: ' + JSON.stringify(cv));
+  await page.locator('#side [data-act=back]').click();
+  cv = await settled();
+  assert.ok(cv.target[2] - cv.position[2] > Math.abs(cv.position[0] - cv.target[0]) * 5, 'BACK looks from -z');
+  await page.locator('#side [data-act=bottom]').click();
+  cv = await settled();
+  assert.ok(cv.position[1] < cv.target[1] - 1 && cv.ground === false && cv.lookingUp, 'BOTTOM looks up from under the model, the ground put away: ' + JSON.stringify(cv));
+  await page.locator('#side [data-act=top]').click();
+  cv = await settled();
+  assert.ok(cv.position[1] > cv.target[1] + 1 && cv.ground === true && !cv.lookingUp, 'TOP looks down, the ground back');
+
+  // The page tabs: right-click shows the icon alone, or the icon and the word.
+  const label = page.locator('#rail a[data-view=model] .lbl');
+  assert.equal(await label.isVisible(), true);
+  await page.locator('#rail a[data-view=model]').click({ button: 'right' });
+  await page.locator('.tk-tabmenu [data-tab-labels=icons]').click();
+  assert.equal(await label.isVisible(), false, 'Icon only hides the words');
+  assert.equal(await page.locator('#rail a[data-view=model] .ic').isVisible(), true, 'and keeps the icon');
+  assert.equal(await page.locator('#rail a[data-view=model]').getAttribute('aria-label'), 'MODEL', 'the tab still names its page');
+  await page.locator('#rail a[data-view=plan]').click({ button: 'right' });
+  await page.locator('.tk-tabmenu [data-tab-labels=words]').click();
+  assert.equal(await label.isVisible(), true, 'Icon and word brings them back');
+
+  await page.locator('#side [data-act=top-mode]').click();
+  assert.equal(await page.locator('.tool-col').isVisible(), false, 'the old tool column stays away');
   await delay(1200);   // the camera flies to the top view
 
   // Hiding Roof takes the red slab off the model.
@@ -133,14 +166,24 @@ try {
   const moved = await prop(page, `return p.tagOf[${JSON.stringify(chairKey)}]`);
   assert.equal(moved, 'tag-builtins', 'the chair moved to the chosen tag');
 
-  // A saved view keeps Roof hidden; showing Roof and going back to the tab hides it again.
+  // A saved view keeps Roof hidden, the chair hidden on its own and the photo pins off; showing
+  // them all and going back to the tab hides them again.
+  await page.locator('#side [data-act=hide]').click();
+  assert.equal(await prop(page, `return p.hidden[${JSON.stringify(chairKey)}]`), true, 'HIDE in the left pane hides the chair alone');
   await page.keyboard.press('Escape');
+  await page.locator('#side [data-act=pins]').click();
+  assert.equal(await prop(page, 'return p.env.showPins'), false);
   await page.locator('[data-view-add]').click();
   await page.locator('.v-view-tab').waitFor();
   await page.locator('.v-tags [data-tag-eye="tag-roof"]').click();
-  assert.equal(await prop(page, 'return p.tags.find(t => t.id === "tag-roof").visible'), true);
+  await page.locator('#side [data-act=show-hidden]').click();
+  await page.locator('#side [data-act=pins]').click();
+  assert.deepEqual(await prop(page, 'return [p.tags.find(t => t.id === "tag-roof").visible, Object.keys(p.hidden).length, p.env.showPins]'), [true, 0, true]);
   await page.locator('.v-view-tab').first().click();
-  assert.equal(await prop(page, 'return p.tags.find(t => t.id === "tag-roof").visible'), false, 'the saved view brings back its tags');
+  assert.deepEqual(await prop(page, `return [p.tags.find(t => t.id === "tag-roof").visible, p.hidden[${JSON.stringify(chairKey)}] === true, p.env.showPins]`), [false, true, false],
+    'the saved view brings back its tags, the hidden chair and the pins switched off');
+  await page.locator('#side [data-act=show-hidden]').click();
+  await page.locator('#side [data-act=pins]').click();
 
   // A saved view is renamed in its tab: a double-click opens the name, Enter keeps it; the
   // pencil beside the current tab opens RENAME too, and Esc leaves the name as it was.

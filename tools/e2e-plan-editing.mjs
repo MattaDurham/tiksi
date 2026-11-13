@@ -121,7 +121,7 @@ try {
   assert.equal(now.walls.mid[1], 0); assert.equal(now.walls.mid[3], 4);
   for (const id of ['left', 'right']) for (const p of now.rooms[id].filter(p => p[0] > 3.5 && p[0] < 4.5)) near(p[0], now.walls.mid[0], 1e-9, `${id} corner on the partition`);
   assert.equal(now.rooms.left.filter(p => Math.abs(p[0] - now.walls.mid[0]) < 1e-9).length, 2, 'left floor has two corners on the partition');
-  await page.locator('[data-act=undo]').click();
+  await page.keyboard.press('ControlOrMeta+z');
   now = await state();
   assert.deepEqual(now.walls.mid, [3, 0, 3, 4], 'undo puts the partition back');
   assert.deepEqual(now.rooms, start.rooms);
@@ -137,7 +137,7 @@ try {
   const tCorner = now.rooms.left.find(p => p[0] === 3 && p[1] < 0);
   assert.ok(tCorner, 'left floor corner at the T followed the wall');
   near(tCorner[1], now.walls.mid[1], 1e-9, 'floor corner sits where the partition meets the wall');
-  await page.locator('[data-act=undo]').click();
+  await page.keyboard.press('ControlOrMeta+z');
   assert.deepEqual((await state()).rooms, start.rooms, 'undo restores the floors');
 
   // 6. A selected floor shows its corners: drag one off the walls, then snap it back.
@@ -153,8 +153,8 @@ try {
   near(now.rooms.right[2][1], 4, 1e-9, 'loose corner snapped onto the north wall');
   assert.match(await inspector(), /Corners on walls\s*4 of 4/);
   assert.equal(await page.locator('[data-snap-floor]').count(), 0, 'nothing left to snap');
-  await page.locator('[data-act=undo]').click();
-  await page.locator('[data-act=undo]').click();
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.keyboard.press('ControlOrMeta+z');
   assert.deepEqual((await state()).rooms, start.rooms);
 
   // 7. The underlay only moves once it is selected; until then a drag on it pans.

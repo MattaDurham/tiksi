@@ -72,3 +72,53 @@ test('hostile saved views are cleaned or dropped; the views travel in the projec
   assert.deepEqual(store.ws.data.properties.find(x => x.id === p.id).savedViews, p.savedViews);
   assert.throws(() => SV.addSavedView(p, 'Broken', { camera: { position: [0, 0], target: [0, 0, 0] } }));
 });
+
+test('a saved view keeps the objects hidden one by one, the models shown, pins and notes, and gives them back', () => {
+  const p = store.propertyTemplate('Everything hidden');
+  p.scans = [{ id: 'scan-a', name: 'Before', visible: true }, { id: 'scan-b', name: 'After', visible: false }];
+  T.setHidden(p, ['wall:w-1', 'opening:o-2'], true);
+  const v = SV.addSavedView(p, 'Clean cut', {
+    ...state(), section: { on: true, height: 1.1, planes: [{ id: 'cut-1', kind: 'side', q: [0, Math.SQRT1_2, 0, Math.SQRT1_2], pos: [1, 1, 1] }], active: 'cut-1', done: true },
+    models: SV.modelState(p), compare: 'after', markers: { pins: false, notes: true }, xrayOpacity: 0.4, uncertainty: true,
+  });
+  assert.deepEqual(v.hidden.sort(), ['opening:o-2', 'wall:w-1']);
+  assert.deepEqual(v.models, { 'scan-a': true, 'scan-b': false });
+  assert.equal(v.section.done, true, 'the section is saved clean');
+  assert.deepEqual(v.markers, { pins: false, notes: true });
+  assert.equal(v.compare, 'after');
+  assert.equal(v.xrayOpacity, 0.4);
+  assert.equal(v.uncertainty, true);
+  // Something else hidden and the wall shown again; the view puts back exactly what it had.
+  T.setHidden(p, ['wall:w-1'], false);
+  T.setHidden(p, ['room:r-9', 'node:scan-a#0/3'], true);
+  assert.equal(SV.applySavedHidden(p, v), 3, 'the wall back, the room and the model part shown');
+  assert.deepEqual(SV.hiddenObjects(p).sort(), ['opening:o-2', 'wall:w-1']);
+  assert.equal(SV.applySavedHidden(p, v), 0, 'nothing to change the second time');
+  // A view from before Tiksi kept these leaves them as they are.
+  const old = SV.normalizeSavedView({ name: 'Old', camera: { position: [1, 2, 3], target: [0, 0, 0] } });
+  for (const k of ['hidden', 'models', 'compare', 'markers', 'xrayOpacity', 'uncertainty']) assert.equal(k in old, false, k);
+  assert.equal('done' in old.section, false);
+  assert.equal(SV.applySavedHidden(p, old), 0);
+  assert.deepEqual(SV.hiddenObjects(p).sort(), ['opening:o-2', 'wall:w-1']);
+  // Updating the view takes what is hidden now.
+  T.showAllHidden(p);
+  SV.updateSavedView(p, v.id, state());
+  assert.deepEqual(p.savedViews.find(x => x.id === v.id).hidden, []);
+});
+
+test('the new view fields are cleaned of hostile input', () => {
+  const v = SV.normalizeSavedView({
+    name: 'Hostile', camera: { position: [1, 2, 3], target: [0, 0, 0] },
+    hidden: ['wall:w-1', 'wall:w-1', 'nonsense', 5, '../../etc', 'x'.repeat(600)],
+    models: { 'scan-a': true, 'bad id!': true, 'scan-b': 'yes' },
+    compare: 'sideways', markers: { pins: 'no', notes: false, other: true }, xrayOpacity: 7, uncertainty: 'on',
+    section: { on: true, done: 'yes' },
+  });
+  assert.deepEqual(v.hidden, ['wall:w-1']);
+  assert.deepEqual(v.models, { 'scan-a': true });
+  assert.equal('compare' in v, false);
+  assert.deepEqual(v.markers, { notes: false });
+  assert.equal(v.xrayOpacity, 1);
+  assert.equal('uncertainty' in v, false);
+  assert.equal('done' in v.section, false);
+});

@@ -90,7 +90,8 @@ try {
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   assert.equal(await page.evaluate(() => document.documentElement.classList.contains('phone')), true, 'a phone gets the phone layout');
   assert.equal(await shown(page, '#topbar'), false, 'no topbar on a phone');
-  assert.equal(await shown(page, '#rail'), false, 'no rail on a phone');
+  assert.equal(await shown(page, '#rail'), false, 'no page tabs on a phone');
+  assert.equal(await shown(page, '#side'), false, 'no left pane on a phone');
   assert.equal(await page.locator('#rail a.active').getAttribute('data-view'), 'model', 'a phone opens on the model');
   // FILE must still open from the panel with nothing to show yet, so a property can be added.
   await settled(page);
@@ -240,9 +241,11 @@ try {
   await desk.goto(url + '/#/model');
   await desk.locator('.v-wrap canvas').waitFor();
   assert.equal(await desk.evaluate(() => document.documentElement.classList.contains('phone')), false);
-  for (const sel of ['#topbar', '#rail', '.v-views', '.v-compass']) assert.equal(await shown(desk, sel), true, sel + ' shows on desktop');
+  for (const sel of ['#topbar', '#rail', '#side', '.v-views', '.v-compass']) assert.equal(await shown(desk, sel), true, sel + ' shows on desktop');
   for (const sel of ['.fd-bar', '.fd-frame', '.fd-panel']) assert.equal(await shown(desk, sel), false, sel + ' stays out of the desktop');
-  assert.equal(await shown(desk, '#rail [data-field-layout=phone]'), true, 'FIELD VIEW is offered in the rail');
+  await desk.locator('#tiksi-menu').click();
+  assert.equal(await shown(desk, '.tk-menu [data-field-layout=phone]'), true, 'the phone layout is offered in the Tiksi menu');
+  await desk.keyboard.press('Escape');
   assert.equal(await shown(desk, '#topbar .fd-return'), false, 'a computer at full width needs no PHONE LAYOUT button');
 
   assert.deepEqual(errors, []);

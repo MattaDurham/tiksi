@@ -44,7 +44,7 @@ const docs = () => prop("return p.photos.filter(x => x.kind === 'document').map(
 
 try {
   await page.goto(url + '/#/plan');
-  await page.waitForSelector('#btn-file');
+  await page.waitForSelector('#btn-file', { state: 'attached' });
   await page.evaluate(async () => {
     const s = await import('/js/store.js'), ps = await import('/js/photos-store.js');
     localStorage.clear();
@@ -84,10 +84,10 @@ try {
   await page.locator('#prog-start').waitFor();
   check((await page.locator('.kpi.accent .k-label').textContent()) === 'Last day of work' && (await page.locator('.kpi.accent .k-value').textContent()) === 'Nov 22, 2026' && /13 calendar days/.test(await page.locator('.kpi.accent .k-sub').textContent()), 'SCHEDULE\'s last day of work is Nov 22, 2026, the 13th calendar day');
   await page.goto(url + '/#/plan');
-  await page.waitForSelector('#btn-file');
+  await page.waitForSelector('#btn-file', { state: 'attached' });
 
   // ---- the editor ----
-  await page.click('#btn-file');
+  await page.click('#tiksi-menu').then(() => page.click('#btn-file'));
   check(/No one-pager saved yet/.test(await page.locator('[data-op-file-status]').textContent()), 'FILE > Project says there is no one-pager yet');
   await page.click('[data-one-pager]');
   await page.locator('.op-dialog .op-preview-page .op-page').waitFor();
@@ -182,7 +182,7 @@ try {
   await page.click('[data-op-later]');
   await page.locator('.op-prompt').waitFor({ state: 'detached' });
   await prop("s.ws.data.settings.onePagerPrompt = 'changed'; s.touch();");
-  await page.click('#btn-file');
+  await page.click('#tiksi-menu').then(() => page.click('#btn-file'));
   await page.click('[data-file-tab="settings"]');
   check((await page.inputValue('[data-op-prompt]')) === 'changed', 'FILE > Settings shows the closing choice');
   await page.selectOption('[data-op-prompt]', 'never');
@@ -191,7 +191,7 @@ try {
   await page.click('[data-close-file]');
 
   // ---- NEW PROPERTY makes version 1 by itself ----
-  await page.click('#btn-file');
+  await page.click('#tiksi-menu').then(() => page.click('#btn-file'));
   await page.click('[data-new-property]');
   await page.fill('#np-dialog [data-np-input]', 'Second House');
   await page.click('#np-dialog [data-np-create]');
@@ -240,7 +240,7 @@ try {
   // ---- a reload keeps everything ----
   // The room renamed while the setting was Never left the one-pager behind: bring it up to date first.
   await page.goto(url + '/#/plan');
-  await page.waitForSelector('#btn-file');
+  await page.waitForSelector('#btn-file', { state: 'attached' });
   check((await state()) === 'behind' && (await fireClose()) === false, 'the room renamed earlier left the one-pager behind, but NOT NOW still holds');
   await prop("p.address = '2 Synthetic Way'; s.touch();");
   check((await fireClose()) === true, 'one more change and closing asks again');
@@ -251,7 +251,7 @@ try {
   await page.locator('.op-prompt').waitFor({ state: 'detached' });
   check((await versions()).join() === '1,2,3' && (await state()) === 'current', 'version 3 brings it up to date');
   await page.reload();
-  await page.waitForSelector('#btn-file');
+  await page.waitForSelector('#btn-file', { state: 'attached' });
   await until(async () => { try { return (await versions()).length > 0; } catch { return false; } }, 'the project after a reload');
   v = await versions();
   const kept = await prop("return { headline: p.onePager.headline, customized: p.onePager.customized, docs: p.photos.filter(x => x.kind === 'document').length }");

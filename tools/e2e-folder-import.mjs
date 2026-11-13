@@ -129,7 +129,7 @@ try {
     await page.goto(url);
     await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
     const held = await propertyCount(page);
-    await page.click('#btn-file');
+    await page.click('#tiksi-menu').then(() => page.click('#btn-file'));
     await page.click('[data-new-folder]');
     const steps = await reviewAndCreate(page, { name: 'Elm Street kitchen', where: 'kept in this folder', held });
     check(steps.some(s => s.state === 'ok' && s.text.includes(join(visit, 'Tiksi', 'Elm Street kitchen.tiksi'))), 'the run names the project file it will write in the folder');
@@ -165,9 +165,9 @@ try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
     const errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.goto('http://localhost:' + staticServer.address().port + '/');
-    await page.waitForSelector('#btn-file');
+    await page.waitForSelector('#btn-file', { state: 'attached' });
     const held = await propertyCount(page);
-    await page.click('#btn-file');
+    await page.click('#tiksi-menu').then(() => page.click('#btn-file'));
     await page.click('[data-new-property]');
     const waiting = page.waitForEvent('filechooser');
     await page.click('[data-np-folder]');

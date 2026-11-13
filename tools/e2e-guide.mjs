@@ -34,6 +34,7 @@ try {
     await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
   });
   const before = await page.evaluate(async () => JSON.stringify((await import('/js/store.js')).ws.data));
+  await page.locator('#tiksi-menu').click();
   await page.locator('.guide-entry').click();
   await page.getByRole('heading', { name: 'Your first renovation workflow', exact: true }).waitFor();
   await page.locator('#guide-search').fill('photo pins');
