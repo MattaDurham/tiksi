@@ -1,3 +1,5 @@
+import { keepRemoved, openRecovery } from './recovery.js';
+import { referencedProductIds } from './evidence.js';
 // Product registry: researched products with vendor and manufacturer links, specs, prices
 // and their sources, linked to scope items so the model becomes a true digital twin.
 
@@ -208,7 +210,7 @@ function render() {
   el.innerHTML = `
     <div class="view-scroll">
       <div class="view-head">
-        <span class="view-title">PRODUCTS</span>
+        <span class="view-title">PRODUCTS</span><button class="btn" data-recovery>REMOVED RECORDS</button>
         <span class="view-sub">${mine ? `${mine.size} in ${escapeHtml(prop.name)}, ` : ''}${d.products.length} in registry - link products to scope items to build the digital twin</span>
       </div>
       <div class="toolbar prod-toolbar">
@@ -242,6 +244,7 @@ function render() {
     render();
     el.querySelector('#prod-form [data-image-url]')?.focus();
   };
+  el.querySelector('[data-recovery]').onclick = () => openRecovery(render);
   el.querySelector('#research-prod').onclick = () => openResearch({});
   el.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => { scope = b.dataset.scope; render(); });
   const q = el.querySelector('#prod-q');
@@ -504,6 +507,9 @@ function renderForm() {
   form.querySelector('#prod-done').onclick = () => { editingId = null; message = ''; render(); };
   form.querySelector('#prod-del').onclick = () => {
     if (!confirm('Delete product "' + p.name + '"?')) return;
+    const references = referencedProductIds({ properties: ws.data.properties, materials: ws.data.materials, projects: ws.data.projects, products: ws.data.products.filter(record => record.id !== p.id) });
+    if (references.has(p.id)) { alert('This product is linked to a model or material. Keep its specification, or unlink it before removing it.'); return; }
+    keepRemoved(activeProperty(), 'products', [p]);
     ws.data.products = ws.data.products.filter(x => x.id !== p.id);
     editingId = null;
     touch(); render();

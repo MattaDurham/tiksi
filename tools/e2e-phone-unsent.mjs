@@ -1,3 +1,5 @@
+// Network fault injection uses Playwright routing, which service workers bypass.
+// The real service-worker/offline journey is covered in e2e-audit-repairs.mjs.
 // A phone on the Mac's project files: what it has not sent yet must survive a lock, a
 // switched app and a dropped tab, and the phone bar must say where a save stands.
 // Runs in Chromium with a phone profile, and also in WebKit (Safari's engine) with the
@@ -71,7 +73,7 @@ async function run(name, type, profile) {
   browser = await type.launch(type === chromium ? { args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] } : {});
   const id = 'prop-site-' + name;
   // The Mac's desktop browser makes the property the phone will work on.
-  const desktopContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const desktopContext = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
   const desktop = await openPage(desktopContext);
   await desktop.evaluate(async id => {
     const store = await import('/js/store.js');
@@ -79,7 +81,7 @@ async function run(name, type, profile) {
     store.ws.data.properties.push(p); store.ws.data.settings.activePropertyId = id; store.touch();
     await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
   }, id);
-  const phoneContext = await browser.newContext({ ...profile });
+  const phoneContext = await browser.newContext({ serviceWorkers: 'block', ...profile });
   const noteOnMac = async () => (await onTheMac()).data.properties.find(p => p.id === id).notes;
 
   step('1');
@@ -231,11 +233,38 @@ async function run(name, type, profile) {
     return bytes.length;
   }, lateId);
   await phoneContext.setOffline(true);
-  await phone.evaluate(async ([id, lateId]) => {
-    const store = await import('/js/store.js');
-    store.ws.data.properties.find(p => p.id === id).photos.push({ id: lateId, name: 'Before its record', thumb: '', notes: '', kind: 'photo' }); store.touch();
-  }, [id, lateId]);
+  const beforeLateNote = await phone.evaluate(async id => {
+    const store = await import('/js/store.js'), p = store.ws.data.properties.find(p => p.id === id), before = p.notes;
+    p.notes = before + ' Earlier durable offline edit'; store.touch(); return before;
+  }, id);
   await phone.waitForFunction(() => /kept on this device/.test(document.querySelector('#save-status').title), null, { timeout: 20000 });
+  await phone.evaluate(async ([id, lateId, beforeLateNote]) => {
+    // Keep the actual IndexedDB write transaction open while the network request fails.
+    // The earlier snapshot must not make the new photo record appear durable meanwhile.
+    const put = IDBObjectStore.prototype.put;
+    window.__latestPhotoKept = false;
+    window.__restoreRecoveryWrite = () => { IDBObjectStore.prototype.put = put; delete window.__restoreRecoveryWrite; };
+    IDBObjectStore.prototype.put = function(value, ...args) {
+      const request = put.call(this, value, ...args);
+      if (this.name === 'states' && typeof value?.local === 'string' && value.local.includes(lateId)) {
+        const until = Date.now() + 1500;
+        const hold = () => { if (Date.now() < until) this.get(value.owner).onsuccess = hold; };
+        hold(); this.transaction.addEventListener('complete', () => { window.__latestPhotoKept = true; });
+      }
+      return request;
+    };
+    const store = await import('/js/store.js');
+    const p = store.ws.data.properties.find(p => p.id === id); p.notes = beforeLateNote;
+    p.photos.push({ id: lateId, name: 'Before its record', thumb: '', notes: '', kind: 'photo' }); store.touch();
+  }, [id, lateId, beforeLateNote]);
+  await phone.waitForFunction(() => /kept on this device/.test(document.querySelector('#save-status').title), null, { timeout: 20000 });
+  assert(await phone.evaluate(() => window.__latestPhotoKept), 'the kept-on-device message waits for the latest recovery transaction to commit');
+  assert(await phone.evaluate(async lateId => {
+    const { unsentStore } = await import('/js/unsent.js');
+    const kept = await unsentStore().list();
+    return kept?.states.some(s => JSON.parse(s.local)?.properties.some(p => p.photos?.some(photo => photo.id === lateId)));
+  }, lateId), 'the kept-on-device message confirms the current photo record is durable, not just an earlier copy');
+  await phone.evaluate(() => window.__restoreRecoveryWrite());
   await phone.close();
   await phoneContext.setOffline(false);
   phone = await openPage(phoneContext, '#/photos');

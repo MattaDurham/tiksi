@@ -60,7 +60,7 @@ check(f.photos.length === 1 && f.renderings.length === 0, 'site photos are count
 
 const changed = op.draftOnePager(A, store.ws.data);
 const o = A.onePager;
-check(changed && o.headline === '12 Elm Street' && /2 rooms/.test(o.tagline), 'the draft names the property and its rooms in the tagline (' + o.tagline + ')');
+check(changed && o.headline === '12 Elm Street' && /2 modeled floor regions/.test(o.tagline), 'the draft names the property and its rooms in the tagline (' + o.tagline + ')');
 check(/Kitchen refresh/.test(o.summary) && /\$33,000/.test(o.summary) && /\$25,800 to \$42,500/.test(o.summary) && /13 calendar days, from Nov 10, 2026 to Nov 22, 2026\./.test(o.summary) && /Acme Shaker cabinets/.test(o.summary), 'the summary says what the work is, what it costs and when, and names a product');
 check(o.highlights[0] === 'Kitchen refresh: $33,000 likely' && o.highlights[1] === 'Pantry shelving: $600 likely', 'highlights list the projects with their likely cost (' + o.highlights.join(' / ') + ')');
 check(o.customized === false && o.draftedAt, 'a drafted record is not customized and says when it was drafted');
@@ -73,7 +73,7 @@ check(op.draftOnePager(A, store.ws.data, { force: true }) === true && /\$34,000/
 const empty = store.propertyTemplate('Bare lot');
 store.ws.data.properties.push(empty);
 op.draftOnePager(empty, store.ws.data);
-check(empty.onePager.headline === 'Bare lot' && /A renovation at Bare lot/.test(empty.onePager.summary) && /fill in as the design takes shape/.test(empty.onePager.summary) && empty.onePager.highlights.length === 0, 'a property with nothing in it still gets a sensible first draft');
+check(empty.onePager.headline === 'Bare lot' && /The modeled portion of Bare lot/.test(empty.onePager.summary) && /fill in as the design takes shape/.test(empty.onePager.summary) && empty.onePager.highlights.length === 0, 'a property with nothing in it still gets a sensible first draft');
 
 // ---------- the one-pager prints BUDGET's totals and SCHEDULE's span ----------
 {
@@ -166,11 +166,11 @@ check(/<div xmlns="http:\/\/www.w3.org\/1999\/xhtml" class="op-page">/.test(html
 check(/Prepared for The Does &lt;family&gt;/.test(html) && /Studio &amp; Co/.test(html) && /hello@example.com/.test(html), 'client, author and contact are on the page, escaped');
 check(/<h1>12 Elm Street<\/h1>/.test(html) && /Version 1 · Nov 6, 2026/.test(html), 'the headline and the version label are printed');
 check(/<img src="data:image\/jpeg;base64,AAAA" alt=""\/>/.test(html) && /<div class="op-plan"><svg/.test(html), 'the picture goes at the top and the plan beside the text');
-check(/\$25,000/.test(html) && /\$20,000 to \$32,000/.test(html) && /About 10 calendar days/.test(html) && /Nov 10, 2026 to Nov 19, 2026/.test(html) && /2 rooms · 215 sf/.test(html), 'budget, schedule and rooms are printed (' + (html.match(/<b>[^<]*<\/b>/g) || []).slice(0, 4).join(' ') + ')');
-check(/Specified products/.test(html) && /Shaker cabinets <span>Acme S-12<\/span>/.test(html), 'specified products are listed with brand and model');
+check(/\$25,000/.test(html) && /\$20,000 to \$32,000/.test(html) && /About 10 calendar days/.test(html) && /Nov 10, 2026 to Nov 19, 2026/.test(html) && /2 floor regions · 215 sf/.test(html), 'budget, schedule and rooms are printed (' + (html.match(/<b>[^<]*<\/b>/g) || []).slice(0, 4).join(' ') + ')');
+check(/Products recorded for review/.test(html) && /Shaker cabinets <span>Acme S-12<\/span>/.test(html), 'specified products are listed with brand and model');
 B.onePager.show.budget = false; B.onePager.show.products = false; B.onePager.show.plan = false;
 const html2 = page.onePagerHtml(B, store.ws.data, { hero: { plan: true }, planSvg: '<svg xmlns="http://www.w3.org/2000/svg"></svg>' }, { version: 'Draft' });
-check(!/Likely cost/.test(html2) && !/Specified products/.test(html2) && /<figure class="op-hero plan"><svg/.test(html2) && !/op-plan/.test(html2), 'toggles hide the budget and products, and the plan can be the picture at the top');
+check(!/Likely cost/.test(html2) && !/Products recorded for review/.test(html2) && /<figure class="op-hero plan"><svg/.test(html2) && !/op-plan/.test(html2), 'toggles hide the budget and products, and the plan can be the picture at the top');
 const bare = store.propertyTemplate('Bare'); store.ws.data.properties.push(bare); op.draftOnePager(bare, store.ws.data);
 const html3 = page.onePagerHtml(bare, store.ws.data, { hero: null, planSvg: '' }, {});
 check(/op-cover/.test(html3) && /In design/.test(html3) && /Draft/.test(html3), 'a bare property gets a typographic cover and an In design status');

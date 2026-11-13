@@ -1,3 +1,5 @@
+// Network fault injection uses Playwright routing, which service workers bypass.
+// The real service-worker/offline journey is covered in e2e-audit-repairs.mjs.
 // Two origins/contexts, one private disk workspace. All data is synthetic and temporary.
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
@@ -17,8 +19,8 @@ let browser, releaseDownload;
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch('http://127.0.0.1:' + port)).ok) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
   browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
-  const desktopContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  const phoneContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  const desktopContext = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
+  const phoneContext = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   const desktop = await desktopContext.newPage(), phone = await phoneContext.newPage();
   const errors = []; for (const page of [desktop, phone]) page.on('pageerror', e => errors.push(e.message));
   await desktop.goto('http://127.0.0.1:' + port);
@@ -100,7 +102,7 @@ try {
   assert.equal(replacement[0], 137, 'mutating an import buffer cannot change the saved original');
   assert.equal(replacement.at(-1), 88);
   const oldHash = snapshot.assets['photo-shared'].hash;
-  const slow = await (await browser.newContext()).newPage();
+  const slow = await (await browser.newContext({ serviceWorkers: 'block' })).newPage();
   const delayed = new Promise(resolve => { releaseDownload = resolve; });
   let requested; const requestStarted = new Promise(resolve => { requested = resolve; });
   await slow.route('**/api/workspace/blobs/' + oldHash, async route => { requested(); await delayed; await route.continue(); });
@@ -121,7 +123,7 @@ try {
   releaseDownload(); await slow.evaluate(() => window.oldPhotoDownload);
   assert.equal(await slow.evaluate(async () => new Uint8Array((await window.diskTestStore.getCachedFile('photo-shared')).buffer).at(-1)), 99, 'late old response does not poison the current original');
   // A brand-new browser has no cache or migration state and still sees everything.
-  const cleanContext = await browser.newContext();
+  const cleanContext = await browser.newContext({ serviceWorkers: 'block' });
   await cleanContext.addInitScript(() => {
     for (const method of ['getItem', 'setItem', 'removeItem']) Storage.prototype[method] = () => { throw new Error('Browser storage unavailable'); };
     indexedDB.open = () => { throw new Error('IndexedDB unavailable'); };
@@ -134,7 +136,7 @@ try {
   assert.equal(catalog.data.properties.length, 3);
   // Migrate an older device, including an orphan original, before clearing its
   // browser database. The Mac's newer records and unrelated local project survive.
-  const legacyContext = await browser.newContext();
+  const legacyContext = await browser.newContext({ serviceWorkers: 'block' });
   const legacy = await legacyContext.newPage();
   legacy.on('console', message => { if (message.type() === 'error') console.error('Migration browser:', message.text()); });
   await legacy.goto('http://127.0.0.1:' + port + '/app-icon.svg');
@@ -175,7 +177,7 @@ try {
   const recovered = execFileSync('python3', ['-c', 'import sys,zipfile,json;z=zipfile.ZipFile(sys.argv[1]);m=json.loads(z.read("manifest.json"));e=next(e for e in m["files"] if e["id"]=="orphan-original");print(list(z.read(e["path"])))', state + '/workspace/history/' + recovery]).toString().trim();
   assert.equal(recovered, '[3, 1, 4, 1, 5]');
   assert.equal(await legacy.evaluate(async () => (await import('/js/store.js')).ws.data.properties.length), 4);
-  const damaged = await (await browser.newContext()).newPage();
+  const damaged = await (await browser.newContext({ serviceWorkers: 'block' })).newPage();
   damaged.on('console', message => { if (message.type() === 'error' || message.type() === 'warning') console.error('Damaged browser:', message.text()); });
   // Requests the damaged page is still waiting on, printed if its load times out.
   const damagedPending = new Map();

@@ -2,11 +2,12 @@
 // rules are tested under Node. A reading is
 //   { id, videoId, seconds, frameAssetId, crop: [x, y, w, h] | null (normalised to the frame),
 //     value (m) | null, input (as typed), text (what was measured), direction, confidence,
-//     element: { kind: 'opening'|'wall', id, dim: 'width'|'height'|'length' } | null,
+//     element: { kind: 'opening'|'wall', id, dim: 'width'|'height'|'slabWidth'|'length' } | null,
 //     status: 'unassigned'|'assigned'|'applied', applied: { previous, at } | null, note, createdAt }
 // Applying a reading edits the model through the same geometry history as a typed edit in
 // PLAN, so UNDO reverts it; the reading then reports that the model no longer matches.
 import { uid, touch, units, readLength, wallsOn, roomsOn, openingsOn, levelOfWall, fmtLen, wallHeightOf } from './store.js';
+import { openingDimensions, wallWidthFromSlab } from './opening-dimensions.js';
 import { resizeOpening } from './opening-schedule.js';
 import { beginGeometryEdit } from './edit-history.js';
 import { planCornerMove, applyCornerMove } from './wallmove.js';
@@ -91,7 +92,7 @@ function validCrop(c) {
 }
 function validElement(e) {
   if (!e || typeof e !== 'object' || typeof e.id !== 'string') return null;
-  if (e.kind === 'opening' && ['width', 'height'].includes(e.dim)) return { kind: 'opening', id: e.id, dim: e.dim };
+  if (e.kind === 'opening' && ['width', 'height', 'slabWidth'].includes(e.dim)) return { kind: 'opening', id: e.id, dim: e.dim };
   if (e.kind === 'wall' && e.dim === 'length') return { kind: 'wall', id: e.id, dim: 'length' };
   return null;
 }
@@ -118,7 +119,8 @@ export function elementTargets(prop) {
       const kind = o.type === 'window' ? 'window' : 'door', w = walls.find(x => x.id === o.wallId);
       const n = ++counts[kind], room = w ? roomOfWall(prop, w) : '';
       const name = (kind === 'window' ? 'Window ' : 'Door ') + n + (room ? ' (' + room + ')' : '') + ' on wall ' + (wallNo.get(o.wallId) || '?') + suffix;
-      for (const dim of ['width', 'height']) out.push({ kind: 'opening', id: o.id, dim, group: kind === 'window' ? 'Windows' : 'Doors and openings', label: name + ' · ' + dim, current: o[dim] });
+      for (const dim of ['width', 'height']) out.push({ kind: 'opening', id: o.id, dim, group: kind === 'window' ? 'Windows' : 'Doors and openings', label: name + ' · wall opening ' + dim, current: o[dim] });
+      if (kind === 'door' && openingDimensions(prop,o).leaves) out.push({kind:'opening',id:o.id,dim:'slabWidth',group:'Doors and openings',label:name+' · door slab width per leaf',current:openingDimensions(prop,o).slabWidth});
     }
     for (const w of walls) {
       const room = roomOfWall(prop, w);
@@ -132,7 +134,7 @@ export function targetFor(prop, e) { return e ? elementTargets(prop).find(t => t
 
 export function currentValue(prop, e) {
   if (!e) return null;
-  if (e.kind === 'opening') { const o = (prop.openings || []).find(x => x.id === e.id); return o ? o[e.dim] : null; }
+  if (e.kind === 'opening') { const o = (prop.openings || []).find(x => x.id === e.id); return o ? e.dim === 'slabWidth' ? o.type === 'window' ? null : openingDimensions(prop,o).slabWidth : o[e.dim] : null; }
   const w = (prop.walls || []).find(x => x.id === e.id);
   return w ? wallLength(w) : null;
 }
@@ -152,12 +154,16 @@ export function canApply(prop, m) {
   if (current == null) return 'That element is no longer in the model.';
   if (m.element.kind === 'opening') {
     const o = prop.openings.find(x => x.id === m.element.id), w = prop.walls.find(x => x.id === o.wallId);
+    if (!w) return 'The opening has no host wall.';
     if (m.value < 0.05) return 'Too small for an opening.';
+    const changes=m.element.dim === 'slabWidth' ? {width:wallWidthFromSlab(o,m.value,openingDimensions(prop,o).leaves)} : {[m.element.dim]:m.value};
     // PLAN's rule for a typed size (the opening schedule's resize): try it on a copy, and refuse
     // a reading the rule would have to cut down rather than store a different number.
     const trial = Object.assign({}, o);
-    if (w && resizeOpening(prop, trial, { [m.element.dim]: m.value }, wallHeightOf(prop, w)) && Math.abs(trial[m.element.dim] - m.value) > TOLERANCE) {
-      if (m.element.dim === 'width') return 'The opening would be wider than its wall allows (' + fmtLen(trial.width) + ' at most on a ' + fmtLen(wallLength(w)) + ' wall).';
+    if (m.element.dim === 'slabWidth') trial.leaves=openingDimensions(prop,o).leaves;
+    if (w && !resizeOpening(prop, trial, changes, wallHeightOf(prop, w))) return 'The opening would overlap another opening or has invalid geometry.';
+    if (w && Math.abs((m.element.dim === 'slabWidth' ? openingDimensions(prop,trial).slabWidth : trial[m.element.dim]) - m.value) > TOLERANCE) {
+      if (['width','slabWidth'].includes(m.element.dim)) return 'The opening would be wider than its wall allows (' + fmtLen(trial.width) + ' at most on a ' + fmtLen(wallLength(w)) + ' wall).';
       const sill = o.type === 'window' ? Number(o.sill) || 0 : 0;
       return 'The opening would be taller than its wall (' + fmtLen(trial.height) + ' at most under a ' + fmtLen(wallHeightOf(prop, w)) + ' wall' + (sill ? ' above a ' + fmtLen(sill) + ' sill' : '') + ').';
     }
@@ -174,7 +180,10 @@ export function applyMeasurement(prop, id) {
   if (e.kind === 'opening') {
     // Through the same resize rule as a size typed in PLAN, so a wider opening stays on its wall.
     const o = prop.openings.find(x => x.id === e.id), w = prop.walls.find(x => x.id === o.wallId);
-    if (!w || !resizeOpening(prop, o, { [e.dim]: m.value }, wallHeightOf(prop, w))) o[e.dim] = m.value;
+    const changes=e.dim === 'slabWidth' ? {width:wallWidthFromSlab(o,m.value,openingDimensions(prop,o).leaves)} : {[e.dim]:m.value};
+    const leaves=openingDimensions(prop,o).leaves;
+    if (!w || !resizeOpening(prop, o, changes, wallHeightOf(prop, w))) throw new Error('Opening change refused; review its host and overlap.');
+    if(e.dim === 'slabWidth') o.leaves=leaves;
   }
   else {
     // As PLAN's length field: the b end moves along the wall, joined walls and floors follow.
@@ -190,7 +199,9 @@ export function applyMeasurement(prop, id) {
 // Readings a person has to explain: nobody said what they are, where they belong, or the
 // numbers could not be read. Applied readings have been decided.
 export function needsOwner(prop, m) {
-  if (m.status === 'applied') return false;
+  const state = readingState(prop, m);
+  if (state === 'changed' || state === 'missing') return true;
+  if (state === 'applied') return false;
   return m.status === 'unassigned' || m.confidence === 'unreadable' || !m.text.trim() || readingState(prop, m) === 'missing';
 }
 export function askOwnerList(prop) {
@@ -207,7 +218,7 @@ export function fmtTime(t) {
 export function askOwnerText(prop) {
   const videos = new Map((prop.videos || []).map(v => [v.id, v.name]));
   return askOwnerList(prop).map((m, i) => {
-    const why = m.confidence === 'unreadable' ? 'numbers not readable' : !m.text.trim() ? 'what was measured?' : m.status === 'unassigned' ? 'which element is this?' : 'element no longer in the model';
+    const why = readingState(prop,m) === 'changed' ? 'model changed since this reading was applied' : m.confidence === 'unreadable' ? 'numbers not readable' : !m.text.trim() ? 'what was measured?' : m.status === 'unassigned' ? 'which element is this?' : 'element no longer in the model';
     return (i + 1) + '. ' + (videos.get(m.videoId) || 'video') + ' at ' + fmtTime(m.seconds) + ': ' + (Number.isFinite(m.value) ? fmtReading(m.value) : m.input || 'no value') +
       (m.text ? ' - ' + m.text : '') + (m.direction ? ' (' + m.direction + ')' : '') + ' - ' + why + (m.note ? ' - ' + m.note : '');
   }).join('\n');

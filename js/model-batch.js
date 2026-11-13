@@ -331,7 +331,7 @@ export class ModelBatches {
 
   // Before the viewer draws: sync, then swap the originals out and the proxies in. Returns true
   // when something that shadows depend on changed (the shadow map needs a refresh).
-  beginFrame(models) {
+  beginFrame(models, originals = false) {
     let shadows = this.update(models);
     for (const [id, e] of [...this.entries]) {
       if (!e.proxies) continue;
@@ -345,6 +345,7 @@ export class ModelBatches {
       if (r === 'rebuild') { this.rebuild(id); r = true; }
       if (r) shadows = true;
     }
+    if (originals) { this.root.visible = false; this.drawing = false; return shadows; }
     for (const e of this.entries.values()) {
       if (!e.proxies) continue;
       e.group.visible = chainVisible(e.inner);

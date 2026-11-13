@@ -40,7 +40,7 @@ export const FIXTURE_FALLBACK = { top: '#e9e5dc', body: '#efece6', kick: '#3a3c3
 
 const fin = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-const SOURCES = new Set(['scan', 'user', 'tape']);
+const SOURCES = new Set(['scan', 'user', 'tape', 'unknown']);
 
 export function fixtureLabel(f) {
   if (!f) return 'Fixture';
@@ -70,10 +70,18 @@ export function fixtureTemplate(kind, subtype, at) {
 export function normaliseFixture(f, levelIds) {
   if (!f || typeof f !== 'object' || !FIXTURE_KINDS[f.kind]) return null;
   const k = FIXTURE_KINDS[f.kind];
+  const rawDimensions = Object.fromEntries(['w','d','h','depth','y0','rot','x','y','counterT','toeKick','toeDepth','overhang'].filter(key => f[key] !== undefined).map(key => [key, f[key]]));
+  const rawLevel = f.level;
   if (levelIds && !levelIds.has(f.level)) f.level = levelIds.values().next().value || null;
   if (typeof f.name !== 'string') f.name = '';
   const p = f.provenance && typeof f.provenance === 'object' ? f.provenance : {};
-  f.provenance = { ...p, source: SOURCES.has(p.source) ? p.source : 'user', confidence: Number.isFinite(p.confidence) ? clamp(p.confidence, 0, 1) : null };
+  const validConfidence = Number.isFinite(p.confidence) && p.confidence >= 0 && p.confidence <= 1;
+  f.provenance = { ...p, source: SOURCES.has(p.source) ? p.source : 'unknown', confidence: validConfidence ? p.confidence : null };
+  if (p.source && !SOURCES.has(p.source)) f.provenance.rawSource = p.source;
+  if (p.confidence != null && !validConfidence) f.provenance.rawConfidence = p.confidence;
+  const defaults = [...(f.provenance.defaultedFields || [])];
+  for (const key of k.shape === 'run' ? ['depth', 'h'] : ['w', 'd', 'h']) if (!Number.isFinite(f[key])) defaults.push(key);
+  if (defaults.length) f.provenance.defaultedFields = [...new Set(defaults)];
   for (const key of ['material', 'bodyMaterial']) if (f[key] !== undefined && typeof f[key] !== 'string') f[key] = null;
   f.y0 = clamp(fin(f.y0, 0), -1, 20);
   if (k.shape === 'run') {
@@ -91,13 +99,18 @@ export function normaliseFixture(f, levelIds) {
       f.overhang = clamp(fin(f.overhang, 0.025), 0, 0.5);
     }
   } else {
-    if (!k.subtypes.includes(f.subtype)) f.subtype = k.subtypes[0];
-    const d = BOX_DEFAULTS[f.subtype];
+    // An unrecognized object keeps its identity and uses an explicitly unverified box.
+    const d = BOX_DEFAULTS[f.subtype] || { w: 0.6, d: 0.6, h: 0.9 };
+    if (!k.subtypes.includes(f.subtype)) f.provenance.unresolvedSubtype = true;
     for (const key of ['x', 'y']) f[key] = fin(f[key], 0);
     f.rot = fin(f.rot, 0);
     for (const key of ['w', 'd', 'h']) f[key] = clamp(fin(f[key], d[key]), 0.05, 20);
     if (f.subtype === 'sofa') f.seat = clamp(fin(f.seat, d.seat), 0.1, f.h);
   }
+  const adjusted = { ...(f.provenance.adjustedFields || {}) };
+  for (const [key, raw] of Object.entries(rawDimensions)) if (typeof raw !== 'number' || raw !== f[key]) adjusted[key] = { raw, displayed: f[key] };
+  if (rawLevel !== f.level) adjusted.level = { raw: rawLevel, displayed: f.level };
+  if (Object.keys(adjusted).length) f.provenance.adjustedFields = adjusted;
   return f;
 }
 

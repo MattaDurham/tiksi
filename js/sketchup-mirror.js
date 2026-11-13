@@ -248,7 +248,7 @@ export function mergeMirror(prop, read, synced, seenBefore) {
   synced = synced || {};
   seenBefore = seenBefore || {};
   const written = (read.model && read.model.elements && typeof read.model.elements === 'object') ? read.model.elements : {};
-  const report = { applied: [], added: [], deleted: [], conflicts: [], warnings: (read.warnings || []).slice(), untagged: read.untagged || null, seen: {} };
+  const report = { ...(read.unsupportedGeometry?.length ? { blockWrite: true } : {}), applied: [], added: [], deleted: [], conflicts: [], warnings: (read.warnings || []).slice(), untagged: read.untagged || null, seen: {} };
   const before = elementState(prop);
   // A millimetre signature saved before SIG_TAIL stands for `sigNow` (the value's signature
   // today) when it is the millimetre signature of that same value; otherwise it differs from it.
@@ -258,6 +258,10 @@ export function mergeMirror(prop, read, synced, seenBefore) {
     return upgrade(synced[id], kind, cur && cur.params, cur && cur.sig) || upgrade(written[id] && written[id].sig, kind, cur && cur.params, cur && cur.sig); };
   const seen = new Set();
   const decide = (id, kind, now, base) => {
+    if (['wall', 'room'].includes(kind) && Number.isFinite(now.elevation) && Number.isFinite(base?.elevation) && Math.abs(now.elevation-base.elevation) > .0001) {
+      report.conflicts.push({ id, kind, reason: 'Vertical move is unsupported by the limited bridge; SketchUp copy preserved.' });
+      report.blockWrite = true; return 'keep';
+    }
     const nowSig = readSig[kind](now), fileBase = readSig[kind](base || {}), cur = before.get(id);
     report.seen[id] = nowSig;
     const agreed = agreedOf(id, kind) || fileBase;
@@ -535,7 +539,9 @@ export async function syncMirror(folder, prop, entry, write, materials) {
     ms.mtime = got.file.lastModified; ms.size = got.file.size;
     ms.synced = syncedState(prop);
     ms.report = summarise(report);
+    ms.blockWrite = report.blockWrite;
   }
+  if (ms.blockWrite) return { changed, report: report || ms.report };
   const spec = mirrorSpec(prop, materials), sig = specSignature(spec);
   const underlayChanged = spec.underlays.some(u => (ms.underlays || {})[u.level] !== u.sig);
   // A mirror saved before SIG_TAIL whose signature is that of today's project, built the old
@@ -554,6 +560,8 @@ export async function syncMirror(folder, prop, entry, write, materials) {
       files[u.file] = data.bytes;
     }
     const bytes = await writeMirror(spec, got ? await got.file.arrayBuffer() : null, files);
+    // Retain the entire prior SketchUp file, including edits the limited reader cannot represent.
+    if (got && !folder.preservesMirrorVersions) await write(await folder.getFileHandle(name.replace(/\.skp$/i, '') + '.before-sync-' + Date.now() + '.skp', { create: true }), new Blob([await got.file.arrayBuffer()]));
     const handle = got ? got.handle : await folder.getFileHandle(name, { create: true });
     await write(handle, new Blob([bytes]));
     const f = await handle.getFile();

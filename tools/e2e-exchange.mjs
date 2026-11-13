@@ -99,6 +99,11 @@ try {
   await page.locator('[data-format]').selectOption('glb');
   const downloadPromise=page.waitForEvent('download');await page.locator('[data-save-model]').click();const download=await downloadPromise;
   assert.match(download.suggestedFilename(),/\.glb$/);assert.ok((await readFile(await download.path())).length>100);
+  const evidencePromise=page.waitForEvent('download');await page.locator('[data-evidence-download]').click();const evidenceDownload=await evidencePromise;
+  const evidence=JSON.parse(await readFile(await evidenceDownload.path(),'utf8'));
+  assert.equal(evidence.format,'tiksi-model-evidence');assert.equal(evidence.lighting,'illustrative');assert.ok(evidence.elements.length);
+  assert.equal(await page.locator('[data-file-dialog]').isVisible(),true,'saving evidence keeps the exchange dialog open');
+
   await page.getByText('Conversion history / agent handoffs',{exact:true}).click();
   await page.locator('[data-history]').click();await page.locator('[data-jobs]').filter({hasText:'failed'}).waitFor();
   await page.locator('[data-revision]').selectOption('design');
