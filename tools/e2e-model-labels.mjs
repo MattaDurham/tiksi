@@ -6,8 +6,8 @@
 //             items do the same; the switches are kept with the property through a reload; a
 //             hidden level hides its labels and shows them again with the level
 //   parallel  TOP turns PARALLEL on and ORBIT turns it off again; Shift+P and the pill switch
-//             it; a click in PARALLEL still selects the wall under it (a WALL panel with
-//             read-only Thickness and Height lines); scroll steps change the scale a little at
+//             it; a click in PARALLEL still selects the face under it, and THE WALL BEHIND
+//             opens the wall (read-only Thickness and Height lines); scroll steps change the scale a little at
 //             a time and never drop the camera onto its target; a saved view made in PARALLEL
 //             comes back in PARALLEL
 //
@@ -184,15 +184,18 @@ try {
   for (let dy = 0; dy <= 160 && !picked; dy = dy > 0 ? -dy : -dy + 8) {
     await page.mouse.click(box.x + box.width / 2 + 40, box.y + box.height / 2 + dy);
     await page.waitForTimeout(150);
-    picked = (await heading.innerText()) === 'WALL';
+    picked = (await heading.innerText()) === 'WALL FACE';
   }
-  assert.ok(picked, 'a click in PARALLEL selects a wall');
+  assert.ok(picked, 'a click in PARALLEL selects a wall face');
+  assert.equal((await page.locator('.inspector .op-name').innerText()).trim(), 'Outside, south face', 'the front wall\'s outside, seen from the front');
+  await page.locator('.inspector [data-face-wall]').first().click();
+  await waitUntil(async () => (await heading.innerText()) === 'WALL', 'THE WALL BEHIND opens the wall');
   const stat = label => page.locator('.inspector .stat-line', { has: page.locator('span', { hasText: new RegExp('^' + label + '$') }) }).locator('b');
   assert.equal(await stat('Length').innerText(), '16\'-0"', 'the front wall, 16\'-0" long');
   assert.equal(await stat('Thickness').innerText(), await page.evaluate(() => window.testStore.fmtLen(0.15)), 'its thickness is a read-only line');
   assert.equal(await stat('Height').count(), 1, 'so is its height');
   assert.equal(await page.locator('.inspector input[data-th], .inspector .field:has(> label:text-is("Thickness")) input').count(), 0, 'no thickness to type');
-  ok('a click in PARALLEL selects the front wall, with read-only Thickness (' + await stat('Thickness').innerText() + ') and Height');
+  ok('a click in PARALLEL selects the front wall\'s face; the wall behind it has read-only Thickness (' + await stat('Thickness').innerText() + ') and Height');
   await page.keyboard.press('Escape');
 
   // Scroll steps in PARALLEL: the camera keeps its distance when the navigation re-aims, so each
