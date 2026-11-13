@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 from server.sketchup_convert import API, Ref, library_path
-from server.sketchup_mirror import opening_detail_parts, scaled_opening_detail, get_data, to_ref, face_bounds, face_ring, group_transform, multiply, apply, IN
+from server.sketchup_mirror import opening_detail_parts, scaled_opening_detail, get_data, to_ref, face_bounds, face_ring, group_transform, multiply, apply, baseboard_part, scaled_baseboard, IN
 
 ROOT = Path(__file__).resolve().parent.parent
 TRIM = {'id': 'trim', 'name': 'Trim', 'color': '#eeeeee'}
@@ -135,6 +135,49 @@ class OpeningDetailGeometryTests(unittest.TestCase):
         self.assertEqual(opening_detail_parts(h, .1), [])
 
 
+
+class BaseboardGeometryTests(unittest.TestCase):
+    def test_rounded_profile_has_correct_envelope_and_four_curved_segments(self):
+        segment = {'s0': .2, 's1': 1.3, 'height': .15, 'depth': .02, 'profile': 'rounded', 'side': 'pos'}
+        part = baseboard_part(segment, .1)
+        self.assertEqual(len(part['points']), 16)
+        self.assertEqual(len(part['faces']), 10)
+        self.assertEqual(min(p[0] for p in part['points']), .2)
+        self.assertEqual(max(p[0] for p in part['points']), 1.3)
+        self.assertAlmostEqual(min(p[1] for p in part['points']), -.07)
+        self.assertAlmostEqual(max(p[1] for p in part['points']), -.05)
+        self.assertAlmostEqual(max(p[2] for p in part['points']), .15)
+        top = [p for p in part['points'][:8] if p[2] > .14]
+        self.assertEqual(len(top), 5)
+        opposite = baseboard_part(dict(segment, side='neg'), .1)
+        self.assertEqual(opposite['points'], [[x, -y, z] for x, y, z in part['points']])
+
+    def test_explicit_profile_radius_overrides_default(self):
+        segment = {'s0': 0, 's1': 1, 'height': .15, 'depth': .02, 'radius': .004, 'profile': 'rounded', 'side': 'pos'}
+        part = baseboard_part(segment, .1)
+        points = part['points'][:8]
+        self.assertAlmostEqual(points[2][2], .146)
+        self.assertAlmostEqual(points[6][1], -.066)
+        self.assertAlmostEqual(points[6][2], .15)
+        self.assertEqual(len(baseboard_part(dict(segment, radius=0), .1)['points']), 8)
+        self.assertEqual(scaled_baseboard({'radius': .004}, 2, 3)['radius'], .008)
+
+    def test_rectangular_and_disabled_profiles(self):
+        segment = {'s0': 0, 's1': 1, 'height': .12, 'depth': .01, 'profile': 'rectangular', 'side': 'neg'}
+        part = baseboard_part(segment, .1)
+        self.assertEqual((len(part['points']), len(part['faces'])), (8, 6))
+        self.assertIsNone(baseboard_part(dict(segment, height=0), .1))
+        self.assertIsNone(baseboard_part(dict(segment, depth=0), .1))
+        self.assertIsNone(baseboard_part(dict(segment, s1=0), .1))
+
+    def test_baseboard_scaling_preserves_labels_and_unscaled_precision(self):
+        raw = {'height': .123456789, 'depth': .012345678, 'profile': 'rounded'}
+        self.assertEqual(scaled_baseboard(raw, 1, 1), raw)
+        scaled = scaled_baseboard(raw, 2, 3)
+        self.assertEqual(scaled, {'height': .37037, 'depth': .024691, 'profile': 'rounded'})
+        self.assertEqual(raw['height'], .123456789)
+
+
 @unittest.skipUnless(library_path(), 'SketchUp SDK not installed')
 class NativeOpeningDetailTests(unittest.TestCase):
     def test_open_leaf_handing_on_rotated_wall_matches_world_coordinates(self):
@@ -162,6 +205,32 @@ class NativeOpeningDetailTests(unittest.TestCase):
                 distances = sorted({round(math.dist(points[0], q), 6) for q in points[1:]})
                 self.assertIn(.75, distances, 'the world-space leaf edge preserves its specified width')
                 self.assertIn(1.95, distances, 'the world-space leaf edge preserves its specified height')
+
+    def test_native_baseboards_do_not_change_wall_bounds_or_bridge_doorway(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); source = spec()
+            wall = source['walls'][0]
+            wall['baseboardPos'] = {'height': .15, 'depth': .02, 'profile': 'rounded'}
+            wall['baseboardNeg'] = {'height': 0, 'depth': .01, 'profile': 'rectangular'}
+            wall['baseboards'] = [dict(wall['baseboardPos'], s0=a, s1=b, side='pos', material=TRIM)
+                                  for a, b in ((0, .6), (1.4, 4))]
+            (root/'mirror.json').write_text(json.dumps(source))
+            for operation in ('write', 'read'):
+                if operation == 'read':
+                    shutil.copy(root/'model.skp', root/'source.skp')
+                result = subprocess.run([sys.executable, str(ROOT/'server/sketchup_mirror.py'), operation, str(root)],
+                                        capture_output=True, text=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            read = json.loads((root/'mirror-read.json').read_text())
+            self.assertEqual(read['walls'][0]['now'], read['walls'][0]['base'])
+            self.assertEqual(read['walls'][0]['now']['baseboardPos'], wall['baseboardPos'])
+            self.assertEqual(read['walls'][0]['now']['baseboardNeg']['height'], 0)
+            points = named_world_points(root/'model.skp', 'Baseboard pos')
+            self.assertFalse(any(.600001 < p[0] < 1.399999 for p in points))
+            self.assertAlmostEqual(max(p[2] for p in points), .15)
+            self.assertAlmostEqual(max(p[1] for p in points), .07)
+            self.assertEqual(inspect_groups(root/'model.skp')['wall']['children'].count('Baseboard pos'), 2)
+            self.assertEqual(named_world_points(root/'model.skp', 'Baseboard neg'), [])
 
     def test_detailed_model_roundtrip_keeps_opening_and_room_dimensions(self):
         with tempfile.TemporaryDirectory() as temp:

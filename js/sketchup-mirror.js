@@ -17,7 +17,7 @@
 // run under Node for tests; the rest talks to /api/model-conversion/mirror.
 
 import { wallHeightOf, levelOfWall, levelOfRoom, levelHeight, roomsOn, uid } from './store.js';
-import { openingSpans, wallFaceMaterialIds, wallSides, doorGlassBand, plainOpening, doorDetail, windowDetail, doorShownOpen, doorGlass, leafGlazing } from './wall-solids.js';
+import { openingSpans, wallSolids, baseboardDetail, wallFaceMaterialIds, wallSides, doorGlassBand, plainOpening, doorDetail, windowDetail, doorShownOpen, doorGlass, leafGlazing } from './wall-solids.js';
 import { tagIdOf, tagById } from './tags.js';
 import { thresholdFloors } from './threshold-floors.js';
 import { fixtureShape, fixtureMirrorParams, fixtureLocalFrame, fixtureParts, fixtureLabel, fixturesOn, normaliseFixture, FIXTURE_FALLBACK } from './fixtures.js';
@@ -53,7 +53,9 @@ function openingParams(o, s0, s1, L, H) {
 }
 
 function wallParams(prop, w) {
-  return { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by, thickness: w.thickness || 0.114, height: wallHeightOf(prop, w) };
+  const p = { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by, thickness: w.thickness || 0.114, height: wallHeightOf(prop, w) };
+  for (const key of ['baseboardPos', 'baseboardNeg']) if (w[key] && typeof w[key] === 'object') p[key] = JSON.parse(JSON.stringify(w[key]));
+  return p;
 }
 
 // Every element the mirror carries, with comparable signatures: id -> { kind, sig, params }.
@@ -87,7 +89,11 @@ export function elementState(prop, legacy = false) {
 }
 
 export function wallSig(p) { return wallSigNow(p); }
-function wallSigNow(p) { return ['wall', tenth(p.ax), tenth(p.ay), tenth(p.bx), tenth(p.by), tenth(p.thickness), tenth(p.height)].join(',') + SIG_TAIL; }
+function wallSigNow(p) {
+  let sig = ['wall', tenth(p.ax), tenth(p.ay), tenth(p.bx), tenth(p.by), tenth(p.thickness), tenth(p.height)].join(',');
+  for (const key of ['baseboardPos', 'baseboardNeg']) if (p[key] && typeof p[key] === 'object') sig += '|' + key + ':' + JSON.stringify(stableDetail(p[key]));
+  return sig + SIG_TAIL;
+}
 export function openingSig(p) { return openingSigNow(p); }
 // Detail is optional so old opening signatures remain unchanged. Sorting keys makes the
 // signature independent of JSON field order and catches concurrent handing/profile edits.
@@ -216,7 +222,19 @@ export function mirrorSpec(prop, materials, legacy = false) {
     // .skp, local y = -thickness/2); neg: the opposite face; other: ends, top and reveals.
     const ids = wallFaceMaterialIds(w, roomsOn(prop, lvl.id));
     const faces = Object.fromEntries(Object.entries(ids).map(([face, id]) => [face, finish(id, 'wall', 'wall ' + w.id)]));
-    walls.push(Object.assign({ id: w.id, level: lvl.id, elevation: lvl.elevation, name: 'Wall ' + w.id, holes, materials: faces, tag: tag('wall:' + w.id) }, st.params));
+    const wall = Object.assign({ id: w.id, level: lvl.id, elevation: lvl.elevation, name: 'Wall ' + w.id, holes, materials: faces, tag: tag('wall:' + w.id) }, st.params);
+    const sides = wallSides(w, roomsOn(prop, lvl.id));
+    for (const [side, key, sign] of [['pos', 'baseboardPos', 1], ['neg', 'baseboardNeg', -1]]) {
+      if (!w[key] || typeof w[key] !== 'object' || !sides[side]) continue;
+      const detail = baseboardDetail(w, sign);
+      if (!(detail.height > 0) || !(detail.depth > 0)) continue;
+      for (const s of wallSolids(w, prop.openings || [], st.params.height).solids) {
+        if (s.v0 >= .001) continue;
+        const height = Math.min(detail.height, s.v1);
+        (wall.baseboards ||= []).push({ s0: s.s0, s1: s.s1, side, ...detail, height, radius: Math.min(detail.radius, height), material: finish('mat-trim', 'door', 'wall ' + w.id) });
+      }
+    }
+    walls.push(wall);
   }
   const rooms = (prop.rooms || []).filter(r => state.has(r.id)).map(r => {
     const lvl = levelOfRoom(prop, r);
@@ -415,6 +433,7 @@ export function mergeMirror(prop, read, synced, seenBefore) {
 }
 
 function applyWall(prop, w, now) {
+  for (const key of ['baseboardPos', 'baseboardNeg']) if (now[key] && typeof now[key] === 'object') w[key] = JSON.parse(JSON.stringify(now[key]));
   for (const k of ['ax', 'ay', 'bx', 'by']) w[k] = round(now[k]);
   if (now.thickness > 0.005) w.thickness = round(now.thickness);
   if (now.height > 0.05) {

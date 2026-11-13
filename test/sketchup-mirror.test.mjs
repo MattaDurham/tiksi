@@ -27,6 +27,7 @@ function readOf(spec) {
     model: { propertyId: spec.property.id, elements: spec.elements },
     walls: spec.walls.map(w => {
       const base = { ax: w.ax, ay: w.ay, bx: w.bx, by: w.by, thickness: w.thickness, height: w.height, elevation: w.elevation };
+      for (const key of ['baseboardPos', 'baseboardNeg']) if (w[key]) base[key] = structuredClone(w[key]);
       return {
         id: w.id, level: w.level, base, now: { ...base },
         openings: w.holes.map(h => {
@@ -538,4 +539,46 @@ test('project export retains a custom door leaf finish and its specification', (
   assert.deepEqual(exported.products, [product]);
   const spec = mirrorSpec(exported.properties[0], exported.materials);
   assert.equal(spec.walls[0].holes[0].leafMaterial.color, '#9a704a');
+});
+
+
+test('explicit baseboards mirror only room-facing floor solids and preserve profile', () => {
+  const p = room(), wall = p.walls[0];
+  wall.baseboardPos = { height: .09, depth: .012, profile: 'rounded' };
+  wall.baseboardNeg = { height: .11, depth: .014, profile: 'rectangular' };
+  const spec = mirrorSpec(p), native = spec.walls[0];
+  assert.deepEqual(native.baseboardPos, wall.baseboardPos);
+  assert.ok(native.baseboards.length > 0);
+  assert.ok(native.baseboards.every(b => b.side === 'pos' && b.height === .09 && b.depth === .012 && b.profile === 'rounded'));
+  const door = native.holes.find(h => h.type === 'door');
+  assert.ok(native.baseboards.every(b => b.s1 <= door.s0 || b.s0 >= door.s1), 'no rail crosses the door opening');
+  const win = native.holes.find(h => h.type === 'window');
+  assert.ok(native.baseboards.some(b => b.s0 <= win.s0 && b.s1 >= win.s1), 'rail continues under a raised window');
+  assert.deepEqual(mergeMirror(p, readOf(spec), syncedState(p)).applied, []);
+  p.openings.find(o => o.type === 'window').sill = .003;
+  // A sill below the board top clips both its height and radius; it cannot cover glass.
+  const low = mirrorSpec(p).walls[0].baseboards.find(b => b.s0 >= win.s0 && b.s1 <= win.s1);
+  // wallSolids omits sill walls thinner than 10 mm, so no baseboard belongs below that pane.
+  assert.equal(low, undefined);
+  p.openings.find(o => o.type === 'window').sill = .02;
+  const short = mirrorSpec(p).walls[0].baseboards.find(b => b.s0 >= win.s0 && b.s1 <= win.s1);
+  assert.equal(short.height, .02);
+  assert.ok(short.radius <= short.height);
+  wall.baseboardPos.height = 0;
+  assert.equal(mirrorSpec(p).walls[0].baseboards, undefined);
+});
+
+test('baseboard profile edits participate in conflict detection and native detail is copied independently', () => {
+  const p = room(); p.walls[0].baseboardPos = { height: .09, depth: .012, profile: 'rounded' };
+  const synced = syncedState(p), read = readOf(mirrorSpec(p));
+  p.walls[0].baseboardPos.height = .10;
+  read.walls[0].now.by = .2;
+  assert.deepEqual(mergeMirror(p, read, synced).conflicts.map(c => c.id), ['w-s']);
+  const copiedRead = readOf(mirrorSpec(p));
+  copiedRead.walls.push(structuredClone(copiedRead.walls[0]));
+  const copied = mergeMirror(p, copiedRead, syncedState(p));
+  const addedWall = p.walls.find(w => copied.added.includes(w.id));
+  assert.deepEqual(addedWall.baseboardPos, p.walls[0].baseboardPos);
+  addedWall.baseboardPos.height = .2;
+  assert.equal(p.walls[0].baseboardPos.height, .10);
 });

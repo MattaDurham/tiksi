@@ -640,6 +640,56 @@ def scaled_opening_detail(detail, sx, sy, sz):
     return result
 
 
+
+def baseboard_part(segment, thickness):
+    """One already-clipped rail, with the viewer's four-segment rounded top profile."""
+    s0, s1, height, depth = (segment[k] for k in ('s0', 's1', 'height', 'depth'))
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in (s0, s1, height, depth)):
+        return None
+    if s1-s0 <= 1e-7 or height <= 0 or depth <= 0:
+        return None
+    section = [(0, 0), (depth, 0)]
+    radius = segment.get('radius', min(depth/2, height/10))
+    if not isinstance(radius, (int, float)) or isinstance(radius, bool) or not math.isfinite(radius):
+        radius = min(depth/2, height/10)
+    radius = min(max(radius, 0), depth, height)
+    if segment.get('profile') == 'rounded' and radius > 1e-7:
+        section.append((depth, height-radius))
+        section += [(depth-radius+radius*math.cos(k*math.pi/8), height-radius+radius*math.sin(k*math.pi/8)) for k in range(1, 5)]
+    else:
+        section.append((depth, height))
+    section.append((0, height))
+    sign = -1 if segment.get('side') == 'pos' else 1
+    count = len(section)
+    points = [[x, sign*(thickness/2+offset), z] for x in (s0, s1) for offset, z in section]
+    faces = [(list(range(count-1, -1, -1)), []), (list(range(count, 2*count)), [])]
+    faces += [([k, (k+1)%count, (k+1)%count+count, k+count], []) for k in range(count)]
+    return {'points': points, 'faces': faces, 'material': segment.get('material')}
+
+
+def scaled_baseboard(detail, depth_scale, height_scale):
+    result = json.loads(json.dumps(detail))
+    for key, scale in (('depth', depth_scale), ('height', height_scale), ('radius', min(depth_scale, height_scale))):
+        value = result.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+            result[key] = value if abs(scale-1) < 1e-10 else r6(value*scale)
+    return result
+
+
+def write_baseboards(api, entities, wall, layer, materials):
+    for segment in wall.get('baseboards', []):
+        part = baseboard_part(segment, wall['thickness'])
+        if not part:
+            continue
+        group = new_group(api, entities, 'Baseboard '+segment.get('side', 'neg'), translation(0, 0, 0))
+        set_layer(api, group, layer)
+        inner = api.ref('SUGroupGetEntities', group)
+        fill(api, inner, [[v*IN for v in p] for p in part['points']], part['faces'])
+        mat = materials.get(part['material'])
+        for face in api.collection(inner, 'Faces'):
+            paint(api, face, mat)
+
+
 def write_wall(api, entities, wall, layer, materials, tags=None):
     ax, ay, bx, by = wall['ax'], wall['ay'], wall['bx'], wall['by']
     L = math.hypot(bx - ax, by - ay)
@@ -659,6 +709,10 @@ def write_wall(api, entities, wall, layer, materials, tags=None):
         if isinstance(wall.get('materials'), dict):
             paint_wall(api, inner, th, wall['materials'], materials)
     base = {'ax': r6(ax), 'ay': r6(ay), 'bx': r6(bx), 'by': r6(by), 'thickness': r6(th), 'height': r6(H), 'elevation': r6(elev)}
+    for key in ('baseboardPos', 'baseboardNeg'):
+        if isinstance(wall.get(key), dict):
+            base[key] = json.loads(json.dumps(wall[key]))
+    write_baseboards(api, inner, wall, layer, materials)
     set_data(api, to_ref(api, 'SUGroupToEntity', group), {'kind': 'wall', 'id': wall['id'], 'level': wall['level'], 'base': base,
                                                           'local': {'x0': 0, 'x1': r6(L * IN), 'y0': r6(-th / 2 * IN), 'y1': r6(th / 2 * IN), 'z0': 0, 'z1': r6(H * IN)}})
     for h in wall.get('holes', []):
@@ -943,6 +997,10 @@ def read_wall(api, group, data, warnings):
     pa, pb = skp_to_plan(a), skp_to_plan(b)
     now = {'ax': r6(pa[0]), 'ay': r6(pa[1]), 'bx': r6(pb[0]), 'by': r6(pb[1]),
            'thickness': r6(dist(side0, side1) / IN), 'height': r6(dist(a, top) / IN), 'elevation': r6(a[2] / IN)}
+    for key in ('baseboardPos', 'baseboardNeg'):
+        value = (data.get('base') or {}).get(key)
+        if isinstance(value, dict):
+            now[key] = scaled_baseboard(value, axis_scale(m, 1), axis_scale(m, 2))
     openings = []
     length_local = x1 - x0
     sx, sz = axis_scale(m, 0), axis_scale(m, 2)
