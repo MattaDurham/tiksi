@@ -64,9 +64,10 @@ function textureKey(tex) {
 }
 export function lookKey(material) {
   if (!material) return 'none';
-  // Reflection capture hides declared source mirrors only. Their otherwise identical
-  // ordinary neighbours must not share that material's drawing proxy.
-  const parts = [material.type, material.userData?.tiksiMirror?.type === 'planar' ? 'planar-mirror' : 'ordinary'];
+  // Reflection capture/composition changes a declared source material's render flags.
+  // Keep its identity separate from both ordinary neighbours and distinct declared
+  // materials: an unsupported surface using a different material must retain its fallback.
+  const parts = [material.type, material.userData?.tiksiMirror?.type === 'planar' ? 'planar-mirror:' + identity(material) : 'ordinary'];
   for (const k of Object.keys(material).sort()) if (!MATERIAL_SKIP.has(k)) parts.push(k + '=' + valueKey(material[k], 0));
   return parts.join('|');
 }

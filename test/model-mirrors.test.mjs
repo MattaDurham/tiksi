@@ -307,3 +307,36 @@ test('reflection capture hides declared surfaces without hiding same-looking ord
   assert.equal(s.mesh.material.visible, true); assert.equal(plain.visible, true);
   batches.dispose(); s.mirrors.dispose();
 });
+
+test('distinct same-looking declared materials keep unsupported batched geometry drawable', () => {
+  const s = scene(); s.mesh.material.name = 'Planar declared';
+  const curvedMaterial = s.mesh.material.clone(); curvedMaterial.name = 'Curved declared';
+  Object.assign(s.wrapper.userData, { scanKind: 'mesh', inner: s.parent });
+  const secondPlane = s.mesh.clone(); secondPlane.position.x = -0.5;
+  const box = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.2), curvedMaterial);
+  const secondBox = box.clone(); box.position.x = 0.5; secondBox.position.y = -0.5;
+  s.parent.add(secondPlane, box, secondBox);
+  const batches = new ModelBatches(); s.world.add(batches.root);
+  s.update(); batches.beginFrame({ model: s.wrapper });
+  assert.equal(s.mirrors.entries.size, 2, 'the two supported planes have reflections');
+  assert.equal(s.mirrors.stats().rejected, 2, 'the boxes retain their unsupported fallback');
+  assert.equal(s.parent.visible, false, 'this check uses drawing proxies, not visible originals');
+  const planarProxy = batches.members.get(s.mesh).proxy, boxProxy = batches.members.get(box).proxy;
+  assert.notEqual(planarProxy, boxProxy, 'distinct declared material identities cannot share capture/composition flags');
+  assert.equal(batches.stats().proxies, 2, 'parts sharing each declared material still batch together');
+  for (const e of s.mirrors.entries.values()) e.capture = () => {
+    assert.equal(planarProxy.material.visible, false);
+    assert.equal(boxProxy.material.visible, true, 'unsupported geometry remains in the reflected scene');
+  };
+  const renderer = { getRenderTarget: () => null, setRenderTarget() {}, xr: { enabled: false }, shadowMap: { autoUpdate: true } };
+  try {
+    s.mirrors.render(renderer, s.world, s.camera);
+    s.mirrors.draw(() => {
+      assert.equal(planarProxy.material.colorWrite, false); assert.equal(planarProxy.material.depthWrite, false);
+      assert.equal(boxProxy.material.visible, true);
+      assert.equal(boxProxy.material.colorWrite, true, 'unsupported box retains color in the beauty draw');
+      assert.equal(boxProxy.material.depthWrite, true, 'unsupported box retains depth in the beauty draw');
+    });
+    assert.equal(s.mesh.material.colorWrite, true); assert.equal(curvedMaterial.colorWrite, true);
+  } finally { batches.endFrame(); batches.dispose(); s.mirrors.dispose(); }
+});
