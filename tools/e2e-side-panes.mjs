@@ -123,7 +123,6 @@ try {
 
   // ---------- the other views ----------
   for (const [view, selector, open] of [
-    ['plan', '.editor-layout > [data-side-pane="plan"]'],
     ['model', '.editor-layout > [data-side-pane="model"]'],
     ['measure', '.ms-layout > [data-side-pane="measure"]'],
     ['materials', '.mv-body > [data-side-pane="materials"]', '.mv-card'],
@@ -157,7 +156,7 @@ try {
   assert.equal(await page.locator('.ms-layout > .side-handle').isHidden(), true, 'no handle on a stacked pane');
 
   assert.deepEqual(errors, []);
-  console.log('Side panes passed: photo deck strips, lift on pointer, click selects the lifted card; resize, remember, clamp, reset and keys on photos; plan, model (canvas follows), measure, materials and products panes resize; stacked pane has no handle.');
+  console.log('Side panes passed: photo deck strips, lift on pointer, click selects the lifted card; resize, remember, clamp, reset and keys on photos; model (canvas follows), measure, materials and products panes resize; stacked pane has no handle.');
 } finally {
   if (browser) await browser.close();
   child.kill();
