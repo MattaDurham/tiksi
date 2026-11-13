@@ -481,7 +481,7 @@ function setupComposer() {
   const gtaoRender = passes.gtao.render.bind(passes.gtao);
   passes.gtao.render = (...args) => {
     const hidden = hideSplats();
-    for (const o of [pinRoot, noteRoot, ...sectionOverlays()]) if (o && o.visible) { o.visible = false; hidden.push(o); }
+    for (const o of [pinRoot, noteRoot, markupRoot, ...sectionOverlays()]) if (o && o.visible) { o.visible = false; hidden.push(o); }
     gtaoRender(...args);
     hidden.forEach(o => { o.visible = true; });
   };
@@ -1877,7 +1877,7 @@ function pick(e, opts) {
     if (!o) continue;
     if (o.userData.kind === 'grid') continue;
     if (opts.surfaceOnly && ['pin', 'note', 'camera', 'position'].includes(o.userData.kind)) continue;
-    const n = h.face ? h.face.normal.clone().transformDirection(h.object.matrixWorld) : new THREE.Vector3(0, 1, 0);
+    const n = h.face ? h.face.normal.clone().applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(h.object.matrixWorld)) : new THREE.Vector3(0, 1, 0);
     const part = o.userData.kind === 'scan' ? partKeyForObject(o, h.object) : null;
     return { kind: o.userData.kind, id: o.userData.id, point: h.point, normal: n, object: o, wallId: o.userData.wallId, faceId: o.userData.faceId, cap: !!o.userData.cap, part, mesh: h.object };
   }

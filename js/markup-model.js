@@ -3,7 +3,8 @@
 // put a markup's ink on). Fetched with the layer the first time MARK UP is wanted, so none of
 // this is in the app's first load; viewer3d.js hands over `v` (its markupParts()).
 import { attachMarkup, ready } from './markup-layer.js';
-import { MARKER_ALPHA, onSurfaces } from './markups.js';
+import { onSurfaces, strokeOpacity } from './markups.js';
+import { drawStroke } from './markup-ink.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
@@ -16,6 +17,63 @@ export { ready };
 const EDGE_ANGLE = 20, EDGE_MAX_TRIANGLES = 60000;
 const edgeCache = new WeakMap();
 
+// A translucent Line2 is a series of overlapping capsules. Every join (and every crossing)
+// blends again, leaving dark beads in a highlighter. On a known flat face, paint the whole
+// path once into an antialiased mask and put that mask on the actual face instead. The saved
+// points stay vector data; the mask is only a bounded, disposable rendering cache.
+const MASK_EDGE = 2048, MASK_PIXELS = 1024 * 1024, MASK_BUDGET = 16 * MASK_PIXELS;
+export function planarStrokeInk(THREE, s, pixelBudget = MASK_PIXELS) {
+  if (pixelBudget < 256 || s.tool === 'line' || !Array.isArray(s.normal) || s.normal.length !== 3 || !s.normal.every(Number.isFinite)) return null;
+  const n = new THREE.Vector3(...s.normal);
+  if (n.lengthSq() < 1e-12 || !(s.width > 0)) return null;
+  n.normalize();
+  const origin = new THREE.Vector3(...s.w.slice(0, 3));
+  const u = new THREE.Vector3(), v = new THREE.Vector3(), p = new THREE.Vector3();
+  // Build a stable basis even for a dot or a perfectly straight stroke.
+  u.set(Math.abs(n.x) < 0.8 ? 1 : 0, Math.abs(n.x) < 0.8 ? 0 : 1, 0);
+  u.addScaledVector(n, -u.dot(n)).normalize();
+  v.crossVectors(n, u);
+  const pts = [];
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let i = 0; i + 2 < s.w.length; i += 3) {
+    p.set(s.w[i], s.w[i + 1], s.w[i + 2]).sub(origin);
+    // Never flatten a curved scan or a stroke that wraps around a corner.
+    if (Math.abs(p.dot(n)) > Math.max(0.0002, s.width * 0.01)) return null;
+    const x = p.dot(u), y = p.dot(v);
+    pts.push(x, y, 0.5);
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+  }
+  if (!pts.length) return null;
+  const pad = s.width * 0.65;
+  x0 -= pad; y0 -= pad; x1 += pad; y1 += pad;
+  const width = x1 - x0, height = y1 - y0;
+  // Up to 64 texels across the nib, with both a per-stroke and a whole-view pixel budget.
+  const budget = Math.max(256, Math.min(MASK_PIXELS, pixelBudget)), edge = Math.min(MASK_EDGE, Math.floor(budget / 2));
+  const scale = Math.min(64 / s.width, edge / width, edge / height, Math.sqrt(budget / (width * height)));
+  const mask = document.createElement('canvas');
+  mask.width = Math.max(2, Math.floor(width * scale));
+  mask.height = Math.max(2, Math.floor(height * scale));
+  const ctx = mask.getContext('2d');
+  drawStroke(ctx, { tool: 'marker', color: '#ffffff', opacity: 1, width: s.width, pts },
+    (x, y) => [(x - x0) * mask.width / width, (y1 - y) * mask.height / height], scale);
+  const texture = new THREE.CanvasTexture(mask);
+  texture.anisotropy = 4;
+  const material = new THREE.MeshBasicMaterial({
+    color: s.color, map: texture, transparent: true, opacity: strokeOpacity(s),
+    depthWrite: false, side: THREE.DoubleSide, forceSinglePass: true, alphaTest: 1 / 255,
+  });
+  const obj = new THREE.Mesh(new THREE.PlaneGeometry(width, height), material);
+  obj.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(u, v, n));
+  obj.position.copy(origin).addScaledVector(u, (x0 + x1) / 2).addScaledVector(v, (y0 + y1) / 2);
+  return obj;
+}
+
+function disposeInk(obj) {
+  obj.geometry.dispose();
+  if (obj.material.map) obj.material.map.dispose();
+  obj.material.dispose();
+}
+
 export function attachModelMarkup(v) {
   const { camera, controls, canvas, THREE } = v;
   const point = new v.THREE.Vector3();
@@ -27,15 +85,22 @@ export function attachModelMarkup(v) {
   const root = v.markupRoot;
   const drawn = new Map();   // stroke id -> { obj, sig, markupId }
   let only = null;
-  const sigOf = s => [s.tool, s.color, s.width, s.px, s.w.length, s.w[0], s.w[1], s.w[2], s.w.at(-1)].join('|');
-  function lineOf(s) {
+  const sigOf = (s, pixels) => [s.tool, s.color, strokeOpacity(s), s.width, s.px, s.normal, s.w, pixels].join('|');
+  function lineOf(s, pixels) {
+    const planar = planarStrokeInk(THREE, s, pixels);
+    if (planar) {
+      planar.userData.markupInk = true;
+      planar.renderOrder = s.tool === 'marker' ? 3 : 2;
+      planar.raycast = () => {};
+      return planar;
+    }
     const pts = s.w.length >= 6 ? s.w : [...s.w, s.w[0] + 1e-4, s.w[1], s.w[2]];   // a dot is a line too short to see as one
     const geo = new LineGeometry();
     geo.setPositions(pts);
-    const marker = s.tool === 'marker', line = s.tool === 'line';
+    const marker = s.tool === 'marker', line = s.tool === 'line', opacity = strokeOpacity(s);
     const mat = new LineMaterial({
       color: new THREE.Color(s.color), worldUnits: !line, linewidth: line ? s.px : s.width,
-      transparent: marker, opacity: marker ? MARKER_ALPHA : 1, depthWrite: !marker,
+      transparent: opacity < 1, opacity, depthWrite: opacity === 1,
     });
     mat.resolution.set(canvas.width, canvas.height);
     const obj = new Line2(geo, mat);
@@ -48,18 +113,23 @@ export function attachModelMarkup(v) {
   function showSurfaces(markups) {
     const keep = new Set();
     let changed = false;
+    const count = markups.reduce((total, m) => total + m.strokes.filter(s => onSurfaces(s) && s.normal && s.tool !== 'line').length, 0);
+    // Quantize the budget so ordinary additions reuse existing masks. Only crossing a power
+    // of two after the first sixteen strokes asks the cache to resize its textures.
+    const capacity = 2 ** Math.ceil(Math.log2(Math.max(1, count)));
+    const pixels = Math.min(MASK_PIXELS, Math.floor(MASK_BUDGET / capacity));
     for (const m of markups) for (const s of m.strokes) {
       if (!onSurfaces(s)) continue;
       keep.add(s.id);
-      const sig = sigOf(s), had = drawn.get(s.id);
+      const sig = sigOf(s, pixels), had = drawn.get(s.id);
       if (had && had.sig === sig) { had.markupId = m.id; continue; }
-      if (had) { root.remove(had.obj); had.obj.geometry.dispose(); had.obj.material.dispose(); }
-      const obj = lineOf(s);
+      if (had) { root.remove(had.obj); disposeInk(had.obj); }
+      const obj = lineOf(s, pixels);
       root.add(obj);
       drawn.set(s.id, { obj, sig, markupId: m.id });
       changed = true;
     }
-    for (const [id, d] of drawn) if (!keep.has(id)) { root.remove(d.obj); d.obj.geometry.dispose(); d.obj.material.dispose(); drawn.delete(id); changed = true; }
+    for (const [id, d] of drawn) if (!keep.has(id)) { root.remove(d.obj); disposeInk(d.obj); drawn.delete(id); changed = true; }
     applyOnly();
     if (changed) v.requestRender(2);
   }
@@ -206,7 +276,7 @@ export function attachModelMarkup(v) {
   const dispose = layer.dispose;
   layer.dispose = () => {
     dispose();
-    for (const d of drawn.values()) { root.remove(d.obj); d.obj.geometry.dispose(); d.obj.material.dispose(); }
+    for (const d of drawn.values()) { root.remove(d.obj); disposeInk(d.obj); }
     drawn.clear();
   };
   return layer;

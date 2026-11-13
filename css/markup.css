@@ -112,3 +112,48 @@ html.touch .mk-open { min-height: 44px; }
 @media (max-width: 760px) {
   .mk-list { left: 8px; right: 8px; width: auto; }
 }
+
+/* Brush details stay one tap away, leaving the view for drawing. */
+.mk-brush-toggle, .mk-lock { width: auto; grid-auto-flow: column; gap: 6px; padding: 0 9px; font: 11px var(--sans); }
+.mk-brush-toggle i { width: 12px; height: 12px; border-radius: 50%; background: var(--c); border: 1px solid rgba(255,255,255,.6); }
+.mk-lock .ic { width: 15px; height: 15px; }
+.mk-brush-panel { position: absolute; right: 12px; z-index: 8; width: min(328px, calc(100% - 24px)); max-height: calc(100% - 120px); overflow: auto; box-sizing: border-box; padding: 12px; border-radius: 14px; border: 1px solid var(--glass-line); background: var(--glass-bg); box-shadow: var(--shadow-2); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+.mk-brush-panel[hidden] { display: none; }
+.mk-brush-head { display: flex; align-items: center; gap: 10px; font: 12px var(--sans); color: var(--ink); }
+.mk-brush-head span { color: var(--dim); font: 9px var(--mono); letter-spacing: .08em; }
+.mk-brush-head .mk-btn { margin-left: auto; }
+.mk-brush-sample { display: block; width: 100%; height: 76px; border-radius: 8px; margin: 8px 0 12px; background-color: #f4f1e9; background-image: linear-gradient(rgba(0,0,0,.05) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,.05) 1px, transparent 1px); background-size: 16px 16px; }
+.mk-brush-controls { display: grid; gap: 10px; }
+.mk-brush-controls label { display: grid; grid-template-columns: 1fr auto; align-items: center; font: 12px var(--sans); color: var(--ink); }
+.mk-brush-controls output { color: var(--dim); font: 11px var(--mono); }
+.mk-brush-controls input { grid-column: 1 / -1; width: 100%; height: 26px; margin: 0; accent-color: var(--accent); }
+.mk-palette { display: grid; grid-template-columns: repeat(6, 1fr); gap: 3px; margin: 12px 0; }
+.mk-palette .mk-dot { width: 100%; min-height: 36px; }
+.mk-custom-colour { display: flex; gap: 10px; align-items: center; border-top: 1px solid var(--line); padding-top: 12px; font: 11px var(--sans); color: var(--dim); }
+.mk-picker-label { display: flex; align-items: center; gap: 8px; }
+.mk-custom-colour input[type=color] { border: 0; border-radius: 5px; width: 36px; height: 32px; padding: 2px; background: var(--panel-3); cursor: pointer; }
+.mk-hex-label { display: flex; align-items: center; gap: 5px; margin-left: auto; font: 9px var(--mono); }
+.mk-custom-colour input[type=text] { width: 96px; min-width: 0; padding: 7px; box-sizing: border-box; border: 1px solid var(--line-2); border-radius: 5px; background: var(--panel); color: var(--ink); font: 16px var(--mono); }
+.mk-custom-colour input[aria-invalid=true] { border-color: #e5372b; }
+.mk-list { width: min(430px, calc(100% - 24px)); }
+.mk-list-summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 12px; color: var(--dim); font: 11px var(--sans); border-bottom: 1px solid var(--line); }
+.mk-list-summary button { padding: 5px 8px; border: 0; border-radius: 4px; background: none; color: var(--ink); cursor: pointer; font: inherit; }
+.mk-list-summary button:disabled { opacity: .4; cursor: default; }
+.mk-row.is-hidden .mk-open { opacity: .45; }
+.mk-row .mk-visibility { color: var(--ink); }
+.mk-row.is-hidden .mk-visibility { color: var(--dim); }
+.mk-list-summary button:focus-visible, .mk-brush-panel input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+html.touch .mk-brush-toggle, html.touch .mk-lock { width: auto; }
+html.touch .mk-list-summary button { min-height: 44px; }
+@media (max-width: 760px) {
+  .mk-list { width: auto; }
+  .mk-lock span { font-size: 10px; }
+  .mk-row { flex-wrap: wrap; }
+  .mk-row .mk-open { flex-basis: calc(100% - 54px); }
+  .mk-row > .mk-btn:not(.mk-visibility) { margin-bottom: 3px; }
+}
+
+/* On a phone, the brush panel owns colour/width choices so the bar leaves room to draw. */
+@media (max-width: 600px) {
+  .mk-bar > .mk-dot, .mk-bar > .mk-size, .mk-bar > .mk-sep { display: none; }
+}

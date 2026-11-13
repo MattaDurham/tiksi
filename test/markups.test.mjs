@@ -70,6 +70,77 @@ test('markups survive the project file', () => {
   assert.deepEqual(back.markups[0].notes[0].anchor, { x: 1, y: 0.9, z: 2, nx: 0, ny: 1, nz: 0 });
 });
 
+test('individual visibility and stroke opacity survive saving, deleting and restoring', () => {
+  const d = store.emptyWorkspace(), p = store.propertyTemplate('Visibility');
+  d.properties.push(p);
+  const a = M.addMarkup(p, { on: 'model', view: view() });
+  const b = M.addMarkup(p, { on: 'plan', levelId: p.levels[0].id });
+  const s = M.addStroke(a, { ...line(), opacity: 0.65 });
+  M.addStroke(b, { tool: 'marker', color: '#008c9e', width: 0.05, w: [0, 1, 2, 0, 1, 3], normal: [2, 0, 0], opacity: 0.2 });
+  assert.equal(M.markupVisible(a), true);
+  assert.equal(M.setMarkupHidden(p, a.id, true), true);
+  assert.equal(M.markupVisible(a), false);
+  assert.equal(M.markupVisible(b), true, 'hiding one markup leaves others visible');
+  assert.equal(M.setMarkupHidden(p, 'missing', true), false);
+  const back = M.normalizeMarkups(store.tidiedCopy(d).properties[0]);
+  assert.equal(back.markups[0].hidden, true);
+  assert.equal(back.markups[1].hidden, false);
+  assert.deepEqual(back.markups[0].strokes[0], s);
+  assert.equal(back.markups[1].strokes[0].opacity, 0.2);
+  assert.deepEqual(back.markups[1].strokes[0].normal, [1, 0, 0]);
+  const taken = M.deleteMarkup(back, a.id);
+  const restored = M.restoreMarkup(back, taken.markup, taken.index);
+  assert.equal(restored.hidden, true);
+  assert.equal(restored.strokes[0].opacity, 0.65);
+  M.setMarkupHidden(back, restored.id, false);
+  assert.equal(M.markupVisible(restored), true);
+});
+
+test('only usable surface normals survive stroke normalization', () => {
+  const p = store.propertyTemplate('Normals'), m = M.addMarkup(p, { on: 'model', view: view() });
+  const surfaceStroke = { ...line(), w: [0, 1, 2, 0, 1, 3] };
+  assert.deepEqual(M.addStroke(m, { ...surfaceStroke, normal: [0, '3', 4] }).normal, [0, 0.6, 0.8]);
+  for (const normal of [null, [0, 0, 0], [1, 0], [0, NaN, 1], [0, Infinity, 1], [0, 0, 1e-12], [0, 1, 0, 0]]) {
+    assert.equal(M.addStroke(m, { ...surfaceStroke, normal }).normal, undefined);
+  }
+  assert.equal(M.addStroke(m, { ...line(), normal: [0, 1, 0] }).normal, undefined, 'flat screen ink has no surface normal');
+});
+
+test('legacy markups remain visible and retain their tools’ original opacity', () => {
+  const m = M.normalizeMarkup({ on: 'plan', levelId: 'lvl-0', strokes: [line(), { ...line(), tool: 'marker' }] });
+  assert.equal(m.hidden, false);
+  assert.equal(M.markupVisible({}), true);
+  assert.deepEqual(m.strokes.map(s => s.opacity), [1, M.MARKER_ALPHA]);
+  assert.equal(M.strokeOpacity({ tool: 'marker' }), M.MARKER_ALPHA);
+  assert.equal(M.strokeOpacity({ tool: 'line' }), 1);
+});
+
+test('malformed visibility and opacity cannot make ink disappear or break compositing', () => {
+  for (const hidden of ['true', 'false', 1, null, {}, []]) {
+    assert.equal(M.normalizeMarkup({ on: 'plan', levelId: 'lvl-0', hidden }).hidden, false);
+  }
+  const p = store.propertyTemplate('Opacity'), m = M.addMarkup(p, { on: 'model', view: view() });
+  for (const [opacity, expected] of [[-2, 0.05], [0, 0.05], [2, 1], ['0.45', 0.45], [null, M.MARKER_ALPHA], ['', M.MARKER_ALPHA], [NaN, M.MARKER_ALPHA], [Infinity, M.MARKER_ALPHA], [true, M.MARKER_ALPHA], [{}, M.MARKER_ALPHA]]) {
+    const s = M.addStroke(m, { ...line(), tool: 'marker', opacity });
+    assert.equal(s.opacity, expected);
+    assert.equal(M.strokeOpacity(s), expected);
+  }
+});
+
+test('visibility edits merge with another device’s new ink', () => {
+  const p = store.propertyTemplate('Visibility merge');
+  const m = M.addMarkup(p, { on: 'plan', levelId: p.levels[0].id });
+  M.addStroke(m, line());
+  const base = copy(p), mine = copy(p), theirs = copy(p);
+  M.setMarkupHidden(mine, m.id, true);
+  M.addStroke(theirs.markups[0], { ...line(1), opacity: 0.25 });
+  const merged = mergeShared(base, mine, theirs);
+  assert.deepEqual(merged.conflicts, []);
+  assert.equal(merged.value.markups[0].hidden, true);
+  assert.equal(merged.value.markups[0].strokes.length, 2);
+  assert.equal(merged.value.markups[0].strokes[1].opacity, 0.25);
+});
+
 test('a hand-edited file cannot break the list', () => {
   const p = { markups: [
     null, 'ink', { on: 'model' }, { on: 'plan' },
@@ -134,11 +205,21 @@ test('the eraser finds a stroke by its line, not its box', () => {
 test('thinning keeps the corners and drops the points on a straight run', () => {
   const pts = [];
   for (let i = 0; i <= 50; i++) pts.push(i / 50, 0, 0.5);
-  for (let i = 1; i <= 50; i++) pts.push(1, i / 50, 0.8);
+  for (let i = 1; i <= 50; i++) pts.push(1, i / 50, 0.5);
   const out = M.simplifyPoints(pts, 0.001);
-  assert.deepEqual(out, [0, 0, 0.5, 1, 0, 0.5, 1, 1, 0.8]);
+  assert.deepEqual(out, [0, 0, 0.5, 1, 0, 0.5, 1, 1, 0.5]);
   assert.deepEqual(M.simplifyPoints([0, 0, 0.5, 1, 1, 0.5], 0.5), [0, 0, 0.5, 1, 1, 0.5]);
   assert.deepEqual(M.roundPoints([0.123456789, 1 / 3, 0.777, NaN, 1, 1], 4), [0.1235, 0.3333, 0.78]);
+});
+
+test('thinning retains pressure extrema and transitions on otherwise straight strokes', () => {
+  const pts = [0, 0, 0.1, 1, 0, 0.5, 2, 0, 0.9, 3, 0, 0.5, 4, 0, 0.1];
+  assert.deepEqual(M.simplifyPoints(pts, 0.01), [0, 0, 0.1, 2, 0, 0.9, 4, 0, 0.1]);
+  const step = [0, 0, 0.1, 1, 0, 0.1, 1.01, 0, 0.9, 2, 0, 0.9];
+  assert.deepEqual(M.simplifyPoints(step, 0.01), step, 'a quick pressure change is not spread along the whole stroke');
+  const stationary = [0, 0, 0.1, 0, 0, 0.9, 0, 0, 0.1];
+  assert.deepEqual(M.simplifyPoints(stationary, 0.01), stationary);
+  assert.deepEqual(M.simplifyPoints([0, 0, 0.5, 1, 0, 0.51, 2, 0, 0.5], 0.01), [0, 0, 0.5, 2, 0, 0.5], 'small pressure noise can still be thinned');
 });
 
 test('the same camera is recognised after the rounding a flight leaves, and a moved one is not', () => {

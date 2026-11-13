@@ -59,6 +59,55 @@ test('ink that jumps from a near wall to a far one breaks instead of crossing th
   assert.deepEqual(pieces.map(p => [p.first, p.last]), [[0, 0], [1, 1]]);
 });
 
+test('a surface lock identifies a face within a mesh, not just the object', () => {
+  const mesh = {}, start = { p: [0, 0, 0], n: [0, 0, 1], mesh, ref: 'room', kind: 'model' };
+  const lock = S.makeSurfaceLock(start);
+  assert.ok(S.onLockedSurface(lock, { ...start, p: [4, 2, 0] }), 'anywhere on the same planar face');
+  assert.ok(S.onLockedSurface(lock, { ...start, p: [4, 2, 0.002], n: [0, 0.01, 1] }), 'small reconstruction noise is tolerated');
+  assert.ok(S.onLockedSurface(lock, { ...start, n: [0, 0, -1] }), 'a reversed triangle normal still identifies the same plane');
+  assert.equal(S.onLockedSurface(lock, { ...start, p: [0, 2, 0], n: [1, 0, 0] }), false, 'an adjoining face in the same mesh');
+  assert.equal(S.onLockedSurface(lock, { ...start, p: [0, 0, 0.05] }), false, 'a nearby parallel face in the same mesh');
+  assert.equal(S.onLockedSurface(lock, { ...start, mesh: {} }), false, 'a separate object on the same plane');
+  assert.equal(S.onLockedSurface(lock, { ...start, ref: 'other-room' }), false, 'another instance sharing mesh geometry');
+  assert.equal(S.onLockedSurface(lock, null), false, 'an opening is not part of a face');
+  start.p[2] = 3; start.n[0] = 1;
+  assert.deepEqual(lock.p, [0, 0, 0], 'lock copies its initial plane');
+  assert.deepEqual(lock.n, [0, 0, 1], 'lock copies its initial normal');
+});
+
+test('locked ink stops at openings and other faces without bridging when it returns', () => {
+  const mesh = {}, at = x => {
+    const r = rayAt(x, 300);
+    return { ...r, px: [x, 300], hit: { p: S.rayPlane(r.o, r.d, [0, 0, 0], [0, 0, 1]), n: [0, 0, 1], mesh } };
+  };
+  const samples = [at(380), at(390), { ...at(400), hit: null }, at(410), at(420)];
+  const surfaceLock = S.makeSurfaceLock(samples[0].hit);
+  const opts = { surfaceLock, lift: 0, mPerPx: () => 0.1 };
+  const pieces = S.dropOntoSurfaces(samples, opts);
+  assert.deepEqual(pieces.map(p => [p.first, p.last]), [[0, 1], [3, 4]], 'the opening splits the stroke');
+  assert.ok(pieces.every(p => p.w.length === 6));
+  samples[2] = { ...at(400), hit: { ...at(400).hit, n: [1, 0, 0] } };
+  assert.deepEqual(S.dropOntoSurfaces(samples, opts), pieces, 'another face is also a gap');
+  assert.deepEqual(S.dropOntoSurfaces([{ ...at(380), hit: null }, at(390)], opts).map(p => [p.first, p.last]), [[1, 1]], 'no backfilling an empty start');
+  assert.deepEqual(S.dropOntoSurfaces([samples[2]], opts), [], 'entirely rejected samples create no ink');
+});
+
+test('point-cloud locks stay with their object and still split at depth discontinuities', () => {
+  const mesh = {}, hit = { p: [0, 0, 5], n: null, mesh, ref: 'scan', kind: 'scan' };
+  const lock = S.makeSurfaceLock(hit);
+  assert.ok(S.onLockedSurface(lock, { ...hit, p: [0.1, 0, 5] }));
+  assert.equal(S.onLockedSurface(lock, { ...hit, mesh: {} }), false);
+  assert.equal(S.onLockedSurface(lock, { ...hit, n: [0, 0, 1] }), false);
+  const samples = [
+    { ...rayAt(400, 300), px: [400, 300], hit },
+    { ...rayAt(404, 300), px: [404, 300], hit: { ...hit, p: [1.2, 0, -20] } },
+  ];
+  assert.deepEqual(S.dropOntoSurfaces(samples, { surfaceLock: lock, lift: 0, mPerPx: p => (10 - p[2]) / 100 }).map(p => [p.first, p.last]), [[0, 0], [1, 1]]);
+  assert.equal(S.makeSurfaceLock(null), null);
+  assert.equal(S.makeSurfaceLock({ p: [0, 0, 0], n: null }), null, 'an unidentified point cannot establish a lock');
+  assert.equal(S.makeSurfaceLock({ p: [NaN, 0, 0], n: [0, 0, 1] }), null);
+});
+
 test('3D thinning keeps the corners of a line and drops the points along its straight runs', () => {
   const pts = [0, 0, 0, 0.5, 0, 0, 1, 0, 0, 1, 0.5, 0, 1, 1, 0];
   assert.deepEqual(S.simplify3(pts, 0.001), [0, 0, 0, 1, 0, 0, 1, 1, 0]);
