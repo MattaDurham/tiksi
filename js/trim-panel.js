@@ -90,6 +90,8 @@ export function trimPanelHtml(ctx) {
   if (!crownOnly) {
     const yVal = same(list, t => t.y);
     html += `<div class="field-row">${lenField(fields ? 'Bottom edge' : 'Height to bottom', 'y', yVal)}${fields ? lenField('Field height', 'h', same(list, t => t.h)) : ''}</div>`;
+    // Several sections at different heights move together by the same amount.
+    if (!one) html += `<div class="field-row"><div class="field"><label>Raise by (minus lowers)</label><input type="text" data-raise value="" placeholder="${escapeHtml(fmtLen(IN))}" title="Every selected section moves up by this much; start with a minus sign to lower them."></div></div>`;
   }
   if (one && style && style.kind === 'field') {
     const lay = ctx.layoutOf(one);
@@ -149,6 +151,13 @@ export function bindTrimPanel(root, ctx) {
     }, 'trim extent');
     ctx.set(t => { t[key] = v; }, 'trim ' + key);
   });
+  const raise = q('[data-raise]');
+  if (raise) raise.onchange = () => {
+    const raw = raise.value.trim(), sign = raw.startsWith('-') ? -1 : 1;
+    const v = parseLen(raw.replace(/^[+-]\s*/, ''), 'inches');
+    if (!raw || !Number.isFinite(v) || v <= 0) return ctx.rerender();
+    ctx.raise(sign * v);
+  };
   root.querySelectorAll('[data-int]').forEach(inp => inp.onchange = () => {
     const key = inp.dataset.int, n = parseInt(inp.value, 10);
     ctx.set(t => {

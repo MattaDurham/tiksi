@@ -1312,3 +1312,13 @@ html.touch .file-dialog .file-units .seg-btn { min-height:44px; }
   position: fixed; inset: 0; z-index: 200; display: grid; place-items: center; padding: 24px; text-align: center;
   background: rgba(8, 10, 14, 0.82); color: var(--ink); font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em;
 }
+
+/* SEND TO THE LAB (js/lab-publish-dialog.js) */
+.lab-dialog .lab-projects { display: grid; gap: 6px; margin: 6px 0 10px; }
+.lab-dialog .lab-project { display: grid; grid-template-columns: minmax(0, 1fr) 160px; gap: 8px; align-items: center; }
+.lab-dialog .lab-project label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lab-dialog .lab-tags { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 6px 0 10px; }
+.lab-dialog .lab-url { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; color: var(--muted); word-break: break-all; }
+.lab-dialog progress { width: 100%; }
+.v-project .pp-group { margin: 6px 0 8px; }
+.v-project .pp-group summary { cursor: pointer; font-size: 11px; letter-spacing: .06em; color: var(--muted); padding: 4px 0; }

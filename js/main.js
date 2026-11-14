@@ -38,6 +38,7 @@ const documentcenter = lazyView(() => import('./documentcenter.js'));
 const guide = lazyView(() => import('./guide.js'));
 import { initNewProperty, openNewPropertyDialog, dialogOpen } from './newproperty.js';
 import { initOnePager, openOnePagerEditor, promptMode } from './one-pager-dialog.js';
+import { openLabDialog } from './lab-publish-dialog.js';
 import { draftOnePager, onePagerStatus, PROMPT_MODES } from './one-pager.js';
 import { parseCaptureUrl } from './polycam.js';
 import {
@@ -442,7 +443,9 @@ function openFileMenu(initialTab = 'project', selected) {
       <div class="file-actions"><button class="btn primary" data-project-save>SAVE PROJECT</button><button class="btn" data-project-as>SAVE AS…</button><button class="btn" data-project-open>OPEN / IMPORT…</button></div><p data-file-target></p>
       <div class="file-actions"><button class="btn" data-new-property>NEW PROPERTY</button><button class="btn" data-new-folder>NEW PROPERTY FROM A FOLDER…</button></div>
       <h3>One-pager</h3><p>A one-page teaser of this property for its client: the picture, the pitch, the scope, the budget and the schedule. Every saved version is a PDF among the property's documents; the newest is the one to send.</p>
-      <p class="op-file-status" data-op-file-status></p><div class="file-actions"><button class="btn primary" data-one-pager>OPEN ONE-PAGER</button></div></section>
+      <p class="op-file-status" data-op-file-status></p><div class="file-actions"><button class="btn primary" data-one-pager>OPEN ONE-PAGER</button></div>
+      <h3>Client page in the lab</h3><p>A view-only copy of this property for its client on thedurham.nyc: the model to orbit or walk through, Existing and the projects you choose, and the saved views as pictures.</p>
+      <div class="file-actions"><button class="btn" data-lab-send-open>SEND TO THE LAB…</button></div></section>
     <section data-file-panel="capture" hidden><h3>Bring your room into Tiksi</h3><p>Choose photos, a walk-through video, a scan, a 3D model or a saved project. Imported projects add or update properties here.</p><button class="btn primary" data-capture-open>CHOOSE FILES…</button><button class="btn" data-polycam>POLYCAM LINK</button><button class="btn" data-photo3d>PHOTOS → 3D</button></section>
     <section data-file-panel="exchange" hidden data-file-exchange></section>
     <section data-file-panel="settings" hidden><h3>Display</h3><div class="file-units"><span id="file-units-label">Units</span><div class="seg" role="group" aria-labelledby="file-units-label"><button type="button" class="seg-btn" data-units-choice="imperial">INCHES</button><button type="button" class="seg-btn" data-units-choice="metric">MILLIMETRES</button></div></div><label>Precision <select data-file-precision></select></label><p data-units-example></p><details><summary>Model environment</summary><div data-file-env></div></details><div data-unavailable-list></div><h3>Where this project is kept</h3><p data-own-folder-label></p><div class="file-actions"><button class="btn primary" data-own-folder-link>CHOOSE FOLDER</button><button class="btn" data-folder-open>OPEN FROM FOLDER</button><button class="btn" data-own-folder-unlink>STOP KEEPING IT IN A FOLDER</button></div>
@@ -513,6 +516,8 @@ function openFileMenu(initialTab = 'project', selected) {
   // The folder of a site visit: its scans, photos, videos and PDFs become a property in one go.
   on('[data-new-folder]',()=>{dialog.close();openNewPropertyDialog({folder:true});});
   on('[data-one-pager]',()=>{dialog.close();openOnePagerEditor(prop);});
+  on('[data-lab-send-open]',()=>{dialog.close();openLabDialog(prop);});
+  dialog.querySelector('[data-lab-send-open]').disabled=!prop;
   dialog.querySelector('[data-op-prompt]').value=promptMode();
   dialog.querySelector('[data-op-prompt]').onchange=e=>{ws.data.settings.onePagerPrompt=e.target.value;touch();};
   on('[data-polycam]',()=>{dialog.close();openNewPropertyDialog({into:prop?.id});});

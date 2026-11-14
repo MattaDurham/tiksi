@@ -198,7 +198,7 @@ class AppHandler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
             return True
-        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement', 'folder_intake'):
+        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement', 'folder_intake', 'lab_publish'):
             service = getattr(self.server, name, None)
             if service and service.dispatch(self): return True
         return False
@@ -237,7 +237,7 @@ class AppHandler(SimpleHTTPRequestHandler):
         result = {key: metadata[key] for key in ('slug', 'branch', 'port', 'instanceId', 'head', 'live') if key in metadata}
         result.update({'pid': os.getpid(), 'port': self.server.server_port, 'started': getattr(self.server, 'started', None),
                        'live': metadata.get('live', self.server.server_port == 8642), 'activeJobs': 0})
-        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement', 'folder_intake'):
+        for name in ('workspace', 'reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement', 'folder_intake', 'lab_publish'):
             service = getattr(self.server, name, None)
             if service:
                 active = getattr(service, 'active_jobs', None)
@@ -399,7 +399,7 @@ class AppServer6(AppServer):
 LOOPBACK_NAMES = {'127.0.0.1', 'localhost', '::1'}
 # Everything a request handler reads from its server; every listening address shares one set.
 SHARED = ('instance_file', 'allowed_hostname', 'allowed_hosts', 'remote_access', 'workspace', 'reconstruction',
-          'material_research', 'model_conversion', 'video_frames', 'photo_placement', 'folder_intake')
+          'material_research', 'model_conversion', 'video_frames', 'photo_placement', 'folder_intake', 'lab_publish')
 log = logging.getLogger('tiksi.serve')
 
 def resolve_host(host):
@@ -501,6 +501,11 @@ def main():
             # A property from a folder the owner picks on this Mac; files are read there, never changed.
             from server.folder_intake import FolderIntakeService
             server.folder_intake = FolderIntakeService(server.workspace)
+        server.lab_publish = None
+        if (ROOT / 'server/lab_publish.py').exists():
+            # SEND TO THE LAB: a view-only copy of a property for its client page on thedurham.nyc.
+            from server.lab_publish import LabPublishService
+            server.lab_publish = LabPublishService(args.state_dir)
         for other in servers[1:]: share(server, other)
         def shutdown(signum, frame):
             stopping.set()
@@ -520,7 +525,7 @@ def main():
         finally:
             stopping.set()
             for each in servers[1:]: each.server_close()
-            for name in ('reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement', 'folder_intake'):
+            for name in ('reconstruction', 'material_research', 'model_conversion', 'video_frames', 'photo_placement', 'folder_intake', 'lab_publish'):
                 service = getattr(server, name, None)
                 if service: service.close()
     # Every socket is closed now; a restart runs the same command again in this process.
