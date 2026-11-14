@@ -123,6 +123,70 @@ def gltf_matrix(m): return multiply(multiply(SKP_TO_GLTF,m),GLTF_TO_SKP)
 def skp_matrix(m): return multiply(multiply(GLTF_TO_SKP,m),SKP_TO_GLTF)
 
 
+class Vector(C.Structure): _fields_ = [('x', C.c_double), ('y', C.c_double), ('z', C.c_double)]
+MAX_SCENES = 100
+
+def read_scenes(api, model):
+    """The model's scenes, in SketchUp's order, as Tiksi can turn them into saved views: name,
+    description, the camera in glTF metres (Y up, the frame read_skp writes the GLB in) and the
+    tags (by the same names read_skp gives parts) the scene hides. `useCamera` and `useTags` say
+    whether the scene keeps a camera and tag visibility at all; a scene that does not leaves them
+    as they were when it is gone to. Section planes, styles and shadows stay in the SKP."""
+    count = C.c_size_t(); api.call('SUModelGetNumScenes', model, C.byref(count))
+    n = min(count.value, MAX_SCENES)
+    if not n: return []
+    scenes = (Ref * n)(); api.call('SUModelGetScenes', model, C.c_size_t(n), scenes, C.byref(count))
+    display = 'SULayerGetDisplayName' if hasattr(api.lib, 'SULayerGetDisplayName') else 'SULayerGetName'
+    def flag(name, scene):
+        value = C.c_bool(False)
+        return None if not hasattr(api.lib, name) or api.call(name, scene, C.byref(value), optional=True) else bool(value.value)
+    def metres(p): return [round(v, 6) for v in from_skp([p.x, p.y, p.z])]
+    out = []
+    for scene in scenes[:count.value]:
+        camera = Ref(); api.call('SUSceneGetCamera', scene, C.byref(camera))
+        eye, target, up = Point(), Point(), Vector()
+        api.call('SUCameraGetOrientation', camera, C.byref(eye), C.byref(target), C.byref(up))
+        perspective = C.c_bool(True); api.call('SUCameraGetPerspective', camera, C.byref(perspective), optional=True)
+        cam = {'eye': metres(eye), 'target': metres(target), 'up': [round(v, 6) for v in (up.x, up.z, -up.y)], 'perspective': bool(perspective.value)}
+        if cam['perspective']:
+            fov = C.c_double(); is_height = C.c_bool(True); aspect = C.c_double(0)
+            if not api.call('SUCameraGetPerspectiveFrustumFOV', camera, C.byref(fov), optional=True): cam['fov'] = fov.value
+            api.call('SUCameraGetFOVIsHeight', camera, C.byref(is_height), optional=True)
+            if not is_height.value:
+                cam['fovIsWidth'] = True
+                if not api.call('SUCameraGetAspectRatio', camera, C.byref(aspect), optional=True) and aspect.value > 0: cam['aspect'] = aspect.value
+        else:
+            height = C.c_double()
+            if not api.call('SUCameraGetOrthographicFrustumHeight', camera, C.byref(height), optional=True): cam['height'] = round(height.value * .0254, 6)
+        layers = C.c_size_t(); api.call('SUSceneGetNumLayers', scene, C.byref(layers), optional=True)
+        hidden = []
+        if layers.value:
+            refs = (Ref * layers.value)(); api.call('SUSceneGetLayers', scene, layers, refs, C.byref(layers))
+            hidden = [name for name in (api.text(display, layer).strip() for layer in refs[:layers.value]) if name]
+        description = ''
+        if hasattr(api.lib, 'SUSceneGetDescription'):
+            try: description = api.text('SUSceneGetDescription', scene).strip()
+            except ValueError: pass
+        record = {'name': api.text('SUSceneGetName', scene).strip()[:200], 'camera': cam, 'hiddenTags': hidden[:500]}
+        if description: record['description'] = description[:2000]
+        use_camera, use_tags = flag('SUSceneGetUseCamera', scene), flag('SUSceneGetUseHiddenLayers', scene)
+        if use_camera is not None: record['useCamera'] = use_camera
+        if use_tags is not None: record['useTags'] = use_tags
+        out.append(record)
+    return out
+
+
+def scenes_of(source):
+    """Only the scenes of an SKP (read_scenes), for a model Tiksi converted before it kept them."""
+    api = API(); model = Ref()
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), os.fsencode(source))
+        return {'warnings': [], 'scenes': read_scenes(api, model)}
+    finally:
+        if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
+
+
 def read_skp(source, output):
     """SKP -> GLB the SketchUp way: one glTF material per SketchUp material, each component
     definition's geometry written once (in definition coordinates) and shared by every instance,
@@ -267,11 +331,14 @@ def read_skp(source, output):
                 out.append(placed)
             return out
         top=[];collect(entities,IDENTITY,'SketchUp model',Ref(),0,None,top)
-        # The scene says it was written with components, so Tiksi knows not to offer converting again.
-        stats=write_glb(meshes,output,place(top,None),{'sketchupComponents':1})
+        # The scene says it was written with components, so Tiksi knows not to offer converting again,
+        # and carries the file's scenes, which Tiksi makes saved views of.
+        scenes=read_scenes(api,model)
+        stats=write_glb(meshes,output,place(top,None),{'sketchupComponents':1,**({'sketchupScenes':scenes} if scenes else {})})
         components=len({k[0] for k in templates})
         summary=f'{components} component definition{"s" if components!=1 else ""} written once and shared by their instances; {stats["materials"]} material{"s" if stats["materials"]!=1 else ""}.' if components else f'{stats["materials"]} material{"s" if stats["materials"]!=1 else ""}.'
-        return {'warnings': sorted(set(warnings))+['Visible native SKP faces, holes, component definitions and instances, names, tags, diffuse textures and colours converted. '+summary+' Scenes, guides, dynamic component logic and PBR extensions remain in the source SKP.']}
+        kept=f' {len(scenes)} scene{"s" if len(scenes)!=1 else ""} kept as saved views (camera and tags).' if scenes else ''
+        return {'warnings': sorted(set(warnings))+['Visible native SKP faces, holes, component definitions and instances, names, tags, diffuse textures and colours converted. '+summary+kept+' Section planes in scenes, styles, guides, dynamic component logic and PBR extensions remain in the source SKP.']}
     finally:
         if model.ptr:api.call('SUModelRelease',C.byref(model))
         api.lib.SUTerminate()
@@ -374,5 +441,9 @@ def write_skp(source, output):
 if __name__=='__main__':
     # CLI paths are supplied only by the local service, never accepted from HTTP payloads.
     sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
-    try:print(json.dumps(read_skp(sys.argv[1],sys.argv[2]) if Path(sys.argv[1]).suffix.lower()=='.skp' else write_skp(sys.argv[1],sys.argv[2])))
+    try:
+        if sys.argv[1]=='scenes':
+            # Scenes only: the result is written to the output file (it can be larger than a log line).
+            Path(sys.argv[3]).write_text(json.dumps(scenes_of(sys.argv[2])),encoding='utf-8');print(json.dumps({'warnings':[]}))
+        else:print(json.dumps(read_skp(sys.argv[1],sys.argv[2]) if Path(sys.argv[1]).suffix.lower()=='.skp' else write_skp(sys.argv[1],sys.argv[2])))
     except Exception as e:print(str(e),file=sys.stderr);sys.exit(1)

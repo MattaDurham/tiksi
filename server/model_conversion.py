@@ -204,6 +204,23 @@ class ModelConversionService:
         finally:
             if folder:shutil.rmtree(folder,ignore_errors=True)
             self.lock.release()
+    def scenes(self,data):
+        """The scenes of an SKP (sketchup_convert.read_scenes) as JSON bytes, for a model converted
+        before conversions kept them. Nothing is kept in the server's history."""
+        if not self.sketchup:raise ConversionError('Reading SketchUp scenes needs SketchUp installed on this Mac',422)
+        if not 0<len(data)<=MAX_BYTES:raise ConversionError('Model must be between 1 byte and 600 MB',413)
+        if not self.lock.acquire(blocking=False):raise ConversionError('Another model conversion is running',409)
+        folder=None
+        try:
+            base=self.root/'scenes';base.mkdir(exist_ok=True)
+            folder=base/secrets.token_hex(16);folder.mkdir();save(data,folder/'source.skp')
+            self._run([sys.executable,str(ROOT/'server/sketchup_convert.py'),'scenes',str(folder/'source.skp'),str(folder/'scenes.json')],folder)
+            output=folder/'scenes.json'
+            if not output.is_file():raise ConversionError('The scene reader did not produce a result',422)
+            return output.read_bytes()
+        finally:
+            if folder:shutil.rmtree(folder,ignore_errors=True)
+            self.lock.release()
     def open_sketchup(self,request):
         from server.sketchup_open import open_in_sketchup
         return open_in_sketchup(request)
@@ -238,6 +255,12 @@ class ModelConversionService:
                 h.connection.settimeout(60)
                 op=h.headers.get('X-Mirror-Op','')
                 self.mirror(op,Body(h,length),lambda output:self.reply_file(h,200,output,'application/json' if op=='read' else 'application/octet-stream'));return True
+            if path==base+'/scenes' and h.command=='POST':
+                try:length=int(h.headers.get('Content-Length','0'))
+                except ValueError:raise ConversionError('Invalid content length')
+                if not 0<length<=MAX_BYTES:raise ConversionError('Model must be smaller than 600 MB',413)
+                h.connection.settimeout(60)
+                self.reply(h,200,self.scenes(Body(h,length)),'application/json');return True
             if path==base+'/open-in-sketchup' and h.command=='POST':
                 # Opens the browser's mirror file in SketchUp on this Mac (sketchup_open.py).
                 from server.sketchup_open import at_this_mac,OpenError

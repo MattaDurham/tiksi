@@ -41,6 +41,7 @@ import {
   ensureLevels, wallsOn, roomsOn, wallHeightOf, levelOfWall, levelOfRoom, levelHeight, topOfLevels, openingsOn,
 } from './store.js';
 import { placeScanBytes, seedProject, proposalSummary } from './scan2plan.js';
+import { bringInScenes } from './sketchup-scenes.js';
 import { chooseScanPlacement } from './scanplace.js';
 import { proposeFixtures, openFixtureReview, fixtureInspectorHtml, bindFixtureInspector, addFixtureHtml, addFixture } from './fixtures-ui.js';
 import { materialSelectHtml } from './materials.js';
@@ -4130,8 +4131,12 @@ async function addScanToScene(scan) {
   applySection();
   updateOutlineTargets();
   setScanState(scan.id, 'ready');
+  // A SketchUp model's scenes become saved views on its first load, once its parts have tags.
+  let views = null;
+  if (scan.scenesPending) { delete scan.scenesPending; views = bringInScenes(prop, scan); renderViews(); }
   // New tags and counts show in the lists straight away.
-  if (tagged) { touch(); renderToolCol(); if (!selection) renderInspector(); }
+  if (tagged || views) { touch(); renderToolCol(); if (!selection) renderInspector(); }
+  if (views && views.added) toast(scan.name + ': ' + views.added + ' SketchUp scene' + (views.added === 1 ? ' is' : 's are') + ' now saved views, in the tabs over the model.' + (views.skipped ? ' ' + views.skipped + ' did not fit: a property keeps 100 views.' : ''), 'ok');
   renderObjects();
   requestRender(scan.kind === 'splat' ? 8 : 3);
   return obj;
@@ -5009,7 +5014,7 @@ function setModelVisible(id, on) {
 }
 function modelPanelCtx(s, obj) {
   return { prop, scan: s, obj, picks: tagPicks, models: prop.scans.map(x => ({ scan: x, root: scanObjs[x.id] && scanObjs[x.id].userData.inner })).filter(x => x.root),
-    reload: () => addScanToScene(s), rerender: renderInspector, toast,
+    reload: () => addScanToScene(s), rerender: renderInspector, toast, viewsChanged: () => { renderViews(); touch(); },
     select: keys => setSelection({ kind: 'scan', id: s.id, tagKey: keys[0] }, keys),
     selectComponent: c => { const tree = obj && modelObjectTree(obj); const objects = tree ? c.instances.map(n => tree.ofNode.get(n)).filter(Boolean) : []; if (objects.length) pickObjects(s.id, objects); } };
 }

@@ -7,7 +7,8 @@
 // ctx: { prop, scan, obj (the loaded wrapper or null), picks (selected part keys), models (the
 //        property's loaded models: [{ scan, root }]), reload(), rerender(), select(keys), toast }
 
-import { ws, uid, touch, escapeHtml, fmtMoney, fmtArea, materialById } from './store.js';
+import { ws, uid, touch, escapeHtml, fmtMoney, fmtArea, materialById, getFile } from './store.js';
+import { normalizeScenes, bringInScenes, scenesShown } from './sketchup-scenes.js';
 import { modelTakeoff, createModelEstimate, createComponentEstimate, finishAmount, amountText } from './model-takeoff.js';
 import { modelComponents, instanceOf, instanceChain, componentKeyOf, componentProductRecord, componentProductEvidence, componentIdentityStatus, normalizeComponentProduct, linkComponentProduct, unlinkComponentProduct,
   componentSchedule, propertyComponentSchedule, convertedWithComponents } from './model-components.js';
@@ -157,6 +158,19 @@ function reconvertHtml(scan, obj) {
     <button class="btn" data-mp-reconvert>CONVERT AGAIN FROM THE ORIGINAL SKP</button></div>`;
 }
 
+// A SketchUp model's scenes as saved views (sketchup-scenes.js): how many there are, how many
+// have a view, and a button that reads them from the original SKP and makes or updates the views.
+function scenesHtml(prop, scan) {
+  if (!/\.skp$/i.test(scan.originalName || '') || !scan.originalFileId) return '';
+  const n = normalizeScenes(scan.sketchupScenes).length, shown = n ? scenesShown(prop, scan) : 0;
+  const line = !scan.sketchupScenes ? 'The scenes of the original SKP have not been read yet.'
+    : !n ? 'The original SKP has no scenes.'
+    : plural(n, 'scene') + ' in the SKP; ' + (shown === n ? 'each one is a saved view' : shown + ' ' + (shown === 1 ? 'is a saved view' : 'are saved views')) + ', in the tabs over the model.';
+  const label = n && shown ? 'UPDATE THE VIEWS FROM THE SKP\'S SCENES' : 'MAKE SAVED VIEWS FROM THE SKP\'S SCENES';
+  return `<div class="mp-scenes"><h3>SKETCHUP SCENES</h3><p class="empty">${escapeHtml(line)} A scene's view keeps its camera and the tags it hides, and puts away Tiksi's own walls and rooms, which the SKP does not have; section cuts and styles stay in the SKP.</p>
+    <button class="btn" data-mp-scenes>${label}</button></div>`;
+}
+
 // One component definition's card on its own (the object panel shows it for the selected
 // object): its count, what it holds, its product and the product link.
 export function componentCardHtml(ctx, key) {
@@ -172,7 +186,7 @@ export function modelPanelHtml(ctx) {
   const { scan, obj, picks } = ctx;
   if (!obj || !inner(obj)) return '';
   const comps = modelComponents(inner(obj));
-  return `<div class="model-panel">${selectedPartHtml(scan, obj, picks, comps)}${reconvertHtml(scan, obj)}${materialsHtml(scan, obj)}${componentsHtml(scan, obj, comps)}${propertyScheduleHtml(ctx.models || [])}</div>`;
+  return `<div class="model-panel">${selectedPartHtml(scan, obj, picks, comps)}${reconvertHtml(scan, obj)}${ctx.prop ? scenesHtml(ctx.prop, scan) : ''}${materialsHtml(scan, obj)}${componentsHtml(scan, obj, comps)}${propertyScheduleHtml(ctx.models || [])}</div>`;
 }
 
 export function bindModelPanel(root, ctx) {
@@ -223,6 +237,20 @@ export function bindModelPanel(root, ctx) {
     };
     if (unlink) unlink.onclick = () => { unlinkComponentProduct(scan, key, scan.componentProducts?.[key]?.proposedProduct && !scan.componentProducts[key].proposedProduct.unlinked ? 'proposed' : 'all'); touch(); ctx.rerender(); };
   });
+  const scenes = panel.querySelector('[data-mp-scenes]');
+  if (scenes) scenes.onclick = async () => {
+    const label = scenes.textContent;
+    scenes.disabled = true; scenes.textContent = 'READING THE SCENES…';
+    try {
+      const original = await getFile(scan.originalFileId);
+      if (!original || !original.buffer) throw new Error('The original SKP is not in this browser.');
+      const { sketchupScenes } = await import('./native-conversion.js');
+      scan.sketchupScenes = normalizeScenes(await sketchupScenes(original.buffer));
+      const r = bringInScenes(prop, scan);
+      touch(); ctx.viewsChanged && ctx.viewsChanged(); ctx.rerender();
+      say(!scan.sketchupScenes.length ? scan.name + ' has no scenes.' : plural(r.added, 'new saved view') + ', ' + plural(r.updated, 'view') + ' updated from ' + plural(scan.sketchupScenes.length, 'scene') + (r.skipped ? '; ' + r.skipped + ' did not fit (a property keeps 100 views)' : '') + '.');
+    } catch (e) { say('Could not read the scenes: ' + e.message, 'error'); scenes.disabled = false; scenes.textContent = label; }
+  };
   const again = panel.querySelector('[data-mp-reconvert]');
   if (again) again.onclick = async () => {
     again.disabled = true; again.textContent = 'CONVERTING…';
