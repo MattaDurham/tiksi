@@ -134,7 +134,13 @@ try {
     const steps = await reviewAndCreate(page, { name: 'Elm Street kitchen', where: 'kept in this folder', held });
     check(steps.some(s => s.state === 'ok' && s.text.includes(join(visit, 'Tiksi', 'Elm Street kitchen.tiksi'))), 'the run names the project file it will write in the folder');
     const prop = await checkProperty(page, steps, 'Elm Street kitchen', true);
-    await page.click('[data-np-cancel]');
+    // CLOSE remounts MODEL in this document. A cold software-rendered mount can
+    // outlast Playwright's default click budget; wait for the actual app state,
+    // not its implicit full-navigation synchronization.
+    await page.click('[data-np-cancel]', { noWaitAfter: true, timeout: 90000 });
+    await page.waitForSelector('#np-dialog', { state: 'detached', timeout: 90000 });
+    await page.waitForSelector('#view canvas.v-canvas', { state: 'visible', timeout: 90000 });
+    check(await page.locator('#np-dialog').count() === 0 && await page.locator('#view canvas.v-canvas').isVisible(), 'CLOSE removes the finished folder dialog and mounts MODEL');
     await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK', null, { timeout: 60000 });
     const saved = join(visit, 'Tiksi', 'Elm Street kitchen.tiksi');
     check(existsSync(saved), 'the project file is in the picked folder\'s Tiksi folder');
