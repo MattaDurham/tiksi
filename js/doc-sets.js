@@ -10,7 +10,9 @@
 //   section    vertical cut along a plan line, looking to one side: { line: [ax, ay, bx, by],
 //              flip, center [u, h] (m along the line from its middle, m above 0), scale, style, clip: true }
 //   elevation  the same camera with nothing cut away, placed outside the model (clip: false)
-//   view3d     perspective camera: { camera: { position, target, fov }, style }
+//   view3d     a camera: { camera: { position, target, fov, parallel? }, cut?: { normal, d }, style };
+//              parallel shows distance * tan(fov / 2) each way as MODEL does; `cut` takes away
+//              what lies past the plane normal . p = d (a saved view's section cut)
 //   image      a photo or a document page: { photoId, page }
 //   schedule   a table: { source: 'openings'|'rooms'|'products'|'items', projectId, levelId }
 //   text       notes: { text }
@@ -144,7 +146,9 @@ export function normalizeViewport(v) {
   } else if (v.kind === 'view3d') {
     const c = v.camera && typeof v.camera === 'object' ? v.camera : {};
     const position = vec(c.position, 3) || [8, 6, 8], target = vec(c.target, 3) || [0, 1, 0];
-    out.camera = { position, target, fov: fin(c.fov) ? clamp(num(c.fov), 10, 110) : 50 };
+    out.camera = { position, target, fov: fin(c.fov) ? clamp(num(c.fov), 10, 110) : 50, ...(c.parallel === true ? { parallel: true } : {}) };
+    const k = v.cut && typeof v.cut === 'object' ? v.cut : null, n = k && vec(k.normal, 3);
+    if (n && Math.hypot(...n) > 1e-6 && fin(k.d)) { const l = Math.hypot(...n); out.cut = { normal: n.map(x => x / l), d: num(k.d) / l }; }
   } else if (v.kind === 'image') {
     out.photoId = str(v.photoId);
     out.page = fin(v.page) ? Math.max(1, Math.round(num(v.page))) : 1;
