@@ -10,6 +10,9 @@
 //                       read back and merged element by element against the last state
 //                       both sides agreed on: moved, stretched, raised, renamed and deleted
 //                       groups update Tiksi; a copied group becomes a new element.
+//   saved views         both ways, as scenes (mirror-views.js): a scene moved, renamed or given
+//                       other tags or another cut in SketchUp updates its view, one added there
+//                       becomes a view, one deleted there deletes its view, by the same rule.
 //
 // Geometry drawn in SketchUp outside the Tiksi groups is kept in the .skp across rewrites
 // and is not brought into the plan. When both sides changed the same element, Tiksi keeps
@@ -23,6 +26,7 @@ import { thresholdFloors } from './threshold-floors.js';
 import { fixtureShape, fixtureMirrorParams, fixtureLocalFrame, fixtureParts, fixtureLabel, fixturesOn, normaliseFixture, FIXTURE_FALLBACK } from './fixtures.js';
 import { trimMeshParts } from './trim-mesh.js';
 import { trimLabel, trimProduct } from './trims.js';
+import { mirrorsView, viewForm, viewSig, viewScene, sceneForm, applySceneToView, viewFromScene } from './mirror-views.js';
 
 export const MIRROR_FORMAT = 'tiksi-sketchup-mirror';
 // Signatures compare lengths to 0.1 mm, finer than any typed change, and the opening position
@@ -100,6 +104,11 @@ export function elementState(prop, legacy = false) {
     if (!fixtureShape(f)) continue;
     const p = fixtureMirrorParams(f);
     out.set(f.id, { kind: 'fixture', sig: fixtureSig(p), params: p });
+  }
+  for (const v of prop.savedViews || []) {
+    if (!mirrorsView(v)) continue;
+    const p = viewForm(prop, v);
+    out.set(v.id, { kind: 'view', sig: viewSig(p), params: p });
   }
   return out;
 }
@@ -301,6 +310,7 @@ export function mirrorSpec(prop, materials, legacy = false) {
     levels: (prop.levels || []).map(l => ({ id: l.id, name: l.name, elevation: l.elevation, height: l.height })),
     tags: (prop.tags || []).map(t => ({ name: t.name, visible: t.visible !== false })),
     walls, rooms, fixtures, elements,
+    views: (prop.savedViews || []).filter(v => mirrorsView(v) && state.has(v.id)).map(v => viewScene(prop, v)),
     underlays: (prop.levels || []).map(l => underlayOf(l)).filter(Boolean),
     warnings,
   };
@@ -335,6 +345,7 @@ const readSig = {
   opening: p => openingSig(p),
   room: p => roomSig(p),
   fixture: p => fixtureSig(p),
+  view: p => viewSig(p),
 };
 
 // Catalog trim is generated against neighbouring walls. A rigid native move can therefore
@@ -401,7 +412,7 @@ export function mergeMirror(prop, read, synced, seenBefore) {
   const before = elementState(prop);
   // A millimetre signature saved before SIG_TAIL stands for `sigNow` (the value's signature
   // today) when it is the millimetre signature of that same value; otherwise it differs from it.
-  const upgrade = (stored, kind, params, sigNow) => !stored || current(stored) || !params ? stored
+  const upgrade = (stored, kind, params, sigNow) => !stored || current(stored) || !params || !LEGACY_SIG[kind] ? stored
     : stored === LEGACY_SIG[kind](params) ? sigNow : stored;
   const agreedOf = (id, kind) => { const cur = before.get(id);
     return upgrade(synced[id], kind, cur && cur.params, cur && cur.sig) || upgrade(written[id] && written[id].sig, kind, cur && cur.params, cur && cur.sig); };
@@ -493,6 +504,8 @@ export function mergeMirror(prop, read, synced, seenBefore) {
     }
   }
 
+  mergeViews(prop, read, decide, seen, report);
+
   // Elements this .skp was written with and no longer holds: deleted in SketchUp. (An
   // element Tiksi added after the file was opened in SketchUp is not in its record.)
   for (const [id, cur] of before) {
@@ -505,10 +518,44 @@ export function mergeMirror(prop, read, synced, seenBefore) {
       if (prop.trims) prop.trims = prop.trims.filter(t => t.wallId !== id);
     } else if (cur.kind === 'opening') prop.openings = prop.openings.filter(o => o.id !== id);
     else if (cur.kind === 'fixture') prop.fixtures = prop.fixtures.filter(f => f.id !== id);
+    else if (cur.kind === 'view') prop.savedViews = prop.savedViews.filter(v => v.id !== id);
     else prop.rooms = prop.rooms.filter(r => r.id !== id);
     report.deleted.push(id);
   }
   return report;
+}
+
+// The scenes read back: each with Tiksi's id is decided like any element; a scene added in
+// SketchUp is a new view, unless a view was made from it already (it is tagged on the next write).
+// In a scene the owner made, the cut is SketchUp's and is not compared (mirror-views.js sceneForm).
+function mergeViews(prop, read, decide, seen, report) {
+  if (!Array.isArray(read.views)) return;
+  prop.savedViews = Array.isArray(prop.savedViews) ? prop.savedViews : [];
+  const taken = new Set(prop.savedViews.map(v => v.id));
+  for (const scene of read.views) {
+    if (!scene || !scene.camera) continue;
+    let id = typeof scene.id === 'string' ? scene.id : null, base = scene.base || null;
+    if (!id) {
+      const made = prop.savedViews.find(v => v.source && v.source.app === 'sketchup-sync' && v.source.scene === scene.name && !seen.has(v.id));
+      if (made) { id = made.id; scene.origin = 'sketchup'; }
+    }
+    const now = sceneForm(prop, scene);
+    if (base && scene.origin !== 'tiksi') base = { ...base, cut: null };
+    let action;
+    if (!id || seen.has(id)) action = 'copy';
+    else { seen.add(id); action = decide(id, 'view', now, base); }
+    const i = id ? prop.savedViews.findIndex(v => v.id === id) : -1;
+    if (action === 'apply' && i >= 0) {
+      prop.savedViews[i] = applySceneToView(prop, prop.savedViews[i], scene, now, base || {});
+      report.applied.push(id);
+    } else if (action === 'copy' || action === 'add') {
+      if (prop.savedViews.length >= 100) { report.warnings.push('Scene "' + now.name + '" did not fit: a property keeps 100 views'); continue; }
+      const v = viewFromScene(prop, scene, action === 'add' ? id : null, taken);
+      if (!v) continue;
+      taken.add(v.id); prop.savedViews.push(v);
+      report.added.push(v.id);
+    }
+  }
 }
 
 function applyWall(prop, w, now) {

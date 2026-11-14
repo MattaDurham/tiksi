@@ -3,7 +3,7 @@
 `write` turns the browser's mirror spec into tagged SketchUp groups: one group per wall
 (an extruded face with its openings cut), one nested group per opening, one group per room
 floor, one group per fixture (a nested group per prism), one tag per level and the level's
-plan underlay as an image. Every Tiksi entity
+plan underlay as an image, one scene per saved view (sketchup_scenes.py). Every Tiksi entity
 carries a "tiksi" attribute dictionary with its id and the values it was written from.
 Faces wear the spec's finishes as SketchUp materials named "Tiksi: <name>", created once and
 reused by name, so rewrites repaint them instead of piling up copies. Writing over an
@@ -25,8 +25,10 @@ import tempfile
 
 if __package__:
     from .sketchup_convert import API, Ref, Point, Transform, Color, get_data, set_data, to_ref
+    from .sketchup_scenes import write_views, read_views
 else:
     from sketchup_convert import API, Ref, Point, Transform, Color, get_data, set_data, to_ref
+    from sketchup_scenes import write_views, read_views
 
 FORMAT = 'tiksi-sketchup-mirror'
 VERSION = 1
@@ -1181,6 +1183,11 @@ def write_mirror(folder):
                     set_data(api, entity, data)
                 stamp(api.collection(api.ref('SUGroupGetEntities', group), 'Groups'))
         stamp(api.collection(entities, 'Groups'))
+        # Saved views as scenes (sketchup_scenes.py); a spec from before views were synced has none.
+        views = spec.get('views')
+        if isinstance(views, list):
+            known = set(tags) | {'Tiksi: ' + str(level.get('name') or level['id']) for level in spec.get('levels', [])}
+            write_views(api, model, views, known, warnings)
         elements = spec.get('elements')
         if not isinstance(elements, dict):
             elements = {e['id']: {'kind': e['kind']} for e in spec_elements(spec)}
@@ -1458,6 +1465,7 @@ def read_mirror(folder):
         instances = C.c_size_t()
         api.call('SUEntitiesGetNumInstances', entities, C.byref(instances))
         return {'format': FORMAT, 'version': VERSION, 'model': info, 'walls': walls, 'rooms': rooms, 'fixtures': fixtures, 'underlays': underlays,
+                'views': read_views(api, model),
                 'unsupportedGeometry': unsupported_geometry, 'untagged': {'faces': count.value, 'groups': untagged_groups, 'instances': instances.value}, 'warnings': warnings}
     finally:
         if model.ptr:

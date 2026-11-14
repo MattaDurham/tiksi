@@ -267,7 +267,9 @@ MODEL as it starts: its views, tools and tags in the left pane. Roof is hidden i
 
 **Hidden and moved objects.** Both are saved with the project. Drawings in DOCUMENTS leave out hidden objects and show moved ones where they now stand. Converting a SketchUp model again, or importing a new version of it, starts both over: everything shown, everything where the file has it.
 
-**Drawings follow the tags.** DOCUMENTS draws plans, sections, elevations and 3D views with the model's tags. Each view also has its own TAGS list: leave a tag as the model has it, or show or hide it in that view only. A 3D view can start from a saved view, camera and tags together.
+**Drawings follow the tags.** DOCUMENTS draws plans, sections, elevations and 3D views with the model's tags. Each view also has its own TAGS list: leave a tag as the model has it, or show or hide it in that view only. A 3D view can start from a saved view, camera and tags together; a parallel view stays parallel and keeps its section cut, so a standard plan or elevation comes onto the sheet as MODEL shows it.
+
+**Standard views.** MAKE THE STANDARD VIEWS, under SAVED VIEWS in the left pane, makes the views construction drawings start from: an overview, a plan from above for each level (parallel, north up, cut 4'-0" above the floor) and a cut-open parallel elevation of each wall of each room, named by the side of the room it is on ("Kitchen, north wall"). Sides of a room that carry on in a straight line are one wall; a wall shorter than 2'-0" gets no elevation. Each elevation looks square at its wall from inside the room, with its cut 1" short of the far side of the room. Once made, the item reads REFRESH THE STANDARD VIEWS: it brings them up to date with the rooms, keeps their tabs and the names you gave them, and takes away the views of walls that are gone. Views you saved yourself, and a standard view you updated by hand, stay as they are. The SketchUp build scripts give every model they make the same views as scenes.
 
 **SketchUp.** Exports to SketchUp, and the SketchUp mirror beside a project file, put each object on a SketchUp tag with the same name and visibility.
 
@@ -791,7 +793,7 @@ Settings groups display, model environment and workspace maintenance. This synth
 
 ### Other features here
 
-**Keep a SketchUp mirror.** With the local server and SketchUp on this Mac, each project gets a .skp beside its canonical .tiksi. Keep Tiksi open on the Mac while authoring so saved native edits return to the shared project; phone clients see the synced results. The static edition instead needs a linked folder. EDIT IN SKETCHUP in MODEL opens the native file on the Mac.
+**Keep a SketchUp mirror.** With the local server and SketchUp on this Mac, each project gets a .skp beside its canonical .tiksi. Each saved view is a scene in it, with its camera, the tags it hides and its section cut (SketchUp 2025 or later for the cut); a scene moved, renamed or given other tags or another cut in SketchUp changes its view when the file is saved, a scene added there becomes a saved view, and one deleted there deletes its view. When both sides changed one view, Tiksi keeps its own and says so. Views made from an imported model's own scenes stay with that model and are not written. Keep Tiksi open on the Mac while authoring so saved native edits return to the shared project; phone clients see the synced results. The static edition instead needs a linked folder. EDIT IN SKETCHUP in MODEL opens the native file on the Mac.
 
 **Save workspace backup.** Exports every property together. Keep a .tiksi per property for ordinary project handoffs.
 

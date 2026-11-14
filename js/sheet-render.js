@@ -223,11 +223,25 @@ async function renderNow(prop, v, width, height) {
   let camera, clip = [];
   setCeilings(group, v.ceilings !== false);
   if (v.kind === 'view3d') {
-    const c = v.camera;
-    camera = new THREE.PerspectiveCamera(c.fov, width / height, 0.05, reach * 4);
-    camera.position.set(...c.position);
-    camera.up.set(0, 1, 0);
-    camera.lookAt(new THREE.Vector3(...c.target));
+    const c = v.camera, target = new THREE.Vector3(...c.target), eye = new THREE.Vector3(...c.position);
+    const look = target.clone().sub(eye);
+    if (c.parallel) {
+      // As MODEL's parallel camera (viewer3d.js viewCamera): distance * tan(fov / 2) each way, the
+      // camera standing back so nothing behind the eye is lost.
+      const hh = Math.max(0.05, look.length()) * Math.tan(THREE.MathUtils.degToRad(c.fov) / 2), hw = hh * width / height;
+      camera = new THREE.OrthographicCamera(-hw, hw, hh, -hh, 0.01, reach * 6);
+      camera.position.copy(eye).addScaledVector(look.clone().normalize(), -reach);
+    } else {
+      camera = new THREE.PerspectiveCamera(c.fov, width / height, 0.05, reach * 4);
+      camera.position.copy(eye);
+    }
+    // Straight down (a plan): the top of the picture is the way the camera leans, as in MODEL.
+    const dir = look.clone().normalize();
+    if (Math.abs(dir.y) > 0.9995) { const flat = new THREE.Vector3(dir.x, 0, dir.z); camera.up.copy(flat.lengthSq() > 1e-12 ? flat.normalize() : new THREE.Vector3(0, 0, -1)); }
+    else camera.up.set(0, 1, 0);
+    camera.lookAt(target);
+    camera.updateProjectionMatrix();
+    if (v.cut) clip = [new THREE.Plane(new THREE.Vector3(...v.cut.normal).negate(), v.cut.d)];
   } else {
     const f = orthoFrame(v);
     const hw = f.w / 2, hh = f.h / 2;

@@ -1,0 +1,1670 @@
+{
+ "about": "Inputs and the standard view set js/standard-views.js and server/standard_scenes.py both make from them (tools/standard-views-fixture.mjs).",
+ "cases": [
+  {
+   "about": "one level: a square-cornered kitchen and an L-shaped hall, the hall's west wall drawn in two pieces",
+   "input": {
+    "north": 0,
+    "levels": [
+     {
+      "id": "lvl-0",
+      "name": "Main level",
+      "elevation": 0,
+      "height": 2.44
+     }
+    ],
+    "walls": [],
+    "rooms": [
+     {
+      "id": "r1",
+      "name": "Kitchen",
+      "level": "lvl-0",
+      "z": 0,
+      "height": 2.44,
+      "pts": [
+       [
+        0,
+        0
+       ],
+       [
+        4,
+        0
+       ],
+       [
+        4,
+        3
+       ],
+       [
+        0,
+        3
+       ]
+      ]
+     },
+     {
+      "id": "r2",
+      "name": "Hall",
+      "level": "lvl-0",
+      "z": 0,
+      "height": 2.44,
+      "pts": [
+       [
+        4,
+        0
+       ],
+       [
+        6,
+        0
+       ],
+       [
+        6,
+        1
+       ],
+       [
+        5,
+        1
+       ],
+       [
+        5,
+        3
+       ],
+       [
+        4,
+        3
+       ],
+       [
+        4,
+        1.5
+       ]
+      ]
+     }
+    ]
+   },
+   "views": [
+    {
+     "name": "Overview",
+     "camera": {
+      "position": [
+       -2.508557,
+       5.841479,
+       7.008557
+      ],
+      "target": [
+       3,
+       1.098,
+       1.5
+      ],
+      "fov": 50
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": false,
+      "height": 1.2
+     },
+     "xray": false,
+     "hiddenLevels": [],
+     "standard": {
+      "key": "overview",
+      "name": "Overview"
+     }
+    },
+    {
+     "name": "Plan",
+     "camera": {
+      "position": [
+       3,
+       4.803686,
+       1.509607
+      ],
+      "target": [
+       3,
+       0,
+       1.5
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "top",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2192,
+      "planes": [
+       {
+        "id": "cut-std-plan",
+        "kind": "level",
+        "q": [
+         -0.7071067811865476,
+         0,
+         0,
+         0.7071067811865476
+        ],
+        "pos": [
+         3,
+         1.2192,
+         1.5
+        ]
+       }
+      ],
+      "active": "cut-std-plan",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [],
+     "standard": {
+      "key": "plan:lvl-0",
+      "name": "Plan"
+     }
+    },
+    {
+     "name": "Kitchen, north wall",
+     "camera": {
+      "position": [
+       2,
+       1.22,
+       3.202464
+      ],
+      "target": [
+       2,
+       1.22,
+       0
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         0,
+         0,
+         1
+        ],
+        "pos": [
+         2,
+         1.22,
+         2.9746
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [],
+     "standard": {
+      "key": "elevation:r1:north:1",
+      "name": "Kitchen, north wall"
+     }
+    },
+    {
+     "name": "Kitchen, east wall",
+     "camera": {
+      "position": [
+       1.069746,
+       1.22,
+       1.5
+      ],
+      "target": [
+       4,
+       1.22,
+       1.5
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         -0.707107,
+         0,
+         0.707107
+        ],
+        "pos": [
+         0.0254,
+         1.22,
+         1.5
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [],
+     "standard": {
+      "key": "elevation:r1:east:1",
+      "name": "Kitchen, east wall"
+     }
+    },
+    {
+     "name": "Kitchen, south wall",
+     "camera": {
+      "position": [
+       2,
+       1.22,
+       -0.202464
+      ],
+      "target": [
+       2,
+       1.22,
+       3
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         -1,
+         0,
+         0
+        ],
+        "pos": [
+         2,
+         1.22,
+         0.0254
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [],
+     "standard": {
+      "key": "elevation:r1:south:1",
+      "name": "Kitchen, south wall"
+     }
+    },
+    {
+     "name": "Kitchen, west wall",
+     "camera": {
+      "position": [
+       2.930254,
+       1.22,
+       1.5
+      ],
+      "target": [
+       0,
+       1.22,
+       1.5
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         0.707107,
+         0,
+         0.707107
+        ],
+        "pos": [
+         3.9746,
+         1.22,
+         1.5
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [],
+     "standard": {
+      "key": "elevation:r1:west:1",
+      "name": "Kitchen, west wall"
+     }
+    },
+    {
+     "name": "Hall, north wall",
+     "camera": {
+      "position": [
+       5,
+       1.22,
+       2.930254
+      ],
+      "target": [
+       5,
+       1.22,
+       0
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         0,
+         0,
+         1
+        ],
+        "pos": [
+         5,
+         1.22,
+         2.9746
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [],
+     "standard": {
+      "key": "elevation:r2:north:1",
+      "name": "Hall, north wall"
+     }
+    },
+    {
+     "name": "Hall, east wall",
+     "camera": {
+      "position": [
+       3.069746,
+       1.22,
+       0.5
+      ],
+      "target": [
+       6,
+       1.22,
+       0.5
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         -0.707107,
+         0,
+         0.707107
+        ],
+        "pos": [
+         4.0254,
+         1.22,
+         0.5
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [],
+     "standard": {
+      "key": "elevation:r2:east:1",
+      "name": "Hall, east wall"
+     }
+    },
+    {
+     "name": "Hall, south wall",
+     "camera": {
+      "position": [
+       5.5,
+       1.22,
+       -1.930254
+      ],
+      "target": [
+       5.5,
+       1.22,
+       1
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         -1,
+         0,
+         0
+        ],
+        "pos": [
+         5.5,
+         1.22,
+         0.0254
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [],
+     "standard": {
+      "key": "elevation:r2:south:1",
+      "name": "Hall, south wall"
+     }
+    },
+    {
+     "name": "Hall, east wall 2",
+     "camera": {
+      "position": [
+       2.069746,
+       1.22,
+       2
+      ],
+      "target": [
+       5,
+       1.22,
+       2
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         -0.707107,
+         0,
+         0.707107
+        ],
+        "pos": [
+         4.0254,
+         1.22,
+         2
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [],
+     "standard": {
+      "key": "elevation:r2:east:2",
+      "name": "Hall, east wall 2"
+     }
+    },
+    {
+     "name": "Hall, south wall 2",
+     "camera": {
+      "position": [
+       4.5,
+       1.22,
+       0.069746
+      ],
+      "target": [
+       4.5,
+       1.22,
+       3
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         -1,
+         0,
+         0
+        ],
+        "pos": [
+         4.5,
+         1.22,
+         0.0254
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [],
+     "standard": {
+      "key": "elevation:r2:south:2",
+      "name": "Hall, south wall 2"
+     }
+    },
+    {
+     "name": "Hall, west wall",
+     "camera": {
+      "position": [
+       6.930254,
+       1.22,
+       1.5
+      ],
+      "target": [
+       4,
+       1.22,
+       1.5
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         0.707107,
+         0,
+         0.707107
+        ],
+        "pos": [
+         5.9746,
+         1.22,
+         1.5
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [],
+     "standard": {
+      "key": "elevation:r2:west:1",
+      "name": "Hall, west wall"
+     }
+    }
+   ]
+  },
+  {
+   "about": "two levels, north turned 30 degrees: a clockwise room with a 1'-0\" jog (no elevation), an angled room, a room with no name, walls only on the empty attic",
+   "input": {
+    "north": 30,
+    "levels": [
+     {
+      "id": "lvl-0",
+      "name": "Ground",
+      "elevation": 0,
+      "height": 2.7
+     },
+     {
+      "id": "lvl-1",
+      "name": "Upper",
+      "elevation": 3,
+      "height": 2.4
+     },
+     {
+      "id": "lvl-2",
+      "name": "Attic",
+      "elevation": 5.6,
+      "height": 2
+     }
+    ],
+    "walls": [
+     {
+      "level": "lvl-0",
+      "ax": -1,
+      "ay": -1,
+      "bx": 7,
+      "by": -1
+     },
+     {
+      "level": "lvl-2",
+      "ax": 0,
+      "ay": 0,
+      "bx": 5,
+      "by": 0
+     }
+    ],
+    "rooms": [
+     {
+      "id": "a",
+      "name": "Living room",
+      "level": "lvl-0",
+      "z": 0,
+      "height": 2.7,
+      "pts": [
+       [
+        0,
+        0
+       ],
+       [
+        0,
+        4
+       ],
+       [
+        5,
+        4
+       ],
+       [
+        5,
+        2.3048
+       ],
+       [
+        5.3048,
+        2.3048
+       ],
+       [
+        5.3048,
+        0
+       ]
+      ]
+     },
+     {
+      "id": "b",
+      "name": "Bay",
+      "level": "lvl-1",
+      "z": 3,
+      "height": 2.1,
+      "pts": [
+       [
+        0,
+        0
+       ],
+       [
+        3,
+        0
+       ],
+       [
+        3.8,
+        1.2
+       ],
+       [
+        3,
+        2.4
+       ],
+       [
+        0,
+        2.4
+       ]
+      ]
+     },
+     {
+      "id": "c",
+      "name": "",
+      "level": "lvl-1",
+      "z": 3,
+      "height": 2.4,
+      "pts": [
+       [
+        0,
+        2.4
+       ],
+       [
+        3,
+        2.4
+       ],
+       [
+        3,
+        5
+       ],
+       [
+        0,
+        5
+       ]
+      ]
+     }
+    ]
+   },
+   "views": [
+    {
+     "name": "Overview",
+     "camera": {
+      "position": [
+       -6.692791,
+       11.76657,
+       11.692791
+      ],
+      "target": [
+       3,
+       3.42,
+       2
+      ],
+      "fov": 50
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": false,
+      "height": 1.2
+     },
+     "xray": false,
+     "hiddenLevels": [],
+     "standard": {
+      "key": "overview",
+      "name": "Overview"
+     }
+    },
+    {
+     "name": "Plan, Ground",
+     "camera": {
+      "position": [
+       2.365597,
+       9.403368,
+       0.866768
+      ],
+      "target": [
+       2.375,
+       0,
+       0.850481
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "top",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2192,
+      "planes": [
+       {
+        "id": "cut-std-plan",
+        "kind": "level",
+        "q": [
+         -0.7071067811865476,
+         0,
+         0,
+         0.7071067811865476
+        ],
+        "pos": [
+         2.375,
+         1.2192,
+         0.850481
+        ]
+       }
+      ],
+      "active": "cut-std-plan",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-1",
+      "lvl-2"
+     ],
+     "standard": {
+      "key": "plan:lvl-0",
+      "name": "Plan, Ground"
+     }
+    },
+    {
+     "name": "Plan, Upper",
+     "camera": {
+      "position": [
+       1.492998,
+       10.001525,
+       2.512127
+      ],
+      "target": [
+       1.5,
+       3,
+       2.5
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "top",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 4.2192,
+      "planes": [
+       {
+        "id": "cut-std-plan",
+        "kind": "level",
+        "q": [
+         -0.7071067811865476,
+         0,
+         0,
+         0.7071067811865476
+        ],
+        "pos": [
+         1.5,
+         4.2192,
+         2.5
+        ]
+       }
+      ],
+      "active": "cut-std-plan",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-0",
+      "lvl-2"
+     ],
+     "standard": {
+      "key": "plan:lvl-1",
+      "name": "Plan, Upper"
+     }
+    },
+    {
+     "name": "Plan, Attic",
+     "camera": {
+      "position": [
+       2.496533,
+       9.066762,
+       0.006005
+      ],
+      "target": [
+       2.5,
+       5.6,
+       0
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "top",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 6.8192,
+      "planes": [
+       {
+        "id": "cut-std-plan",
+        "kind": "level",
+        "q": [
+         -0.7071067811865476,
+         0,
+         0,
+         0.7071067811865476
+        ],
+        "pos": [
+         2.5,
+         6.8192,
+         0
+        ]
+       }
+      ],
+      "active": "cut-std-plan",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-0",
+      "lvl-1"
+     ],
+     "standard": {
+      "key": "plan:lvl-2",
+      "name": "Plan, Attic"
+     }
+    },
+    {
+     "name": "Living room, south-west wall",
+     "camera": {
+      "position": [
+       3.242494,
+       1.35,
+       2
+      ],
+      "target": [
+       0,
+       1.35,
+       2
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         0.707107,
+         0,
+         0.707107
+        ],
+        "pos": [
+         5.2794,
+         1.35,
+         2
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-1",
+      "lvl-2"
+     ],
+     "standard": {
+      "key": "elevation:a:south-west:1",
+      "name": "Living room, south-west wall"
+     }
+    },
+    {
+     "name": "Living room, south-east wall",
+     "camera": {
+      "position": [
+       2.5,
+       1.35,
+       -0.00308
+      ],
+      "target": [
+       2.5,
+       1.35,
+       4
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         1,
+         0,
+         0
+        ],
+        "pos": [
+         2.5,
+         1.35,
+         0.0254
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-1",
+      "lvl-2"
+     ],
+     "standard": {
+      "key": "elevation:a:south-east:1",
+      "name": "Living room, south-east wall"
+     }
+    },
+    {
+     "name": "Living room, north-east wall",
+     "camera": {
+      "position": [
+       1.757506,
+       1.35,
+       3.1524
+      ],
+      "target": [
+       5,
+       1.35,
+       3.1524
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         -0.707107,
+         0,
+         0.707107
+        ],
+        "pos": [
+         0.0254,
+         1.35,
+         3.1524
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-1",
+      "lvl-2"
+     ],
+     "standard": {
+      "key": "elevation:a:north-east:1",
+      "name": "Living room, north-east wall"
+     }
+    },
+    {
+     "name": "Living room, north-east wall 2",
+     "camera": {
+      "position": [
+       2.062306,
+       1.35,
+       1.1524
+      ],
+      "target": [
+       5.3048,
+       1.35,
+       1.1524
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         -0.707107,
+         0,
+         0.707107
+        ],
+        "pos": [
+         0.0254,
+         1.35,
+         1.1524
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-1",
+      "lvl-2"
+     ],
+     "standard": {
+      "key": "elevation:a:north-east:2",
+      "name": "Living room, north-east wall 2"
+     }
+    },
+    {
+     "name": "Living room, north-west wall",
+     "camera": {
+      "position": [
+       2.6524,
+       1.35,
+       4.247107
+      ],
+      "target": [
+       2.6524,
+       1.35,
+       0
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         0,
+         0,
+         1
+        ],
+        "pos": [
+         2.6524,
+         1.35,
+         3.9746
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-1",
+      "lvl-2"
+     ],
+     "standard": {
+      "key": "elevation:a:north-west:1",
+      "name": "Living room, north-west wall"
+     }
+    },
+    {
+     "name": "Bay, north-west wall",
+     "camera": {
+      "position": [
+       1.5,
+       4.05,
+       2.52194
+      ],
+      "target": [
+       1.5,
+       4.05,
+       0
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         0,
+         0,
+         1
+        ],
+        "pos": [
+         1.5,
+         4.05,
+         2.3746
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-0",
+      "lvl-2"
+     ],
+     "standard": {
+      "key": "elevation:b:north-west:1",
+      "name": "Bay, north-west wall"
+     }
+    },
+    {
+     "name": "Bay, north-east wall",
+     "camera": {
+      "position": [
+       1.301619,
+       4.05,
+       1.998921
+      ],
+      "target": [
+       3.4,
+       4.05,
+       0.6
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         -0.471858,
+         0,
+         0.881675
+        ],
+        "pos": [
+         0.236519,
+         4.05,
+         2.708988
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-0",
+      "lvl-2"
+     ],
+     "standard": {
+      "key": "elevation:b:north-east:1",
+      "name": "Bay, north-east wall"
+     }
+    },
+    {
+     "name": "Bay, east wall",
+     "camera": {
+      "position": [
+       1.301619,
+       4.05,
+       0.401079
+      ],
+      "target": [
+       3.4,
+       4.05,
+       1.8
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         -0.881675,
+         0,
+         0.471858
+        ],
+        "pos": [
+         0.236519,
+         4.05,
+         -0.308988
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-0",
+      "lvl-2"
+     ],
+     "standard": {
+      "key": "elevation:b:east:1",
+      "name": "Bay, east wall"
+     }
+    },
+    {
+     "name": "Bay, south-east wall",
+     "camera": {
+      "position": [
+       1.5,
+       4.05,
+       -0.12194
+      ],
+      "target": [
+       1.5,
+       4.05,
+       2.4
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         -1,
+         0,
+         0
+        ],
+        "pos": [
+         1.5,
+         4.05,
+         0.0254
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-0",
+      "lvl-2"
+     ],
+     "standard": {
+      "key": "elevation:b:south-east:1",
+      "name": "Bay, south-east wall"
+     }
+    },
+    {
+     "name": "Bay, south-west wall",
+     "camera": {
+      "position": [
+       2.52194,
+       4.05,
+       1.2
+      ],
+      "target": [
+       0,
+       4.05,
+       1.2
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         0.707107,
+         0,
+         0.707107
+        ],
+        "pos": [
+         3.7746,
+         4.05,
+         1.2
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-0",
+      "lvl-2"
+     ],
+     "standard": {
+      "key": "elevation:b:south-west:1",
+      "name": "Bay, south-west wall"
+     }
+    },
+    {
+     "name": "Room 3, north-west wall",
+     "camera": {
+      "position": [
+       1.5,
+       4.2,
+       5.282217
+      ],
+      "target": [
+       1.5,
+       4.2,
+       2.4
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         0,
+         0,
+         1
+        ],
+        "pos": [
+         1.5,
+         4.2,
+         4.9746
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-0",
+      "lvl-2"
+     ],
+     "standard": {
+      "key": "elevation:c:north-west:1",
+      "name": "Room 3, north-west wall"
+     }
+    },
+    {
+     "name": "Room 3, north-east wall",
+     "camera": {
+      "position": [
+       0.117783,
+       4.2,
+       3.7
+      ],
+      "target": [
+       3,
+       4.2,
+       3.7
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         -0.707107,
+         0,
+         0.707107
+        ],
+        "pos": [
+         0.0254,
+         4.2,
+         3.7
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-0",
+      "lvl-2"
+     ],
+     "standard": {
+      "key": "elevation:c:north-east:1",
+      "name": "Room 3, north-east wall"
+     }
+    },
+    {
+     "name": "Room 3, south-east wall",
+     "camera": {
+      "position": [
+       1.5,
+       4.2,
+       2.117783
+      ],
+      "target": [
+       1.5,
+       4.2,
+       5
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         -1,
+         0,
+         0
+        ],
+        "pos": [
+         1.5,
+         4.2,
+         2.4254
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-0",
+      "lvl-2"
+     ],
+     "standard": {
+      "key": "elevation:c:south-east:1",
+      "name": "Room 3, south-east wall"
+     }
+    },
+    {
+     "name": "Room 3, south-west wall",
+     "camera": {
+      "position": [
+       2.882217,
+       4.2,
+       3.7
+      ],
+      "target": [
+       0,
+       4.2,
+       3.7
+      ],
+      "fov": 50,
+      "parallel": true
+     },
+     "mode": "orbit",
+     "tags": {},
+     "section": {
+      "on": true,
+      "height": 1.2,
+      "planes": [
+       {
+        "id": "cut-std-elev",
+        "kind": "custom",
+        "q": [
+         0,
+         0.707107,
+         0,
+         0.707107
+        ],
+        "pos": [
+         2.9746,
+         4.2,
+         3.7
+        ]
+       }
+      ],
+      "active": "cut-std-elev",
+      "done": true
+     },
+     "xray": false,
+     "hiddenLevels": [
+      "lvl-0",
+      "lvl-2"
+     ],
+     "standard": {
+      "key": "elevation:c:south-west:1",
+      "name": "Room 3, south-west wall"
+     }
+    }
+   ]
+  }
+ ]
+}
