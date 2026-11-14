@@ -7,6 +7,7 @@ import { normalizePositions } from './positions.js';
 import { normalizePin, normalizeLens, normalizeCameraSets, normalizeWallAnchor } from './pin-records.js';
 import { normaliseFixtures } from './fixtures.js';
 import { normaliseTrims } from './trims.js';
+import { normalisePieceProjects } from './project-pieces.js';
 import { normalizeDocSets } from './doc-sets.js';
 import { normalizeTags } from './tags.js';
 import { normalizeSavedViews } from './saved-views.js';
@@ -42,6 +43,9 @@ const memoryFiles = new Map();
 let legacyFiles = true;
 let legacyDeletion = null;
 export function useDiskPersistence(backend) { diskPersistence = backend; }
+// The client page in the lab (client-view.js) keeps files in page memory only and never opens
+// this browser's own Tiksi storage: the website's other pages may keep a workspace there.
+export function useMemoryFiles() { legacyFiles = false; }
 export async function finishBrowserMigration({ clearFiles = true } = {}) {
   // Only called after an acknowledged, complete save to the Mac's project files.
   try { localStorage.removeItem(LS_KEY); localStorage.removeItem('tiksi.folder.v1'); } catch (ignored) {}
@@ -850,6 +854,8 @@ function migrate(d) {
   }
   sanitiseIds(d);
   fixParents(d);
+  // A piece of the model may name the project (or subproject) it belongs to (project-pieces.js).
+  normalisePieceProjects(d);
   d.version = SCHEMA_VERSION;
   return d;
 }

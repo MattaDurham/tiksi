@@ -64,7 +64,7 @@ try {
   const page = await context.newPage();
   await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  await page.goto(url); await page.locator('[data-prop-name]').waitFor();
+  await page.goto(url + '/#/budget'); await page.locator('#cap-input').waitFor();   // seed before MODEL mounts
   // A 6 m by 4 m kitchen. The west wall's room side is the plane x = 0.057 (half its thickness).
   // Two saved views: straight at the west wall, and across the room at it from a corner.
   const WALL_X = 0.057;
@@ -144,6 +144,48 @@ try {
   assert.ok(await redness(page, ...there) < 40, 'and it is gone from the wall');
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
   assert.deepEqual((await markups(page))[0].strokes.map(s => s.id), [ink.id, low.id]);
+
+  // ---------- one pen-down stays on the starting face ----------
+  assert.equal((await state(page)).surfaceLock, true, 'surface locking is on by default');
+  await page.keyboard.press('p');
+  const faceStart = onScreen(camCorner, box, [WALL_X, 1.1, 0.75]);
+  const otherFace = onScreen(camCorner, box, [1.1, 1.1, WALL_X]);
+  const faceReturn = onScreen(camCorner, box, [WALL_X, 0.9, 0.8]);
+  const beforeLock = (await markups(page))[0].strokes.length;
+  await page.mouse.move(...faceStart); await page.mouse.down();
+  await page.mouse.move(...otherFace, { steps: 18 });
+  await page.mouse.move(...faceReturn, { steps: 18 }); await page.mouse.up();
+  const locked = (await markups(page))[0].strokes.slice(beforeLock);
+  assert.ok(locked.length >= 2, 'leaving and returning starts a separate run instead of a bridge');
+  assert.ok(locked.every(s => s.on.every(h => h.id === 'w-w')), 'only the starting wall receives ink');
+  assert.ok(locked.every(s => s.w.filter((_, i) => i % 3 === 0).every(x => Math.abs(x - WALL_X - 0.004) < 0.002)), 'no points bend onto the adjacent face');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+  assert.equal((await markups(page))[0].strokes.length, beforeLock, 'all parts of one press undo together');
+
+  await page.locator('.mk-bar [data-act=lock]').click();
+  assert.equal((await state(page)).surfaceLock, false);
+  await page.mouse.move(...faceStart); await page.mouse.down();
+  await page.mouse.move(...otherFace, { steps: 20 }); await page.mouse.up();
+  const free = (await markups(page))[0].strokes.slice(beforeLock);
+  const touched = new Set(free.flatMap(s => s.on.map(h => h.id)));
+  assert.ok(touched.has('w-w') && touched.has('w-s'), 'unlocking permits a stroke across both faces: ' + [...touched]);
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+  await page.locator('.mk-bar [data-act=lock]').click();
+
+  // Surface visibility affects rendered ink and erasing, independently of other markups.
+  await page.locator('.mk-bar [data-act=list]').click();
+  await page.locator('.mk-row').first().locator('[data-visibility]').click();
+  assert.equal((await markups(page))[0].hidden, true);
+  await delay(150);
+  assert.ok(await redness(page, ...there) < 40, 'hidden surface ink leaves the model');
+  await page.locator('.mk-list [data-close]').click();
+  await page.keyboard.press('e');
+  await page.mouse.move(there[0], there[1] - 20); await page.mouse.down(); await page.mouse.move(there[0], there[1] + 20, { steps: 5 }); await page.mouse.up();
+  assert.equal((await markups(page))[0].strokes.length, beforeLock, 'the eraser ignores hidden surface ink');
+  await page.locator('.mk-bar [data-act=list]').click();
+  await page.locator('.mk-list [data-show-all]').click();
+  assert.equal((await markups(page))[0].hidden, false);
+  await page.locator('.mk-list [data-close]').click();
 
   // ---------- the line tool, straight at the wall ----------
   await go('v-west');

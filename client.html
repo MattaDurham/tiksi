@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#090c0f">
+<meta name="tiksi-storage" content="client">
+<meta name="robots" content="noindex">
+<title>Tiksi</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230c1013'/%3E%3Cpath d='M7 25h18v-4H7zM10 18h12v-4H10zM13 11h6V7h-6z' fill='%23e8973a'/%3E%3C/svg%3E">
+<style>
+  html, body { margin: 0; height: 100%; background: #090c0f; }
+  #client-wait { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; background: #090c0f; }
+  #client-wait svg { width: 44px; height: 44px; opacity: .9; animation: client-breathe 1.6s ease-in-out infinite; }
+  @keyframes client-breathe { 50% { opacity: .35; } }
+  #client-wait.failed svg { animation: none; opacity: .35; }
+</style>
+</head>
+<body>
+<!-- The client page of a property in the lab (client-view.js): Tiksi's own frame with MODEL
+     alone, in client mode. It shows what SEND TO THE LAB
+     last sent: data/current.json names the copy (data/v/<version>/) and the code that shows
+     it (data/app/<code>/), both of which never change once sent. -->
+<div id="app">
+  <header id="topbar">
+    <div class="brand" title="tiksi">
+      <svg class="brand-logo" viewBox="0 0 32 32" width="22" height="22" aria-hidden="true">
+        <path d="M7 25h18v-4H7zM10 18h12v-4H10zM13 11h6V7h-6z" fill="currentColor"/>
+      </svg>
+      <span class="brand-mark">TIKSI</span>
+    </div>
+    <nav id="rail" aria-label="Pages">
+      <a href="#/model" data-view="model" class="active">MODEL</a>
+    </nav>
+  </header>
+  <aside id="side" aria-label="Views" hidden></aside>
+  <main id="view"></main>
+</div>
+<div id="client-wait" aria-label="Loading"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M7 25h18v-4H7zM10 18h12v-4H10zM13 11h6V7h-6z" fill="#e8973a"/></svg></div>
+<script>
+(async () => {
+  const wait = document.getElementById('client-wait');
+  try {
+    const res = await fetch('./data/current.json', { cache: 'no-store' });
+    if (!res.ok) throw new Error('No copy has been sent yet (' + res.status + ')');
+    const cur = await res.json();
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(cur.version || '') || !/^[a-f0-9]{8,64}$/.test(cur.app || '')) throw new Error('The sent copy is not readable');
+    const app = new URL('./data/app/' + cur.app + '/', location.href).href;
+    const map = document.createElement('script');
+    map.type = 'importmap';
+    map.textContent = JSON.stringify({ imports: { three: app + 'vendor/three.module.min.js', 'three/addons/': app + 'vendor/addons/' } });
+    document.head.append(map);
+    const { startClient } = await import(app + 'js/client-view.js');
+    await startClient({ app, data: new URL('./data/v/' + cur.version + '/', location.href).href, wait });
+  } catch (e) {
+    console.error(e);
+    wait.classList.add('failed');
+    wait.title = String(e && e.message || e);
+  }
+})();
+</script>
+</body>
+</html>

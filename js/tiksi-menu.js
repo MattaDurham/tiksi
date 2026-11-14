@@ -265,9 +265,13 @@ export function close() {
 export function isMenuOpen() { return !!menuEl; }
 
 // The top bar's logo becomes the menu button; the page tabs and the left pane start listening.
-export function initTiksiMenu() {
+// `client`: the client page in the lab (client-view.js). The logo stays a logo, with no menu
+// behind it (there is no project to choose, nothing to open or save); the tabs and the left
+// pane work as here.
+export function initTiksiMenu({ client = false } = {}) {
   const brand = document.querySelector('#topbar .brand');
   if (!brand || button) return;
+  if (client) { bindTabs(); bindPane(); refreshPane(); return; }
   button = document.createElement('button');
   button.type = 'button';
   button.className = 'brand tk-button';

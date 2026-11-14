@@ -26,6 +26,8 @@ Open **GUIDE** in the Tiksi menu (the logo at the top left) for chapter search, 
 - [Print a useful specification sheet](#sheets)
 - [Make a drawing set from the model](#documents)
 - [Send the client a one-pager](#one-pager)
+- [Group pieces of the model by project](#groups)
+- [Send the client a page in the lab](#lab)
 - [Settings, backups and storage](#settings)
 - [Use Tiksi on a phone](#phone)
 - [Shortcuts and common questions](#shortcuts)
@@ -211,7 +213,17 @@ The left pane holds MODEL's views, tools and switches, in groups that fold to th
 
 **Open and closed doors.** Interior doors stand ajar so you can see through rooms, and exterior doors are shut. Right-click a door and choose CLOSE DOOR or OPEN DOOR to change that one; its panel on the right has the same choice under SHOWN. CLOSE ALL DOORS, at the bottom of the right-click menu and under Display in the Tiksi menu, shuts every interior door at once, and OPEN ALL DOORS stands them ajar again. Each is one step for Undo. DOCUMENTS plans still draw every door's swing.
 
-**Mark up the model.** MARK UP (U) turns the view into a drawing surface, with its tools in a bar at the bottom: pen, highlighter, line, eraser, numbered note and MOVE, six colours and three line widths. An Apple Pencil or a tablet pen draws with its pressure, and fingers still orbit and zoom; while the pencil is down a resting hand is ignored. With no pencil, a finger or the mouse draws, and two fingers, the wheel, a right-drag or a Space-drag move the view; the finger button in the bar switches between drawing and moving. Ink goes onto the surfaces of the model itself: a stroke across a wall is drawn on that wall, follows it round a corner, stays on the plane of the wall over a window opening, and shows from any view, so marks from anywhere join the open markup. The box button in the bar (S) switches to ink flat on the screen instead: that ink belongs to the camera it was drawn from, so move the view and it is put away, the chip above the bar flies back to it, and the next flat mark from a new view starts a new markup. LINE (L) draws straight lines the way SketchUp does: click a point on a face, then the next; the line stays on the plane of that face and snaps to the ends, middles and edges you can see (those of the model and of the lines already drawn) and to the red, green and blue axes, and parallel or perpendicular to the edge touched last, with a label saying which. Type a length and press Enter to place the next point that far along; Shift holds the direction, the arrow keys hold the red, green or blue axis, a click on the first point closes the shape and Esc ends the line. A numbered note is pinned to the wall, floor or scan under it and shows from any view; tap it to change its words. The list in the bar opens, renames, ticks off or deletes each markup and saves a picture of it. UNDO and REDO step through the marks while MARK UP is on. Markups are kept in the project file.
+**Mark up the model.** MARK UP (U) opens pen, highlighter, line, eraser, numbered note and MOVE tools in a bar at the bottom. The brush button opens twelve named colours, a custom colour picker and hex entry, continuous width and opacity controls, and a live brush sample. Pen, highlighter and line each remember their own width and opacity during the session. On wider screens, quick swatches and three width presets also sit in the bar.
+
+An Apple Pencil or a tablet pen draws with its pressure, and fingers still orbit and zoom; while the pencil is down a resting hand is ignored. With no pencil, a finger or the mouse draws, and two fingers, the wheel, a right-drag or a Space-drag move the view. The finger button switches between drawing and moving. UNDO and REDO step through the marks while MARK UP is on. An exceptionally long press asks you to lift and continue before reaching the input limit; the ink already drawn is kept.
+
+Ink goes onto the model's surfaces and shows from any view, so marks from anywhere join the open markup. **Stay on surface** is on by default: each press stays on its starting face, stops when its centre reaches another face or an opening, and resumes only when it returns to that face. Lift the pencil to start on another surface. Turn the lock off to let a stroke wrap across surfaces or continue over openings. The brush has a round footprint, so a broad stroke can extend past a face edge. On point-cloud scans without face normals, the lock restricts the stroke to the starting scan object but cannot identify its individual faces. Flat-surface ink uses a smooth mask, so a highlighter stays even where one stroke crosses itself; separate strokes build colour.
+
+The box button (S) switches to ink flat on the screen: that ink belongs to the camera it was drawn from. Move the view and it is put away; the chip above the bar flies back to it, and the next flat mark from a new view starts a new markup. Visible screen markups from the same camera can be shown together.
+
+LINE (L) draws straight lines: click a point on a face, then the next. The line stays on that face's plane and snaps to visible ends, middles and edges, to the red, green and blue axes, and parallel or perpendicular to the edge touched last. A label says which. Type a length and press Enter to place the next point that far along; Shift holds the direction, the arrow keys hold an axis, a click on the first point closes the shape and Esc ends the line. A numbered note is pinned to the wall, floor or scan under it and shows from any view; tap it to change its words.
+
+The markup list opens, renames, ticks off or deletes each markup and saves a picture of it. Each row's eye button hides its ink and notes without deleting them. Hidden markups stay in the list and are protected from the eraser. **Show all** reveals every markup; the master visibility switch temporarily hides them without changing individual choices. Opening a hidden markup reveals it; drawing while the active markup is hidden starts a new one. Markups and their individual visibility are kept in the project file.
 
 **Edit in SketchUp.** EDIT IN SKETCHUP (in MODEL) brings the project's .skp up to date and opens it in SketchUp. Save there and walls, openings and rooms come back. It needs the project kept in a folder and Tiksi running on the Mac with SketchUp.
 
@@ -710,6 +722,52 @@ Every property has a one-page teaser for its client: a picture, the pitch, the s
 **When closing asks.** FILE → Settings → One-pager: ask when the project changed since the last version (the default), every time, or never.
 
 > **Good to know:** The page is laid out in the browser and printed at 200 dots per inch, so it looks the same everywhere. Browsers only let a page ask a generic Leave site? question before it closes, which is why Tiksi's own question comes after choosing to stay.
+
+<a id="groups"></a>
+
+## Group pieces of the model by project
+
+**Where:** MODEL → select pieces → PROJECT in the inspector
+
+Any wall, door, room, fixture, trim section or imported model can belong to a project or to one of its subprojects. Pieces that belong to no project are the house as it is (Existing). A subproject is also a group: a click on any of its pieces selects the whole group, so a run of trim moves as one.
+
+### Try it
+
+1. Select the pieces: a room's SELECT THIS ROOM'S TRIM, a wall's SELECT THIS WALL'S TRIM, or Shift-click.
+2. In PROJECT, open GROUP … AS A SUBPROJECT, type a name (Entry and hall), choose its project (or New project…) and press GROUP.
+3. Click any piece of the group: the whole group is selected. Type an amount in RAISE BY to move every section up by it (start with a minus sign to lower them), or drag them with EDIT BY DRAGGING.
+4. Alt-click picks one piece of a group on its own; SELECT ONLY THE PIECE I CLICKED does the same from the inspector.
+
+### Other features here
+
+**Belongs to.** The PROJECT list moves the selection to another project, a subproject or back to Existing.
+
+**Deleted projects.** A project deleted in PROJECTS keeps its pieces' link while it waits in the recovery list, so restoring it brings the grouping back.
+
+<a id="lab"></a>
+
+## Send the client a page in the lab
+
+**Where:** FILE → Project → SEND TO THE LAB…
+
+A view-only copy of the property goes to its page in the lab on thedurham.nyc. The page is Tiksi's own MODEL, with little switched on: the saved views, orbit and walk, Existing or one of the projects you send, furniture on or off, and the drawing quality (it starts at Ultra; a client on a slow phone can lower it). On a phone it is Tiksi's phone layout: the model full screen and the three-line button.
+
+### Try it
+
+1. Put the new work in projects (see Group pieces of the model by project). Save views in MODEL; the first is where the page opens.
+2. Open SEND TO THE LAB…, tick the projects to offer and give each a short name, tick the tags the furniture switch hides, and press SEND.
+3. OPEN THE PREVIEW shows the copy as sent, on this Mac. OPEN THE LAB PAGE opens it online when the Mac has the lab's upload key.
+4. Give clients access on the lab's own page: the lab shows a section only to the emails granted it.
+
+### Other features here
+
+**Sending again** replaces the copy at the same link, in one step; a client's open page keeps the old copy until they reload.
+
+**What is left out.** Products, prices, project scope and notes, photos and their pins, notes, measurements, documents, the scan capture, the record of where measurements came from, and any project not ticked. Pieces hidden in MODEL stay hidden.
+
+**Walking on the client page.** A tap or click on the floor walks there; the arrows on the floor at each doorway step through it.
+
+> **Good to know:** The upload key is the website's own file-storage key, kept on this Mac in ~/.r2-credentials. Without it a send goes to this Mac's preview copy only, and SEND TO THE LAB says so.
 
 <a id="settings"></a>
 
