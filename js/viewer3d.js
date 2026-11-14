@@ -41,6 +41,7 @@ import {
   ensureLevels, wallsOn, roomsOn, wallHeightOf, levelOfWall, levelOfRoom, levelHeight, topOfLevels, openingsOn,
 } from './store.js';
 import { placeScanBytes, seedProject, proposalSummary } from './scan2plan.js';
+import { bringInScenes } from './sketchup-scenes.js';
 import { chooseScanPlacement } from './scanplace.js';
 import { proposeFixtures, openFixtureReview, fixtureInspectorHtml, bindFixtureInspector, addFixtureHtml, addFixture } from './fixtures-ui.js';
 import { materialSelectHtml } from './materials.js';
@@ -72,6 +73,9 @@ import { modelObjectTree, objectForClick, objectBelow, objectOffset, setObjectOf
 import { renderObjectList, showListTab, revealInList, objectThing, hiddenState } from './object-list.js';
 import { trimTemplate, swapTrimProduct, setTrimY, setFieldEdge, trimExtent, trimLayout, trimStyle, isField, roomFaces } from './trims.js';
 import { trimPanelHtml, bindTrimPanel, addTrimHtml, bindAddTrim } from './trim-panel.js';
+import { PIECE_KINDS, pieceRecord, clickGroupIds, assignProject } from './project-pieces.js';
+import { arrowsNear, walkTarget, glideMs } from './walk-hops.js';
+import { projectBlockHtml, bindProjectBlock, newProjectRecord } from './project-pieces-ui.js';
 import { catalogItem } from './trim-catalog.js';
 import { objectPanelHtml, bindObjectPanel, multiPanelHtml, bindMultiPanel, planTagHtml, bindPlanTag } from './object-panel.js';
 import { ensureCanonTag } from './tags.js';
@@ -164,6 +168,38 @@ let markup = null, markupLoading = null, markupUsed = false;
 const walkKeys = {};
 let walkLocked = false, dragLook = null;
 let walkFloor = 0;             // elevation of the level the walk started on (eye height sits 1.6 m above)
+// Walking by tap (walk-hops.js): a tap on the floor glides there; arrows on the floor at the
+// doorways near the person take them through. On a touch screen, in the phone layout and on the
+// client page; a mouse click elsewhere still captures the mouse for free-look.
+let walkGlide = null;          // { from, to, yaw0, yaw1, t0, ms } while gliding
+let walkArrowRoot = null;      // the arrows' group in the scene
+let walkArrowsAt = null;       // where the arrows were laid out for, { x, z, y }
+let clientMode = false;        // the client page in the lab (client-view.js): looking only
+// What the client page plugs in: { states: [{ id, label }], show(), setShow(id), furniture(),
+// setFurniture(on), hasFurniture }. The left pane and the phone panel offer these and the saved
+// views, orbit and walk; nothing can be selected, edited or saved.
+let clientControls = null;
+// For checks: the walk arrows as drawn ({ on, count, inScene }).
+export function walkArrowState() { return { on: !!(walkArrowRoot && walkArrowRoot.visible), count: walkArrowRoot ? walkArrowRoot.children.length : 0, inScene: !!(walkArrowRoot && scene && walkArrowRoot.parent === scene) }; }
+export function setClientMode(on, controls) { clientMode = !!on; clientControls = on ? controls || null : null; if (scene) { renderViews(); refreshPane(); } }
+function clientMenuGroups() {
+  const c = clientControls;
+  const groups = [
+    { title: 'Saved views', screen: { id: 'model.views', on: onScreen('model.views', true), label: 'The saved-view tabs over the model' }, items:
+      (prop.savedViews || []).map(v => ({ label: v.name, icon: 'camera', active: v.id === activeViewId, data: { viewGo: v.id }, title: v.name + ': go to this view', run: () => goToView(v.id) })) },
+  ];
+  if (c && c.states.length > 1) groups.push({ title: 'Show', items: c.states.map(st => ({ label: st.label, icon: st.id === c.show() ? 'check' : 'layers', active: st.id === c.show(), data: { clientShow: st.id }, run: () => { c.setShow(st.id); refreshPane(); } })) });
+  groups.push({ title: 'Camera', items: [
+    { label: 'Orbit', key: 'O', icon: 'rotate', act: 'orbit', active: mode === 'orbit', run: () => setMode('orbit') },
+    { label: 'Walk through', key: 'W', icon: 'walk', act: 'walk', active: mode === 'walk', run: () => setMode(mode === 'walk' ? 'orbit' : 'walk') },
+  ] });
+  if (c && c.hasFurniture) groups.push({ title: 'Display', items: [
+    { label: 'Furniture', icon: c.furniture() ? 'eye' : 'eye-off', act: 'furniture', active: c.furniture(), pressed: c.furniture(), run: () => { c.setFurniture(!c.furniture()); refreshPane(); } },
+  ] });
+  // Lower when the model moves slowly on this computer or phone.
+  groups.push({ title: 'Quality', items: QUALITY_NAMES.map(id => ({ label: id[0].toUpperCase() + id.slice(1), icon: quality() === id ? 'check' : 'settings', active: quality() === id, data: { quality: id }, run: () => { fieldAction('quality', id); refreshPane(); } })) });
+  return groups;
+}
 // Levels switched off in the LEVELS section, per property, kept across remounts.
 const hiddenLevelsByProp = {};
 let pmremTimer = 0, envDirty = true, sunDirty = true;
@@ -194,7 +230,11 @@ function browserStorage() { try { return window.localStorage; } catch (e) { retu
 const ownQuality = () => touchDevice(window);
 let unsavedDeviceQuality = null;   // the choice for this visit when the browser refuses storage
 function quality() {
-  return effectiveQuality({ touch: ownQuality(), shared: prop && prop.env && prop.env.quality, choice: deviceQualityChoice(browserStorage()) || unsavedDeviceQuality });
+  // The client page starts at the highest quality on every device; a client who lowers it keeps
+  // that choice on that device, as here.
+  const choice = deviceQualityChoice(browserStorage()) || unsavedDeviceQuality;
+  if (clientMode) return QUALITY_NAMES.includes(choice) ? choice : 'ultra';
+  return effectiveQuality({ touch: ownQuality(), shared: prop && prop.env && prop.env.quality, choice });
 }
 function memoryLimits() { return deviceLimits({ touch: ownQuality(), quality: quality() }); }
 // Texture sizes and how many generated textures are kept follow the device too.
@@ -1416,6 +1456,7 @@ function setMode(next) {
     walk.disconnect();
     dragLook = null;
     for (const k of Object.keys(walkKeys)) delete walkKeys[k];
+    walkGlide = null;
   }
   mode = next;
   if (lookingUp && next !== 'orbit') setLookingUp(false);
@@ -1446,6 +1487,20 @@ function startWalk() {
   const rooms = (prop.rooms || []).filter(r => r.pts && r.pts.length > 2 && !hidden.has(levelOfRoom(prop, r).id));
   const selRoom = selection && selection.kind === 'room' && rooms.find(r => r.id === selection.id);
   // Start in the largest measured room, never in an unscanned area.
+  // On the client page a walk starts where the person is looking from, when that is inside a room.
+  const here = clientMode && rooms.filter(countsAsFloor).find(x => pointInPolygon(camera.position.x, camera.position.z, x.pts)
+    && camera.position.y >= levelOfRoom(prop, x).elevation - 0.05 && camera.position.y <= levelOfRoom(prop, x).elevation + levelHeight(prop, levelOfRoom(prop, x).id) + 0.3);
+  if (here) {
+    walkFloor = levelOfRoom(prop, here).elevation;
+    camera.getWorldDirection(_v); _v.y = 0;
+    if (_v.lengthSq() < 1e-6) _v.set(0, 0, -1);
+    _v.normalize();
+    camera.position.y = walkFloor + 1.6;
+    camera.lookAt(camera.position.x + _v.x * 5, walkFloor + 1.45, camera.position.z + _v.z * 5);
+    walk.connect(renderer.domElement);
+    layoutWalkArrows(true);
+    return;
+  }
   const r = selRoom || rooms.filter(countsAsFloor).sort((a, b) => polyArea(b.pts) - polyArea(a.pts))[0];
   walkFloor = r ? levelOfRoom(prop, r).elevation : 0;
   look.y += walkFloor;
@@ -1461,10 +1516,102 @@ function startWalk() {
   if (look.distanceTo(camera.position) < 0.5) look.set(sx, walkFloor + 1.5, sz - 5);
   camera.lookAt(look);
   walk.connect(renderer.domElement);
-  toast(fieldLayout() ? 'WALK: drag to look around, hold the arrows to move.' : 'WALK: WASD / arrows move, Shift runs. Drag to look, or click the view to capture the mouse. Esc exits.', 'info', 5000);
+  layoutWalkArrows(true);
+  if (!clientMode) toast(fieldLayout() ? 'WALK: drag to look around, tap the floor or an arrow to go there.' : 'WALK: WASD / arrows move, Shift runs. Drag to look, or click the view to capture the mouse. Esc exits.', 'info', 5000);
+}
+
+// ---------- walking by tap ----------
+const ARROW_SHAPE = (() => {
+  const sh = new THREE.Shape();
+  sh.moveTo(0, 0.16); sh.lineTo(0.2, -0.06); sh.lineTo(0.11, -0.06); sh.lineTo(0, 0.06); sh.lineTo(-0.11, -0.06); sh.lineTo(-0.2, -0.06); sh.closePath();
+  return sh;
+})();
+let arrowGeometry = null, arrowMaterial = null;
+function tapWalking() { return clientMode || fieldLayout() || touchDevice(); }
+// Lay the arrows out around the person; again only once they have moved a little.
+function layoutWalkArrows(force) {
+  if (!scene) return;
+  const on = mode === 'walk' && tapWalking();
+  if (!walkArrowRoot) { walkArrowRoot = new THREE.Group(); walkArrowRoot.name = 'walk-arrows'; scene.add(walkArrowRoot); }
+  walkArrowRoot.visible = on;
+  if (!on) return;
+  const at = { x: camera.position.x, z: camera.position.z, y: walkFloor };
+  if (!force && walkArrowsAt && Math.hypot(at.x - walkArrowsAt.x, at.z - walkArrowsAt.z) < 0.3) return;
+  walkArrowsAt = at;
+  for (const c of [...walkArrowRoot.children]) walkArrowRoot.remove(c);
+  if (!arrowGeometry) {
+    arrowGeometry = new THREE.ShapeGeometry(ARROW_SHAPE);
+    arrowGeometry.rotateX(-Math.PI / 2);
+    arrowMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.82, depthWrite: false });
+  }
+  for (const a of arrowsNear(prop, at.x, at.z, walkFloor)) {
+    const m = new THREE.Mesh(arrowGeometry, arrowMaterial);
+    m.position.set(a.x, a.elevation + 0.02, a.z);
+    // The shape points along -z after rotateX; turn it to point along (dx, dz).
+    m.rotation.y = Math.atan2(-a.dx, -a.dz);
+    m.renderOrder = 5;
+    m.userData = { kind: 'walk-arrow', to: a.to, noCollide: true };
+    walkArrowRoot.add(m);
+  }
+  requestRender(2);
+}
+// The distance along the floor from the person toward (x, z) to the first wall, or Infinity.
+function wallAhead(x, z) {
+  if (!modelGroup) return Infinity;
+  const from = new THREE.Vector3(camera.position.x, walkFloor + 0.9, camera.position.z);
+  const dir = new THREE.Vector3(x - from.x, 0, z - from.z);
+  const dist = dir.length();
+  if (dist < 1e-3) return Infinity;
+  raycaster.set(from, dir.normalize());
+  raycaster.far = dist + 0.5;
+  const hit = raycaster.intersectObject(modelGroup, true).find(h => !(h.object.userData && h.object.userData.noCollide) && isVisibleChain(h.object) && h.object.userData.kind === 'wall');
+  raycaster.far = Infinity;
+  return hit ? hit.distance : Infinity;
+}
+function glideTo(x, z) {
+  const from = camera.position.clone();
+  const to = new THREE.Vector3(x, walkFloor + 1.6, z);
+  const dist = Math.hypot(to.x - from.x, to.z - from.z);
+  if (dist < 0.05) return;
+  walkEuler.setFromQuaternion(camera.quaternion);
+  const yaw0 = walkEuler.y, pitch = walkEuler.x;
+  // Turn to face the way the person goes, the short way round.
+  let yaw1 = Math.atan2(-(to.x - from.x), -(to.z - from.z));
+  while (yaw1 - yaw0 > Math.PI) yaw1 -= Math.PI * 2;
+  while (yaw1 - yaw0 < -Math.PI) yaw1 += Math.PI * 2;
+  walkGlide = { from, to, yaw0, yaw1, pitch: pitch * 0.4, pitch0: pitch, t0: performance.now(), ms: glideMs(dist) };
+  requestRender(2);
+}
+function stepGlide() {
+  const g = walkGlide;
+  const k = Math.min(1, (performance.now() - g.t0) / g.ms), e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+  camera.position.lerpVectors(g.from, g.to, e);
+  walkEuler.set(g.pitch0 + (g.pitch - g.pitch0) * Math.min(1, k * 2), g.yaw0 + (g.yaw1 - g.yaw0) * Math.min(1, k * 1.6), 0, 'YXZ');
+  camera.quaternion.setFromEuler(walkEuler);
+  if (k >= 1) { walkGlide = null; layoutWalkArrows(true); }
+  return true;
+}
+// A tap while walking: an arrow takes the person through its doorway; the floor (or anything
+// else) glides toward the point tapped, stopping short of a wall.
+function walkTap(e) {
+  if (!scene) return;
+  if (walkArrowRoot && walkArrowRoot.visible && walkArrowRoot.children.length) {
+    raycaster.setFromCamera(ndcFromEvent(e), viewCamera());
+    const a = raycaster.intersectObjects(walkArrowRoot.children, false)[0];
+    if (a) { const to = a.object.userData.to; glideTo(to.x, to.z); return; }
+  }
+  const hit = pick(e, { pins: false, notes: false, ground: true });
+  if (!hit || !hit.point) return;
+  const from = { x: camera.position.x, z: camera.position.z };
+  const target = walkTarget(from, { x: hit.point.x, z: hit.point.z }, wallAhead(hit.point.x, hit.point.z));
+  if (target) glideTo(target.x, target.z);
 }
 
 function stepWalk(dt) {
+  if (walkGlide) {
+    if (Object.keys(walkKeys).length) walkGlide = null;
+    else return stepGlide();
+  }
   const run = walkKeys.ShiftLeft || walkKeys.ShiftRight;
   const speed = (run ? 3.6 : 1.7) * dt;
   let fwd = 0, side = 0;
@@ -1486,6 +1633,7 @@ function stepWalk(dt) {
   }
   camera.position.add(move);
   camera.position.y = walkFloor + 1.6;
+  layoutWalkArrows(false);
   return true;
 }
 
@@ -1909,10 +2057,14 @@ function onPointerUp(e) {
   // While marking up, a tap or click on the view is the markup's (or nobody's), never a selection.
   if (markup && markup.takesClicks()) return;
   if (mode === 'walk') {
-    // A plain click in walk mode captures the mouse for free-look (a user gesture is required).
-    if (!walkLocked && e.pointerType !== 'touch') { try { walk.lock(); } catch (err) { /* drag-look keeps working */ } }
+    // A tap walks (walk-hops.js). A plain mouse click on the desktop captures the mouse for
+    // free-look instead (a user gesture is required).
+    if (e.pointerType === 'touch' || tapWalking()) { walkTap(e); return; }
+    if (!walkLocked) { try { walk.lock(); } catch (err) { /* drag-look keeps working */ } }
     return;
   }
+  // A client looks; a click selects nothing.
+  if (clientMode) return;
   if (tool === 'measure') return addMeasurePoint(e);
   if (tool === 'pin') return placePin(e);
   if (tool === 'note') return placeNote(e);
@@ -1937,7 +2089,23 @@ function onPointerUp(e) {
   // A wall's top, ends and reveals belong to no room face: a click there selects nothing.
   if (hit.cap) { if (!e.shiftKey) setSelection(null); return; }
   if (hit.kind === 'wall') wallFaceClicked = wallSideOfHit(hit);
-  pickThing(thingForHit(hit, again && !e.shiftKey), e.shiftKey);
+  const thing = thingForHit(hit, again && !e.shiftKey);
+  // A piece grouped in a subproject (project-pieces.js) brings the rest of its group with it;
+  // Alt-click picks the one piece.
+  lastClickedPiece = thing.sel && PIECE_KINDS[thing.sel.kind] && thing.sel.kind !== 'scan' ? { kind: thing.sel.kind, id: thing.sel.id } : null;
+  if (lastClickedPiece && !e.shiftKey && !e.altKey) {
+    const ids = clickGroupIds(prop, ws.data.projects, lastClickedPiece.kind, lastClickedPiece.id);
+    if (ids.length > 1) { selectPieces(lastClickedPiece.kind, ids); return; }
+  }
+  pickThing(thing, e.shiftKey);
+}
+let lastClickedPiece = null;    // { kind, id } of the last piece clicked, for SELECT ONLY THE PIECE I CLICKED
+// Select these pieces of one kind together (a group, a wall's trim).
+function selectPieces(kind, ids) {
+  if (kind === 'trim') return selectTrims(ids);
+  const things = ids.map(id => ({ key: planKey(kind, id), keys: [planKey(kind, id)], scanId: null, name: '', sel: { kind, id } }));
+  if (!things.length) { setSelection(null); return; }
+  setSelection(things[things.length - 1].sel, things.map(t => t.key), things);
 }
 // What a click on the model picked, as a thing (see `picked`).
 function thingForHit(hit, deeper) {
@@ -2006,7 +2174,7 @@ function onPointerMove(e) {
     requestRender(2);
     return;
   }
-  if (pressed || hoverPending || mode === 'walk') return;
+  if (pressed || hoverPending || mode === 'walk' || clientMode) return;
   hoverPending = true;
   requestAnimationFrame(() => {
     hoverPending = false;
@@ -2208,6 +2376,7 @@ function renderTrimPanel() {
     layoutOf: t => { const w = trimWall(t); return w ? trimLayout(t, w, openingsOn(prop, levelOfWall(prop, w).id), { H: wallHeightOf(prop, w) }) : { boxes: [], rects: [], cols: 0 }; },
     faceName: t => { const w = trimWall(t); if (!w) return ''; const n = wallFaceLabels(w, roomsOn(prop, levelOfWall(prop, w).id)); return t.side === -1 ? n.neg : n.pos; },
     setY: (t, v) => setTrimY(t, v, trimWallHeight(t)),
+    raise: d => editTrims(t => { if (trimStyle(t) && trimStyle(t).kind !== 'crown') setTrimY(t, t.y + d, trimWallHeight(t)); }, d >= 0 ? 'raise trim' : 'lower trim'),
     set: (fn, label) => editTrims(fn, label),
     swap: (productId, keepFocus) => { trimFocusList = !!keepFocus; editTrims(t => swapTrimProduct(t, productId, trimWallHeight(t)), 'swap trim'); trimFocusList = false; },
     toggleEdit: toggleTrimEdit, remove: () => deleteTrims(list.map(t => t.id)),
@@ -3699,6 +3868,7 @@ function closeNoteEditor() {
 
 // ---------- right-click menu ----------
 function openContextMenu(e) {
+  if (clientMode) return;
   closeContextMenu();
   closeNoteEditor();
   const hit = pick(e, { ground: true, scans: true });
@@ -3961,8 +4131,12 @@ async function addScanToScene(scan) {
   applySection();
   updateOutlineTargets();
   setScanState(scan.id, 'ready');
+  // A SketchUp model's scenes become saved views on its first load, once its parts have tags.
+  let views = null;
+  if (scan.scenesPending) { delete scan.scenesPending; views = bringInScenes(prop, scan); renderViews(); }
   // New tags and counts show in the lists straight away.
-  if (tagged) { touch(); renderToolCol(); if (!selection) renderInspector(); }
+  if (tagged || views) { touch(); renderToolCol(); if (!selection) renderInspector(); }
+  if (views && views.added) toast(scan.name + ': ' + views.added + ' SketchUp scene' + (views.added === 1 ? ' is' : 's are') + ' now saved views, in the tabs over the model.' + (views.skipped ? ' ' + views.skipped + ' did not fit: a property keeps 100 views.' : ''), 'ok');
   renderObjects();
   requestRender(scan.kind === 'splat' ? 8 : 3);
   return obj;
@@ -4110,6 +4284,7 @@ function taskText() {
   return '';
 }
 function defaultHint() {
+  if (clientMode) return mode === 'walk' ? 'WALK: click the floor or an arrow to go there; drag to look around. WASD and the arrow keys move too.' : 'Drag to orbit, hold Shift to pan, scroll or pinch to zoom. W walks through.';
   if (mode === 'walk') return walkLocked ? 'WALK: WASD / arrows move, Shift runs, mouse looks. Esc releases the mouse.' : 'WALK: WASD / arrows move, Shift runs. Drag to look or click to capture the mouse. Esc exits.';
   if (tool === 'measure') return 'MEASURE: click two points on any surface.';
   if (tool === 'fov') return 'FIELD OF VIEW: drag up to narrow the view, down to widen it. The panel has the iPhone 0.5×, 1× and 2× lenses. Esc ends.';
@@ -4716,6 +4891,7 @@ function renderInspector() {
   renderEvidenceInspector();
   renderObjects();
   if (!inspEl || tool === 'pin' || match) return;
+  addProjectBlock();
   // One object of a model, and several objects, draw their own tag line (object-panel.js).
   if (!selection || picked.length > 1 || selectedModelObject() || selection.kind === 'face') return;
   const sec = document.createElement('div');
@@ -4725,6 +4901,49 @@ function renderInspector() {
   else return;
   const h = inspEl.querySelector('h3');
   if (h) h.after(sec); else inspEl.prepend(sec);
+}
+// The PROJECT block (project-pieces-ui.js) for the selected pieces: trim sections, plan
+// elements, or one whole model.
+let projectGroupOpen = false;
+function selectedPieces() {
+  const tids = trimIds();
+  if (tids.length) return { refs: tids.map(id => ({ kind: 'trim', id })), label: 'trim section' };
+  if (!selection) return null;
+  if (selection.kind === 'scan') return !selectedModelObject() && picked.length < 2 ? { refs: [{ kind: 'scan', id: selection.id }], label: 'model' } : null;
+  const refs = (picked.length ? picked.map(t => t.sel) : [selection]).filter(Boolean).map(s => ({ kind: s.kind === 'ceiling' ? 'room' : s.kind, id: s.id }));
+  if (!refs.length || !refs.every(r => PIECE_KINDS[r.kind] && r.kind !== 'scan')) return null;
+  const kinds = new Set(refs.map(r => r.kind));
+  return { refs, label: kinds.size === 1 ? refs[0].kind : 'piece' };
+}
+function addProjectBlock() {
+  const sel = selectedPieces();
+  if (!sel) return;
+  const records = sel.refs.map(r => pieceRecord(prop, r.kind, r.id)).filter(Boolean);
+  if (!records.length) return;
+  const ctx = {
+    projects: ws.data.projects, propId: prop.id, records, kindLabel: sel.label, openGroup: projectGroupOpen,
+    assign: id => { beginGeometryEdit(prop, 'project of ' + sel.label + 's'); assignProject(prop, sel.refs, id); touch(); renderInspector(); },
+    group: ({ name, parentId, newParentName }) => {
+      let parent = parentId ? ws.data.projects.find(p => p.id === parentId) : null;
+      if (!parent) { parent = newProjectRecord(prop.id, newParentName || 'Model groups'); ws.data.projects.push(parent); }
+      const sub = newProjectRecord(prop.id, name, { parentId: parent.id, category: parent.category || 'interior' });
+      ws.data.projects.push(sub);
+      beginGeometryEdit(prop, 'group ' + sel.label + 's');
+      assignProject(prop, sel.refs, sub.id);
+      projectGroupOpen = false;
+      touch(); renderInspector();
+      toast('Grouped ' + sel.refs.length + ' ' + sel.label + (sel.refs.length === 1 ? '' : 's') + ' as ' + parent.name + ' / ' + name + '.', 'ok');
+    },
+    selectOne: lastClickedPiece && sel.refs.some(r => r.kind === lastClickedPiece.kind && r.id === lastClickedPiece.id) ? () => selectPieces(lastClickedPiece.kind, [lastClickedPiece.id]) : null,
+  };
+  const box = document.createElement('div');
+  box.className = 'v-project';
+  box.innerHTML = projectBlockHtml(ctx);
+  bindProjectBlock(box, ctx);
+  const details = box.querySelector('details');
+  if (details) details.ontoggle = () => { projectGroupOpen = details.open; };
+  const h = inspEl.querySelector('h3');
+  if (h) h.after(box); else inspEl.prepend(box);
 }
 // What the tag line and the HIDE button of the selected objects need (object-panel.js).
 function thingsCtx(things) {
@@ -4795,7 +5014,7 @@ function setModelVisible(id, on) {
 }
 function modelPanelCtx(s, obj) {
   return { prop, scan: s, obj, picks: tagPicks, models: prop.scans.map(x => ({ scan: x, root: scanObjs[x.id] && scanObjs[x.id].userData.inner })).filter(x => x.root),
-    reload: () => addScanToScene(s), rerender: renderInspector, toast,
+    reload: () => addScanToScene(s), rerender: renderInspector, toast, viewsChanged: () => { renderViews(); touch(); },
     select: keys => setSelection({ kind: 'scan', id: s.id, tagKey: keys[0] }, keys),
     selectComponent: c => { const tree = obj && modelObjectTree(obj); const objects = tree ? c.instances.map(n => tree.ofNode.get(n)).filter(Boolean) : []; if (objects.length) pickObjects(s.id, objects); } };
 }
@@ -5514,9 +5733,12 @@ function renderViews() {
   strip.querySelectorAll('[data-view-tab]').forEach(b => {
     const id = b.dataset.viewTab;
     b.onclick = () => goToView(id);
+    if (clientMode) { b.oncontextmenu = e => e.preventDefault(); return; }
     b.ondblclick = () => renameView(id);
     b.oncontextmenu = e => { e.preventDefault(); viewMenu(id, { x: e.clientX, y: e.clientY }); };
   });
+  // The client page has no view to add, rename or change.
+  if (clientMode) for (const b of strip.querySelectorAll('[data-view-add], [data-view-edit]')) b.remove();
   const box = strip.querySelector('[data-view-name]');
   if (box) {
     const id = box.dataset.viewName;
@@ -5554,6 +5776,7 @@ function applyScreen() {
 }
 function menuGroups() {
   if (!prop || !scene) return [];
+  if (clientMode) return clientMenuGroups();
   const screen = (id, on, label) => ({ id, on: onScreen(id, on), label });
   const counts = tagCounts(prop), hidden = hiddenLevels();
   const orbitTo = name => () => { if (mode !== 'orbit') setMode('orbit'); presetView(name); };
@@ -5829,6 +6052,15 @@ function onKeyDown(e) {
     walkKeys[e.code] = true;
     if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) { e.preventDefault(); requestRender(2); }
     if (e.code === 'Escape' && !walkLocked) setMode('orbit');
+    return;
+  }
+  // The client page answers only the keys for moving: F frames, O orbits, W walks.
+  if (clientMode) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.code === 'KeyF') presetView('frame');
+    else if (e.code === 'KeyO') setMode('orbit');
+    else if (e.code === 'KeyW') setMode('walk');
+    else if (e.code === 'PageDown' || e.code === 'PageUp') stepView(e.code === 'PageDown' ? 1 : -1);
     return;
   }
   switch (e.code) {
@@ -6242,6 +6474,7 @@ export function unmount() {
     renderer.clear();
   }
   scene = null; camera = null; skyScene = null; sun = null; hemi = null;
+  walkArrowRoot = null; walkArrowsAt = null; walkGlide = null;
   scanRoot = null; pinRoot = null; noteRoot = null; measureRoot = null; markupRoot = null; cameraRoot = null; positionRoot = null;
   el = null; wrapEl = null; inspEl = null; hud = {};
   selection = null; hoverTarget = null; tween = null; pressed = null; dragLook = null; rightPress = null; movingNoteId = null;
@@ -6258,6 +6491,9 @@ export function fieldState() {
   const counts = tagCounts(prop);
   return {
     mode,
+    // The client page (setClientMode): what it shows, for the phone panel.
+    client: clientMode ? { states: clientControls ? clientControls.states.map(st => ({ id: st.id, label: st.label, on: st.id === clientControls.show() })) : [],
+      furniture: clientControls && clientControls.hasFurniture ? clientControls.furniture() : null } : null,
     cameras: [{ id: 'frame', label: 'Overview' }, { id: 'front', label: 'Front' }, { id: 'iso', label: 'Corner' }],
     // The iPhone 17 Pro lens the view is framed with (lens.js), or the default.
     lenses: [...LENSES.map(l => ({ id: l.id, label: l.label, on: !parallel && lensPick === l.id })), { id: 'default', label: 'Default', on: !parallel && !lensPick && !!camera && Math.abs(camera.fov - DEFAULT_VFOV) < 0.05 },
@@ -6329,10 +6565,17 @@ export function fieldAction(kind, id, value) {
   else if (kind === 'clear-measures') { clearMeasures(); renderToolCol(); requestRender(2); }
   else if (kind === 'compare') { if (prop.designComparison && (id === 'before' || id === 'after')) compareDesignView(id); }
   else if (kind === 'tag') toggleTag(id || UNTAGGED);
+  // The client page changed what is shown (prop.hidden, tags, scan.visible): show it.
+  else if (kind === 'client-show') { if (clientControls) { clientControls.setShow(id); refreshPane(); } }
+  else if (kind === 'client-furniture') { if (clientControls) { clientControls.setFurniture(!clientControls.furniture()); refreshPane(); } }
+  else if (kind === 'refresh-shown') {
+    for (const s of prop.scans) if (scanObjs[s.id]) applyScanTransform(s, scanObjs[s.id]);
+    applyTagVisibility(); loadShownScans();
+  }
   else if (kind === 'level') toggleLevel(id);
   else if (kind === 'quality') {
     if (!QUALITY_NAMES.includes(id) || id === quality()) return;
-    if (ownQuality()) setDeviceQuality(id); else { prop.env.quality = id; touch(); }
+    if (ownQuality() || clientMode) setDeviceQuality(id); else { prop.env.quality = id; touch(); }
     applyTextureLimits(); rebuildModel(); applyQuality(); applyEnvironment();
   }
   else if (kind === 'section-height') { slideSection(Number(value)); updateSectionReadout(); }

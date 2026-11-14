@@ -26,6 +26,8 @@ Open **GUIDE** in the Tiksi menu (the logo at the top left) for chapter search, 
 - [Print a useful specification sheet](#sheets)
 - [Make a drawing set from the model](#documents)
 - [Send the client a one-pager](#one-pager)
+- [Group pieces of the model by project](#groups)
+- [Send the client a page in the lab](#lab)
 - [Settings, backups and storage](#settings)
 - [Use Tiksi on a phone](#phone)
 - [Shortcuts and common questions](#shortcuts)
@@ -720,6 +722,52 @@ Every property has a one-page teaser for its client: a picture, the pitch, the s
 **When closing asks.** FILE → Settings → One-pager: ask when the project changed since the last version (the default), every time, or never.
 
 > **Good to know:** The page is laid out in the browser and printed at 200 dots per inch, so it looks the same everywhere. Browsers only let a page ask a generic Leave site? question before it closes, which is why Tiksi's own question comes after choosing to stay.
+
+<a id="groups"></a>
+
+## Group pieces of the model by project
+
+**Where:** MODEL → select pieces → PROJECT in the inspector
+
+Any wall, door, room, fixture, trim section or imported model can belong to a project or to one of its subprojects. Pieces that belong to no project are the house as it is (Existing). A subproject is also a group: a click on any of its pieces selects the whole group, so a run of trim moves as one.
+
+### Try it
+
+1. Select the pieces: a room's SELECT THIS ROOM'S TRIM, a wall's SELECT THIS WALL'S TRIM, or Shift-click.
+2. In PROJECT, open GROUP … AS A SUBPROJECT, type a name (Entry and hall), choose its project (or New project…) and press GROUP.
+3. Click any piece of the group: the whole group is selected. Type an amount in RAISE BY to move every section up by it (start with a minus sign to lower them), or drag them with EDIT BY DRAGGING.
+4. Alt-click picks one piece of a group on its own; SELECT ONLY THE PIECE I CLICKED does the same from the inspector.
+
+### Other features here
+
+**Belongs to.** The PROJECT list moves the selection to another project, a subproject or back to Existing.
+
+**Deleted projects.** A project deleted in PROJECTS keeps its pieces' link while it waits in the recovery list, so restoring it brings the grouping back.
+
+<a id="lab"></a>
+
+## Send the client a page in the lab
+
+**Where:** FILE → Project → SEND TO THE LAB…
+
+A view-only copy of the property goes to its page in the lab on thedurham.nyc. The page is Tiksi's own MODEL, with little switched on: the saved views, orbit and walk, Existing or one of the projects you send, furniture on or off, and the drawing quality (it starts at Ultra; a client on a slow phone can lower it). On a phone it is Tiksi's phone layout: the model full screen and the three-line button.
+
+### Try it
+
+1. Put the new work in projects (see Group pieces of the model by project). Save views in MODEL; the first is where the page opens.
+2. Open SEND TO THE LAB…, tick the projects to offer and give each a short name, tick the tags the furniture switch hides, and press SEND.
+3. OPEN THE PREVIEW shows the copy as sent, on this Mac. OPEN THE LAB PAGE opens it online when the Mac has the lab's upload key.
+4. Give clients access on the lab's own page: the lab shows a section only to the emails granted it.
+
+### Other features here
+
+**Sending again** replaces the copy at the same link, in one step; a client's open page keeps the old copy until they reload.
+
+**What is left out.** Products, prices, project scope and notes, photos and their pins, notes, measurements, documents, the scan capture, the record of where measurements came from, and any project not ticked. Pieces hidden in MODEL stay hidden.
+
+**Walking on the client page.** A tap or click on the floor walks there; the arrows on the floor at each doorway step through it.
+
+> **Good to know:** The upload key is the website's own file-storage key, kept on this Mac in ~/.r2-credentials. Without it a send goes to this Mac's preview copy only, and SEND TO THE LAB says so.
 
 <a id="settings"></a>
 

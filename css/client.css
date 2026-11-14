@@ -1,0 +1,9 @@
+/* tiksi - the client page in the lab (js/client-view.js): Tiksi's own frame with MODEL alone.
+   Only what has no use to a client is taken away; everything else is styled as in Tiksi. */
+
+/* Nothing is saved, nothing is selected and there is one page. */
+html.tiksi-client .fd-save, html.tiksi-client .fd-save-note { display: none !important; }
+html.tiksi-client .v-layout > .inspector, html.tiksi-client .v-layout > .side-handle, html.tiksi-client .v-objects { display: none !important; }
+/* With no inspector, the model takes its column too. */
+@media (min-width: 761px) { html.tiksi-client .editor-layout.v-no-tools { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 760px) { html.tiksi-client .editor-layout.v-no-tools { grid-template: minmax(0, 1fr) / minmax(0, 1fr); } }

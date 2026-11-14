@@ -19,6 +19,7 @@ import { makePointCloud, updatePointCloud, decimate, fromGeometry } from './poin
 import { ensureSpark, loadSplat, disposeSplat, splatBounds, splatDrawables, splatBusy, releaseSplatRenderer } from './splats.js';
 import { working } from './work-in-progress.js';
 import { applyPartOffsets } from './model-objects.js';
+import { normalizeScenes } from './sketchup-scenes.js';
 
 export { splatDrawables, splatBusy, releaseSplatRenderer };
 
@@ -123,7 +124,7 @@ async function importBytes(buffer, name, prop, hooks, extra) {
   const signal = hooks && hooks.signal;
   const cancelled = () => { if (signal && signal.aborted) throw signal.reason || new Error('Import cancelled'); };
   const originalBuffer = buffer, originalName = name;
-  let e, kind, prepared, info;
+  let e, kind, prepared, info, sketchupScenes = [];
   try {
     cancelled();
     if (!(buffer instanceof ArrayBuffer) || !buffer.byteLength) throw new Error('The file is empty');
@@ -141,6 +142,8 @@ async function importBytes(buffer, name, prop, hooks, extra) {
     }
     if(e==='glb') {
       const doc=inspectGltf(buffer,e),warnings=prepared.warnings||(prepared.warnings=[]);
+      // A converted SketchUp model carries its scenes (server/sketchup_convert.py read_scenes).
+      sketchupScenes=normalizeScenes(doc.scenes?.[doc.scene||0]?.extras?.sketchupScenes);
       if(doc.animations?.length||doc.skins?.length)warnings.push('Animations/rigs are retained in the original GLB; Tiksi edits static design geometry.');
       if(doc.cameras?.length||doc.extensions?.KHR_lights_punctual)warnings.push('Source cameras/lights are retained in the original; Tiksi uses its own environment.');
     }
@@ -165,6 +168,9 @@ async function importBytes(buffer, name, prop, hooks, extra) {
   }, extra || {});
   prop.scans = prop.scans || [];
   prop.scans.push(scan);
+  // Its scenes become saved views when MODEL first loads it and its parts have their tags
+  // (viewer3d.js addScanToScene, sketchup-scenes.js).
+  if (sketchupScenes.length) { scan.sketchupScenes = sketchupScenes; scan.scenesPending = true; }
   if (info?.object) keepPreparedMesh(id, info.object);
   touch();
   return scan;

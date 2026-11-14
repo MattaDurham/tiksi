@@ -12,6 +12,14 @@ export async function nativeConvert(buffer,extension,target='glb') {
   if(!response.ok){const info=await response.json();const error=new Error(info.error);error.jobId=info.jobId;throw error;}
   return {buffer:await response.arrayBuffer(),format:response.headers.get('X-Tiksi-Format'),warnings:JSON.parse(response.headers.get('X-Tiksi-Warnings')||'[]'),conversionJobId:response.headers.get('X-Tiksi-Job')};
 }
+// The scenes of an SKP (cameras and the tags each hides) without converting it again.
+export async function sketchupScenes(buffer) {
+  const cap=capabilities || await converterCapabilities();
+  const response=await fetch('/api/model-conversion/scenes',{method:'POST',headers:{'X-Tiksi-Token':cap.token,'Content-Type':'application/octet-stream'},body:buffer});
+  const info=await response.json().catch(()=>({}));
+  if(!response.ok)throw new Error(info.error||'Could not read the scenes');
+  return info.scenes||[];
+}
 export async function conversionJobs() {
   const cap=capabilities || await converterCapabilities();
   const response=await fetch('/api/model-conversion/jobs',{headers:{'X-Tiksi-Token':cap.token}});

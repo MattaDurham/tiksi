@@ -8,7 +8,8 @@
 //   mode: 'orbit' | 'top', tags: { tagId | '_untagged': shown },
 //   section: { on, height, planes: [{ id, kind, q, pos }], active, done }, xray, hiddenLevels: [levelId],
 //   hidden: [object key], models: { scanId: shown }, compare: 'before' | 'after',
-//   markers: { pins, notes }, xrayOpacity, uncertainty }]
+//   markers: { pins, notes }, xrayOpacity, uncertainty, source? }]
+// `source` = { app: 'sketchup', scan, scene } on a view made from a SketchUp scene.
 // `planes` (section-planes.js) is every cut the view was saved with and `active` the one whose
 // handles show; `done` is a clean section, its planes and handles put away. A view saved before
 // cuts could be rotated has only `height`, one flat cut. A view saved before Tiksi kept
@@ -70,6 +71,10 @@ export function normalizeSavedView(v, taken = new Set()) {
   const xo = num(v.xrayOpacity);
   if (v.xrayOpacity != null && Number.isFinite(xo)) out.xrayOpacity = Math.min(1, Math.max(0, xo));
   if (typeof v.uncertainty === 'boolean') out.uncertainty = v.uncertainty;
+  // A view made from a SketchUp scene (sketchup-scenes.js) names the model and the scene.
+  const src = v.source;
+  if (src && src.app === 'sketchup' && typeof src.scan === 'string' && ID_RE.test(src.scan) && typeof src.scene === 'string' && src.scene.trim())
+    out.source = { app: 'sketchup', scan: src.scan, scene: src.scene.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 200) };
   return out;
 }
 
