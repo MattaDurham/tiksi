@@ -134,7 +134,10 @@ try {
     const steps = await reviewAndCreate(page, { name: 'Elm Street kitchen', where: 'kept in this folder', held });
     check(steps.some(s => s.state === 'ok' && s.text.includes(join(visit, 'Tiksi', 'Elm Street kitchen.tiksi'))), 'the run names the project file it will write in the folder');
     const prop = await checkProperty(page, steps, 'Elm Street kitchen', true);
-    await page.click('[data-np-cancel]');
+    // CLOSE opens MODEL on the new property, and its first frame builds every shader. In the
+    // software graphics these checks run on that takes 15-20 s on a Mac and longer on the
+    // online runners, past the click's usual 30 s, so it gets the same room as CREATE.
+    await page.click('[data-np-cancel]', { timeout: 240000 });
     await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK', null, { timeout: 60000 });
     const saved = join(visit, 'Tiksi', 'Elm Street kitchen.tiksi');
     check(existsSync(saved), 'the project file is in the picked folder\'s Tiksi folder');
