@@ -2,11 +2,11 @@
 // they travel in its project file. Pure data only (no DOM, no three.js), so Node tests run it;
 // markup-layer.js draws them and takes the pen, finger and mouse.
 //
-// prop.markups = [{ id, number, name, on: 'model' | 'plan', status: 'open' | 'done',
+// prop.markups = [{ id, number, name, on: 'model' | 'plan', status: 'open' | 'done', hidden,
 //   view: a saved view's camera, mode, section, x-ray and hidden levels   (on === 'model')
 //   levelId: the level the ink sits on                                     (on === 'plan')
-//   strokes: [{ id, tool: 'pen' | 'marker' | 'line', color: '#rrggbb', width, pts: [x, y, pressure, ...],
-//               w: [x, y, z, ...], px, on: [{ k: kind, id, p: [x, y, z] }] }],
+//   strokes: [{ id, tool: 'pen' | 'marker' | 'line', color: '#rrggbb', width, opacity, pts: [x, y, pressure, ...],
+//               w: [x, y, z, ...], normal?: [x, y, z], px, on: [{ k: kind, id, p: [x, y, z] }] }],
 //   notes: [{ id, n, text, at: [x, y], anchor: { x, y, z, nx, ny, nz, wall? }, kind, ref }],
 //   createdAt }]
 // Nothing here counts or stamps changes: two devices adding to one markup must merge record by
@@ -28,13 +28,22 @@
 import { normalizeSavedView } from './saved-views.js';
 import { normalizeWallAnchor } from './pin-records.js';
 
-export const MARKUP_COLORS = ['#e5372b', '#1f6feb', '#1a9c4b', '#f2b705', '#111111', '#ffffff'];
+export const MARKUP_COLORS = ['#e5372b', '#1f6feb', '#1a9c4b', '#f2b705', '#111111', '#ffffff', '#7955c7', '#c74784', '#008c9e', '#e27632', '#8d6347', '#6c7b8b'];
+export const MARKUP_COLOR_NAMES = {
+  '#e5372b': 'Red', '#1f6feb': 'Blue', '#1a9c4b': 'Green', '#f2b705': 'Yellow', '#111111': 'Black', '#ffffff': 'White',
+  '#7955c7': 'Violet', '#c74784': 'Rose', '#008c9e': 'Teal', '#e27632': 'Orange', '#8d6347': 'Umber', '#6c7b8b': 'Slate',
+};
 export const MARKER_ALPHA = 0.38;
 const ID_RE = /^[\w.:-]{1,80}$/;
 const COLOR_RE = /^#[0-9a-f]{6}$/i;
 const MAX_MARKUPS = 300, MAX_STROKES = 3000, MAX_POINTS = 4000, MAX_NOTES = 200, MAX_TEXT = 2000, MAX_ON = 12;
 const num = v => (typeof v === 'number' || (typeof v === 'string' && v.trim())) ? Number(v) : NaN;
 const fin = v => Number.isFinite(num(v));
+// Missing opacity belongs to the original tools: translucent highlighter, opaque pen/line.
+export function strokeOpacity(s) {
+  const opacity = num(s.opacity);
+  return Number.isFinite(opacity) ? Math.min(1, Math.max(0.05, opacity)) : s.tool === 'marker' ? MARKER_ALPHA : 1;
+}
 const cleanName = v => String(typeof v === 'string' ? v : '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
 const cleanText = v => String(typeof v === 'string' ? v : '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ').slice(0, MAX_TEXT);
 let counter = 0;
@@ -61,7 +70,8 @@ export function roundPoints(pts, digits = 5) {
 }
 
 // Fewer points for the same line (Ramer-Douglas-Peucker on the positions): a point stays when it
-// is further than `tol` from the straight line between its kept neighbours. The ends stay.
+// is further than `tol` from the straight line between its kept neighbours. Pressure bends
+// stay too: flattening a straight stroke must not erase a light–heavy–light pen gesture.
 export function simplifyPoints(pts, tol) {
   const n = Math.floor(pts.length / 3);
   if (n <= 2 || !(tol > 0)) return pts.slice(0, n * 3);
@@ -77,9 +87,12 @@ export function simplifyPoints(pts, tol) {
       const px = pts[i * 3] - ax, py = pts[i * 3 + 1] - ay;
       const t = len2 > 0 ? Math.min(1, Math.max(0, (px * dx + py * dy) / len2)) : 0;
       const d = Math.hypot(px - t * dx, py - t * dy);
-      if (d > far) { far = d; worst = i; }
+      const pressureT = len2 > 0 ? t : (i - a) / (b - a);
+      const expectedPressure = pts[a * 3 + 2] + (pts[b * 3 + 2] - pts[a * 3 + 2]) * pressureT;
+      const error = Math.max(d / tol, Math.abs(pts[i * 3 + 2] - expectedPressure) / 0.04);
+      if (error > far) { far = error; worst = i; }
     }
-    if (worst > 0 && far > tol) { keep[worst] = 1; stack.push([a, worst], [worst, b]); }
+    if (worst > 0 && far > 1) { keep[worst] = 1; stack.push([a, worst], [worst, b]); }
   }
   const out = [];
   for (let i = 0; i < n; i++) if (keep[i]) out.push(pts[i * 3], pts[i * 3 + 1], pts[i * 3 + 2]);
@@ -181,9 +194,15 @@ function normalizeStroke(s, taken) {
   const out = {
     id: takeId(s.id, taken, 'ink'), tool,
     color: typeof s.color === 'string' && COLOR_RE.test(s.color) ? s.color.toLowerCase() : MARKUP_COLORS[0],
-    width: Number.isFinite(width) && width > 0 && width < 1e3 ? width : 0.005, pts: onSurface ? [] : pts,
+    width: Number.isFinite(width) && width > 0 && width < 1e3 ? width : 0.005, opacity: strokeOpacity({ ...s, tool }), pts: onSurface ? [] : pts,
   };
   if (onSurface) out.w = w;
+  // A known planar face can be drawn as a single translucent surface. A missing or invalid
+  // normal simply uses the general surface-stroke renderer, including on legacy projects.
+  if (onSurface && Array.isArray(s.normal) && s.normal.length === 3 && s.normal.every(fin)) {
+    const normal = s.normal.map(num), length = Math.hypot(...normal);
+    if (Number.isFinite(length) && length > 1e-8) out.normal = normal.map(v => v / length);
+  }
   if (tool === 'line') { const px = num(s.px); out.px = Number.isFinite(px) && px >= 0.5 && px <= 20 ? px : 2.5; }
   if (Array.isArray(s.on)) {
     const on = [];
@@ -221,7 +240,7 @@ export function normalizeMarkup(m, taken = new Set()) {
   for (const n of Array.isArray(m.notes) ? m.notes.slice(0, MAX_NOTES) : []) { const x = normalizeNote(n, inner, notes.length); if (x) notes.push(x); }
   const out = {
     id: takeId(m.id, taken, 'markup'), number: Number.isInteger(num(m.number)) && num(m.number) > 0 ? num(m.number) : 0, name: cleanName(m.name), on,
-    status: m.status === 'done' ? 'done' : 'open', strokes, notes, createdAt: isoDate(m.createdAt),
+    status: m.status === 'done' ? 'done' : 'open', hidden: m.hidden === true, strokes, notes, createdAt: isoDate(m.createdAt),
   };
   if (view) out.view = view; else out.levelId = m.levelId;
   return out;
@@ -243,6 +262,7 @@ export function normalizeMarkups(p) {
 
 export const markupById = (prop, id) => (prop.markups || []).find(m => m.id === id) || null;
 export const markupTitle = m => m.name || 'Markup ' + m.number;
+export const markupVisible = m => !m.hidden;
 export const markupEmpty = m => !m.strokes.length && !m.notes.length;
 // Is this stroke on the model's surfaces (it shows from any camera)?
 export const onSurfaces = s => Array.isArray(s.w) && s.w.length >= 3;
@@ -284,6 +304,12 @@ export function setMarkupStatus(prop, id, status) {
   const m = markupById(prop, id);
   if (!m) return false;
   m.status = status === 'done' ? 'done' : 'open';
+  return true;
+}
+export function setMarkupHidden(prop, id, hidden) {
+  const m = markupById(prop, id);
+  if (!m) return false;
+  m.hidden = hidden === true;
   return true;
 }
 

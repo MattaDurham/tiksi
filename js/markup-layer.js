@@ -30,11 +30,13 @@
 import { icon as appIcon } from './icons.js';
 import { touch, escapeHtml, fmtLen, parseLen } from './store.js';
 import {
-  MARKUP_COLORS, MARKER_ALPHA, addMarkup, addStroke, removeStroke, addNote, removeNote, setNoteText, markupById, markupTitle,
+  MARKUP_COLORS, MARKUP_COLOR_NAMES, MARKER_ALPHA, addMarkup, addStroke, removeStroke, addNote, removeNote, setNoteText, markupById, markupTitle,
   deleteMarkup, restoreMarkup, renameMarkup, setMarkupStatus, pruneEmptyMarkups, simplifyPoints, roundPoints, strokeHit, penWidth,
-  evenPressure, sameCamera, markupEmpty, normalizeMarkups, onSurfaces, markupFlat,
+  sameCamera, markupVisible, setMarkupHidden, markupEmpty, normalizeMarkups, onSurfaces, markupFlat,
 } from './markups.js';
-import { dropOntoSurfaces, simplify3, inferPoint, AXES, vec } from './markup-surface.js';
+import { drawStroke, smoothInkPoints } from './markup-ink.js';
+export { drawStroke } from './markup-ink.js';
+import { makeSurfaceLock, onLockedSurface, dropOntoSurfaces, simplify3, inferPoint, AXES, vec } from './markup-surface.js';
 
 // This layer's stylesheet and its own icons come with it, not with the app's first load.
 const ICONS = {
@@ -76,6 +78,7 @@ const PALM_PX = 90;           // once a pen is in use, a contact this wide is th
 const TAP_PX = 8;
 const UNDO_LIMIT = 100;
 const LINE_PX = [1.5, 2.5, 4];   // the line tool's widths, in px at any distance
+const MAX_PRESS_SAMPLES = 12000;  // a bounded press; lift to continue after the limit
 const SAMPLE_PX = 4;             // a stroke onto the surfaces is read from the model this often along it
 const LINE_LIFT = 0.003;         // a line sits this far off its face, metres
 const TOOLS = [['pen', 'pen', 'Pen', 'P'], ['marker', 'marker', 'Highlighter', 'H'], ['line', 'line', 'Line', 'L', 'model'], ['eraser', 'eraser', 'Eraser', 'E'], ['note', 'note', 'Numbered note', 'N'], ['move', 'hand', 'Move the view', 'V']];
@@ -83,53 +86,12 @@ const TOOLS = [['pen', 'pen', 'Pen', 'P'], ['marker', 'marker', 'Highlighter', '
 // What survives the page being rebuilt (a save merged from another device rebuilds PLAN): whether
 // markup mode is on, the tool, colour and size, and which markup is open. The mode itself only
 // comes back when the page is rebuilt straight away; leaving for another page ends it.
-const fresh = () => ({ on: false, tool: 'pen', color: MARKUP_COLORS[0], size: 1, activeId: null, finger: null, shown: true, list: false, leftAt: -Infinity, place: 'surface' });
+const fresh = () => ({ on: false, tool: 'pen', color: MARKUP_COLORS[0], size: 1, activeId: null, finger: null, shown: true, list: false, leftAt: -Infinity, place: 'surface', surfaceLock: true, brush: false, widths: { pen: 5, marker: 22, line: 2.5 }, opacities: { pen: 1, marker: MARKER_ALPHA, line: 1 } });
 const REBUILD_MS = 1500;
 const kept = { model: fresh(), plan: fresh() };
 let penSeen = false;
 const now = () => performance.now();
 const clone = v => JSON.parse(JSON.stringify(v));
-
-// One stroke onto a 2D context. `map(x, y)` turns the stroke's own coordinates into px and
-// `unit` is px per coordinate unit; the layer, the live stroke and a saved picture all use it.
-export function drawStroke(ctx, s, map, unit) {
-  const p = s.pts, n = Math.floor(p.length / 3);
-  if (!n) return;
-  const base = Math.max(0.75, s.width * unit), marker = s.tool === 'marker';
-  ctx.save();
-  ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = s.color; ctx.fillStyle = s.color;
-  ctx.globalAlpha = marker ? MARKER_ALPHA : 1;
-  const at = i => map(p[i * 3], p[i * 3 + 1]);
-  if (n === 1) {
-    const [x, y] = at(0);
-    ctx.beginPath(); ctx.arc(x, y, (marker ? base : penWidth(base, p[2])) / 2, 0, Math.PI * 2); ctx.fill();
-  } else if (marker || evenPressure(p)) {
-    // One even line: a single path, so a highlighter does not darken where it crosses itself.
-    ctx.lineWidth = marker ? base : penWidth(base, p[2]);
-    ctx.beginPath();
-    let a = at(0);
-    ctx.moveTo(a[0], a[1]);
-    for (let i = 1; i < n - 1; i++) {
-      const b = at(i), c = at(i + 1);
-      ctx.quadraticCurveTo(b[0], b[1], (b[0] + c[0]) / 2, (b[1] + c[1]) / 2);
-    }
-    a = at(n - 1);
-    ctx.lineTo(a[0], a[1]);
-    ctx.stroke();
-  } else {
-    // Pen pressure: each short piece at its own width, curved through the points between.
-    let a = at(0), mid = a;
-    for (let i = 1; i < n; i++) {
-      const b = at(i), next = i === n - 1 ? b : [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-      ctx.lineWidth = penWidth(base, (p[(i - 1) * 3 + 2] + p[i * 3 + 2]) / 2);
-      ctx.beginPath(); ctx.moveTo(mid[0], mid[1]);
-      if (i === n - 1) ctx.quadraticCurveTo(a[0], a[1], b[0], b[1]); else ctx.quadraticCurveTo(a[0], a[1], next[0], next[1]);
-      ctx.stroke();
-      mid = next; a = b;
-    }
-  }
-  ctx.restore();
-}
 
 // A note's numbered disc onto a 2D context, for a saved picture.
 export function drawNoteDisc(ctx, x, y, label, color, r = 13) {
@@ -157,13 +119,14 @@ export function attachMarkup(host) {
   ink.style.cssText = live.style.cssText = 'position:absolute;left:0;top:0;display:block;pointer-events:none';
   layerEl.attachShadow({ mode: 'closed' }).append(ink, live);
   layerEl.ink = ink;            // for a check that reads what is drawn
-  const notesEl = make('div', 'mk-notes'), chip = make('button', 'mk-chip'), bar = make('div', 'mk-bar'), listEl = make('div', 'mk-list');
+  const notesEl = make('div', 'mk-notes'), chip = make('button', 'mk-chip'), bar = make('div', 'mk-bar'), listEl = make('div', 'mk-list'), brushEl = make('div', 'mk-brush-panel');
+  brushEl.hidden = true; brushEl.setAttribute('role', 'region'); brushEl.setAttribute('aria-label', 'Brush settings');
   bar.setAttribute('role', 'toolbar'); bar.setAttribute('aria-label', 'Markup');
   chip.type = 'button'; chip.hidden = true; listEl.hidden = true; bar.hidden = true;
-  wrap.append(layerEl, notesEl, chip, listEl, bar);
+  wrap.append(layerEl, notesEl, chip, listEl, brushEl, bar);
 
   let size = { w: 0, h: 0, d: 1 };
-  let inkDirty = true, liveDirty = true, notesKey = '', viewKey = '', raf = 0, gone = false;
+  let inkDirty = true, liveDirty = true, notesKey = null, viewKey = '', raf = 0, gone = false;
   let stroke = null;            // the press in progress: { id, type, tool, eaten, px: [x, y, p, ...], predicted, t0, start, erased }
   let hoverAt = null;           // where a hovering pen is, px
   let penDown = false, lastPen = -Infinity, spaceDown = false;
@@ -176,6 +139,10 @@ export function attachMarkup(host) {
   const undo = [], redo = [];
   const prop = () => host.prop();
   tidy(prop());
+  const brushTool = () => ['pen', 'marker', 'line'].includes(S.tool) ? S.tool : 'pen';
+  const brushWidth = (tool = brushTool()) => S.widths[tool];
+  const brushOpacity = (tool = brushTool()) => S.opacities[tool];
+  function setSize(i) { S.size = i; S.widths[brushTool()] = (brushTool() === 'marker' ? MARKER_PX : brushTool() === 'line' ? LINE_PX : PEN_PX)[i]; renderBar(); }
   const active = () => { const m = markupById(prop(), S.activeId); return m && m.on === host.kind ? m : null; };
 
   // ---------- geometry ----------
@@ -190,14 +157,14 @@ export function attachMarkup(host) {
   // The markups whose ink is on the screen now.
   function shownMarkups() {
     if (!S.shown) return [];
-    if (model) { const m = active(); return m && onView(m) ? [m] : []; }
+    if (model) return (prop().markups || []).filter(m => m.on === 'model' && markupVisible(m) && onView(m));
     const level = host.levelId();
-    return (prop().markups || []).filter(m => m.on === 'plan' && m.levelId === level);
+    return (prop().markups || []).filter(m => m.on === 'plan' && markupVisible(m) && m.levelId === level);
   }
 
   // ---------- drawing ----------
   function fit() {
-    const w = surface.clientWidth, h = surface.clientHeight, d = Math.min(2, window.devicePixelRatio || 1);
+    const w = surface.clientWidth, h = surface.clientHeight, d = Math.min(3, window.devicePixelRatio || 1);
     if (w === size.w && h === size.h && d === size.d) return;
     size = { w, h, d };
     for (const c of [ink, live]) {
@@ -205,7 +172,7 @@ export function attachMarkup(host) {
       c.style.width = w + 'px'; c.style.height = h + 'px';
       c.style.left = surface.offsetLeft + 'px'; c.style.top = surface.offsetTop + 'px';
     }
-    inkDirty = liveDirty = true; notesKey = '';
+    inkDirty = liveDirty = true; notesKey = null;
     liftPanels();
   }
   function paintInk() {
@@ -216,7 +183,7 @@ export function attachMarkup(host) {
     const u = unit();
     for (const m of shownMarkups()) for (const s of m.strokes) drawStroke(ctx, s, toPx, u);
     // Ink on the surfaces is drawn in the model by the page, from any camera.
-    if (model && host.showSurfaces) host.showSurfaces(S.shown ? (prop().markups || []).filter(m => m.on === 'model') : []);
+    if (model && host.showSurfaces) host.showSurfaces(S.shown ? (prop().markups || []).filter(m => m.on === 'model' && markupVisible(m)) : []);
   }
   function paintLive() {
     liveDirty = false;
@@ -224,14 +191,15 @@ export function attachMarkup(host) {
     ctx.setTransform(size.d, 0, 0, size.d, 0, 0);
     ctx.clearRect(0, 0, size.w, size.h);
     if (stroke && (stroke.tool === 'pen' || stroke.tool === 'marker') && stroke.px.length) {
-      const px = (stroke.tool === 'marker' ? MARKER_PX : PEN_PX)[S.size];
+      const px = stroke.width;
       // The browser's guess at the next few positions is drawn as a tail and redrawn every frame.
-      drawStroke(ctx, { tool: stroke.tool, color: S.color, width: px, pts: stroke.predicted.length ? stroke.px.concat(stroke.predicted) : stroke.px }, (x, y) => [x, y], 1);
+      const paths = stroke.locked ? stroke.runs : [stroke.predicted.length ? stroke.px.concat(stroke.predicted) : stroke.px];
+      for (const pts of paths) drawStroke(ctx, { tool: stroke.tool, color: stroke.color, opacity: stroke.opacity, width: px, pts }, (x, y) => [x, y], 1);
     }
     if (S.on && S.tool === 'line') paintLine(ctx);
     const ring = stroke && stroke.tool === 'eraser' ? stroke.at : (S.on && hoverAt && !stroke && S.tool !== 'line' ? hoverAt : null);
     if (ring) {
-      const r = stroke || S.tool === 'eraser' ? ERASER_PX : Math.max(3, (S.tool === 'marker' ? MARKER_PX : PEN_PX)[S.size] / 2);
+      const r = stroke || S.tool === 'eraser' ? ERASER_PX : Math.max(3, brushWidth() / 2);
       ctx.beginPath(); ctx.arc(ring[0], ring[1], r, 0, Math.PI * 2);
       ctx.lineWidth = 1.5; ctx.strokeStyle = S.tool === 'eraser' || stroke ? '#ffffff' : S.color; ctx.stroke();
       ctx.beginPath(); ctx.arc(ring[0], ring[1], r + 1.5, 0, Math.PI * 2);
@@ -241,18 +209,18 @@ export function attachMarkup(host) {
 
   // ---------- notes on the screen ----------
   // Over the model a pinned note shows from any camera, at its point; one with no pin shows
-  // with its markup's ink. On the plan every note of the level shows.
+  // with its markup's ink. On the plan every visible note of the level shows.
   function shownNotes() {
     if (!S.shown) return [];
     const out = [], own = active();
     for (const m of prop().markups || []) {
-      if (m.on !== host.kind) continue;
+      if (m.on !== host.kind || !markupVisible(m)) continue;
       if (!model && m.levelId !== host.levelId()) continue;
       for (const n of m.notes) {
         let at = null;
         if (!model) at = toPx(n.at[0], n.at[1]);
         else if (n.anchor) at = host.project(n.anchor);
-        else if (m === own && onView(m)) at = toPx(n.at[0], n.at[1]);
+        else if (onView(m)) at = toPx(n.at[0], n.at[1]);
         if (at) out.push({ m, n, at, own: m === own });
       }
     }
@@ -297,7 +265,7 @@ export function attachMarkup(host) {
     if (liveDirty) paintLive();
   }
   // `outside`: the records were changed by something other than this layer (another device).
-  function refresh(outside = false) { if (outside) tidy(prop(), true); inkDirty = true; notesKey = ''; refreshChip(); if (!listEl.hidden) renderList(); frame(); }
+  function refresh(outside = false) { if (outside) tidy(prop(), true); inkDirty = true; notesKey = null; refreshChip(); if (!listEl.hidden) renderList(); frame(); }
 
   // ---------- which markup a mark joins ----------
   // The open markup while the view is still its own (over the model) or the level is (on the
@@ -305,7 +273,7 @@ export function attachMarkup(host) {
   // Ink on the model's surfaces shows from any camera, so it joins the open markup from anywhere.
   function target(anyView = false) {
     let m = active();
-    if (m && (model ? anyView || onView(m) : m.levelId === host.levelId())) return { m, made: null };
+    if (m && markupVisible(m) && (model ? anyView || onView(m) : m.levelId === host.levelId())) return { m, made: null };
     m = addMarkup(prop(), model ? { on: 'model', view: host.viewNow() } : { on: 'plan', levelId: host.levelId() });
     S.activeId = m.id;
     return { m, made: { markup: clone(m), index: prop().markups.indexOf(m) } };
@@ -355,40 +323,83 @@ export function attachMarkup(host) {
   // ---------- strokes ----------
   const pressureOf = e => e.pointerType === 'pen' && e.pressure > 0 ? e.pressure : 0.5;
   function push(e) {
+    if (stroke.limited) return;
+    if (stroke.px.length >= MAX_PRESS_SAMPLES * 3) { limitPress(); return; }
     const [x, y] = local(e), p = stroke.px, n = p.length;
+    if (stroke.locked) sampleLocked(x, y, pressureOf(e));
     if (n && Math.hypot(x - p[n - 3], y - p[n - 2]) < 0.3) { p[n - 1] = Math.max(p[n - 1], pressureOf(e)); return; }
     p.push(x, y, pressureOf(e));
     if (n) stroke.length += Math.hypot(x - p[n - 3], y - p[n - 2]);
-    // A very long press is thinned as it goes, so it never outgrows what a stroke may hold.
-    if (p.length > 3 * 3000) stroke.px = simplifyPoints(p, 0.6);
+  }
+  // Validate every short interval, including fast/coalesced input. A rejected hit ends the
+  // visible run immediately; returning to the same face begins a separate run, never a bridge.
+  function sampleLocked(x, y, pressure) {
+    const last = stroke.sampleAt, r = surface.getBoundingClientRect();
+    const count = last ? Math.max(1, Math.ceil(Math.hypot(x - last[0], y - last[1]) / 2)) : 1;
+    for (let i = 1; i <= count; i++) {
+      if (stroke.samples.length >= MAX_PRESS_SAMPLES) { limitPress(); break; }
+      const t = i / count, a = last ? last[0] + (x - last[0]) * t : x, b = last ? last[1] + (y - last[1]) * t : y;
+      const pressureAt = last ? last[2] + (pressure - last[2]) * t : pressure;
+      const ray = host.rayAt(r.left + a, r.top + b), hit = host.surfaceAt(r.left + a, r.top + b);
+      const accepted = onLockedSurface(stroke.surfaceLock, hit);
+      stroke.samples.push({ o: ray.o, d: ray.d, px: [a, b], hit: accepted ? hit : null, info: accepted ? hit : null });
+      if (accepted) {
+        if (!stroke.run || stroke.run.length >= 9000) { stroke.run = []; stroke.runs.push(stroke.run); }
+        stroke.run.push(a, b, pressureAt);
+      } else stroke.run = null;
+      if (stroke.blocked !== !accepted) {
+        stroke.blocked = !accepted;
+        host.hint(accepted ? hintText() : 'Stay on surface: return to this surface, or lift to start on another.');
+      }
+    }
+    stroke.sampleAt = [x, y, pressure];
+  }
+  function limitPress() {
+    stroke.limited = true;
+    stroke.predicted = [];
+    host.toast('Stroke limit reached. Lift to keep drawing; your ink is kept.', 'ok');
   }
   function extend(e) {
     const more = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
     for (const c of more.length ? more : [e]) push(c);
     const guess = typeof e.getPredictedEvents === 'function' ? e.getPredictedEvents() : [];
     stroke.predicted = [];
-    for (const g of guess.slice(0, 4)) { const [x, y] = local(g); stroke.predicted.push(x, y, pressureOf(g)); }
+    for (const g of (stroke.limited ? [] : guess.slice(0, 4))) { const [x, y] = local(g); stroke.predicted.push(x, y, pressureOf(g)); }
+  }
+  // Preserve every point instead of letting the record's import limit truncate a long mark.
+  function pointChunks(points) {
+    const chunks = [];
+    for (let i = 0; i < points.length; i += 8997) {
+      chunks.push(points.slice(i, i + 9000));
+      if (i + 9000 >= points.length) break;
+    }
+    return chunks;
   }
   function commitStroke() {
     const px = stroke.px, u = unit();
     if (!px.length || !(u > 0)) return;
+    if (stroke.locked) { if (stroke.samples.length) commitOnSurfaces(); return; }
     if (surfaceInk() && commitOnSurfaces()) return;
     const doc = [];
     for (let i = 0; i + 2 < px.length; i += 3) { const [x, y] = toDoc(px[i], px[i + 1]); doc.push(x, y, px[i + 2]); }
-    const width = (stroke.tool === 'marker' ? MARKER_PX : PEN_PX)[S.size] / u;
-    const pts = roundPoints(simplifyPoints(doc, 0.35 / u), model ? 5 : 4);
+    const width = stroke.width / u;
     let t;
     try { t = target(); } catch (err) { host.toast(String(err.message || err), 'error'); return; }
-    const s = addStroke(t.m, { tool: stroke.tool, color: S.color, width, pts });
-    if (!s) { host.toast('This markup is full. Start a new one to keep drawing.', 'warn'); saved(); return; }
-    did({ t: 'ink+', items: [{ head: header(t.m), stroke: clone(s), index: t.m.strokes.length - 1 }] });
+    const items = [];
+    for (const points of pointChunks(doc)) {
+      const part = roundPoints(simplifyPoints(points, 0.35 / u), model ? 5 : 4);
+      const s = addStroke(t.m, { tool: stroke.tool, color: stroke.color, opacity: stroke.opacity, width, pts: part });
+      if (!s) { host.toast('This markup is full. Start a new one to keep drawing.', 'warn'); break; }
+      items.push({ head: header(t.m), stroke: clone(s), index: t.m.strokes.length - 1 });
+      if (model) setTimeout(() => readSurfaces(t.m.id, s.id), 0);
+    }
+    if (items.length) did({ t: 'ink+', items });
     saved();
-    if (model) setTimeout(() => readSurfaces(t.m.id, s.id), 0);
   }
   // The stroke onto the model's surfaces: read from the model every few pixels along it, so it
   // follows a wall round a corner. False when it touched nothing (it is then ink on the screen).
   function commitOnSurfaces() {
-    const px = stroke.px, n = px.length / 3, r = surface.getBoundingClientRect();
+    const px = smoothInkPoints(stroke.px), n = px.length / 3, r = surface.getBoundingClientRect();
     const at = [];
     for (let i = 0; i < n; i++) {
       const x = px[i * 3], y = px[i * 3 + 1];
@@ -397,20 +408,20 @@ export function attachMarkup(host) {
       for (let k = 1; k * SAMPLE_PX < d; k++) at.push([last[0] + (x - last[0]) * k * SAMPLE_PX / d, last[1] + (y - last[1]) * k * SAMPLE_PX / d]);
       if (d > 0.5 || i === n - 1) at.push([x, y]);
     }
-    const samples = at.map(([x, y]) => {
+    const samples = stroke.locked ? stroke.samples : at.map(([x, y]) => {
       const ray = host.rayAt(r.left + x, r.top + y), hit = host.surfaceAt(r.left + x, r.top + y);
-      return { o: ray.o, d: ray.d, px: [x, y], hit: hit ? { p: hit.p, n: hit.n } : null, info: hit };
+      return { o: ray.o, d: ray.d, px: [x, y], hit, info: hit };
     });
-    const pieces = dropOntoSurfaces(samples, { mPerPx: host.mPerPx });
+    const pieces = dropOntoSurfaces(samples, { mPerPx: host.mPerPx, ...(stroke.locked ? { surfaceLock: stroke.surfaceLock } : {}) });
     if (!pieces.length) return false;
     let pressure = 0;
     for (let i = 2; i < px.length; i += 3) pressure += px[i];
-    const base = (stroke.tool === 'marker' ? MARKER_PX : PEN_PX)[S.size];
+    const base = stroke.width;
     const widthPx = stroke.tool === 'marker' ? base : penWidth(base, pressure / n);
     let t;
     try { t = target(true); } catch (err) { host.toast(String(err.message || err), 'error'); return true; }
     const items = [];
-    for (const piece of pieces) {
+    for (const piece of pieces.flatMap(piece => pointChunks(piece.w).map(w => ({ ...piece, w })))) {
       const mid = piece.w.slice(Math.floor(piece.w.length / 6) * 3, Math.floor(piece.w.length / 6) * 3 + 3);
       const mpp = host.mPerPx(mid);
       // What it is drawn on, for whoever reads the markup later: up to eight readings along it.
@@ -419,7 +430,7 @@ export function attachMarkup(host) {
         const h = hits[Math.round(k * (hits.length - 1) / Math.max(1, Math.min(8, hits.length) - 1))].info;
         on.push({ k: h.kind, id: h.ref || '', p: h.p.map(v => Math.round(v * 1000) / 1000) });
       }
-      const s = addStroke(t.m, { tool: stroke.tool, color: S.color, width: widthPx * mpp, w: simplify3(piece.w, 0.35 * mpp), on });
+      const s = addStroke(t.m, { tool: stroke.tool, color: stroke.color, opacity: stroke.opacity, width: widthPx * mpp, w: simplify3(piece.w, 0.2 * mpp), normal: stroke.surfaceLock?.n, on });
       if (!s) { host.toast('This markup is full. Start a new one to keep drawing.', 'warn'); break; }
       items.push({ head: header(t.m), stroke: clone(s), index: t.m.strokes.length - 1 });
     }
@@ -463,7 +474,7 @@ export function attachMarkup(host) {
     for (const m of shownMarkups()) for (const s of m.strokes.filter(k => !onSurfaces(k) && strokeHit(k, x, y, r))) take(m, s);
     // Ink on the surfaces is rubbed out where it is on the screen now.
     if (model && S.shown) {
-      for (const m of (prop().markups || []).filter(k => k.on === 'model')) {
+      for (const m of (prop().markups || []).filter(k => k.on === 'model' && markupVisible(k))) {
         for (const s of m.strokes.filter(k => onSurfaces(k) && surfaceHit(k, at, ERASER_PX))) take(m, s);
       }
     }
@@ -490,7 +501,7 @@ export function attachMarkup(host) {
   function drawnLines() {
     const edges = [], ends = [];
     for (const m of prop().markups || []) {
-      if (m.on !== 'model') continue;
+      if (!S.shown || m.on !== 'model' || !markupVisible(m)) continue;
       for (const s of m.strokes) {
         if (s.tool !== 'line' || !onSurfaces(s)) continue;
         const w = s.w;
@@ -562,7 +573,7 @@ export function attachMarkup(host) {
     let t;
     try { t = target(true); } catch (err) { host.toast(String(err.message || err), 'error'); return; }
     const on = [a, b].map(p => ({ k: res.hit ? res.hit.kind : '', id: res.hit ? res.hit.ref || '' : '', p: p.map(v => Math.round(v * 1000) / 1000) }));
-    const s = addStroke(t.m, { tool: 'line', color: S.color, width: 0.005, px: LINE_PX[S.size], w: [...vec.add(a, lift), ...vec.add(b, lift)], on });
+    const s = addStroke(t.m, { tool: 'line', color: S.color, width: 0.005, px: brushWidth('line'), opacity: brushOpacity('line'), w: [...vec.add(a, lift), ...vec.add(b, lift)], on });
     if (!s) { host.toast('This markup is full. Start a new one to keep drawing.', 'warn'); saved(); return; }
     did({ t: 'ink+', items: [{ head: header(t.m), stroke: clone(s), index: t.m.strokes.length - 1 }] });
     const first = chain.pts[0];
@@ -597,9 +608,9 @@ export function attachMarkup(host) {
     }
     if (a && p) {
       const color = snap.dir ? snap.color : '#111111';
-      ctx.lineWidth = LINE_PX[S.size] + 3; ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+      ctx.lineWidth = brushWidth('line') + 3; ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
       ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...p); ctx.stroke();
-      ctx.lineWidth = LINE_PX[S.size]; ctx.strokeStyle = color;
+      ctx.lineWidth = brushWidth('line'); ctx.strokeStyle = color;
       ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...p); ctx.stroke();
     }
     if (chain) {
@@ -714,7 +725,11 @@ export function attachMarkup(host) {
     if (type === 'pen') penDown = true;
     hoverAt = null;
     if (host.hold) host.hold();
-    if (tool === 'pen' || tool === 'marker') push(e);
+    if (tool === 'pen' || tool === 'marker') {
+      Object.assign(stroke, { width: brushWidth(tool), color: S.color, opacity: brushOpacity(tool), locked: surfaceInk() && S.surfaceLock, samples: [], runs: [], run: null, sampleAt: null });
+      if (stroke.locked) stroke.surfaceLock = makeSurfaceLock(host.surfaceAt(e.clientX, e.clientY));
+      push(e);
+    }
     else if (tool === 'eraser') eraseAt(stroke.at);
     else if (tool === 'line') lineHover(e);
     liveDirty = true;
@@ -732,6 +747,7 @@ export function attachMarkup(host) {
     } else if (!cancelled) commitStroke();
     stroke = null;
     liveDirty = true;
+    if (S.on) host.hint(hintText());
   }
   function onDown(e) {
     if (!S.on || gone) return;
@@ -814,6 +830,10 @@ export function attachMarkup(host) {
     if (!stroke || e.pointerId !== stroke.id) return;
     if (stroke.eaten) eat(e);
     stroke.at = local(e);
+    if (!cancelled && (stroke.tool === 'pen' || stroke.tool === 'marker') && stroke.px.length) {
+      const p = stroke.px;
+      if (Math.hypot(stroke.at[0] - p[p.length - 3], stroke.at[1] - p[p.length - 2]) > 0.3) push({ clientX: e.clientX, clientY: e.clientY, pointerType: stroke.type, pressure: p[p.length - 1] });
+    }
     // A finger the browser took back was never a stroke; a pen or mouse press cut short keeps
     // what it drew.
     finish(cancelled && stroke.type === 'touch');
@@ -836,6 +856,7 @@ export function attachMarkup(host) {
   function key(e) {
     if (!S.on || gone) return false;
     if (editor) return true;
+    if (e.target && e.target.closest && e.target.closest('input, textarea, select')) return false;
     const cmd = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
     if (cmd && k === 'z') { e.preventDefault(); step(!e.shiftKey); return true; }
     if (cmd && k === 'y') { e.preventDefault(); step(false); return true; }
@@ -844,6 +865,7 @@ export function attachMarkup(host) {
     if (e.key === 'Escape') {
       e.preventDefault();
       if (stroke) { if (stroke.tool === 'eraser' && stroke.erased.length) finish(false); else { stroke = null; liveDirty = true; } }
+      else if (!brushEl.hidden) { S.brush = false; renderBar(); }
       else if (!listEl.hidden) toggleList(false);
       else setOn(false);
       return true;
@@ -852,7 +874,7 @@ export function attachMarkup(host) {
     const tool = { p: 'pen', h: 'marker', e: 'eraser', n: 'note', v: 'move', ...(model ? { l: 'line' } : {}) }[k];
     if (tool) { setTool(tool); return true; }
     if (model && k === 's') { setPlace(S.place === 'surface' ? 'screen' : 'surface'); return true; }
-    if (k === '1' || k === '2' || k === '3') { S.size = Number(k) - 1; renderBar(); return true; }
+    if (k === '1' || k === '2' || k === '3') { setSize(Number(k) - 1); return true; }
     return false;
   }
   // The line tool's own keys: a length typed while a line is being drawn, Enter, Backspace,
@@ -902,15 +924,17 @@ export function attachMarkup(host) {
     if (S.tool === 'line') return chain
       ? 'LINE: click the next point. Type a length and press Enter; Shift or an arrow key holds the direction; Esc ends the line.'
       : 'LINE: click where the line starts. It stays on that face and snaps to ends, middles and edges, and to the red, green and blue axes.';
+    const constraint = surfaceInk() && S.surfaceLock && ['pen', 'marker'].includes(S.tool) ? ' Stay on surface is on; lift to change surfaces.' : '';
     const what = { pen: surfaceInk() ? 'draws on the model' : 'draws', marker: surfaceInk() ? 'highlights on the model' : 'highlights', eraser: 'rubs out whole strokes', note: 'pins a numbered note' }[S.tool];
     // A screen that takes fingers says who draws; a mouse-only one says how the view still moves.
-    if (!matchMedia('(any-pointer: coarse)').matches && !penSeen) return `${S.tool === 'note' ? 'Click' : 'Drag'}: the ${S.tool === 'marker' ? 'highlighter' : S.tool} ${what}. The wheel, right-drag or Space-drag moves the view.`;
-    return fingerDraws() ? `A finger or the pencil ${what}. Two fingers move the view.` : `The pencil ${what}. Fingers move the view.`;
+    if (!matchMedia('(any-pointer: coarse)').matches && !penSeen) return `${S.tool === 'note' ? 'Click' : 'Drag'}: the ${S.tool === 'marker' ? 'highlighter' : S.tool} ${what}. The wheel, right-drag or Space-drag moves the view.${constraint}`;
+    return fingerDraws() ? `A finger or the pencil ${what}. Two fingers move the view.${constraint}` : `The pencil ${what}. Fingers move the view.${constraint}`;
   }
   function renderBar() {
     bar.hidden = !S.on;
     wrap.classList.toggle('mk-on', S.on);
     wrap.dataset.mkTool = S.on ? S.tool : '';
+    brushEl.hidden = !S.on || !S.brush;
     if (!S.on) return;
     const count = (prop().markups || []).filter(m => m.on === host.kind).length;
     const touchy = matchMedia('(any-pointer: coarse)').matches;
@@ -919,10 +943,12 @@ export function attachMarkup(host) {
       TOOLS.filter(t => !t[4] || t[4] === host.kind).map(([id, ic, label, k]) => b(`data-tool="${id}"`, ic, `${label} (${k})`, S.tool === id)).join('') +
       (model ? b('data-act="place"', S.place === 'surface' ? 'surface' : 'screen', S.place === 'surface' ? 'Ink goes on the model\'s surfaces. Click for ink flat on the screen (S)' : 'Ink is flat on the screen. Click for ink on the model\'s surfaces (S)') : '') +
       '<span class="mk-sep"></span>' +
-      MARKUP_COLORS.map(c => `<button type="button" class="mk-dot ${S.color === c ? 'active' : ''}" data-color="${c}" style="--c:${c}" title="Colour" aria-label="Colour ${c}" aria-pressed="${S.color === c}"></button>`).join('') +
+      MARKUP_COLORS.slice(0, 6).map(c => `<button type="button" class="mk-dot ${S.color === c ? 'active' : ''}" data-color="${c}" style="--c:${c}" title="${MARKUP_COLOR_NAMES[c]}" aria-label="Colour ${c}" aria-pressed="${S.color === c}"></button>`).join('') +
       '<span class="mk-sep"></span>' +
-      [0, 1, 2].map(i => `<button type="button" class="mk-size ${S.size === i ? 'active' : ''}" data-size="${i}" title="${['Fine', 'Medium', 'Bold'][i]} line (${i + 1})" aria-label="${['Fine', 'Medium', 'Bold'][i]} line" aria-pressed="${S.size === i}"><i style="--s:${[3, 6, 10][i]}px"></i></button>`).join('') +
+      [0, 1, 2].map(i => `<button type="button" class="mk-size ${brushWidth() === (brushTool() === 'marker' ? MARKER_PX : brushTool() === 'line' ? LINE_PX : PEN_PX)[i] ? 'active' : ''}" data-size="${i}" title="${['Fine', 'Medium', 'Bold'][i]} line (${i + 1})" aria-label="${['Fine', 'Medium', 'Bold'][i]} line" aria-pressed="${brushWidth() === (brushTool() === 'marker' ? MARKER_PX : brushTool() === 'line' ? LINE_PX : PEN_PX)[i]}"><i style="--s:${[3, 6, 10][i]}px"></i></button>`).join('') +
       '<span class="mk-sep"></span>' +
+      `<button type="button" class="mk-btn mk-brush-toggle ${S.brush ? 'active' : ''}" data-act="brush" aria-label="Brush settings" aria-expanded="${S.brush}" title="Colour, width and opacity"><i style="--c:${S.color}"></i><span>${brushWidth()} px</span></button>` +
+      (surfaceInk() ? `<button type="button" class="mk-btn mk-lock ${S.surfaceLock ? 'active' : ''}" data-act="lock" aria-pressed="${S.surfaceLock}" title="Keep each stroke on its starting surface">${icon('lock')}<span>Stay on surface</span></button>` : '') +
       b('data-act="undo"' + (undo.length ? '' : ' disabled'), 'undo', 'Undo the last mark') +
       b('data-act="redo"' + (redo.length ? '' : ' disabled'), 'redo', 'Redo') +
       (touchy ? b('data-act="finger"', 'finger', fingerOn() ? 'A finger draws. Tap so that fingers only move the view.' : 'Fingers move the view. Tap to draw with a finger.', fingerOn()) : '') +
@@ -930,15 +956,62 @@ export function attachMarkup(host) {
       `<button type="button" class="mk-btn mk-count ${S.list ? 'active' : ''}" data-act="list" title="All markups" aria-label="All markups" aria-pressed="${S.list}">${icon('list')}<b>${count}</b></button>` +
       '<button type="button" class="mk-done" data-act="done">DONE</button>';
     bar.querySelectorAll('[data-tool]').forEach(x => x.onclick = () => setTool(x.dataset.tool));
-    bar.querySelectorAll('[data-color]').forEach(x => x.onclick = () => { S.color = x.dataset.color; if (S.tool !== 'pen' && S.tool !== 'marker') S.tool = 'pen'; renderBar(); host.changed(S.on); });
-    bar.querySelectorAll('[data-size]').forEach(x => x.onclick = () => { S.size = Number(x.dataset.size); renderBar(); });
-    const act = { undo: () => step(true), redo: () => step(false), list: () => toggleList(), done: () => setOn(false),
+    bar.querySelectorAll('[data-color]').forEach(x => x.onclick = () => { S.color = x.dataset.color; if (!['pen', 'marker', 'line'].includes(S.tool)) S.tool = 'pen'; renderBar(); host.changed(S.on); });
+    bar.querySelectorAll('[data-size]').forEach(x => x.onclick = () => { setSize(Number(x.dataset.size)); });
+    const act = { brush: () => { S.brush = !S.brush; if (S.brush) { S.list = false; listEl.hidden = true; } renderBar(); },
+      lock: () => { S.surfaceLock = !S.surfaceLock; renderBar(); }, undo: () => step(true), redo: () => step(false), list: () => toggleList(), done: () => setOn(false),
       place: () => setPlace(S.place === 'surface' ? 'screen' : 'surface'),
       finger: () => { S.finger = !fingerOn(); renderBar(); host.changed(S.on); },
       new: () => { S.activeId = null; refresh(); host.toast(model ? 'The next mark starts a new markup from this view.' : 'The next mark starts a new markup.', 'ok'); } };
     bar.querySelectorAll('[data-act]').forEach(x => x.onclick = act[x.dataset.act]);
+    renderBrush();
     host.hint(hintText());
     liftPanels();
+  }
+  function renderBrush() {
+    brushEl.hidden = !S.on || !S.brush;
+    if (brushEl.hidden) return;
+    const tool = brushTool(), width = brushWidth(), opacity = brushOpacity();
+    const title = { pen: 'Pen', marker: 'Highlighter', line: 'Line' }[tool];
+    brushEl.innerHTML = `<div class="mk-brush-head"><b>${title}</b><span>BRUSH SETTINGS</span><button type="button" class="mk-btn" data-close aria-label="Close brush settings">${icon('close')}</button></div>
+      <canvas class="mk-brush-sample" aria-label="Brush preview"></canvas>
+      <div class="mk-brush-controls">
+        <label>Width <output data-width-value>${width} px</output><input type="range" data-width aria-label="Brush width" min="${tool === 'marker' ? 4 : 0.5}" max="${tool === 'marker' ? 80 : 20}" step="${tool === 'marker' ? 1 : 0.5}" value="${width}"></label>
+        <label>Opacity <output data-opacity-value>${Math.round(opacity * 100)}%</output><input type="range" data-opacity aria-label="Brush opacity" min="5" max="100" step="1" value="${Math.round(opacity * 100)}"></label>
+      </div>
+      <div class="mk-palette" role="group" aria-label="Ink colours">${MARKUP_COLORS.map(c => `<button type="button" class="mk-dot ${S.color === c ? 'active' : ''}" data-color="${c}" style="--c:${c}" title="${MARKUP_COLOR_NAMES[c]}" aria-label="${MARKUP_COLOR_NAMES[c]}" aria-pressed="${S.color === c}"></button>`).join('')}</div>
+      <div class="mk-custom-colour"><label class="mk-picker-label">Custom colour<input type="color" data-custom-color aria-label="Custom ink colour" value="${S.color}"></label><label class="mk-hex-label">HEX<input type="text" data-hex aria-label="Ink hex colour" value="${S.color}" maxlength="7" spellcheck="false" autocapitalize="off"></label></div>`;
+    const repaint = () => {
+      brushEl.querySelector('[data-width-value]').textContent = brushWidth() + ' px';
+      brushEl.querySelector('[data-opacity-value]').textContent = Math.round(brushOpacity() * 100) + '%';
+      bar.querySelectorAll('[data-size]').forEach(b => { const same = brushWidth() === (tool === 'marker' ? MARKER_PX : tool === 'line' ? LINE_PX : PEN_PX)[Number(b.dataset.size)]; b.classList.toggle('active', same); b.setAttribute('aria-pressed', String(same)); });
+      const toggle = bar.querySelector('.mk-brush-toggle span'); if (toggle) toggle.textContent = brushWidth() + ' px';
+      const c = brushEl.querySelector('canvas'), d = Math.min(3, window.devicePixelRatio || 1);
+      const w = c.clientWidth || 280, h = Math.max(76, brushWidth() + 54); c.style.height = h + 'px'; c.width = Math.round(w * d); c.height = Math.round(h * d);
+      const ctx = c.getContext('2d'); ctx.scale(d, d);
+      const pts = [22, 47, .5, w * .26, 47, .5, w * .38, 24, .5, w * .61, 24, .5, w * .74, 48, .5, w - 22, 36, .5];
+      drawStroke(ctx, { pts, width: brushWidth(), tool, color: S.color, opacity: brushOpacity() }, (x, y) => [x, y + (h - 76) / 2], 1);
+      liveDirty = true;
+    };
+    brushEl.querySelector('[data-close]').onclick = () => { S.brush = false; renderBar(); };
+    brushEl.querySelector('[data-width]').oninput = e => { S.widths[tool] = Number(e.target.value); repaint(); };
+    brushEl.querySelector('[data-opacity]').oninput = e => { S.opacities[tool] = Number(e.target.value) / 100; repaint(); };
+    const colour = value => {
+      S.color = value.toLowerCase();
+      brushEl.querySelector('[data-hex]').value = S.color;
+      brushEl.querySelector('[data-hex]').removeAttribute('aria-invalid');
+      brushEl.querySelector('[data-custom-color]').value = S.color;
+      bar.querySelector('.mk-brush-toggle i').style.setProperty('--c', S.color);
+      for (const panel of [bar, brushEl]) panel.querySelectorAll('[data-color]').forEach(b => { b.classList.toggle('active', b.dataset.color === S.color); b.setAttribute('aria-pressed', String(b.dataset.color === S.color)); });
+      repaint();
+    };
+    brushEl.querySelectorAll('[data-color]').forEach(b => b.onclick = () => colour(b.dataset.color));
+    brushEl.querySelector('[data-custom-color]').oninput = e => colour(e.target.value);
+    const hex = brushEl.querySelector('[data-hex]');
+    const applyHex = () => { let value = hex.value.trim(); if (!value.startsWith('#')) value = '#' + value; if (/^#[0-9a-f]{3}$/i.test(value)) value = '#' + [...value.slice(1)].map(c => c + c).join(''); if (/^#[0-9a-f]{6}$/i.test(value)) colour(value); else { hex.setAttribute('aria-invalid', 'true'); hex.title = 'Enter a hex colour, such as #1f6feb.'; } };
+    hex.onchange = applyHex;
+    hex.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') { e.preventDefault(); applyHex(); } else if (e.key === 'Escape') { S.brush = false; renderBar(); } };
+    repaint();
   }
   // The bar is one row on a wide view and two or three on a narrow one; the list and the
   // way-back chip sit just above it, however tall it is.
@@ -946,24 +1019,29 @@ export function attachMarkup(host) {
   function liftPanels() {
     const lift = bar.hidden ? 12 : wrap.clientHeight - bar.offsetTop + 8;
     barTop = bar.hidden ? wrap.clientHeight : bar.offsetTop;
+    brushEl.style.bottom = lift + 'px';
+    const topSpace = document.documentElement.classList.contains('phone') ? 64 : 8;
+    brushEl.style.maxHeight = Math.max(80, wrap.clientHeight - lift - topSpace) + 'px';
+    listEl.style.maxHeight = Math.max(80, Math.min(460, wrap.clientHeight - lift - topSpace)) + 'px';
     listEl.style.bottom = lift + 'px'; chip.style.bottom = lift + 'px';
   }
   // Over the model: the open markup's ink is out of sight because the camera has moved.
   function refreshChip() {
     const m = model && S.on ? active() : null;
     // Only what is flat on the screen needs its own view; ink on the surfaces shows from anywhere.
-    const away = !!m && !markupEmpty(m) && markupFlat(m) && !onView(m);
+    const away = !!m && markupVisible(m) && !markupEmpty(m) && markupFlat(m) && !onView(m);
     chip.hidden = !away;
     if (away) chip.textContent = markupTitle(m).toUpperCase() + ': BACK TO ITS VIEW';
   }
   chip.onclick = () => { const m = active(); if (m) open(m.id); };
 
   // ---------- the list ----------
-  function toggleList(on = !S.list) { S.list = on; listEl.hidden = !on || !S.on; if (!listEl.hidden) renderList(); renderBar(); }
+  function toggleList(on = !S.list) { S.list = on; if (on) S.brush = false; listEl.hidden = !on || !S.on; if (!listEl.hidden) renderList(); renderBar(); }
   function open(id) {
     const m = markupById(prop(), id);
     if (!m || m.on !== host.kind) return;
     S.activeId = id;
+    if (!markupVisible(m)) { setMarkupHidden(prop(), id, false); touch(); }
     if (!S.shown) S.shown = true;
     host.goTo(m);
     refresh();
@@ -974,8 +1052,9 @@ export function attachMarkup(host) {
       const parts = [m.strokes.length + (m.strokes.length === 1 ? ' stroke' : ' strokes'), m.notes.length ? m.notes.length + (m.notes.length === 1 ? ' note' : ' notes') : ''].filter(Boolean).join(', ');
       const where = model ? '' : ((prop().levels.find(l => l.id === m.levelId) || {}).name || '');
       if (renaming === m.id) return `<div class="mk-row" data-id="${escapeHtml(m.id)}"><input class="mk-name" value="${escapeHtml(m.name)}" placeholder="${escapeHtml('Markup ' + m.number)}" maxlength="60" aria-label="Name"><button type="button" class="btn primary" data-save>SAVE</button></div>`;
-      return `<div class="mk-row ${m.id === S.activeId ? 'active' : ''} ${m.status === 'done' ? 'done' : ''}" data-id="${escapeHtml(m.id)}">
-        <button type="button" class="mk-open" data-open><b>${m.number}</b><span>${escapeHtml(markupTitle(m))}<small>${escapeHtml([where, parts].filter(Boolean).join(' · '))}</small></span></button>
+      return `<div class="mk-row ${m.id === S.activeId ? 'active' : ''} ${m.status === 'done' ? 'done' : ''} ${m.hidden ? 'is-hidden' : ''}" data-id="${escapeHtml(m.id)}">
+        <button type="button" class="mk-btn mk-visibility" data-visibility title="${m.hidden ? 'Show' : 'Hide'} ${escapeHtml(markupTitle(m))}" aria-label="${m.hidden ? 'Show' : 'Hide'} ${escapeHtml(markupTitle(m))}" aria-pressed="${!m.hidden}">${icon(m.hidden ? 'eye-off' : 'eye')}</button>
+        <button type="button" class="mk-open" data-open><b>${m.number}</b><span>${escapeHtml(markupTitle(m))}<small>${escapeHtml([m.hidden ? 'Hidden' : '', where, parts].filter(Boolean).join(' · '))}</small></span></button>
         ${confirmDelete === m.id
           ? '<button type="button" class="btn danger" data-really>DELETE IT</button><button type="button" class="btn" data-keep>KEEP</button>'
           : `<button type="button" class="mk-btn" data-status title="${m.status === 'done' ? 'Mark as open again' : 'Mark as done'}" aria-label="${m.status === 'done' ? 'Mark as open again' : 'Mark as done'}" aria-pressed="${m.status === 'done'}">${icon('check')}</button>
@@ -987,12 +1066,15 @@ export function attachMarkup(host) {
     listEl.innerHTML = `<div class="mk-list-head"><b>MARKUPS</b>
         <label class="mk-show"><input type="checkbox" ${S.shown ? 'checked' : ''} data-shown> SHOW ${model ? 'OVER THE MODEL' : 'ON THE PLAN'}</label>
         <button type="button" class="mk-btn" data-close title="Close" aria-label="Close">${icon('close')}</button></div>
+      <div class="mk-list-summary"><span>${S.shown ? all.filter(m => !m.hidden).length : 0} visible · ${S.shown ? all.filter(m => m.hidden).length : all.length} hidden</span><button type="button" data-show-all ${all.some(m => m.hidden) || !S.shown ? '' : 'disabled'}>Show all</button></div>
       <div class="mk-rows">${all.length ? all.map(row).join('') : `<p class="mk-none">No markups yet. Draw ${model ? 'over the model' : 'on the plan'} and the first one appears here.</p>`}</div>`;
     listEl.querySelector('[data-close]').onclick = () => toggleList(false);
+    listEl.querySelector('[data-show-all]').onclick = () => { for (const m of all) setMarkupHidden(prop(), m.id, false); S.shown = true; touch(); refresh(); };
     listEl.querySelector('[data-shown]').onchange = e => { S.shown = e.target.checked; refresh(); };
     listEl.querySelectorAll('.mk-row').forEach(r => {
       const id = r.dataset.id, on = (sel, fn) => { const x = r.querySelector(sel); if (x) x.onclick = fn; };
       on('[data-open]', () => open(id));
+      on('[data-visibility]', () => { const m = markupById(prop(), id); if (!m) return; if (editor && editor.markupId === id) closeEditor(true); setMarkupHidden(prop(), id, !m.hidden); touch(); refresh(); });
       on('[data-status]', () => { const m = markupById(prop(), id); if (m && setMarkupStatus(prop(), id, m.status === 'done' ? 'open' : 'done')) { touch(); renderList(); } });
       on('[data-rename]', () => { renaming = id; confirmDelete = null; renderList(); const f = listEl.querySelector('.mk-name'); if (f) { f.focus(); f.select(); } });
       on('[data-delete]', () => { confirmDelete = id; renderList(); });
@@ -1047,7 +1129,7 @@ export function attachMarkup(host) {
     stroke = null; hoverAt = null; spaceDown = false; fingers.clear(); ignored.clear(); penDown = false;
     chain = null; snap = null; lineAt = null; lock = null; typed = ''; lineRef = null;
     wrap.classList.remove('mk-space');
-    if (!on) { closeEditor(true); listEl.hidden = true; host.hint(''); }
+    if (!on) { closeEditor(true); listEl.hidden = true; brushEl.hidden = true; host.hint(''); }
     else listEl.hidden = !S.list;
     renderBar();
     if (on && !listEl.hidden) renderList();
@@ -1088,7 +1170,7 @@ export function attachMarkup(host) {
       const color = (markup.strokes[0] && markup.strokes[0].color) || MARKUP_COLORS[0];
       for (const n of markup.notes) { const at = place(n); if (at) drawNoteDisc(ctx, at[0], at[1], n.n, color, r); }
     },
-    state: () => ({ on: S.on, tool: S.tool, color: S.color, size: S.size, activeId: S.activeId, fingerDraws: fingerDraws(), penSeen, shown: S.shown, undo: undo.length, redo: redo.length,
+    state: () => ({ on: S.on, tool: S.tool, color: S.color, size: S.size, activeId: S.activeId, fingerDraws: fingerDraws(), penSeen, shown: S.shown, width: brushWidth(), opacity: brushOpacity(), surfaceLock: S.surfaceLock, hidden: (prop().markups || []).filter(m => m.on === host.kind && !markupVisible(m)).map(m => m.id), undo: undo.length, redo: redo.length,
       ...(model ? { place: S.place, line: chain ? chain.pts.map(p => p.slice()) : null, snap: snap ? { kind: snap.kind, label: snap.label, p: snap.p.slice(), locked: !!snap.locked } : null, typed } : {}) }),
     dispose() {
       if (gone) return;
@@ -1107,7 +1189,7 @@ export function attachMarkup(host) {
       surface.removeEventListener('touchstart', onTouchStart);
       wrap.classList.remove('mk-on', 'mk-space');
       delete wrap.dataset.mkTool;
-      for (const e of [layerEl, notesEl, chip, bar, listEl]) e.remove();
+      for (const e of [layerEl, notesEl, chip, bar, listEl, brushEl]) e.remove();
     },
   };
 }

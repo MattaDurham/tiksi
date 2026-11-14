@@ -39,6 +39,34 @@ export function segmentNearRay(a, b, o, d) {
 }
 
 // ---------- freehand ink on surfaces ----------
+// A freehand stroke can stay on the face where the pointer first went down. Object identity
+// alone is not enough: imported models often put a whole room into one mesh. Keep the starting
+// plane and normal as well, allowing a little noise in reconstructed surfaces but not a corner
+// or a parallel face elsewhere. The mesh is an in-memory token, never saved with a stroke.
+// Points have no face normal; they can only be restricted to their own object. The distance
+// discontinuity check in dropOntoSurfaces still prevents them joining across a depth jump.
+export function makeSurfaceLock(hit, { planeTolerance = 0.01, angleTolerance = 12 } = {}) {
+  if (!hit || !Array.isArray(hit.p) || hit.p.length !== 3 || !hit.p.every(Number.isFinite)) return null;
+  const normal = Array.isArray(hit.n) && hit.n.length === 3 && hit.n.every(Number.isFinite) && len(hit.n) > 0.5 ? unit(hit.n) : null;
+  const ref = typeof hit.ref === 'string' ? hit.ref : '';
+  if (!normal && !hit.mesh && !ref) return null;   // no face or object to identify
+  return {
+    p: hit.p.slice(), n: normal, mesh: hit.mesh || null, ref, kind: hit.kind || '',
+    planeTolerance: Number.isFinite(planeTolerance) && planeTolerance >= 0 ? planeTolerance : 0.01,
+    normalDot: Math.cos((Number.isFinite(angleTolerance) ? Math.max(0, Math.min(45, angleTolerance)) : 12) * Math.PI / 180),
+  };
+}
+
+export function onLockedSurface(lock, hit) {
+  if (!lock || !hit || !Array.isArray(hit.p) || hit.p.length !== 3 || !hit.p.every(Number.isFinite)) return false;
+  if (lock.mesh && hit.mesh !== lock.mesh) return false;
+  if (lock.ref && (hit.ref !== lock.ref || (hit.kind || '') !== lock.kind)) return false;
+  const normal = Array.isArray(hit.n) && hit.n.length === 3 && hit.n.every(Number.isFinite) && len(hit.n) > 0.5 ? unit(hit.n) : null;
+  if (!lock.n) return !normal;   // never hop from a point cloud onto a mesh face
+  if (!normal || Math.abs(dot(lock.n, normal)) < lock.normalDot) return false;
+  return Math.abs(dot(sub(hit.p, lock.p), lock.n)) <= lock.planeTolerance;
+}
+
 // Samples along a stroke on the screen, each { o, d (its ray), px: [x, y], hit: { p, n } | null }
 // (n is null where the surface has no facing, a scan's points), become pieces of 3D line, each
 // { w: [x, y, z, ...], first, last } (the samples it covers), lifted `lift` metres off the
@@ -50,7 +78,9 @@ export function segmentNearRay(a, b, o, d) {
 //   through the air between them.
 // `mPerPx(p)` is how many metres one screen pixel spans at the depth of p. Returns [] when the
 // stroke touched nothing at all: it is then ink on the screen, as before.
-export function dropOntoSurfaces(samples, { lift = 0.004, mPerPx, breakRatio = 10 } = {}) {
+// With `surfaceLock`, missing hits and hits on other faces are gaps, never projected or joined.
+// A stroke starting off a surface must be rejected by the caller rather than given a null lock.
+export function dropOntoSurfaces(samples, { lift = 0.004, mPerPx, breakRatio = 10, surfaceLock = null } = {}) {
   const n = samples.length;
   if (!samples.some(s => s.hit)) return [];
   const flat = s => s.hit && s.hit.n && len(s.hit.n) > 0.5;
@@ -60,6 +90,7 @@ export function dropOntoSurfaces(samples, { lift = 0.004, mPerPx, breakRatio = 1
   const firstFlat = samples.find(flat);
   for (let i = 0; i < n; i++) {
     const s = samples[i];
+    if (surfaceLock && !onLockedSurface(surfaceLock, s.hit)) continue;
     if (s.hit) {
       const nn = flat(s) ? unit(s.hit.n) : null;
       // The lift goes towards the viewer: a wall seen from behind is lifted on the seen side.
@@ -74,7 +105,7 @@ export function dropOntoSurfaces(samples, { lift = 0.004, mPerPx, breakRatio = 1
   }
   // Samples still without a point (no plane to land on, or the plane turned away): the nearest
   // landed point along the stroke stands in for them.
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; !surfaceLock && i < n; i++) {
     if (pts[i]) continue;
     let k = 1;
     while (k < n && !(pts[i - k] || pts[i + k])) k++;
@@ -85,7 +116,7 @@ export function dropOntoSurfaces(samples, { lift = 0.004, mPerPx, breakRatio = 1
   let cur = null;
   for (let i = 0; i < n; i++) {
     const p = pts[i];
-    if (!p) continue;
+    if (!p) { if (cur) { pieces.push(cur); cur = null; } continue; }
     if (cur) {
       const w = cur.w, prev = [w[w.length - 3], w[w.length - 2], w[w.length - 1]];
       const onScreen = Math.max(1, dist2d(samples[i].px, samples[cur.last].px));

@@ -337,6 +337,108 @@ try {
     await context.close();
   }
 
+  // ---------- 3. Exact brush controls and independent markup visibility ----------
+  {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
+    const { page, errors } = await open(context, 'model');
+    await page.locator('.v-modes [data-mode=top]').click();
+    await delay(900);
+    await page.locator('#side [data-act=markup]').click();
+    await page.locator('.mk-bar').waitFor();
+    await page.keyboard.press('s');
+    const box = await page.locator('canvas.v-canvas').boundingBox();
+    const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+    const setRange = async (selector, value) => page.locator(selector).evaluate((input, value) => {
+      input.value = String(value); input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true }));
+    }, value);
+    await page.locator('.mk-bar [data-act=brush]').click();
+    await page.locator('.mk-brush-panel [data-hex]').fill('#zzzzzz');
+    await page.locator('.mk-brush-panel [data-hex]').press('Tab');
+    assert.equal(await page.locator('.mk-brush-panel [data-hex]').getAttribute('aria-invalid'), 'true', 'invalid colours are identified instead of saved');
+    assert.equal((await modelState(page)).color, '#e5372b');
+    await page.locator('.mk-brush-panel [data-hex]').fill('#7b3fe4');
+    await page.locator('.mk-brush-panel [data-hex]').press('Tab');
+    await setRange('.mk-brush-panel [data-width]', 12);
+    await setRange('.mk-brush-panel [data-opacity]', 45);
+    let st = await modelState(page);
+    assert.equal(st.color, '#7b3fe4', 'exact colour entry is used');
+    assert.equal(st.width, 12, 'continuous width is used');
+    assert.equal(st.opacity, 0.45, 'opacity is independent of tool type');
+    await page.locator('.mk-bar [data-tool=marker]').click();
+    assert.equal((await modelState(page)).width, 22, 'highlighter keeps its own width');
+    await setRange('.mk-brush-panel [data-width]', 48);
+    await page.locator('.mk-bar [data-tool=pen]').click();
+    assert.equal((await modelState(page)).width, 12, 'returning to the pen restores its width');
+    assert.equal((await modelState(page)).opacity, 0.45, 'returning to the pen restores its opacity');
+    await page.locator('.mk-bar [data-act=brush]').click();
+    await page.mouse.move(cx - 90, cy); await page.mouse.down(); await page.mouse.move(cx + 90, cy, { steps: 10 }); await page.mouse.up();
+    let list = await markups(page);
+    const firstId = list[0].id, firstStroke = list[0].strokes[0];
+    assert.equal(firstStroke.color, '#7b3fe4');
+    assert.equal(firstStroke.opacity, 0.45);
+    assert.ok(Math.abs(firstStroke.width * box.height - 12) < 0.1, 'saved width matches the live brush');
+    const alpha = await inkAt(page, cx, cy);
+    assert.ok(alpha >= 110 && alpha <= 118, 'saved stroke renders the chosen opacity: ' + alpha);
+    await page.keyboard.press('n');
+    await page.mouse.click(cx + 70, cy + 70);
+    await page.locator('.mk-edit textarea').fill('Keep this note with its markup');
+    await page.locator('.mk-edit textarea').press('Enter');
+    assert.equal(await page.locator('.mk-note').count(), 1);
+
+    await page.locator('.mk-bar [data-act=list]').click();
+    await page.locator('.mk-row').first().locator('[data-visibility]').click();
+    assert.equal((await markups(page))[0].hidden, true);
+    assert.equal(await inkAt(page, cx, cy), 0, 'hiding a markup hides its flat ink');
+    assert.equal(await page.locator('.mk-note').count(), 0, 'its pinned notes hide too');
+    assert.match(await page.locator('.mk-list-summary').innerText(), /1 hidden/);
+    await page.locator('.mk-list [data-close]').click();
+    await page.keyboard.press('e');
+    await page.mouse.move(cx, cy - 20); await page.mouse.down(); await page.mouse.move(cx, cy + 20, { steps: 6 }); await page.mouse.up();
+    assert.equal((await markups(page))[0].strokes[0].id, firstStroke.id, 'erasing cannot alter hidden ink');
+
+    // A hidden active markup is never silently edited by drawing another stroke.
+    await page.keyboard.press('p');
+    await page.mouse.move(cx - 60, cy - 80); await page.mouse.down(); await page.mouse.move(cx + 60, cy - 80, { steps: 6 }); await page.mouse.up();
+    list = await markups(page);
+    assert.equal(list.length, 2);
+    assert.equal(list[0].hidden, true);
+    assert.equal(list[0].strokes.length, 1);
+    assert.equal((await modelState(page)).activeId, list[1].id);
+    await page.locator('.mk-bar [data-act=list]').click();
+    await page.locator('.mk-list [data-shown]').uncheck();
+    await page.locator('.mk-list [data-shown]').check();
+    assert.equal((await markups(page))[0].hidden, true, 'global show does not overwrite individual visibility');
+    assert.equal(await page.locator('.mk-note').count(), 0);
+
+    await page.evaluate(async () => (await import('/js/store.js')).save());
+    await page.reload();
+    await page.locator('canvas.v-canvas').waitFor();
+    assert.equal((await markups(page)).find(m => m.id === firstId).hidden, true, 'hidden state survives reload');
+    assert.equal((await markups(page)).find(m => m.id === firstId).strokes[0].opacity, 0.45, 'brush opacity survives reload');
+    await page.locator('#side [data-act=markup]').click();
+    await page.locator('.mk-bar').waitFor();
+    await page.locator('.mk-bar [data-act=list]').click();
+    await page.locator('.mk-row').first().locator('[data-open]').click();
+    await waitUntil(async () => await inkAt(page, cx, cy) > 0, 'opening a hidden markup reveals its ink and view');
+    assert.equal((await markups(page)).find(m => m.id === firstId).hidden, false);
+    assert.equal(await page.locator('.mk-note').count(), 1);
+    await page.locator('.mk-row').first().locator('[data-visibility]').click();
+    await page.locator('.mk-list [data-show-all]').click();
+    assert.ok((await markups(page)).every(m => !m.hidden), 'Show all restores individual visibility');
+    assert.ok(await inkAt(page, cx, cy) > 0 && await inkAt(page, cx, cy - 80) > 0, 'both visible screen markups from this camera render together');
+    await page.locator('.mk-list [data-close]').click();
+
+    // Brush controls and Done remain reachable on a narrow touch-sized viewport.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('.mk-bar [data-act=brush]').click();
+    for (const selector of ['.mk-bar', '.mk-brush-panel', '.mk-bar [data-act=done]', '.mk-brush-panel [data-hex]', '.mk-brush-panel [data-opacity]']) {
+      const rect = await page.locator(selector).boundingBox();
+      assert.ok(rect && rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= 391 && rect.y + rect.height <= 845, selector + ' stays in the viewport: ' + JSON.stringify(rect));
+    }
+    assert.deepEqual(errors, []);
+    await context.close();
+  }
+
   console.log('markup mode: mouse, pen and fingers draw on MODEL; notes, undo, eraser, pictures and the view rules hold.');
 } finally {
   await browser.close();
