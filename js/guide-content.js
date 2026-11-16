@@ -206,7 +206,7 @@ export const chapters = [
       'Choose DOWNLOAD or SHOW IN FINDER when you need the original file.',
     ],
     features: [
-      ['Photos, scan frames and renderings', 'Each picture is in a group with its own button above the gallery: PHOTOS, 360 PANORAMAS, SCAN FRAMES (the keyframe photos of a Polycam raw data export in the folder; its depth and confidence maps are not pictures and are not listed), RENDERINGS (pictures in a folder named for renders, or in the project\'s build folder) and DOCUMENTS. Press a button to hide that group; this device remembers it.'],
+      ['Photos, scan frames and renderings', 'Each picture is in a group with its own button above the gallery: PHOTOS, 360 PANORAMAS, SCAN FRAMES (the keyframe photos of a Polycam raw data export in the folder; its depth and confidence maps are not pictures and are not listed), RENDERINGS (pictures in a folder named for renders, or in the project\'s build folder) and DOCUMENTS. Press a button to hide that group; this device remembers it. A picture can be put on a saved view (SAVED VIEW in its details): it then goes with that view to the client page when SEND TO THE LAB has it ticked. RENDER THIS VIEW in MODEL does that for the still it makes, and a rendering in the renders folder named for a view goes on that view by its name.'],
       ['Select the good ones', 'Tick the corner of a card, choose SELECT in the details, or press S in the viewer while stepping through with the arrow keys. The SELECTED filter then shows only those, so a few hundred scan frames are gone through once.'],
       ['Photos Tiksi held', 'Photos added before Tiksi read the project folder are moved into its Photos folder the first time PHOTOS opens, with their notes, pins and links, and Tiksi lets go of its copy. A photo already in the folder is linked to that file instead of written twice.'],
       ['Material from a photo', 'MATERIAL creates a photo-based finish that you can tune in MATERIALS.'],
@@ -425,6 +425,28 @@ export const chapters = [
     ],
     note: 'The page is laid out in the browser and printed at 200 dots per inch, so it looks the same everywhere. Browsers only let a page ask a generic Leave site? question before it closes, which is why Tiksi\'s own question comes after choosing to stay.',
     related: ['documents', 'files', 'projects'],
+  },
+  {
+    id: 'lab', group: 'Project work', title: 'Send the client a page in the lab', path: 'FILE → Project → SEND TO THE LAB…',
+    intro: 'A view-only copy of the property goes to its page in the lab on thedurham.nyc. The page is Tiksi\'s own MODEL, with little switched on: the saved views as small pictures under the model, orbit and walk, Existing or one of the projects you send, furniture on or off, and the drawing quality (it starts at Ultra; a client on a slow phone can lower it). On a phone it is Tiksi\'s phone layout: the model full screen, the three-line button and the same pictures along the bottom.',
+    steps: [
+      'Put the new work in projects: in MODEL, select pieces and choose their project in the PROJECT section. Save views in MODEL; the first one ticked is where the page opens.',
+      'Open SEND TO THE LAB…, tick the projects to offer and give each a short name, and tick the tags the furniture switch hides.',
+      'Look over VIEWS AND RENDERINGS: every saved view is listed with a tick, and under it the renderings of that view, each with its own tick and a box for the name the client sees. Untick what should not go. The line above SEND counts what is going.',
+      'Press SEND. A small frame in the window shows the client page taking the picture of each view; keep the window in front until it says Sent.',
+      'OPEN THE PREVIEW shows the copy as sent, on this Mac. OPEN THE LAB PAGE opens it online when the Mac has the lab\'s upload key.',
+      'Give clients access on the lab\'s own page: the lab shows a section only to the emails granted it.',
+    ],
+    features: [
+      ['The views on the client page', 'Each saved view sent is a small picture in a strip under the model. A click goes to the view and opens what there is more of it, beside it: its iterations (Existing and each project that changes what that view shows) and its renderings. A click on an iteration changes the model. A click on a rendering opens the picture in a window floating over the model, which can be dragged by its bar, resized at its corner and closed, while the model stays in use behind it. A number on a view\'s picture says how many iterations and renderings it opens; a view with neither just goes there.'],
+      ['Where the pictures of the views come from', 'During a send the client page\'s own code opens the copy on this Mac and takes a picture of every view under Existing and under each project, so a picture shows what a click on it gives. A project that looks the same as Existing from a view is not offered under that view. If the pictures cannot be made the send still goes, says so, and the page lists the views by name.'],
+      ['Renderings of a view', 'A rendering goes to the client only with the saved view it is on, and only while its tick is on. RENDER THIS VIEW (right-click a view\'s tab in MODEL, or the pencil beside it) makes a still of the view and puts it on that view. A rendering made elsewhere and kept in the project\'s renders folder goes on the view its file is named for (the view\'s name first: "Kitchen.png", "Kitchen - walnut option.jpg"). SAVED VIEW in a picture\'s details in PHOTOS, and the list under each rendering in SEND TO THE LAB, put a picture on a view or take it off. The client gets a copy at most 2400 pixels on its long side, under the name typed for it (or "Rendering" and its date), never its file name. A rendering new since the last send is marked NEW. The ticks are kept with the property as they are flipped.'],
+      ['Sending again', 'Sending again replaces the copy at the same link, in one step; a client\'s open page keeps the old copy until they reload.'],
+      ['What is left out', 'Products, prices, project scope and notes, every photo that is not a ticked rendering of a ticked view, photo pins, notes, measurements, documents, the scan capture, the record of where measurements came from, and any project or saved view not ticked. Pieces hidden in MODEL stay hidden.'],
+      ['Walking on the client page', 'A tap or click on the floor walks there; the arrows on the floor at each doorway step through it.'],
+    ],
+    note: 'The upload key is the website\'s own file-storage key, kept on this Mac in ~/.r2-credentials. Without it a send goes to this Mac\'s preview copy only, and SEND TO THE LAB says so.',
+    related: ['one-pager', 'tags', 'projects'],
   },
   {
     id: 'settings', group: 'Reference', title: 'Settings, backups and storage', path: 'FILE → Settings', image: 'settings.png',

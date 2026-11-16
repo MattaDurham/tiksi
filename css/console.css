@@ -1358,3 +1358,31 @@ html.touch .file-dialog .file-units .seg-btn { min-height:44px; }
 .lab-dialog progress { width: 100%; }
 .v-project .pp-group { margin: 6px 0 8px; }
 .v-project .pp-group summary { cursor: pointer; font-size: 11px; letter-spacing: .06em; color: var(--muted); padding: 4px 0; }
+/* The look-over of what goes to the client: each saved view, and the renderings on it. */
+.lab-dialog { width: min(820px, calc(100vw - 24px)); }
+.lab-dialog .lab-all { margin: 0 0 8px; }
+.lab-dialog .lab-views { display: grid; gap: 8px; margin: 6px 0 14px; }
+.lab-dialog .lab-view { border: 1px solid var(--line-2); border-radius: 8px; padding: 2px 12px; background: var(--panel-2); }
+.lab-dialog .lab-view.off { background: transparent; border-style: dashed; }
+.lab-dialog .lab-view.off .lab-renderings { opacity: 0.4; }
+.lab-dialog .lab-view-head { margin: 8px 0; font-weight: 600; flex-wrap: nowrap; }
+.lab-dialog .lab-view-head span { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lab-dialog .lab-view-head small { flex: none; font-weight: 400; font-size: 12px; color: var(--dim); }
+.lab-dialog .lab-view.off .lab-view-head { color: var(--dim); font-weight: 400; }
+.lab-dialog .lab-renderings { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; margin: 2px 0 12px; }
+.lab-dialog .lab-rendering { display: grid; gap: 5px; align-content: start; min-width: 0; }
+.lab-dialog .lab-rendering-pic { position: relative; display: block; margin: 0; min-height: 0; aspect-ratio: 16 / 10; border-radius: 6px; overflow: hidden; background: #05070a; border: 2px solid var(--accent); cursor: pointer; }
+.lab-dialog span.lab-rendering-pic { border-color: var(--line-2); cursor: default; }
+.lab-dialog .lab-rendering.off .lab-rendering-pic { border-color: var(--line-2); }
+.lab-dialog .lab-rendering.off img { opacity: 0.35; filter: grayscale(1); }
+.lab-dialog .lab-rendering-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.lab-dialog .lab-rendering-pic input { position: absolute; top: 6px; left: 6px; z-index: 1; margin: 0; }
+.lab-dialog .lab-new { position: absolute; top: 6px; right: 6px; padding: 2px 6px; border-radius: 4px; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; color: var(--accent-ink); background: var(--accent); }
+.lab-dialog .lab-rendering input[type=text], .lab-dialog .lab-rendering select { width: 100%; min-width: 0; box-sizing: border-box; padding: 6px 8px; font-size: 12px; }
+.lab-dialog .lab-rendering-note { font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lab-dialog .lab-loose { margin-top: 4px; }
+.lab-dialog .lab-summary { color: var(--ink); font-weight: 600; margin: 16px 0 6px; }
+/* The client page taking the pictures of the views (js/lab-pictures.js): a small live frame. */
+.lab-pictures { margin: 10px 0; }
+.lab-pictures p { margin: 0 0 8px; }
+.lab-pictures iframe { display: block; width: 800px; height: 500px; border: 1px solid var(--line-2); border-radius: 8px; background: #090c0f; transform: scale(0.3); transform-origin: 0 0; margin: 0 -560px -350px 0; pointer-events: none; }

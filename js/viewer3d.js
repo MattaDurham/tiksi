@@ -85,6 +85,7 @@ import { objectPanelHtml, bindObjectPanel, multiPanelHtml, bindMultiPanel, planT
 import { ensureCanonTag } from './tags.js';
 import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown, setHidden, hiddenKeys, showAllHidden, PHASES, PHASE_LABEL, phaseCounts, phaseShown, setPhaseShown, phaseOfKey, setPhase } from './tags.js';
 import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags, applySavedHidden, modelState } from './saved-views.js';
+import { viewRenderingName } from './view-renderings.js';
 import { onScreen, setOnScreen, onScreenChange, setMenuProvider, refreshPane } from './tiksi-menu.js';
 import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility, partKeyForObject, partByKey, partName, planKeyOf, modelParts, partKey } from './tags-scene.js';
 
@@ -181,7 +182,7 @@ let walkArrowRoot = null;      // the arrows' group in the scene
 let walkArrowsAt = null;       // where the arrows were laid out for, { x, z, y }
 let clientMode = false;        // the client page in the lab (client-view.js): looking only
 // What the client page plugs in: { states: [{ id, label }], show(), setShow(id), furniture(),
-// setFurniture(on), hasFurniture }. The left pane and the phone panel offer these and the saved
+// setFurniture(on), hasFurniture, viewsChanged(openViewId, shown) }. The left pane and the phone panel offer these and the saved
 // views, orbit and walk; nothing can be selected, edited or saved.
 let clientControls = null;
 // MODEL BESIDE (model-beside.js): the model in a pane next to another page. It shows the
@@ -196,7 +197,7 @@ export function setClientMode(on, controls) { clientMode = !!on; clientControls 
 function clientMenuGroups() {
   const c = clientControls;
   const groups = [
-    { title: 'Saved views', screen: { id: 'model.views', on: onScreen('model.views', true), label: 'The saved-view tabs over the model' }, items:
+    { title: 'Saved views', screen: { id: 'model.views', on: onScreen('model.views', true), label: 'The pictures of the saved views under the model' }, items:
       (prop.savedViews || []).map(v => ({ label: v.name, icon: 'camera', active: v.id === activeViewId, data: { viewGo: v.id }, title: v.name + ': go to this view', run: () => goToView(v.id) })) },
   ];
   if (c && c.states.length > 1) groups.push({ title: 'Show', items: c.states.map(st => ({ label: st.label, icon: st.id === c.show() ? 'check' : 'layers', active: st.id === c.show(), data: { clientShow: st.id }, run: () => { c.setShow(st.id); refreshPane(); } })) });
@@ -6077,6 +6078,45 @@ function stepView(by) {
   const i = list.findIndex(v => v.id === activeViewId);
   goToView(list[i < 0 ? (by > 0 ? 0 : list.length - 1) : (i + by + list.length) % list.length].id);
 }
+// A picture of a saved view as the view shows it (camera, tags, cuts): the view goes on the
+// screen at once and stays there. A canvas with `asCanvas`, otherwise a PNG.
+async function stillOfView(v, { width, height, asCanvas = false }) {
+  activeViewId = v.id;
+  showView(v, 0);
+  // Two frames: the camera, the tags and the cuts are on the model before it is drawn.
+  for (let i = 0; i < 2; i++) await new Promise(resolve => requestAnimationFrame(resolve));
+  return renderStillBlob({ width, height, quality: quality(), annotations: false, asCanvas });
+}
+// For the client page's own pictures (client-view.js): the saved view `id` at width x height.
+export async function viewPicture(id, width, height) {
+  const v = prop && (prop.savedViews || []).find(x => x.id === id);
+  if (!scene || !v) throw new Error('No such saved view');
+  return stillOfView(v, { width, height, asCanvas: true });
+}
+// RENDER THIS VIEW: a still of the saved view, filed in PHOTOS as a rendering of that view, so
+// it shows under the view's thumbnail on the client page (view-renderings.js).
+let renderingView = false;
+async function renderSavedView(id) {
+  const v = (prop.savedViews || []).find(x => x.id === id);
+  if (!v || renderingView) return;
+  renderingView = true;
+  const token = mountId;
+  try {
+    setHint('Rendering the view "' + v.name + '"…');
+    const blob = await stillOfView(v, stillDimensions(wrapEl.clientWidth, wrapEl.clientHeight, 2400, renderer.capabilities.maxTextureSize));
+    if (token !== mountId) return;
+    const now = new Date();
+    const file = new File([blob], viewRenderingName(v, now) + '.png', { type: 'image/png' });
+    await addPhotoFromFile(prop, file, { source: 'rendering', savedViewId: v.id, renderedAt: now.toISOString() });
+    touch();
+    toast('Rendered "' + v.name + '". The rendering is in PHOTOS, on this view; SEND TO THE LAB lists it under the view.', 'ok', 7000);
+  } catch (e) {
+    toast('Rendering stopped: ' + e.message, 'error', 12000);
+  } finally {
+    renderingView = false;
+    if (token === mountId) setHint('');
+  }
+}
 // A view is renamed in its own tab: the tab becomes a text box, Enter or clicking away keeps
 // the name, Esc leaves the old one.
 let namingViewId = null;
@@ -6091,6 +6131,7 @@ function viewMenu(id, at) {
   popupMenu(at, [
     ['view-rename', 'RENAME', () => renameView(id)],
     ['view-update', 'UPDATE TO WHAT SHOWS NOW', () => { updateSavedView(prop, id, viewState()); activeViewId = id; touch(); renderViews(); toast('View updated.', 'ok'); }],
+    ['view-render', 'RENDER THIS VIEW', () => renderSavedView(id)],
     i > 0 ? ['view-left', 'MOVE LEFT', () => { moveSavedView(prop, id, -1); touch(); renderViews(); }] : null,
     i < list.length - 1 ? ['view-right', 'MOVE RIGHT', () => { moveSavedView(prop, id, 1); touch(); renderViews(); }] : null,
     null,
@@ -6109,6 +6150,8 @@ function renderViews() {
   refreshPane();
   const strip = hud.views;
   if (!strip) return;
+  // The client page draws its own thumbnails of the views (client-strip.js).
+  if (clientMode && clientControls && clientControls.viewsChanged) clientControls.viewsChanged(activeViewId, !strip.hidden);
   const list = prop.savedViews || [];
   if (namingViewId && !list.some(v => v.id === namingViewId)) namingViewId = null;
   // The same tabs as drawn: mark the current one and leave every tab in place, so choosing a
@@ -6171,6 +6214,7 @@ function applyScreen() {
   hud.modes.hidden = !onScreen('model.modes', false);
   if (hud.compassBox) hud.compassBox.hidden = !onScreen('model.compass', true);
   if (hud.views) hud.views.hidden = !onScreen('model.views', true);
+  if (clientMode && clientControls && clientControls.viewsChanged && hud.views) clientControls.viewsChanged(activeViewId, !hud.views.hidden);
   placeObjectList();
   wrapEl && wrapEl.classList.toggle('v-views-on', !hud.views.hidden);
   refreshPane();
