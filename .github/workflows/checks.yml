@@ -47,7 +47,7 @@ jobs:
     # runner has no GPU: MODEL draws through software GL there, and nearly every browser failure from
     # 2026-11-04 to 11-06 was that slowness, not a fault in the app. With this setup macOS passed all
     # 12 of its group runs on 2026-11-06.
-    # The suites take 35-45 minutes one after another, so they run as four groups of about equal
+    # The suites take about 105 minutes one after another, so they run as four groups of about equal
     # length side by side (scripts/e2e-groups.mjs balances them from scripts/e2e-durations.json).
     # The syntax and unit checks run once, in the quick job above, not again here.
     name: Regression (macos-latest, group ${{ matrix.group }} of 4)
@@ -56,9 +56,9 @@ jobs:
       matrix:
         group: [1, 2, 3, 4]
     runs-on: macos-latest
-    # A group takes about 5-13 minutes. A suite that hangs is stopped at 12 minutes and tried once
-    # more, so 40 minutes leaves room for one stopped suite on a slow runner.
-    timeout-minutes: 40
+    # A group takes about 26-32 minutes (2026-11-16). A suite that hangs is stopped at 12 minutes
+    # and tried once more, so 55 minutes leaves room for one stopped suite on a slow runner.
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
