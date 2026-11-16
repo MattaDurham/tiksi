@@ -72,7 +72,8 @@ import { ModelMirrors } from './model-mirrors.js';
 import { componentKeyOf } from './model-components.js';
 import { modelObjectTree, objectForClick, objectBelow, objectOffset, setObjectOffset, applyPartOffsets, objectBox } from './model-objects.js';
 import { renderObjectList, showListTab, revealInList, objectThing, hiddenState } from './object-list.js';
-import { trimTemplate, swapTrimProduct, setTrimY, setFieldEdge, trimExtent, trimLayout, trimStyle, isField, roomFaces } from './trims.js';
+import { trimTemplate, swapTrimProduct, setTrimY, trimExtent, trimStyle, trimProduct, trimLabel, isField, roomFaces } from './trims.js';
+import { trimDesign, designValues, setDesignParam, stickySnap, SCOPE_LABELS } from './trim-design.js';
 import { trimPanelHtml, bindTrimPanel, addTrimHtml, bindAddTrim } from './trim-panel.js';
 import { PIECE_KINDS, pieceRecord, clickGroupIds, assignProject } from './project-pieces.js';
 import { arrowsNear, walkTarget, glideMs } from './walk-hops.js';
@@ -629,6 +630,7 @@ function texturesOnScreen() {
 
 let lastStructure = null, lastFixtureRecords = new Map(), lastTrimRecords = new Map();
 function rebuildModel() {
+  trimDesignMemo = null;
   const structure = JSON.stringify([prop.id, quality(), memoryLimits().textureQuality, prop.levels, prop.walls, prop.openings, prop.rooms, prop.tags, prop.tagOf, prop.hidden, prop.modelSourceId, xray, prop.env.xrayOpacity, [...hiddenLevels()], ws.data.materials]);
   const records = new Map(prop.fixtures.map(f => [f.id, JSON.stringify(f)]));
   const trimRecords = new Map((prop.trims || []).map(t => [t.id, JSON.stringify(t)]));
@@ -2183,7 +2185,19 @@ function onPointerMove(e) {
     const hit = pick(e, { scans: false, ground: false });
     const next = hit && hit.faceId ? findGroupFor('face', hit.faceId) : hit && !hit.cap && ['wall', 'room', 'opening', 'ceiling', 'trim'].includes(hit.kind) ? hit.object : null;
     const under = trimEdit && hit ? trimUnder(e, hit) : null;
-    if (under) { const g = trimGrab(e, under); renderer.domElement.style.cursor = g && g.mode === 'divider' ? 'ew-resize' : 'ns-resize'; return; }
+    if (under) {
+      // What a press here would drag: the cursor, a line saying so, and an outline round every section it would change.
+      const g = trimGrab(e, under);
+      const sideways = g && (g.mode === 'aim' || g.mode === 'divider' || (g.mode === 'gap' && g.axis === 'x') || (g.mode === 'margin' && g.side === 'sides'));
+      renderer.domElement.style.cursor = sideways ? 'ew-resize' : 'ns-resize';
+      if (g) {
+        const reach = trimGrabReach(g, designNow()).map(t => t.id);
+        setHint('EDIT TRIM: ' + trimGrabWords(g, reach.length));
+        if (reach.join() !== trimReach.join()) { trimReach = reach; updateOutlineTargets(); requestRender(2); }
+      }
+      return;
+    }
+    if (trimEdit && trimReach.length) { trimReach = []; setHint(TRIM_EDIT_HINT); updateOutlineTargets(); requestRender(2); }
     if (tool === 'fov') renderer.domElement.style.cursor = 'ns-resize';
     else if (tool === 'measure' || tool === 'pin' || tool === 'note') renderer.domElement.style.cursor = hit ? 'crosshair' : 'default';
     else renderer.domElement.style.cursor = (hit && hit.kind !== 'ground') ? 'pointer' : 'default';
@@ -2242,6 +2256,11 @@ function updateOutlineTargets() {
   const hov = hoverTarget && hoverTarget !== sel ? hoverTarget : null;
   const hovMeshes = [];
   if (hov) hov.traverse(o => { if (o.isMesh && !(o.userData && o.userData.glass)) hovMeshes.push(o); });
+  // While trim is edited by dragging, every section the drag under the pointer reaches is outlined.
+  if (trimEdit && trimReach.length && modelGroup) {
+    const reach = new Set(trimReach);
+    modelGroup.traverse(o => { if (o.isMesh && o.userData && o.userData.kind === 'trim' && reach.has(o.userData.id)) hovMeshes.push(o); });
+  }
   passes.hover.selectedObjects = hovMeshes;
   passes.hover.enabled = hovMeshes.length > 0;
   for (const id of Object.keys(scanObjs)) {
@@ -2252,11 +2271,12 @@ function updateOutlineTargets() {
 }
 function setSelection(sel, picks, things) {
   selectionVersion++;
+  trimDesignMemo = null;
   const was = selection;
   selection = sel;
   tagPicks = picks || (sel && sel.tagKey ? [sel.tagKey] : sel && ['wall', 'opening', 'fixture', 'room', 'trim'].includes(sel.kind) ? [planKey(sel.kind, sel.id)] : []);
   picked = things || (sel && sel.kind !== 'scan' && tagPicks.length ? [{ key: tagPicks[0], keys: tagPicks.slice(), scanId: null, name: '', sel }] : []);
-  if (trimEdit && !trimIds().length) { trimEdit = false; setHint(''); }
+  if (trimEdit && !trimIds().length) { trimEdit = false; trimReach = []; setHint(''); }
   const shownObject = selectedModelObject();
   if (shownObject) revealInList(shownObject);
   listReveal = true;
@@ -2271,11 +2291,39 @@ function setSelection(sel, picks, things) {
 }
 
 // ---------- wall trim ----------
-// Trim sections (trims.js) are picked like any plan element; Shift-click adds more. EDIT BY
-// DRAGGING (E) turns a press on a selected section into a drag in the plane of its wall: up
-// or down moves every selected section; a field's top or bottom edge resizes it; the gap
-// between two boxes moves that divider. One geometry edit per drag, so UNDO takes it back.
+// Trim sections (trims.js) are picked like any plan element; Shift-click adds more. A change
+// to selected trim reaches as far as CHANGES REACH says (trim-design.js): the sections
+// selected, their group, the whole room or the whole project. EDIT BY DRAGGING (E) turns a
+// press on a selected section into a drag in the plane of its wall: a rail or the inside of a
+// box moves that height line; a field's top or bottom edge moves that line; a box's side
+// resizes every box (each wall refits its count); the space between two boxes is the gap, and
+// the space round them the margins. One geometry edit per drag, so UNDO takes it back.
 let trimEdit = false;
+let trimScope = 'room';        // how far a change reaches: 'selected' | 'group' | 'room' | 'project'
+let trimReach = [];            // ids of the sections the drag under the pointer would change, outlined
+// Every number a drag or the panel's layout fields can change on a record.
+const TRIM_KEYS = ['y', 'h', 'cols', 'colsAt', 'widths', 'heights', 'rows', 'gap', 'inset', 'insetTop', 'insetBottom', 'spacing', 'target', 'minBox'];
+// The design rules over this property as it is now (trim-design.js); one per gesture or render.
+let trimDesignMemo = null;     // kept until the model is rebuilt or the selection changes
+function designNow() {
+  if (trimDesignMemo && trimDesignMemo.prop === prop && trimDesignMemo.projects === ws.data.projects) return trimDesignMemo.design;
+  const design = buildTrimDesign();
+  trimDesignMemo = { prop, projects: ws.data.projects, design };
+  return design;
+}
+function buildTrimDesign() {
+  const memo = new Map();
+  const once = (k, f) => { if (!memo.has(k)) memo.set(k, f()); return memo.get(k); };
+  return trimDesign({ prop, projects: ws.data.projects || [], levelOf: w => levelOfWall(prop, w).id,
+    wallsOn: l => once('w' + l, () => wallsOn(prop, l)), roomsOn: l => once('r' + l, () => roomsOn(prop, l)),
+    openingsOn: l => once('o' + l, () => openingsOn(prop, l)), heightOf: w => wallHeightOf(prop, w) });
+}
+function setTrimScope(id) {
+  if (!SCOPE_LABELS[id]) return;
+  trimScope = id; trimReach = [];
+  updateOutlineTargets(); requestRender(2);
+  renderInspector();
+}
 let trimDrag = null;           // { mode, start: {x, y}, base: Map(id -> record copy), ... } while dragging
 let wallFaceClicked = 1;       // the face of the last wall clicked, for ADD TRIM TO THIS FACE
 let trimFocusList = false;     // the catalog list keeps the keyboard after a swap
@@ -2354,32 +2402,73 @@ function deleteTrims(ids) {
   trimEdit = false;
   setSelection(null); touch(); rebuildModel();
 }
-// Change every selected section with fn(t), as one undoable edit.
-function editTrims(fn, label) {
-  const list = trimIds().map(trimById).filter(Boolean);
-  if (!list.length) return;
+// Change every selected section with fn(t), as one undoable edit. `reach`: the change goes to
+// every section of the same kind that CHANGES REACH covers ('style' narrows that to one kind).
+function editTrims(fn, label, reach, style) {
+  const ids = trimIds();
+  let list = reach ? designNow().members(ids, trimScope) : ids.map(trimById).filter(Boolean);
+  if (style) list = list.filter(t => t.style === style);
+  if (!list.length) return 0;
   beginGeometryEdit(prop, label || 'edit trim');
   for (const t of list) fn(t);
   touch(); rebuildModel(); renderInspector();
+  return list.length;
 }
+// Move the height line a section is on by `dy`, with everything CHANGES REACH carries along.
+function moveTrimLine(t, edge, dy, label) {
+  const design = designNow();
+  const pool = design.pool(trimIds().includes(t.id) ? trimIds() : [t.id], trimScope);
+  const plan = design.planLine(pool.map(x => JSON.parse(JSON.stringify(x))), t.id, edge, dy, { all: trimScope === 'selected' && edge === 'move' });
+  if (!plan.moved) return;
+  beginGeometryEdit(prop, label || 'move trim');
+  for (const [id, patch] of plan.patches) { const x = trimById(id); if (x) Object.assign(x, patch); }
+  touch(); rebuildModel(); renderInspector();
+  if (Math.abs(plan.dy - dy) > 5e-4) toast('Moved ' + fmtLen(Math.abs(plan.dy)) + ', not ' + fmtLen(Math.abs(dy)) + ': a section met the floor, the ceiling or its least height.', 'warn');
+}
+const TRIM_EDIT_HINT = 'EDIT TRIM: drag a rail or the inside of a box to move that height; a box\'s side to resize every box; the space between boxes for the gap; the space round them for the margins. Esc or E when done.';
 function toggleTrimEdit() {
   trimEdit = !trimEdit && trimIds().length > 0;
-  setHint(trimEdit ? 'EDIT TRIM: drag a selected section up or down. Wainscoting: drag its top or bottom edge, or the gap between two boxes. Esc or E when done.' : '');
+  if (!trimEdit) { trimReach = []; updateOutlineTargets(); requestRender(2); }
+  setHint(trimEdit ? TRIM_EDIT_HINT : '');
   renderInspector();
+}
+// One more or one fewer box in the stretch of wall under x, on that section alone.
+function stepTrimCols(t, x, delta) {
+  beginGeometryEdit(prop, delta > 0 ? 'add trim panel' : 'remove trim panel');
+  const r = designNow().stepCols(t, x, delta);
+  if (!r) return;
+  touch(); rebuildModel(); renderInspector();
+  toast((r.count ? r.count + (r.count === 1 ? ' panel' : ' panels') : 'No panel') + ' in this stretch now (was ' + r.was + ').', 'ok');
 }
 function renderTrimPanel() {
   const list = trimIds().map(trimById).filter(Boolean);
   if (!list.length) { selection = null; tagPicks = []; picked = []; return renderInspectorBody(); }
+  const design = designNow(), ids = list.map(t => t.id);
+  const reach = design.members(ids, trimScope);
   const ctx = {
     trims: list, editing: trimEdit, focusList: trimFocusList,
+    scope: trimScope, scopes: design.scopes(ids), setScope: setTrimScope, reach, poolCount: design.pool(ids, trimScope).length,
+    values: designValues, summary: design.summary(reach), notes: design.notes(reach, fmtLen),
+    // A layout number for every section of this kind the scope reaches.
+    design: (key, value, label) => editTrims(t => setDesignParam(t, key, value), label || 'trim layout', true),
+    line: (t, edge, dy, label) => moveTrimLine(t, edge, dy, label),
+    swapStyle: (style, productId) => editTrims(t => swapTrimProduct(t, productId, trimWallHeight(t)), 'swap trim', true, style),
+    stretches: t => { const lay = design.layout(t); return lay.rects.map((r, k) => r.full ? { x: (r.x0 + r.x1) / 2, w: r.x1 - r.x0, n: lay.boxes.filter(b => b.rect === k && b.row === 0).length } : null).filter(Boolean); },
+    setStretch: (t, i, n) => editTrims(x => {
+      if (x !== t) return;
+      const now = ctx.stretches(t).map(s => s.n);
+      const at = (t.colsAt || []).slice(0, now.length); while (at.length < now.length) at.push(null);
+      at[i] = n; x.colsAt = at.some(v => v != null) ? at : null; x.cols = null; x.widths = null;
+    }, 'trim panels'),
+    selectReach: scope => selectTrims(design.pool(ids, scope).map(t => t.id)),
     wallHeight: trimWallHeight,
     wallLength: t => { const w = trimWall(t); return w ? Math.hypot(w.bx - w.ax, w.by - w.ay) : 1; },
-    layoutOf: t => { const w = trimWall(t); return w ? trimLayout(t, w, openingsOn(prop, levelOfWall(prop, w).id), { H: wallHeightOf(prop, w) }) : { boxes: [], rects: [], cols: 0 }; },
+    layoutOf: t => design.layout(t),
     faceName: t => { const w = trimWall(t); if (!w) return ''; const n = wallFaceLabels(w, roomsOn(prop, levelOfWall(prop, w).id)); return t.side === -1 ? n.neg : n.pos; },
     setY: (t, v) => setTrimY(t, v, trimWallHeight(t)),
     raise: d => editTrims(t => { if (trimStyle(t) && trimStyle(t).kind !== 'crown') setTrimY(t, t.y + d, trimWallHeight(t)); }, d >= 0 ? 'raise trim' : 'lower trim'),
-    set: (fn, label) => editTrims(fn, label),
-    swap: (productId, keepFocus) => { trimFocusList = !!keepFocus; editTrims(t => swapTrimProduct(t, productId, trimWallHeight(t)), 'swap trim'); trimFocusList = false; },
+    set: (fn, label, reach) => editTrims(fn, label, reach),
+    swap: (productId, keepFocus) => { trimFocusList = !!keepFocus; editTrims(t => swapTrimProduct(t, productId, trimWallHeight(t)), 'swap trim', true); trimFocusList = false; },
     toggleEdit: toggleTrimEdit, remove: () => deleteTrims(list.map(t => t.id)),
     selectWall: () => setSelection({ kind: 'wall', id: list[0].wallId }), rerender: renderInspector,
   };
@@ -2401,8 +2490,8 @@ function trimFacePoint(e, t) {
 }
 // The selected section under the pointer: one hit itself, or the wall face a selected section
 // covers, inside its area (a box field is mostly wall between thin mouldings) give or take 4 cm.
-function trimUnder(e, hit) {
-  const ids = trimIds();
+function trimUnder(e, hit, among) {
+  const ids = among || trimIds();
   if (hit.kind === 'trim' && ids.includes(hit.id)) return hit;
   const wallId = hit.kind === 'wall' ? hit.id : hit.kind === 'trim' ? (trimById(hit.id) || {}).wallId : null;
   if (!wallId) return null;
@@ -2418,27 +2507,98 @@ function trimUnder(e, hit) {
   }
   return null;
 }
-// What a press on selected trim would drag: the whole selection, a field's edge, or a divider.
+// What a press on selected trim would drag (see the note at the top of this section):
+//   move, top, bottom   a height line (trim-design.js planLine)
+//   aim                 the width every box aims for; gap; margin (sides, top or bottom)
+//   divider             with Alt on a gap: that one divider, the two boxes beside it only
 function trimGrab(e, hit) {
   const t = trimById(hit.id);
   if (!t) return null;
   const at = trimFacePoint(e, t);
   if (!at) return null;
-  const H = trimWallHeight(t), ids = trimIds();
-  if (isField(t) && ids.length === 1) {
+  const v = designValues(t);
+  if (!v) return { mode: 'move', t, at };
+  const p = trimProduct(t), W = p ? p.W : .03;
+  const lay = designNow().layout(t);
+  const line = Math.max(.012, Math.min(.03, t.h / 8));
+  if (!v.frame) {
+    // Framed panels, battens and planks: the field's edges are its rails.
     const tol = Math.max(.02, Math.min(.06, t.h / 6));
     if (Math.abs(at.y - (t.y + t.h)) < tol) return { mode: 'top', t, at };
     if (Math.abs(at.y - t.y) < tol) return { mode: 'bottom', t, at };
-    const w = trimWall(t), lay = trimLayout(t, w, openingsOn(prop, levelOfWall(prop, w).id), { H });
-    const full = lay.rects.findIndex(r => r.full);
-    const row = lay.boxes.filter(b => b.rect === full && b.row === 0).sort((a, b) => a.x0 - b.x0);
-    for (let i = 0; i + 1 < row.length; i++) {
-      if (at.x > row[i].x1 - .01 && at.x < row[i + 1].x0 + .01 && at.y > row[i].y0 && at.y < lay.boxes.filter(b => b.rect === full).reduce((m, b) => Math.max(m, b.y1), 0)) {
-        return { mode: 'divider', t, at, i, widths: row.map(b => b.x1 - b.x0) };
+    if (v.boxes || v.bays) {
+      // A stile or batten: the bay beside it is the width in hand.
+      const rects = lay.rects.map((r, k) => ({ r, row: lay.boxes.filter(b => b.rect === k && b.row === 0).sort((a, b) => a.x0 - b.x0) })).filter(x => x.r.full && x.row.length);
+      for (const { r, row } of rects) {
+        if (at.x < r.x0 - .01 || at.x > r.x1 + .01) continue;
+        for (let i = 0; i <= row.length; i++) {
+          const x0 = i === 0 ? r.x0 : row[i - 1].x1, x1 = i === row.length ? r.x1 : row[i].x0;
+          if (at.x > x0 - .012 && at.x < x1 + .012) { const b = row[Math.max(0, i - 1)]; return { mode: 'aim', t, at, dir: i === 0 ? -1 : 1, v0: b.x1 - b.x0 }; }
+        }
       }
     }
+    return { mode: 'move', t, at };
+  }
+  // Picture-frame boxes. The field's own edges first: a thin band on each line.
+  if (Math.abs(at.y - (t.y + t.h)) < line) return { mode: 'top', t, at };
+  if (Math.abs(at.y - t.y) < line) return { mode: 'bottom', t, at };
+  const grip = Math.max(.014, W * .75);                       // half the band a moulding is grabbed in
+  for (const [k, r] of lay.rects.entries()) {
+    if (at.x < r.x0 || at.x > r.x1 || at.y < r.y0 || at.y > r.y1) continue;
+    const boxes = lay.boxes.filter(b => b.rect === k);
+    if (!boxes.length) break;
+    const bx0 = Math.min(...boxes.map(b => b.x0)), bx1 = Math.max(...boxes.map(b => b.x1));
+    const by0 = Math.min(...boxes.map(b => b.y0)), by1 = Math.max(...boxes.map(b => b.y1));
+    for (const b of boxes) {
+      const inY = at.y > b.y0 - grip && at.y < b.y1 + grip, inX = at.x > b.x0 - grip && at.x < b.x1 + grip;
+      // A side moulding is the box's width; a top or bottom moulding is its margin (or the gap to the next row).
+      if (inY && Math.abs(at.x - (b.x0 + W / 2)) < grip) return { mode: 'aim', t, at, dir: -1, v0: b.x1 - b.x0 };
+      if (inY && Math.abs(at.x - (b.x1 - W / 2)) < grip) return { mode: 'aim', t, at, dir: 1, v0: b.x1 - b.x0 };
+      if (inX && Math.abs(at.y - (b.y1 - W / 2)) < grip) return b.y1 > by1 - 1e-6 ? { mode: 'margin', side: 'top', t, at, sign: -1, v0: v.top } : { mode: 'gap', axis: 'y', t, at, sign: 1, v0: v.gap };
+      if (inX && Math.abs(at.y - (b.y0 + W / 2)) < grip) return b.y0 < by0 + 1e-6 ? { mode: 'margin', side: 'bottom', t, at, sign: 1, v0: v.bottom } : { mode: 'gap', axis: 'y', t, at, sign: -1, v0: v.gap };
+      if (at.x > b.x0 && at.x < b.x1 && at.y > b.y0 && at.y < b.y1) return { mode: 'move', t, at };
+    }
+    // Outside every box: the margins round them, or a gap between two.
+    if (at.y > by1) return { mode: 'margin', side: 'top', t, at, sign: -1, v0: v.top };
+    if (at.y < by0) return { mode: 'margin', side: 'bottom', t, at, sign: 1, v0: v.bottom };
+    if (at.x < bx0) return { mode: 'margin', side: 'sides', t, at, sign: 1, v0: v.sides };
+    if (at.x > bx1) return { mode: 'margin', side: 'sides', t, at, sign: -1, v0: v.sides };
+    const row = boxes.filter(b => b.row === 0).sort((a, b) => a.x0 - b.x0);
+    for (let i = 0; i + 1 < row.length; i++) {
+      if (at.x >= row[i].x1 && at.x <= row[i + 1].x0) {
+        // The nearer side of the gap follows the pointer, and the gap opens about its middle.
+        const g = { mode: 'gap', axis: 'x', t, at, sign: at.x < (row[i].x1 + row[i + 1].x0) / 2 ? -1 : 1, v0: v.gap };
+        return e.altKey && r.full ? { mode: 'divider', t, at, i, widths: row.map(b => b.x1 - b.x0) } : g;
+      }
+    }
+    // Between two rows.
+    return { mode: 'gap', axis: 'y', t, at, sign: 1, v0: v.gap };
   }
   return { mode: 'move', t, at };
+}
+// The sections a grab would change, and what to call it.
+function trimGrabReach(grab, design) {
+  const ids = trimIds();
+  if (grab.mode === 'divider') return [grab.t];
+  const pool = design.pool(ids, trimScope);
+  if (['move', 'top', 'bottom'].includes(grab.mode)) {
+    const plan = design.planLine(pool, grab.t.id, grab.mode, 0, { all: trimScope === 'selected' && grab.mode === 'move' });
+    return [...plan.patches.keys()].map(trimById).filter(Boolean);
+  }
+  return pool.filter(t => t.style === grab.t.style);
+}
+function trimGrabWords(grab, n) {
+  const where = n > 1 ? ' on ' + n + ' sections (' + SCOPE_LABELS[trimScope].toLowerCase() + ')' : '';
+  const bays = designValues(grab.t) && designValues(grab.t).bays;
+  switch (grab.mode) {
+    case 'aim': return (bays ? 'Batten spacing' : 'Box width') + ': drag sideways' + where + '; each wall refits its count';
+    case 'gap': return 'Gap between boxes: drag' + where + '. Shift keeps the margins equal to it; Alt moves this one divider';
+    case 'margin': return (grab.side === 'sides' ? 'Margin at the ends' : grab.side === 'top' ? 'Margin above the boxes' : 'Margin below the boxes') + ': drag' + where + '. Shift keeps gap and margins equal';
+    case 'divider': return 'This divider only: drag sideways';
+    case 'top': return 'Top line of the field: drag up or down' + where;
+    case 'bottom': return 'Bottom line of the field: drag up or down' + where;
+    default: return 'Height: drag up or down' + where;
+  }
 }
 function onTrimPointerDown(e) {
   if (!trimEdit || e.button !== 0 || e.ctrlKey || mode === 'walk' || tool !== 'select' || !scene) return;
@@ -2451,47 +2611,84 @@ function onTrimPointerDown(e) {
   // The press is ours: the camera does not orbit, and the click is not a selection.
   e.stopImmediatePropagation(); e.preventDefault();
   try { renderer.domElement.setPointerCapture(e.pointerId); } catch (err) { /* moves still reach the window */ }
-  trimDrag = { ...grab, ids, x: e.clientX, y: e.clientY, shift: e.shiftKey, hit: under, moved: false,
-    base: new Map(ids.map(id => [id, JSON.parse(JSON.stringify(trimById(id)))])), localAfter: new Map() };
+  const design = designNow();
+  // Everything the scope covers is copied as it stands: each move starts again from these.
+  const pool = grab.mode === 'divider' ? [grab.t] : design.pool(ids, trimScope);
+  trimDrag = { ...grab, ids, design, x: e.clientX, y: e.clientY, shift: e.shiftKey, hit: under, moved: false, last: null,
+    stops: ['move', 'top', 'bottom'].includes(grab.mode) ? design.lineStops(grab.t) : [],
+    base: new Map(pool.map(t => [t.id, JSON.parse(JSON.stringify(t))])), localAfter: new Map() };
   window.addEventListener('pointermove', onTrimDragMove);
   window.addEventListener('pointerup', onTrimDragEnd);
   window.addEventListener('pointercancel', onTrimDragEnd);
 }
-// Heights snap to 1/8 in (or 5 mm in metric) as a tape is read.
-function snapHeight(v) { const step = units() === 'metric' ? .005 : .0254 / 8; return Math.round(v / step) * step; }
+// Heights snap to 1/8 in (or 5 mm in metric) as a tape is read; box widths to 1/4 in.
+function snapStep() { return units() === 'metric' ? .005 : .0254 / 8; }
+function snapHeight(v) { const step = snapStep(); return Math.round(v / step) * step; }
 function onTrimDragMove(e) {
   const d = trimDrag;
   if (!d) return;
   if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 3) return;
-  if (!d.moved) { d.moved = true; beginGeometryEdit(prop, d.mode === 'move' ? 'move trim' : 'resize trim', { hold: true }); }
+  if (!d.moved) { d.moved = true; beginGeometryEdit(prop, ['move', 'top', 'bottom'].includes(d.mode) ? 'move trim' : 'resize trim', { hold: true }); }
   const at = trimFacePoint(e, d.t);
   if (!at) return;
   const dy = at.y - d.at.y, dx = at.x - d.at.x;
-  let note = '';
-  if (d.mode === 'move') {
-    for (const id of d.ids) {
-      const t = trimById(id), b = d.base.get(id);
-      if (!t || !b) continue;
-      setTrimY(t, b.y + snapHeight(dy), trimWallHeight(t));   // every section moves by the same snapped distance
-      d.localAfter.set(id, { id, y: t.y });
-    }
-    note = 'Bottom edge ' + fmtLen(trimById(d.ids[0]).y) + (d.ids.length > 1 ? ' (' + d.ids.length + ' sections moved together)' : '');
-  } else if (d.mode === 'top' || d.mode === 'bottom') {
-    const t = trimById(d.t.id), b = d.base.get(d.t.id);
-    Object.assign(t, { y: b.y, h: b.h });
-    setFieldEdge(t, d.mode, snapHeight((d.mode === 'top' ? b.y + b.h : b.y) + dy), trimWallHeight(t));
-    d.localAfter.set(t.id, { id: t.id, y: t.y, h: t.h });
-    note = 'Field ' + fmtLen(t.y) + ' to ' + fmtLen(t.y + t.h) + ' (' + fmtLen(t.h) + ' tall)';
+  // Start again from how things stood at the press, so a drag back undoes itself.
+  for (const [id, b] of d.base) {
+    const t = trimById(id);
+    if (t) for (const k of TRIM_KEYS) { if (b[k] === undefined) delete t[k]; else t[k] = b[k] == null ? b[k] : JSON.parse(JSON.stringify(b[k])); }
+  }
+  const same = [...d.base.keys()].map(trimById).filter(t => t && t.style === d.t.style);
+  const seed = trimById(d.t.id), b0 = d.base.get(d.t.id);
+  let note = '', n = same.length;
+  if (d.mode === 'move' || d.mode === 'top' || d.mode === 'bottom') {
+    let move = snapHeight(dy);
+    // A window stool in this room is a line worth stopping on: the edge in hand, within 1/2 in.
+    const p = trimProduct(b0), fieldLike = isField(b0);
+    const lines = d.mode === 'bottom' ? [b0.y] : d.mode === 'top' ? [b0.y + b0.h] : fieldLike ? [b0.y + b0.h, b0.y] : [b0.y + (p ? p.W : 0), b0.y];
+    let onStool = false;
+    for (const v of lines) { const stop = d.stops.find(s => Math.abs(v + dy - s) < .0127); if (stop != null) { move = stop - v; onStool = true; break; } }
+    const plan = d.design.planLine([...d.base.values()], d.t.id, d.mode, move, { all: trimScope === 'selected' && d.mode === 'move' });
+    for (const [id, patch] of plan.patches) { const t = trimById(id); if (t) Object.assign(t, patch); }
+    n = plan.moved;
+    const ext = trimExtent(seed, trimWallHeight(seed));
+    note = (fieldLike ? 'Field ' + fmtLen(ext.y0) + ' to ' + fmtLen(ext.y1) + ' (' + fmtLen(ext.y1 - ext.y0) + ' tall)' : 'Bottom ' + fmtLen(ext.y0) + ', top ' + fmtLen(ext.y1))
+      + (onStool && Math.abs(plan.dy - move) < 1e-6 ? ', on the window stool' : '') + (Math.abs(plan.dy - move) > 5e-4 ? ', held: a section is at its limit' : '');
+  } else if (d.mode === 'aim') {
+    const v = d.last = stickySnap(Math.max(.1, d.v0 + d.dir * dx), d.last, snapStep() * 2);
+    for (const t of same) setDesignParam(t, 'aim', v);
+    const row = d.design.layout(seed).boxes.filter(x => x.row === 0);
+    const sum = d.design.summary(same);
+    note = 'Aim ' + fmtLen(v) + ': this wall ' + row.length + (row.length === 1 ? ' box' : ' boxes') + (row.length ? ' at ' + fmtLen(row[0].x1 - row[0].x0) : '')
+      + (n > 1 ? '; ' + sum.boxes + ' boxes in all, ' + fmtLen(sum.min) + ' to ' + fmtLen(sum.max) : '');
+  } else if (d.mode === 'gap' || d.mode === 'margin') {
+    const delta = d.sign * (d.mode === 'gap' ? (d.axis === 'x' ? dx : dy) * 2 : d.side === 'sides' ? dx : dy);
+    const v = d.last = stickySnap(Math.max(0, d.v0 + delta), d.last, snapStep());
+    const key = e.shiftKey ? 'reveal' : d.mode === 'gap' ? 'gap' : d.side;
+    for (const t of same) setDesignParam(t, key, v);
+    const now = designValues(seed), row = d.design.layout(seed).boxes.filter(x => x.row === 0);
+    note = (key === 'reveal' ? 'Gap and margins ' + fmtLen(now.gap) : d.mode === 'gap' ? 'Gap ' + fmtLen(now.gap) : 'Margins: ends ' + fmtLen(now.sides) + ', top ' + fmtLen(now.top) + ', bottom ' + fmtLen(now.bottom))
+      + (row.length ? '; boxes here ' + fmtLen(row[0].x1 - row[0].x0) + ' x ' + fmtLen(row[0].y1 - row[0].y0) : '');
   } else if (d.mode === 'divider') {
-    const t = trimById(d.t.id), w = d.widths.slice(), min = .05;
+    const w = d.widths.slice(), min = .05;
     const move = Math.max(min - w[d.i], Math.min(w[d.i + 1] - min, snapHeight(dx)));
     w[d.i] += move; w[d.i + 1] -= move;
-    t.widths = w.map(v => Math.round(v * 10000) / 10000); t.cols = w.length;
-    d.localAfter.set(t.id, { id: t.id, widths: t.widths.slice(), cols: t.cols });
+    seed.widths = w.map(v => Math.round(v * 10000) / 10000); seed.cols = w.length; seed.colsAt = null;
     note = 'Boxes ' + fmtLen(w[d.i]) + ' and ' + fmtLen(w[d.i + 1]);
+    n = 1;
   }
-  setHint('EDIT TRIM: ' + note);
+  // What this drag has written, field by field, for a cancel that leaves other devices' edits alone.
+  d.localAfter.clear();
+  for (const [id, b] of d.base) {
+    const t = trimById(id);
+    if (!t) continue;
+    const patch = { id };
+    for (const k of TRIM_KEYS) if (JSON.stringify(t[k]) !== JSON.stringify(b[k])) patch[k] = t[k];
+    if (Object.keys(patch).length > 1) d.localAfter.set(id, patch);
+  }
+  trimReach = [...d.localAfter.keys()];
+  setHint('EDIT TRIM: ' + note + (n > 1 ? ' · ' + n + ' sections (' + SCOPE_LABELS[trimScope].toLowerCase() + ')' : ''));
   rebuildModel();
+  updateOutlineTargets();
 }
 function onTrimDragEnd(e) {
   const d = trimDrag;
@@ -2505,13 +2702,68 @@ function onTrimDragEnd(e) {
     if (e.type === 'pointerup') { const key = planKey('trim', d.hit.id); pickThing({ key, keys: [key], scanId: null, name: '', sel: { kind: 'trim', id: d.hit.id } }, d.shift); }
     return;
   }
+  trimReach = [];
   if (e.type === 'pointercancel') {
     if (!revertGeometryEdit(prop, { trims: [...d.localAfter.values()] })) toast('Trim changed on another device; cancellation kept the current values.', 'warn');
     touch(); rebuildModel(); renderInspector(); return;
   }
   endGeometryHold(prop);
   touch();
+  updateOutlineTargets();
   renderInspector();
+}
+
+// The trim section under a right-click: the moulding itself, or a field the click is inside.
+function trimAtPointer(e, hit) {
+  if (!hit) return null;
+  if (hit.kind === 'trim') { const t = trimById(hit.id); const at = t && trimFacePoint(e, t); return t && at ? { t, at } : null; }
+  if (hit.kind !== 'wall' || hit.cap) return null;
+  const side = wallSideOfHit(hit);
+  // The smallest field under the pointer, a selected one first.
+  const sel = new Set(trimIds());
+  let best = null;
+  for (const t of prop.trims || []) {
+    if (t.wallId !== hit.id || t.side !== side || !isField(t)) continue;
+    const at = trimFacePoint(e, t), w = trimWall(t);
+    if (!at || !w) continue;
+    const L = Math.hypot(w.bx - w.ax, w.by - w.ay);
+    if (at.x < t.f0 * L || at.x > t.f1 * L || at.y < t.y || at.y > t.y + t.h) continue;
+    const rank = (sel.has(t.id) ? 0 : 1e6) + t.h * (t.f1 - t.f0) * L;
+    if (!best || rank < best.rank) best = { t, at, rank };
+  }
+  return best;
+}
+// The right-click menu's entries for one trim section.
+function trimMenuItems(found) {
+  const { t, at } = found, v = designValues(t), items = [];
+  const design = designNow();
+  const ids = trimIds().includes(t.id) ? trimIds() : [t.id];
+  const pick = () => { if (!trimIds().includes(t.id)) selectTrims([t.id]); };
+  const info = design.info(t);
+  items.push(['trim-info', trimLabel(t) + (info ? ', ' + info.roomName : ''), null]);
+  if (v && (v.boxes || v.bays)) {
+    const word = v.bays ? 'BAY' : 'PANEL';
+    items.push(['trim-add', 'ADD A ' + word + ' HERE', () => { pick(); stepTrimCols(t, at.x, 1); }]);
+    items.push(['trim-less', 'REMOVE A ' + word + ' HERE', () => { pick(); stepTrimCols(t, at.x, -1); }]);
+    if (v.pinned) items.push(['trim-fit', 'FIT THE ' + word + 'S AGAIN', () => { pick(); editTrims(x => { if (x === t) setDesignParam(x, 'fit'); }, 'fit trim panels'); }]);
+    if (v.boxes || t.style === 'grid') {
+      items.push(['trim-row', 'ADD A ROW', () => { pick(); editTrims(x => setDesignParam(x, 'rows', (x.rows || 1) + 1), 'add trim row', true); }]);
+      if ((t.rows || 1) > 1) items.push(['trim-row-less', 'REMOVE A ROW', () => { pick(); editTrims(x => setDesignParam(x, 'rows', (x.rows || 1) - 1), 'remove trim row', true); }]);
+    }
+    if (v.frame) items.push(['trim-reveal', 'ONE REVEAL ALL ROUND (' + fmtLen(v.gap) + ')', () => { pick(); editTrims(x => setDesignParam(x, 'reveal', v.gap), 'even trim reveal', true); }]);
+  }
+  items.push(null);
+  for (const s of design.scopes(ids)) {
+    if (s.id === 'selected') continue;
+    const n = design.pool(ids, s.id).length;
+    items.push(['trim-select-' + s.id, 'SELECT THE ' + s.label + '\'S TRIM (' + n + ')', () => selectTrims(design.pool(ids, s.id).map(x => x.id))]);
+  }
+  items.push(null);
+  for (const s of design.scopes(ids)) items.push(['trim-reach-' + s.id, (s.id === trimScope ? '✓ ' : '') + 'CHANGES REACH: ' + s.label + ' (' + s.count + ')', () => { pick(); setTrimScope(s.id); }]);
+  items.push(null);
+  items.push(['trim-edit', trimEdit ? 'DONE EDITING' : 'EDIT BY DRAGGING', () => { pick(); toggleTrimEdit(); }]);
+  items.push(['trim-delete', 'DELETE THIS SECTION', () => deleteTrims([t.id])]);
+  return items;
 }
 
 // Put an object an earlier version moved back where the model file has it (PUT IT BACK).
@@ -3886,6 +4138,9 @@ function openContextMenu(e) {
     // The note stays the first entry (it is what Enter runs); hiding the object under the
     // pointer comes after it.
     items.push(['add-note', 'ADD NOTE HERE', () => openNoteEditor({ hit, at })]);
+    // Wall trim under the pointer: its panels, its reach and its selection (trim-design.js).
+    const trimHere = !fieldLayout() ? trimAtPointer(e, hit) : null;
+    if (trimHere) items.push(null, ...trimMenuItems(trimHere));
     if (thing && (thing.keys.length || thing.whole)) items.push(['hide', 'HIDE ' + (thing.name ? thing.name.toUpperCase().slice(0, 40) : 'THIS OBJECT'), () => hideThings([thing], true)]);
     // A door that hangs a leaf opens or closes here; windows and cased or plain openings have none.
     const door = hit.kind === 'opening' && !fieldLayout() ? hungDoor(prop.openings.find(o => o.id === hit.id)) : null;

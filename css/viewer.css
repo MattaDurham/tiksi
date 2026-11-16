@@ -431,6 +431,15 @@ html.phone .v-objects { display: none !important; }
 .tp-cat-text b { color: var(--ink); font-size: 11.5px; font-weight: 600; }
 .tp-widths { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
 .tp-widths input { width: 68px; flex: 1 1 60px; }
+.tp-scope { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.tp-scope-btn { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px; border: 1px solid var(--line-2); border-radius: 5px; background: transparent; color: var(--dim); font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; cursor: pointer; }
+.tp-scope-btn span { font-size: 11px; letter-spacing: 0; color: var(--faint); }
+.tp-scope-btn:hover { color: var(--ink); }
+.tp-scope-btn.active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.tp-scope-btn.active span { color: var(--accent-ink); }
+.tp-scope-btn:focus-visible { box-shadow: var(--focus); outline: none; }
+.tp-scope-note { margin: 6px 0 8px; }
+.tp-note { margin: 6px 0; padding-left: 8px; border-left: 2px solid var(--line-2); }
 
 /* DONE: a clean section. Only EDIT CUTS stays, small and faint in the bottom right corner
    (after the component-list rules above, which would centre it). */
