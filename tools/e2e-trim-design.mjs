@@ -295,6 +295,7 @@ try {
   ok('the wainscoting style and picture-frame layout each update the selected field');
 
   { const q = await at(BB, 2, 2.25); await page.mouse.click(q.x, q.y); }
+  await page.locator('.inspector [data-face-wall="e"]').click();
   await page.locator('.inspector [data-trim-add]').waitFor();
   await pickStyle('crown', 'hd-mld04x04x06er');
   await page.locator('.inspector [data-trim-add]').click();
