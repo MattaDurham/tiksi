@@ -294,7 +294,8 @@ try {
   await waitUntil(async () => !(await trim(BB)).frameLayout, 'one undo restores the custom layout');
   ok('the wainscoting style and picture-frame layout each update the selected field');
 
-  await page.locator('.inspector [data-tp-wall]').click();
+  { const q = await at(BB, 2, 2.25); await page.mouse.click(q.x, q.y); }
+  await page.locator('.inspector [data-trim-add]').waitFor();
   await pickStyle('crown', 'hd-mld04x04x06er');
   await page.locator('.inspector [data-trim-add]').click();
   await idle();
@@ -303,6 +304,8 @@ try {
   const cut = page.locator('.inspector .tp-product .tp-prof');
   assert.match(await cut.getAttribute('aria-label'), /5 7\/8" drop × 4 3\/4" projection/);
   assert.ok(await cut.locator('.tp-prof-sides polygon').count() > 1);
+  assert.ok(await cut.locator('text').evaluateAll(labels => labels.every(label => label.getBBox().x >= 0)), 'dimension labels fit the cutaway');
+  if (shots) await cut.screenshot({ path: shots + '/10-dimensioned-cutaway.png' });
   await shot('09-crown-cutaway');
   ok('crown can be added and swapped by style, with the installed dimensions on the cutaway');
 

@@ -451,7 +451,7 @@ export const TRIM_CATALOG = [
   "style": "chair-rail",
   "profile": "chair-colonial",
   "short": "Slim chair rail 1-3/8 in",
-  "title": "RELIABILT 3/8-in T x 1-3/8-in W x 8-ft L Primed MDF Wm134 Chair Rail Moulding",
+  "title": "RELIABILT WM134 Primed MDF Chair Rail Moulding",
   "brand": "RELIABILT",
   "model": "134-MDF8",
   "store": "Lowe's",

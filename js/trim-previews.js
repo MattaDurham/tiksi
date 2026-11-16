@@ -11,7 +11,7 @@ export function trimCutaway(p) {
   const width = escapeHtml(fmtLen(p.W)), depth = escapeHtml(fmtLen(p.T));
   const description = crown ? `${width} drop × ${depth} projection` : `${width} wide × ${depth} thick`;
   const scale = Math.min(57 / p.W, 49 / p.T);
-  const h = p.W * scale, w = p.T * scale, x = 51, y = 10 + (57 - h) / 2;
+  const h = p.W * scale, w = p.T * scale, x = 65, y = 10 + (57 - h) / 2;
   const cut = sectionOf(p.profile, p.W, p.T).map(([a, d]) => [x + d * scale, y + (crown ? a : p.W - a) * scale]);
   const shift = ([a, b]) => [a + 70, b - 6];
   const sides = [];
@@ -25,11 +25,11 @@ export function trimCutaway(p) {
   const relief = crown && crownRelief(p.profile, p.W, p.T, 0, 71 / scale);
   const pattern = relief ? relief.contours.map(contour => `<polygon class="tp-prof-relief" points="${points(contour.map(([u, a]) => [x + (relief.front + u) * scale, y + (a - u * 6 / 70) * scale]))}"/>`).join('') : '';
   const midY = y + h / 2, dimY = y + h + 7;
-  return `<svg class="tp-prof" viewBox="0 0 178 94" role="img" aria-label="${description}">
+  return `<svg class="tp-prof" viewBox="0 0 192 94" role="img" aria-label="${description}">
     <g class="tp-prof-sides">${sides.join('')}${pattern}</g>
     <polygon class="tp-prof-cut" points="${points(cut)}"/>
-    <path class="tp-prof-dims" d="M44 ${y}h-8m4 0v${h}m-4 0h8 M${x} ${dimY - 3}v6m0 -3h${w}m0 -3v6"/>
-    <text x="33" y="${midY}" text-anchor="end" dominant-baseline="middle">${width}</text>
+    <path class="tp-prof-dims" d="M${x - 7} ${y}h-8m4 0v${h}m-4 0h8 M${x} ${dimY - 3}v6m0 -3h${w}m0 -3v6"/>
+    <text x="${x - 18}" y="${midY}" text-anchor="end" dominant-baseline="middle">${width}</text>
     <text x="${x + w / 2}" y="${dimY + 11}" text-anchor="middle">${depth}</text>
   </svg>`;
 }
