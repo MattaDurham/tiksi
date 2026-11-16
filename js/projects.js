@@ -16,6 +16,7 @@ import {
 } from './store.js';
 import { fixtureLabel } from './fixtures.js';
 import { icon } from './icons.js';
+import { showInModel, modelBeside, whenModelBeside } from './model-focus.js';
 
 const STATUSES = ['idea', 'scoped', 'committed', 'in-progress', 'done'];
 const STATUS_LABEL = { idea: 'Idea', scoped: 'Scoped', committed: 'Committed', 'in-progress': 'In progress', done: 'Done' };
@@ -30,6 +31,8 @@ let activeProjectId = null;
 let freshId = null;              // a project just made with NEW PROJECT / ADD SUBPROJECT, still unnamed
 const openItems = new Set();     // scope items whose panel is open
 let moneyProblem = null;         // { itemId, text }: a price as typed that could not be read, and why
+let shownInModel = null;         // the project last outlined in the model beside the page
+let offBeside = null;
 
 // ---------- the list's view: search, filters, sort, grouping, list or board ----------
 // Remembered in this browser for each property (like a saved default view); never written to
@@ -57,6 +60,7 @@ const filterCount = v => [v.category, v.roomId, v.priority, v.program].filter(Bo
 
 export function mount(root) {
   el = root;
+  offBeside = whenModelBeside(() => { if (el && activeProjectId) showProjectInModel(projectById(activeProjectId), true); });
   window.addEventListener('keydown', onKey);
   document.addEventListener('pointerdown', onOutside);
   render();
@@ -65,6 +69,8 @@ export function unmount() {
   window.removeEventListener('keydown', onKey);
   document.removeEventListener('pointerdown', onOutside);
   moneyProblem = null;
+  shownInModel = null;
+  if (offBeside) { offBeside(); offBeside = null; }
   el = null;
 }
 
@@ -348,7 +354,7 @@ function setStatus(p, status) {
 }
 
 function bindList(list, v) {
-  const open = id => { activeProjectId = id; renderList(); renderDetail(projectById(id)); };
+  const open = id => { activeProjectId = id; renderList(); renderDetail(projectById(id)); showProjectInModel(projectById(id), true); };
   list.querySelectorAll('.card, .sub-row').forEach(c => c.onclick = e => {
     // The in-program checkbox and the finger-sized label around it flip that, not open the card.
     if (e.target.closest('input, label')) return;
@@ -434,8 +440,30 @@ function summaryHtml(p, subs) {
   </div>`;
 }
 
+// ---------- the model beside the page (MODEL BESIDE) ----------
+// Opening a project outlines in the model every room, wall, opening, fixture and imported model
+// it and its subprojects are linked to; clicking into a scope item outlines that item's own.
+function projectElementIds(p) {
+  const ids = [];
+  for (const x of [p, ...(p.parentId ? [] : subprojectsOf(p))]) {
+    if (x.roomId) ids.push(x.roomId);
+    for (const it of x.items || []) ids.push(...(it.elementIds || []));
+  }
+  return [...new Set(ids)];
+}
+function showProjectInModel(p, again) {
+  if (!modelBeside() || !p || (!again && shownInModel === p.id)) return;
+  shownInModel = p.id;
+  showInModel(projectElementIds(p));
+}
+function showItemInModel(it) {
+  if (!modelBeside() || !(it.elementIds || []).length) return;
+  showInModel(it.elementIds);
+}
+
 function renderDetail(p) {
   const det = el.querySelector('#proj-detail');
+  showProjectInModel(p);
   if (!p) { det.innerHTML = `<div class="empty-state"><span class="empty-ic">${icon('edit')}</span><b>Nothing selected</b>Select or create a project.</div>`; return; }
   const t = projectTotals(p);
   const parent = p.parentId ? projectById(p.parentId) : null;
@@ -602,9 +630,9 @@ function elementLink(p, id) {
   const o = (prop.openings || []).find(x => x.id === id);
   if (o) return { label: (o.type === 'window' ? 'Window' : 'Door') + ' · ' + fmtLen(o.width), href: plan, kind: 'Opening' };
   const sc = (prop.scans || []).find(x => x.id === id);
-  if (sc) return { label: 'Scan · ' + sc.name, href: '#/model', kind: 'Scan' };
+  if (sc) return { label: 'Scan · ' + sc.name, href: plan, kind: 'Scan' };
   const fx = (prop.fixtures || []).find(x => x.id === id);
-  if (fx) return { label: 'Fixture · ' + fixtureLabel(fx), href: '#/model', kind: 'Fixture' };
+  if (fx) return { label: 'Fixture · ' + fixtureLabel(fx), href: plan, kind: 'Fixture' };
   return { label: 'Missing element', href: '' };
 }
 
@@ -697,6 +725,8 @@ function bindItemRows(p) {
     const it = p.items.find(i => i.id === tr.dataset.item);
     if (!it) return;
     const more = det.querySelector(`tr[data-more="${CSS.escape(it.id)}"]`);
+    // Clicking into the item, or into its open panel, outlines what it is linked to.
+    for (const row of [tr, more]) if (row) for (const ev of ['pointerdown', 'focusin']) row.addEventListener(ev, () => showItemInModel(it));
     tr.querySelectorAll('[data-if]').forEach(inp => inp.onchange = () => {
       const f = inp.dataset.if;
       it[f] = (f === 'qty' || f === 'durationDays') ? parseFloat(inp.value) || 0 : inp.value;

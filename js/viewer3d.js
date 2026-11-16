@@ -81,7 +81,7 @@ import { projectBlockHtml, bindProjectBlock, newProjectRecord } from './project-
 import { catalogItem } from './trim-catalog.js';
 import { objectPanelHtml, bindObjectPanel, multiPanelHtml, bindMultiPanel, planTagHtml, bindPlanTag } from './object-panel.js';
 import { ensureCanonTag } from './tags.js';
-import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown, setHidden, hiddenKeys, showAllHidden } from './tags.js';
+import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown, setHidden, hiddenKeys, showAllHidden, PHASES, PHASE_LABEL, phaseCounts, phaseShown, setPhaseShown, phaseOfKey, setPhase } from './tags.js';
 import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags, applySavedHidden, modelState } from './saved-views.js';
 import { onScreen, setOnScreen, onScreenChange, setMenuProvider, refreshPane } from './tiksi-menu.js';
 import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility, partKeyForObject, partByKey, partName, planKeyOf, modelParts, partKey } from './tags-scene.js';
@@ -181,6 +181,12 @@ let clientMode = false;        // the client page in the lab (client-view.js): l
 // setFurniture(on), hasFurniture }. The left pane and the phone panel offer these and the saved
 // views, orbit and walk; nothing can be selected, edited or saved.
 let clientControls = null;
+// MODEL BESIDE (model-beside.js): the model in a pane next to another page. It shows the
+// picture and its own buttons over it; the left pane and the inspector stay with the page, and
+// the keyboard reaches the model only after a click in it.
+let besideMode = false;
+let keysHere = true;           // the last press was in the model (always so on the MODEL page)
+function notePress(e) { keysHere = !!(el && el.contains(e.target)); }
 // For checks: the walk arrows as drawn ({ on, count, inScene }).
 export function walkArrowState() { return { on: !!(walkArrowRoot && walkArrowRoot.visible), count: walkArrowRoot ? walkArrowRoot.children.length : 0, inScene: !!(walkArrowRoot && scene && walkArrowRoot.parent === scene) }; }
 export function setClientMode(on, controls) { clientMode = !!on; clientControls = on ? controls || null : null; if (scene) { renderViews(); refreshPane(); } }
@@ -528,14 +534,18 @@ function setupComposer() {
     hidden.forEach(o => { o.visible = true; });
   };
 
+  // The selection: a thick orange edge with a soft halo, nearly as strong where the selected
+  // thing is behind something else, over a tint of its whole surface, so its full extent reads
+  // at a glance (addSelectionFill).
   passes.outline = new OutlinePass(new THREE.Vector2(w, h), scene, camera);
-  passes.outline.visibleEdgeColor.set('#e8973a');
-  passes.outline.hiddenEdgeColor.set('#7a4a12');
-  passes.outline.edgeStrength = 4.5; passes.outline.edgeThickness = 1.4; passes.outline.edgeGlow = 0.25;
+  passes.outline.visibleEdgeColor.set(SELECT_EDGE);
+  passes.outline.hiddenEdgeColor.set(SELECT_EDGE_HIDDEN);
+  passes.outline.edgeStrength = 6; passes.outline.edgeThickness = 2.4; passes.outline.edgeGlow = 0.6;
+  addSelectionFill(passes.outline);
   passes.hover = new OutlinePass(new THREE.Vector2(w, h), scene, camera);
   passes.hover.visibleEdgeColor.set('#f6d5a6');
-  passes.hover.hiddenEdgeColor.set('#3a2a14');
-  passes.hover.edgeStrength = 2.2; passes.hover.edgeThickness = 1; passes.hover.edgeGlow = 0;
+  passes.hover.hiddenEdgeColor.set('#5a4024');
+  passes.hover.edgeStrength = 3; passes.hover.edgeThickness = 1.6; passes.hover.edgeGlow = 0;
   passes.hover.enabled = false;
   for (const p of [passes.outline, passes.hover]) {
     const orig = p.render.bind(p);
@@ -555,6 +565,45 @@ function setupComposer() {
   for (const p of [passes.render, passes.gtao, passes.outline, passes.hover, passes.bloom, passes.smaa, passes.output]) composer.addPass(p);
 }
 
+const SELECT_EDGE = '#ff9d2e', SELECT_EDGE_HIDDEN = '#e07f22';
+// OutlinePass adds its edge to the picture, so over a white wall an orange edge comes out white.
+// The selection's overlay paints instead: the edge (blurred, so it fades out) and a tint over
+// everything the selected meshes cover, fainter where something else is in front of them.
+// Its mask is 0 in red where the selected meshes are drawn, and 1 in green where hidden.
+export const SELECT_FILL = { color: '#ff9d2e', visible: 0.24, hidden: 0.16 };
+function addSelectionFill(pass) {
+  const m = pass.overlayMaterial;
+  if (!m || !m.uniforms || !m.uniforms.maskTexture || !m.uniforms.edgeTexture1) { console.warn('the selection tint could not be added to the outline'); return; }
+  m.uniforms.fillColor = { value: new THREE.Color(SELECT_FILL.color) };
+  m.uniforms.fillVisible = { value: SELECT_FILL.visible };
+  m.uniforms.fillHidden = { value: SELECT_FILL.hidden };
+  m.fragmentShader = `varying vec2 vUv;
+    uniform sampler2D maskTexture;
+    uniform sampler2D edgeTexture1;
+    uniform sampler2D edgeTexture2;
+    uniform float edgeStrength;
+    uniform float edgeGlow;
+    uniform vec3 fillColor;
+    uniform float fillVisible;
+    uniform float fillHidden;
+    void main() {
+      vec4 e1 = texture2D(edgeTexture1, vUv);
+      vec4 e2 = texture2D(edgeTexture2, vUv);
+      vec4 mask = texture2D(maskTexture, vUv);
+      vec4 edge = e1 + e2 * edgeGlow;
+      float cover = clamp(edgeStrength * mask.r * edge.a, 0.0, 1.0);
+      vec3 colour = edge.a > 0.0001 ? clamp(edge.rgb / edge.a, 0.0, 1.0) : fillColor;
+      float fill = (1.0 - mask.r) * mix(fillVisible, fillHidden, step(0.5, mask.g));
+      float a = cover + fill * (1.0 - cover);
+      gl_FragColor = vec4(colour * cover + fillColor * fill * (1.0 - cover), a);
+    }`;
+  // Painted over the picture (premultiplied): the picture keeps 1 - a of itself.
+  m.blending = THREE.CustomBlending;
+  m.blendEquation = THREE.AddEquation;
+  m.blendSrc = THREE.OneFactor; m.blendDst = THREE.OneMinusSrcAlphaFactor;
+  m.blendSrcAlpha = THREE.ZeroFactor; m.blendDstAlpha = THREE.OneFactor;
+  m.needsUpdate = true;
+}
 function hideSplats() {
   const hidden = [];
   for (const o of splatDrawables()) if (o.visible) { o.visible = false; hidden.push(o); }
@@ -4721,6 +4770,12 @@ function toggleTag(id) {
   setTagShown(prop, id, !tagShown(prop, id));
   tagsChanged();
 }
+// One half (existing 'e' or proposed 'p') of a tag, or of every tag (id '').
+function togglePhase(id, ph) {
+  if (id && !tagById(prop, id)) return;
+  setPhaseShown(prop, id, ph, !phaseShown(prop, id, ph));
+  tagsChanged();
+}
 // Hide or show objects one by one (the eye in the component list, HIDE in the panel, H): only
 // these objects change; their tags and everything else on those tags stay as they are.
 function hideThings(things, on) {
@@ -5231,7 +5286,7 @@ let listReveal = false;
 // where the next click lands.
 function placeObjectList() {
   if (!hud.objects) return;
-  hud.objects.hidden = !onScreen('model.objects', true) || !!match || tool === 'pin' || fieldLayout();
+  hud.objects.hidden = !onScreen('model.objects', true) || !!match || tool === 'pin' || fieldLayout() || besideMode;
   // The bars in the middle of the view move over to make room for the list (viewer.css).
   wrapEl && wrapEl.classList.toggle('v-list-on', !hud.objects.hidden);
 }
@@ -5402,11 +5457,26 @@ function tagPickHtml() {
   const what = tagPicks.length > 1 ? tagPicks.length + ' objects selected' : part ? 'Part: ' + partName(part) + (comp && comp !== partName(part) ? ' (component ' + comp + ')' : '') : '';
   return `${what ? `<div class="stat-line"><span>${escapeHtml(what)}</span><b></b></div>` : ''}
     ${tagPicks.length ? `<div class="field"><label>Tag${tagPicks.length > 1 ? ' (moves all ' + tagPicks.length + ')' : ''}</label><select data-tag-pick title="Shift-click more objects to move several at once">${tagOptions(ids[0], { mixed })}</select></div>` : ''}
+    ${tagPicks.length ? phasePickHtml() : ''}
     ${s && scanObjs[s.id] ? `<button class="btn" data-tag-detect title="Give every part of this model its automatic tag again: the file's own tags, then part names, then shape. Parts you moved to a tag yourself are moved back.">DETECT TAGS AGAIN</button>` : ''}
     ${s && scanObjs[s.id] ? `<div class="field"><label>Tag every part of this model</label><select data-tag-model>${tagOptions('', { extra: '<option value="__keep" selected>(choose a tag)</option>' }).replace(`<option value="" selected>`, '<option value="">')}</select></div>` : ''}
     <div class="empty" style="margin:0 0 8px">Shift-click adds objects to the selection.</div>`;
 }
+// Existing or proposed: the selected objects' own phase, or following their project.
+function phasePickHtml() {
+  const own = new Set(tagPicks.map(k => (prop.phaseOf && prop.phaseOf[k]) || ''));
+  const now = new Set(tagPicks.map(k => phaseOfKey(prop, k)));
+  const cur = own.size === 1 ? [...own][0] : '__mixed';
+  const follows = now.size === 1 && own.has('') && own.size === 1 ? ' (' + PHASE_LABEL[[...now][0]].toLowerCase() + ')' : '';
+  return `<div class="field"><label>Existing or proposed</label><select data-phase-pick title="Proposed objects are new work: their tag is written to SketchUp as name_p in the Proposed folder">
+    ${cur === '__mixed' ? '<option value="__mixed" selected>(several)</option>' : ''}
+    <option value="" ${cur === '' ? 'selected' : ''}>As its project says${follows}</option>
+    ${PHASES.map(ph => `<option value="${ph}" ${cur === ph ? 'selected' : ''}>${PHASE_LABEL[ph]}</option>`).join('')}
+  </select></div>`;
+}
 function bindTagPick(root) {
+  const phase = root.querySelector('[data-phase-pick]');
+  if (phase) phase.onchange = () => { if (phase.value === '__mixed') return; if (setPhase(prop, tagPicks.slice(), phase.value || null)) tagsChanged(); };
   const pick = root.querySelector('[data-tag-pick]');
   if (pick) pick.onchange = () => { if (pick.value !== '__mixed') moveToTag(tagPicks.slice(), pick.value); };
   const again = root.querySelector('[data-tag-detect]');
@@ -5426,12 +5496,14 @@ function bindTagPick(root) {
 }
 // TAGS, with nothing selected: rename, recolour, show or hide, add and delete tags.
 function tagManagerHtml() {
-  const counts = tagCounts(prop);
+  const counts = tagCounts(prop), halves = phaseCounts(prop);
   const row = t => `<div class="v-tag-row" data-tag-row="${escapeHtml(t.id)}">
       <button class="v-tag-eye ${t.visible !== false ? 'on' : ''}" data-tag-eye="${escapeHtml(t.id)}" aria-pressed="${t.visible !== false}" title="${t.visible !== false ? 'Hide' : 'Show'} ${escapeHtml(t.name)}">${icon(t.visible !== false ? 'eye' : 'eye-off')}</button>
       <input type="color" data-tag-color="${escapeHtml(t.id)}" value="${escapeHtml(t.color)}" title="Colour">
       <input type="text" data-tag-name="${escapeHtml(t.id)}" value="${escapeHtml(t.name)}" aria-label="Tag name" maxlength="80">
       <span class="v-tag-n" title="Objects on this tag">${counts.get(t.id) || 0}</span>
+      <span class="v-tag-phases">${PHASES.map(ph => { const on = phaseShown(prop, t.id, ph), n = (halves.get(t.id) || {})[ph] || 0;
+        return `<button class="v-tag-phase ${on ? 'on' : ''}" data-tag-phase="${escapeHtml(t.id)}" data-ph="${ph}" aria-pressed="${on}" title="${on ? 'Hide' : 'Show'} ${PHASE_LABEL[ph].toLowerCase()} ${escapeHtml(t.name)} (${n})">${ph.toUpperCase()}</button>`; }).join('')}</span>
       <button class="v-tag-del" data-tag-del="${escapeHtml(t.id)}" title="Delete ${escapeHtml(t.name)}; its objects move to Untagged">${icon('close')}</button>
     </div>`;
   const un = prop.tagUntaggedVisible !== false;
@@ -5440,14 +5512,17 @@ function tagManagerHtml() {
     <div class="v-tag-row" data-tag-row="">
       <button class="v-tag-eye ${un ? 'on' : ''}" data-tag-eye="" aria-pressed="${un}" title="${un ? 'Hide' : 'Show'} objects with no tag">${icon(un ? 'eye' : 'eye-off')}</button>
       <span class="v-tag-swatch"></span><span class="v-tag-label">${UNTAGGED_LABEL}</span>
-      <span class="v-tag-n">${counts.get(UNTAGGED) || 0}</span><span></span>
+      <span class="v-tag-n">${counts.get(UNTAGGED) || 0}</span><span></span><span></span>
     </div>
+    <div class="v-tag-row v-tag-all">${PHASES.map(ph => { const on = phaseShown(prop, '', ph);
+      return `<button class="v-tag-phase wide ${on ? 'on' : ''}" data-tag-phase="" data-ph="${ph}" aria-pressed="${on}" title="${on ? 'Hide' : 'Show'} everything ${PHASE_LABEL[ph].toLowerCase()}, on every tag">${on ? 'Showing' : 'Hiding'} all ${PHASE_LABEL[ph].toLowerCase()}</button>`; }).join('')}</div>
     <div class="v-tag-add"><input type="text" data-tag-new placeholder="New tag name" maxlength="80"><button class="btn" data-tag-add>ADD TAG</button></div>
-    <div class="empty" style="margin:0 0 10px">Every wall, floor, ceiling, opening, fixture and part of an imported model sits on a tag. Click an object to see or change its tag; Shift-click to move several at once.</div>
+    <div class="empty" style="margin:0 0 10px">Every wall, floor, ceiling, opening, fixture and part of an imported model sits on a tag, and is existing (E) or proposed (P): proposed when it belongs to a project, unless you set it yourself. E and P show or hide each half of a tag. Click an object to see or change its tag; Shift-click to move several at once. In SketchUp each tag is two: "Walls_e" in the Existing folder and "Walls_p" in Proposed.</div>
     <div class="tool-sep"></div>`;
 }
 function bindTagManager(root) {
   root.querySelectorAll('[data-tag-eye]').forEach(b => b.onclick = () => toggleTag(b.dataset.tagEye));
+  root.querySelectorAll('[data-tag-phase]').forEach(b => b.onclick = () => togglePhase(b.dataset.tagPhase, b.dataset.ph));
   root.querySelectorAll('[data-tag-color]').forEach(i => i.onchange = () => { if (setTagColor(prop, i.dataset.tagColor, i.value)) { renderToolCol(); touch(); } });
   root.querySelectorAll('[data-tag-name]').forEach(i => i.onchange = () => { renameTag(prop, i.dataset.tagName, i.value); renderToolCol(); renderInspector(); touch(); });
   root.querySelectorAll('[data-tag-del]').forEach(b => b.onclick = () => {
@@ -6047,7 +6122,14 @@ function menuGroups() {
   const counts = tagCounts(prop), hidden = hiddenLevels();
   const orbitTo = name => () => { if (mode !== 'orbit') setMode('orbit'); presetView(name); };
   const cut = section.on && section.planes.length;
-  const tagItem = (id, name, color, shown) => ({ label: name, icon: shown ? 'eye' : 'eye-off', dot: color, key: String(counts.get(id) || 0), active: shown, pressed: shown, data: { tag: id }, title: (shown ? 'Hide ' : 'Show ') + name, run: () => toggleTag(id) });
+  const halves = phaseCounts(prop);
+  const phaseChips = (id, name) => PHASES.map(ph => {
+    const on = phaseShown(prop, id, ph), n = (halves.get(id || UNTAGGED) || {})[ph] || 0;
+    return { label: ph.toUpperCase(), on, title: (on ? 'Hide ' : 'Show ') + PHASE_LABEL[ph].toLowerCase() + ' ' + (id ? name : 'objects') + ' (' + n + ')', run: () => togglePhase(id, ph) };
+  });
+  const tagItem = (id, name, color, shown) => ({ label: name, icon: shown ? 'eye' : 'eye-off', dot: color, key: String(counts.get(id) || 0), active: shown, pressed: shown, data: { tag: id }, title: (shown ? 'Hide ' : 'Show ') + name, run: () => toggleTag(id), chips: id ? phaseChips(id, name) : null });
+  const phaseItem = ph => { const on = phaseShown(prop, '', ph); return { label: 'All ' + PHASE_LABEL[ph].toLowerCase(), icon: on ? 'eye' : 'eye-off', active: on, pressed: on, data: { phase: ph },
+    title: (on ? 'Hide ' : 'Show ') + 'everything ' + PHASE_LABEL[ph].toLowerCase() + ', on every tag', run: () => togglePhase('', ph) }; };
   const scanBadge = sc => scanObjs[sc.id] ? (sc.kind || '').toUpperCase().slice(0, 5) : ({ missing: 'GONE', failed: 'ERR', hidden: 'OFF', 'too-large': 'BIG' }[scanState[sc.id]] || '...');
   const c = prop.designComparison;
   return [
@@ -6104,6 +6186,7 @@ function menuGroups() {
       { label: 'Show all hidden objects', key: 'Shift+H', icon: 'eye', act: 'show-hidden', disabled: !hiddenKeys(prop).length, run: showHidden },
     ] },
     { title: 'Tags', items: [
+      ...PHASES.map(phaseItem),
       ...prop.tags.map(t => tagItem(t.id, t.name, t.color, t.visible !== false)),
       ...((counts.get(UNTAGGED) || prop.tagUntaggedVisible === false) ? [tagItem(UNTAGGED, UNTAGGED_LABEL, 'transparent', prop.tagUntaggedVisible !== false)] : []),
     ] },
@@ -6314,6 +6397,8 @@ export function markupState() {
 function onKeyDown(e) {
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+  // Beside another page, the keys belong to that page until the model is clicked.
+  if (besideMode && !keysHere) return;
   if (ctxMenu && e.code === 'Escape') { closeContextMenu(); e.preventDefault(); return; }
   if (markup && markup.key(e)) return;
   if (mode === 'walk') {
@@ -6373,6 +6458,11 @@ function onContextMenu(e) { e.preventDefault(); }
 // ---------- mount / unmount ----------
 // A MODEL page that cannot open says so in its own place, with a way to try again, instead of
 // leaving the layout empty. The other pages keep working.
+export function mountBeside(root) {
+  besideMode = true; keysHere = false;
+  mount(root);
+  if (el) { el.querySelector('.v-layout')?.classList.add('v-beside'); document.addEventListener('pointerdown', notePress, true); }
+}
 export function mount(root) {
   try { openModel(root); }
   catch (e) {
@@ -6458,7 +6548,7 @@ function openModel(root) {
   renderViews();
   applyScreen();
   offScreen = onScreenChange(() => { applyScreen(); renderToolCol(); renderObjects(); });
-  offMenu = setMenuProvider(menuGroups);
+  offMenu = besideMode ? null : setMenuProvider(menuGroups);
   setHint('');
 
   const c = renderer.domElement;
@@ -6493,6 +6583,8 @@ function openModel(root) {
 
   const focus=pendingScanFocus || prop.modelSourceId,token=mountId,focusVersion=selectionVersion;pendingScanFocus=null;
   loadShownScans().then(()=>{if(token===mountId && selectionVersion===focusVersion && !match && !kept && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
+  // The address belongs to the page beside the model, not to the model.
+  if (besideMode) return;
   // Deep link from the PHOTOS view: #/model?pin=<photoId> enters PIN PHOTO for that photo.
   const m = /[?&]pin=([^&]+)/.exec(location.hash);
   if (m) {
@@ -6518,16 +6610,63 @@ function openModel(root) {
   }
 }
 function selectFromLink(id) {
-  const opening = (prop.openings || []).find(o => o.id === id);
-  const wall = prop.walls.find(w => w.id === (opening ? opening.wallId : id));
-  const room = !wall && prop.rooms.find(r => r.id === id);
-  if (!wall && !room) { toast('That element is no longer in the model.', 'warn'); return; }
-  const level = wall ? levelOfWall(prop, wall) : levelOfRoom(prop, room);
-  if (level && hiddenLevels().has(level.id)) toggleLevel(level.id);
-  const kind = opening ? 'opening' : wall ? 'wall' : 'room';
-  setSelection({ kind, id });
-  const g = findGroupFor(kind, id) || (wall && findGroupFor('wall', wall.id));
-  if (g) frameObject(g);
+  if (!showElements([id], { frame: 'always' })) toast('That element is no longer in the model.', 'warn');
+}
+// Select these rooms, walls, openings, fixtures and imported models together and bring them
+// into view (PROJECTS and the other pages beside the model, a #/model?select= link). A level
+// that was hidden is shown. `frame`: true moves the camera only when part of them is out of the
+// picture or they are too small in it to read, 'always' always, false never. Returns how many were found; none clears the selection.
+export function showElements(ids, { frame = true } = {}) {
+  if (!scene || !prop) return 0;
+  const things = [], objects = [];
+  for (const id of new Set(ids || [])) {
+    const opening = (prop.openings || []).find(o => o.id === id);
+    const wall = prop.walls.find(w => w.id === (opening ? opening.wallId : id));
+    const room = !wall && prop.rooms.find(r => r.id === id);
+    const fixture = !wall && !room && (prop.fixtures || []).find(f => f.id === id);
+    const scan = !wall && !room && !fixture && (prop.scans || []).find(x => x.id === id);
+    if (scan) {
+      things.push({ key: 'model:' + id, keys: [], scanId: id, name: scan.name || '', whole: true, sel: { kind: 'scan', id } });
+      if (scanObjs[id]) objects.push(scanObjs[id]);
+      continue;
+    }
+    if (!wall && !room && !fixture) continue;
+    const level = wall ? levelOfWall(prop, wall) : room ? levelOfRoom(prop, room) : null;
+    if (level && hiddenLevels().has(level.id)) toggleLevel(level.id);
+    const kind = opening ? 'opening' : wall ? 'wall' : room ? 'room' : 'fixture';
+    const key = planKey(kind, id);
+    things.push({ key, keys: [key], scanId: null, name: '', sel: { kind, id } });
+    const g = findGroupFor(kind, id) || (wall && findGroupFor('wall', wall.id));
+    if (g) objects.push(g);
+  }
+  if (!things.length) { if (selection) setSelection(null); return 0; }
+  // The plan elements lead, so a mix with an imported model still outlines them.
+  things.sort((a, b) => (b.whole ? 1 : 0) - (a.whole ? 1 : 0));
+  setSelection(things[things.length - 1].sel, [...new Set(things.flatMap(t => t.keys))], things);
+  if (frame && objects.length && (frame === 'always' || mode !== 'walk')) {
+    const box = new THREE.Box3();
+    for (const o of objects) {
+      const b = new THREE.Box3().setFromObject(o);
+      if (o.userData && o.userData.bounds) b.copy(o.userData.bounds).applyMatrix4(o.matrixWorld);
+      if (!b.isEmpty()) box.union(b);
+    }
+    if (frame === 'always' || !boxInView(box)) frameBox(box);
+  }
+  return things.length;
+}
+// Whether the whole box is inside the picture and big enough in it to read: at least a third
+// of the picture's width or height.
+function boxInView(box) {
+  if (box.isEmpty()) return true;
+  const cam = viewCamera();
+  cam.updateMatrixWorld();
+  const p = new THREE.Vector3(), lo = new THREE.Vector2(Infinity, Infinity), hi = new THREE.Vector2(-Infinity, -Infinity);
+  for (let i = 0; i < 8; i++) {
+    p.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).project(cam);
+    if (p.z < -1 || p.z > 1 || Math.abs(p.x) > 1 || Math.abs(p.y) > 1) return false;
+    lo.min(p); hi.max(p);
+  }
+  return Math.max(hi.x - lo.x, hi.y - lo.y) >= 2 / 3;
 }
 
 // three keys shader programs by light count, so the first time the room lights switch on
@@ -6669,6 +6808,7 @@ function rememberView() {
 
 export function unmount() {
   try { rememberView(); } catch (e) { console.error(e); }
+  if (besideMode) { document.removeEventListener('pointerdown', notePress, true); besideMode = false; keysHere = true; }
   if (offScreen) { offScreen(); offScreen = null; }
   if (offMenu) { offMenu(); offMenu = null; }
   if (exportDialog) exportDialog.close();
@@ -6856,6 +6996,13 @@ export function fieldAction(kind, id, value) {
   }
 }
 // Where the camera stands and looks, and whether the ground shows (BOTTOM puts it away).
+// For checks: what is selected and outlined, and whether the model is beside another page.
+export function selectionState() {
+  if (!scene) return null;
+  return { kind: selection ? selection.kind : null, id: selection ? selection.id : null, keys: tagPicks.slice(), things: picked.map(t => t.sel && t.sel.id),
+    outlined: passes.outline ? passes.outline.selectedObjects.length : 0, beside: besideMode,
+    edge: passes.outline ? { strength: passes.outline.edgeStrength, thickness: passes.outline.edgeThickness, fill: !!passes.outline.overlayMaterial.uniforms.fillColor } : null };
+}
 export function cameraState() {
   if (!camera || !controls) return null;
   return { position: camera.position.toArray(), target: controls.target.toArray(), mode, ground: !!(groundGroup && groundGroup.visible), lookingUp };

@@ -176,7 +176,7 @@ class NativeSceneSyncTests(unittest.TestCase):
         corner = by['Corner look']
         self.assertTrue(corner['camera']['perspective'])
         self.assertAlmostEqual(corner['camera']['fov'], 55, places=4)
-        self.assertEqual(corner['hiddenTags'], ['Furniture'])
+        self.assertEqual(corner['hiddenTags'], ['Furniture_e', 'Furniture_p'])   # a hidden tag hides both its halves
         self.assertNotIn('cut', corner)
         self.assertEqual(planes, 5)   # the plan's cut and the four elevations'
         # As SketchUp itself saves a cut-open elevation (the 57 scenes of a real shop-drawings
@@ -215,7 +215,7 @@ class NativeSceneSyncTests(unittest.TestCase):
         self.merge(skp)
         edited = self.root / 'edited.skp'
         edit_like_sketchup(skp, edited, move=('Studio, east wall', 0.3), rename=('Corner look', 'Corner, from the door'),
-                           delete='Studio, south wall', add=('Detail', 'Furniture'), recut=('Studio, north wall', 6))
+                           delete='Studio, south wall', add=('Detail', 'Furniture_e'), recut=('Studio, north wall', 6))
         r = self.merge(edited)
         self.assertEqual(sorted(r['applied']), ['Corner, from the door', 'Studio, east wall', 'Studio, north wall'])
         self.assertEqual(r['added'], ['Detail'])
@@ -234,7 +234,9 @@ class NativeSceneSyncTests(unittest.TestCase):
         self.assertEqual(detail['source'], {'app': 'sketchup-sync', 'scene': 'Detail'})
         self.assertFalse(detail['camera'].get('parallel', False))
         self.assertAlmostEqual(detail['camera']['fov'], 40, places=4)
-        self.assertEqual([on for on in detail['tags'].values()].count(False), 1)
+        hidden = [k for k, on in detail['tags'].items() if on is False]
+        self.assertEqual(len(hidden), 1)
+        self.assertTrue(hidden[0].endswith(':e'), hidden)   # only the existing half of Furniture
         # The next write tags the new scene instead of adding another; reading it again changes nothing.
         rewritten = self.write(edited)
         scenes, planes = self.scenes(rewritten)

@@ -199,6 +199,8 @@ The left pane holds MODEL's views, tools and switches, in groups that fold to th
 
 **Hidden scans load when shown.** A scan or model that is hidden is not loaded when MODEL opens. It loads the first time you show it (its VISIBLE box, or BEFORE / AFTER), so that first switch takes a moment; until then its row reads OFF.
 
+**The model beside any page.** MODEL BESIDE, in the top bar, keeps the model open in a pane to the right of every other page. Drag the bar between them to give either side more room (arrow keys move it too; a double-click puts it back to half and half); the switch and the share are remembered in this browser. The pane shows the model and the buttons over it: orbit, zoom and select there, and click it before using MODEL’s keys, which otherwise stay with the page. OPEN MODEL opens the MODEL page on the same view; the X closes the pane. A selection is drawn with a thick orange edge and an orange tint over everything it covers, fainter where something else is in front of it.
+
 **On a phone or tablet.** A phone or tablet draws at its own quality: Medium until you choose another under FILE → Settings → Model environment, where it reads QUALITY ON THIS DEVICE. The choice is kept on that device and never changes the quality saved with the property, which computers use. To keep the page alive on a small device, MODEL there also lights only the four rooms nearest the camera, draws at most 500,000 points of a point cloud, shrinks large textures inside imported models, and does not load a scan file over 150 MB: it says the scan is too large for this device. In the phone layout the side panel has Measure, BEFORE / AFTER, the open saved view's Rename, Update and Delete, and LOAD ANYWAY for a scan that was not loaded; a banner over the model says what a tap does, with DONE. A tap on a note opens it to edit or delete, and in Top view one finger pans.
 
 **Photos and documents on surfaces.** PIN (P) hangs a photo or a document flat on the wall, floor or scan surface you click, like a print put up by hand. A photo hangs at a print size (11 x 14 in unless you choose another); a PDF page or sheet image hangs at its true size, so a 24 x 36 in drawing is 24 x 36 in on the wall. A pin on a wall keeps its place on that wall and moves with it when the wall moves. Select a pinned document and choose READ IT to fly in front of it, or OPEN THE PDF. PHOTOS in the mode bar hides or shows every pin, camera and numbered position.
@@ -519,7 +521,7 @@ Choose a project to edit its scope. Each row can carry quantity, unit, low/likel
 
 **Dependencies.** Select several predecessors when a task depends on more than one item. Check the schedule for cycles or missing durations.
 
-**Element links.** A scope item can refer to the wall, room or model surface that generated the work.
+**Element links.** A scope item can refer to the wall, room or model surface that generated the work. With MODEL BESIDE on, opening a project selects in the model every room, wall, door, window and fixture it and its subprojects are linked to, and brings them into view; clicking into a scope item selects that item’s own; a link to an element selects it in the pane instead of leaving PROJECTS.
 
 **Selection vs deletion.** Deselecting a project removes it from program calculations while retaining its scope for comparison.
 
