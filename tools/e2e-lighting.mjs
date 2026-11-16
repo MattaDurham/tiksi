@@ -158,6 +158,7 @@ try {
   assert.ok(relief(detailedTrim) > relief(noContrast) + 0.01, 'Contrast increases separation at the same exposure: ' + measured + ' -> ' + JSON.stringify(noContrast));
   assert.equal((await env()).exposure, 2.05);
   assert.equal(await panel.locator('[data-light-choice]').textContent(), 'Custom');
+  console.log('ok   same-paint trim at rest and in motion:', measured);
   await tune.click();
   await panel.locator('[data-light-preset=bright]').click();
   assert.equal(await panel.getByRole('slider', { name: 'Fill light' }).isVisible(), true);
@@ -196,6 +197,7 @@ try {
     const part = scene.modelParts(wrapper).find(x => x.object === ceiling);
     tags.assignTag(p, [scene.partKey(p.scans[0].id, part)], tags.CANON.ceiling.id);
   });
+  await panel.locator('[data-toggle]').click();   // collapse LIGHT so it does not cover the tag list
   await page.locator('.v-objects [data-ol-tab="tags"]').click();   // the tag list is the second tab of the component list
   await page.locator('[data-tag-eye="tag-ceiling"]').click();
   assert.equal(await page.evaluate(() => window.testScene.getObjectByName('Ceiling').visible), false, 'the ceiling is hidden from view');
@@ -204,6 +206,7 @@ try {
   await page.locator('[data-tag-eye="tag-ceiling"]').click();
 
   // After dark the fixtures light the room; switched off, it is dark.
+  await panel.locator('[data-toggle]').click();
   await sun.click();
   await slide('time', 22);
   const night = await brightness(false);
@@ -218,7 +221,7 @@ try {
   await panel.locator('[data-light-preset=trim]').click();
   const nightTrim = await sampleTrim();
   assert.ok(nightTrim.face > naturalTrim.face && relief(nightTrim) > relief(evenTrim) + 0.06, 'Trim detail works after dark: ' + JSON.stringify(nightTrim));
-  console.log('ok   same-paint trim at rest and in motion:', measured);
+  console.log('ok   same-paint trim after dark:', JSON.stringify(nightTrim));
   assert.deepEqual(errors, []);
   console.log('ok   SketchUp-style model keeps its brightness at rest, old night-lights switch carried over, fixtures found with estimated lumens, presets, sliders, saved values, natural restore, corner shading off, hidden ceiling keeps the sun out, fixtures light the room at night and dim');
 } finally { await browser.close(); server.close(); }
