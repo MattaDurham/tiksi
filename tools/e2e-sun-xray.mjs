@@ -56,6 +56,7 @@ try {
   assert.ok(initial.fogMax < 0.6 && initial.fogNear >= 150, 'neutral distant haze does not wash out the model');
   await page.locator('[data-environment]').click();
   const panel = page.locator('.v-wrap > .v-env');
+  await panel.getByText('Sun and sky', { exact: true }).click();
   await panel.locator('[data-env=sunMode]').selectOption('location');
   assert.match(await panel.locator('[data-sun-status]').innerText(), /latitude and longitude/);
   for (const [key, value] of [['latitude', '40'], ['longitude', '-75']]) {
