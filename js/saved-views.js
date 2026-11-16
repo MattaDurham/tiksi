@@ -9,7 +9,9 @@
 //   section: { on, height, planes: [{ id, kind, q, pos }], active, done }, xray, hiddenLevels: [levelId],
 //   hidden: [object key], models: { scanId: shown }, compare: 'before' | 'after',
 //   markers: { pins, notes }, xrayOpacity, uncertainty, source? }]
-// `source` = { app: 'sketchup', scan, scene } on a view made from a SketchUp scene.
+// `source` = { app: 'sketchup', scan, scene } on a view made from an imported model's SketchUp
+// scene, { app: 'sketchup-sync', scene } on one made from a scene added in the SketchUp sync file.
+// `standard` = { key, name } on a view of the standard set (standard-views.js).
 // `planes` (section-planes.js) is every cut the view was saved with and `active` the one whose
 // handles show; `done` is a clean section, its planes and handles put away. A view saved before
 // cuts could be rotated has only `height`, one flat cut. A view saved before Tiksi kept
@@ -75,6 +77,13 @@ export function normalizeSavedView(v, taken = new Set()) {
   const src = v.source;
   if (src && src.app === 'sketchup' && typeof src.scan === 'string' && ID_RE.test(src.scan) && typeof src.scene === 'string' && src.scene.trim())
     out.source = { app: 'sketchup', scan: src.scan, scene: src.scene.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 200) };
+  // A view made from a scene added in the SketchUp sync file (sketchup-mirror.js) names that scene.
+  else if (src && src.app === 'sketchup-sync' && typeof src.scene === 'string' && src.scene.trim())
+    out.source = { app: 'sketchup-sync', scene: src.scene.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 200) };
+  // A view of the standard set (standard-views.js): what it shows, and the name it was made with.
+  const st = v.standard;
+  if (st && typeof st.key === 'string' && /^[\w.:-]{1,200}$/.test(st.key) && typeof st.name === 'string')
+    out.standard = { key: st.key, name: clean(st.name) };
   return out;
 }
 
@@ -152,6 +161,9 @@ export function updateSavedView(prop, id, state) {
   const v = normalizeSavedView({ ...prop.savedViews[i], ...state, tags: tagState(prop), hidden: hiddenObjects(prop), id: undefined });
   if (!v) return null;
   v.id = id;
+  // Updated by hand, a view of the standard set becomes the owner's own: a refresh of the set
+  // leaves it as it is (and makes a fresh one of that view beside it).
+  delete v.standard;
   prop.savedViews[i] = v;
   return v;
 }

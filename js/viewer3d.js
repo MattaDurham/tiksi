@@ -42,6 +42,7 @@ import {
 } from './store.js';
 import { placeScanBytes, seedProject, proposalSummary } from './scan2plan.js';
 import { bringInScenes } from './sketchup-scenes.js';
+import { refreshStandardViews, standardCount } from './standard-views.js';
 import { chooseScanPlacement } from './scanplace.js';
 import { proposeFixtures, openFixtureReview, fixtureInspectorHtml, bindFixtureInspector, addFixtureHtml, addFixture } from './fixtures-ui.js';
 import { materialSelectHtml } from './materials.js';
@@ -5606,6 +5607,16 @@ function addView() {
   toast('Saved the view "' + v.name + '" with its camera, tags, section cuts and everything hidden.' + (fieldLayout() ? '' : ' Double-click its tab, or use the pencil beside it, to rename it.'), 'ok');
   return v;
 }
+// The standard view set (standard-views.js), made or refreshed from the rooms as they are now.
+function makeStandardViews() {
+  const r = refreshStandardViews(prop);
+  if (!r.added && !r.updated && !r.removed) { toast('There are no rooms or walls to make the standard views from yet.', 'warn'); return; }
+  if (activeViewId && !prop.savedViews.some(v => v.id === activeViewId)) activeViewId = null;
+  touch(); renderViews();
+  const n = (k, one, many) => k + ' ' + (k === 1 ? one : many);
+  toast('Standard views: ' + [r.added && n(r.added, 'new view', 'new views'), r.updated && n(r.updated, 'view refreshed', 'views refreshed'), r.removed && n(r.removed, 'view of a wall that is gone taken away', 'views of walls that are gone taken away')].filter(Boolean).join(', ') + '.'
+    + (r.skipped ? ' ' + r.skipped + ' did not fit: a property keeps 100 views.' : ''), r.skipped ? 'warn' : 'ok');
+}
 function goToView(id) {
   const v = (prop.savedViews || []).find(x => x.id === id);
   if (!v) return;
@@ -5788,6 +5799,8 @@ function menuGroups() {
     { title: 'Saved views', screen: screen('model.views', true, 'The saved-view tabs over the model'), items: [
       ...(prop.savedViews || []).map(v => ({ label: v.name, icon: 'camera', active: v.id === activeViewId, data: { viewGo: v.id }, title: v.name + ': go to this view', run: () => goToView(v.id) })),
       { label: 'Save this view', key: '+', icon: 'plus', act: 'view-add', title: 'Save this view: the camera, tags, section cuts, x-ray, levels, models and what is hidden', run: addView },
+      { label: standardCount(prop) ? 'Refresh the standard views' : 'Make the standard views', icon: 'layers', act: 'views-standard',
+        title: 'An overview, a plan from above for each level and a cut-open elevation of each wall of each room, made from the rooms as they are now. A refresh keeps their tabs and the names you gave them; views you saved yourself stay as they are.', run: makeStandardViews },
     ] },
     { title: 'Standard views', items: [
       { label: 'Frame the model', key: 'F', icon: 'frame', act: 'frame', run: orbitTo('frame') },
