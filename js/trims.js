@@ -12,6 +12,7 @@
 //                  it: crown always sits at the top of the wall);
 //   h              a field's height (wainscoting, boxes, planks), metres;
 //   cols, rows     how many boxes, bays or panels across and up (cols null: chosen to fit);
+//   frameLayout    optional picture-frame preset, instead of the custom row and column settings;
 //   colsAt         a count for one stretch between doors, windows and the wall's ends, by the
 //                  stretch's place among the full-height ones (null or missing: chosen to fit;
 //                  0: that stretch is left empty);
@@ -34,6 +35,7 @@
 
 import { sectionOf, isCrownProfile } from './trim-profiles.js';
 import { catalogItem, catalogFor, TRIM_CATALOG } from './trim-catalog.js';
+import { framePreset } from './trim-presets.js';
 import { doorDetail, windowDetail, plainOpening } from './wall-solids.js';
 
 // kind: 'run' (one moulding along the wall), 'crown' (a run at the ceiling), 'field' (an area).
@@ -46,11 +48,13 @@ export const TRIM_STYLES = {
   'picture-rail': { label: 'Picture rail', group: 'Rails and caps', kind: 'run', y: null, fromTop: .3 },
   crown: { label: 'Crown', group: 'Crown', kind: 'crown' },
   'picture-frame': { label: 'Picture-frame boxes', group: 'Wainscoting', kind: 'field', y: .25, h: .5, boxes: true },
-  'board-batten': { label: 'Board and batten', group: 'Wainscoting', kind: 'field', y: .14, h: 1.0, bays: true },
-  grid: { label: 'Square grid', group: 'Wainscoting', kind: 'field', y: .14, h: 1.22, bays: true, rows: 2 },
-  shaker: { label: 'Shaker (recessed) panels', group: 'Wainscoting', kind: 'field', y: .14, h: .78, boxes: true },
   'raised-panel': { label: 'Raised panels', group: 'Wainscoting', kind: 'field', y: .14, h: .78, boxes: true },
-  beadboard: { label: 'Beadboard', group: 'Planks and panels', kind: 'field', y: .14, h: .8, planks: 'v' },
+  'flat-panel': { label: 'Flat panels', group: 'Wainscoting', kind: 'field', y: .14, h: .78, boxes: true },
+  'board-batten': { label: 'Board and batten', group: 'Wainscoting', kind: 'field', y: .14, h: 1.0, bays: true },
+  beadboard: { label: 'Beadboard', group: 'Wainscoting', kind: 'field', y: .14, h: .8, planks: 'v' },
+  shaker: { label: 'Shaker (recessed) panels', group: 'Wainscoting', kind: 'field', y: .14, h: .78, boxes: true },
+  'full-height-paneling': { label: 'Full-height paneling', group: 'Wainscoting', kind: 'field', y: 0, fullHeight: true, boxes: true },
+  grid: { label: 'Square grid', group: 'Wainscoting', kind: 'field', y: .14, h: 1.22, bays: true, rows: 2 },
   'v-groove': { label: 'Tongue and groove (V-groove)', group: 'Planks and panels', kind: 'field', y: .14, h: .8, planks: 'v' },
   shiplap: { label: 'Shiplap', group: 'Planks and panels', kind: 'field', y: .14, h: 1.0, planks: 'h' },
   slat: { label: 'Slat wall', group: 'Planks and panels', kind: 'field', y: 0, h: 2.4, planks: 'v' },
@@ -91,7 +95,7 @@ export function normaliseTrim(t, prop) {
   if (typeof t.product !== 'string' || (known && known.style !== t.style)) t.product = (catalogFor(t.style)[0] || {}).id || null;
   const style = TRIM_STYLES[t.style];
   t.y = clamp(fin(t.y, style.y == null ? 2.1 : style.y), 0, 6);
-  if (style.kind === 'field') t.h = clamp(fin(t.h, style.h), MIN_FIELD, 6);
+  if (style.kind === 'field') t.h = clamp(fin(t.h, style.h ?? 2.44), MIN_FIELD, style.fullHeight ? Infinity : 6);
   else delete t.h;
   t.cols = Number.isInteger(t.cols) && t.cols >= 1 && t.cols <= 60 ? t.cols : null;
   t.rows = Number.isInteger(t.rows) && t.rows >= 1 && t.rows <= 12 ? t.rows : (style.rows || 1);
@@ -104,7 +108,13 @@ export function normaliseTrim(t, prop) {
     ? t.colsAt.map(v => Number.isInteger(v) && v >= 0 && v <= 60 ? v : null) : null;
   t.material = typeof t.material === 'string' && t.material ? t.material : null;
   if (typeof t.name !== 'string') t.name = '';
+  setFrameLayout(t, t.frameLayout);
   return t;
+}
+
+export function setFrameLayout(t, id) {
+  if (t.style === 'picture-frame' && framePreset(id)) t.frameLayout = id;
+  else delete t.frameLayout;
 }
 export function normaliseTrims(list, prop) {
   return Array.isArray(list) ? list.map(t => normaliseTrim(t, prop)).filter(Boolean) : [];
@@ -123,7 +133,7 @@ export function trimTemplate(style, productId, wall, side, at = {}) {
   const H = fin(at.wallHeight, 2.44);
   const y = at.y != null ? at.y : s.y != null ? s.y : Math.max(0, H - (s.fromTop || .3) - (p ? p.W : .04));
   const t = { style, product: p ? p.id : null, wallId: wall.id, level: wall.level || null, side: side === -1 ? -1 : 1, f0: fin(at.f0, 0), f1: fin(at.f1, 1), y, name: '' };
-  if (s.kind === 'field') t.h = at.h != null ? at.h : Math.min(s.h, Math.max(MIN_FIELD, H - y - .05));
+  if (s.kind === 'field') t.h = at.h ?? (s.fullHeight ? Math.max(MIN_FIELD, H - y) : Math.min(s.h, Math.max(MIN_FIELD, H - y - .05)));
   if (s.rows) t.rows = s.rows;
   return normaliseTrim(t, null);
 }
@@ -142,8 +152,30 @@ export function swapTrimProduct(t, productId, wallHeight) {
     t.colsAt = null; t.target = null; t.insetTop = null; t.insetBottom = null; t.minBox = null;
   }
   t.style = p.style; t.product = p.id;
+  if (from !== to) delete t.frameLayout;
   if (to.kind === 'field' && t.h == null) t.h = to.h;
+  if (to.fullHeight && !from?.fullHeight) t.h = Math.max(MIN_FIELD, wallHeight - t.y);
+  if (from?.fullHeight && to.kind === 'field' && !to.fullHeight) {
+    t.y = to.y;
+    t.h = Math.min(to.h, Math.max(MIN_FIELD, wallHeight - t.y));
+  }
   if (to.kind !== 'field') delete t.h;
+  return true;
+}
+
+// A wainscoting style change keeps the field's extent and finish. Panel counts and
+// spacing belong to their original assembly and the new assembly starts with its defaults.
+export function swapWainscot(t, productId, wallHeight) {
+  const from = trimStyle(t), p = catalogItem(productId);
+  const to = p && TRIM_STYLES[p.style];
+  if (from?.kind !== 'field' || to?.kind !== 'field') return false;
+  const { y, h, style } = t;
+  swapTrimProduct(t, productId, wallHeight);
+  if (style === t.style) return true;
+  if (!from.fullHeight && !to.fullHeight) { t.y = y; t.h = h; }
+  if (to.fullHeight) t.h = Math.max(MIN_FIELD, wallHeight - t.y);
+  t.rows = to.rows || 1;
+  for (const k of ['cols', 'colsAt', 'target', 'widths', 'heights', 'gap', 'inset', 'spacing', 'insetTop', 'insetBottom', 'minBox']) t[k] = null;
   return true;
 }
 
@@ -254,6 +286,57 @@ function colsPerRect(rects, total) {
   return out;
 }
 
+function layPicturePreset(t, p, recipe, r, rect, out, push) {
+  const gap = t.gap ?? .1, inset = t.inset ?? .09;
+  const a = r.x0 + inset, b = r.x1 - inset;
+  const c = r.y0 + (t.insetBottom ?? inset), d = r.y1 - (t.insetTop ?? inset);
+  const addBox = (x0, x1, y0, y1, col, row) => {
+    if (x1 - x0 <= Math.max(p.W * 2, t.minBox || 0) || y1 - y0 <= p.W * 2) return;
+    const box = { x0, x1, y0, y1 };
+    const frame = { kind: 'frame', W: p.W, T: p.T, profile: p.profile };
+    out.boxes.push({ ...box, col, row, rect });
+    push({ ...frame, ...box });
+    if (recipe.nested) {
+      const offset = p.W + Math.min(gap / 2, p.W);
+      if (x1 - x0 > 2 * (offset + p.W) && y1 - y0 > 2 * (offset + p.W))
+        push({ ...frame, x0: x0 + offset, x1: x1 - offset, y0: y0 + offset, y1: y1 - offset });
+    }
+  };
+  if (b - a <= p.W * 2 || d - c <= p.W * 2) return;
+  const across = shares => splitSpan(a, b, shares.length, shares, gap);
+  // Fit one ordinary band above/below an opening, or where the preset will not fit.
+  const top = across(recipe.columns);
+  if (!r.full || !top.length || top.some(([x, y]) => y - x <= Math.max(p.W * 2, t.minBox || 0))) {
+    const n = Math.max(1, Math.min(autoCount(t.style, b - a, d - c, null, t.target, gap),
+      Math.floor((b - a + gap) / (p.W * 2 + gap))));
+    splitSpan(a, b, n, null, gap).forEach(([x, y], i) => addBox(x, y, c, d, i, 0));
+    if (r.full) out.cols = Math.max(out.cols, n);
+    return;
+  }
+  out.cols = Math.max(out.cols, top.length);
+  const rowGap = Math.min(gap, Math.max(p.W, (d - c) * .2));
+  const clear = d - c - rowGap;
+  const lowerTop = c + clamp(.24 * clear, p.W * 2.25, clear - p.W * 2.25);
+  const upperBottom = lowerTop + rowGap;
+  const divider = lowerTop + rowGap / 2;
+  const fitsRows = clear >= p.W * 4.5;
+  if (recipe.lower && fitsRows) {
+    const lower = across(recipe.lower);
+    if (lower.length && lower.every(([x, y]) => y - x > Math.max(p.W * 2, t.minBox || 0))) {
+      lower.forEach(([x, y], i) => addBox(x, y, c, lowerTop, i, 0));
+      top.forEach(([x, y], i) => addBox(x, y, upperBottom, d, i, 1));
+      if (p.W <= rowGap) push({ kind: 'board', dir: 'h', x0: r.x0, x1: r.x1, y0: divider - p.W / 2, y1: divider + p.W / 2, T: p.T, profile: p.profile });
+      return;
+    }
+  }
+  top.forEach(([x, y], i) => {
+    if (fitsRows && recipe.split?.includes(i)) {
+      addBox(x, y, c, lowerTop, i, 0);
+      addBox(x, y, upperBottom, d, i, 1);
+    } else addBox(x, y, recipe.low === i ? r.y0 : c, d, i, 0);
+  });
+}
+
 // The parts of one record. `face` is { L, H, x0, x1 } (the face's own ends along the wall,
 // which corners shorten or lengthen; default 0..L) and `openings` the level's openings.
 // Parts:
@@ -290,6 +373,11 @@ export function trimLayout(t, wall, openings, face = {}) {
   const rects = fieldRects(x0, x1, y0, y1, blocks);
   out.rects = rects;
   const rows = Math.max(1, t.rows || 1);
+  const recipe = t.style === 'picture-frame' && framePreset(t.frameLayout);
+  if (recipe) {
+    rects.forEach((r, i) => layPicturePreset(t, p, recipe, r, i, out, push));
+    return out;
+  }
   if (style.planks) {
     const pitch = Math.max(.01, t.spacing || p.pitch || W);
     for (const r of rects) {
@@ -322,10 +410,12 @@ export function trimLayout(t, wall, openings, face = {}) {
     for (const r of rects) {
       // Shaker and raised panels: a top rail, a bottom rail and stiles of flat stock frame the panels.
       if (!frame) {
-        const lowerTop = Math.min(r.y0 + botRail, r.y1);
-        const upperBottom = Math.max(r.y1 - topRail, lowerTop);
-        if (upperBottom < r.y1) push({ kind: 'board', dir: 'h', x0: r.x0, x1: r.x1, y0: upperBottom, y1: r.y1, T, profile: 'eased' });
-        push({ kind: 'board', dir: 'h', x0: r.x0, x1: r.x1, y0: r.y0, y1: lowerTop, T, profile: 'eased' });
+        if (topRail + botRail >= r.y1 - r.y0) {
+          push({ kind: 'board', dir: 'h', x0: r.x0, x1: r.x1, y0: r.y0, y1: r.y1, T, profile: p.profile });
+          continue;
+        }
+        push({ kind: 'board', dir: 'h', x0: r.x0, x1: r.x1, y0: r.y1 - topRail, y1: r.y1, T, profile: 'eased' });
+        push({ kind: 'board', dir: 'h', x0: r.x0, x1: r.x1, y0: r.y0, y1: r.y0 + botRail, T, profile: 'eased' });
       }
       const ix0 = r.x0 + (frame ? inset : 0), ix1 = r.x1 - (frame ? inset : 0);
       const iy0 = r.y0 + (frame ? insetB : botRail), iy1 = r.y1 - (frame ? insetT : topRail);
@@ -333,6 +423,7 @@ export function trimLayout(t, wall, openings, face = {}) {
       const rowGap = frame ? gap : stile;
       const rowsHere = r.full ? rows : 1;
       const spans = rowsHere > 1 ? rowSplit(iy0, iy1, rowGap) : [[iy0, iy1]];
+      if (!spans.length) continue;
       const set = setCols(r);
       // Framed panels count their clear widths between stiles once a target is set; without one they fit as before.
       const n = frame && set != null ? set : set ? set : frame || !t.target ? autoCount(t.style, ix1 - ix0, spans[0][1] - spans[0][0], null, t.target, gap)
@@ -353,6 +444,7 @@ export function trimLayout(t, wall, openings, face = {}) {
           if (bx1 - bx0 < .03 || d - c < .03) return;
           out.boxes.push({ x0: bx0, x1: bx1, y0: c, y1: d, col: i, row: j, rect: rects.indexOf(r) });
           if (frame) push({ kind: 'frame', x0: bx0, x1: bx1, y0: c, y1: d, W, T, profile: p.profile });
+          else if (p.panelThickness) push({ kind: 'board', dir: 'h', x0: bx0, x1: bx1, y0: c, y1: d, T: p.panelThickness, profile: 'flat' });
           else if (t.style === 'raised-panel') {
             const bevel = Math.min(.05, (bx1 - bx0) / 4, (d - c) / 4);
             push({ kind: 'frame', x0: bx0 + .003, x1: bx1 - .003, y0: c + .003, y1: d - .003, W: bevel, T: T * .9, profile: 'raised-bevel' });
@@ -374,6 +466,7 @@ export function trimLayout(t, wall, openings, face = {}) {
       if (by1 - r.y0 < .03) continue;
       const rowsHere = t.style === 'grid' && r.full ? rows : 1;
       const spans = rowsHere > 1 ? splitSpan(r.y0, by1, rowsHere, t.heights, W) : [[r.y0, by1]];
+      if (!spans.length) continue;
       const set = setCols(r);
       const n = set || autoCount(t.style, r.x1 - r.x0, spans[0][1] - spans[0][0], t.style === 'grid' ? t.spacing : spacing);
       if (r.full) out.cols = Math.max(out.cols, n);

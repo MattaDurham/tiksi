@@ -11,7 +11,7 @@ export function evidenceSignature(record) {
   // records that do not use it while invalidating reviewed details when they change.
   const detailFields = ['detail','ceilingHeight','baseboardPos','baseboardNeg','floorContinuity','doorState','materialEndA','materialEndB'];
   // Trim's product sets its drawn profile. Names and notes do not change that geometry.
-  if (record?.wallId && record?.style && ('f0' in record || 'f1' in record)) detailFields.push('style','product','f0','f1','cols','rows','widths','heights','gap','inset','spacing','material');
+  if (record?.wallId && record?.style && ('f0' in record || 'f1' in record)) detailFields.push('style','product','f0','f1','cols','rows','widths','heights','gap','inset','spacing','material','frameLayout');
   return JSON.stringify([...fields.map(k => [k, record?.[k] ?? null]), ...detailFields.filter(k => record?.[k] !== undefined).map(k => [k, record[k]])]);
 }
 export function evidenceState(record, aspect = 'geometry') {

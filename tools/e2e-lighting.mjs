@@ -140,6 +140,25 @@ try {
   const slide = async (key, value) => {
     await panel.locator(`[data-env=${key}]`).evaluate((input, value) => { input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); }, String(value));
   };
+  // At close range a point emitter can bleach the painted wall and even its dark
+  // backplate. Check those pixels separately from the amount of light across the room.
+  const sconceView = { position: [1.45, 1.86, 2.5], target: [0.07, 1.85, 2.5] };
+  const sconceRegions = { plate: [.489, .485, .511, .525], globe: [.583, .48, .597, .52], wall: [.64, .48, .67, .52] };
+  const sampleSconce = () => page.evaluate(async opts => (await import('/js/viewer3d.js')).frameBrightness(opts), { view: sconceView, regions: sconceRegions });
+  const workSconce = await sampleSconce();
+  await page.screenshot({ path: resolve(output, 'sconce-work-light.png') });
+  await panel.locator('[data-light-preset=lamplight]').click();
+  const lampRoom = await brightness();
+  const lampSconce = await sampleSconce();
+  await page.screenshot({ path: resolve(output, 'sconce-lamplight.png') });
+  const glare = JSON.stringify({ workSconce, lampSconce, room: { natural: still, work: bright, lamp: lampRoom } });
+  console.log('Fixture and room brightness:', glare);
+  assert.ok(lampRoom > 0.35, 'Lamplight keeps the room visible: ' + glare);
+  for (const look of [workSconce, lampSconce]) {
+    assert.ok(look.wall < 0.92 && look.globe < 0.95, 'the globe and nearby wall retain detail: ' + glare);
+    assert.ok(look.globe - look.plate > 0.25, 'the light globe and dark backplate remain distinct: ' + glare);
+  }
+  await panel.locator('[data-light-preset=bright]').click();
   const evenTrim = await sampleTrim();
   await page.screenshot({ path: resolve(output, 'trim-even.png') });
   await panel.locator('[data-light-preset=trim]').click();

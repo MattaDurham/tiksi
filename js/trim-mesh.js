@@ -1,7 +1,7 @@
 import { Vector2, ShapeUtils } from '../vendor/three.module.min.js';
 import { wallFrame, wallEnds } from './wall-joins.js';
 import { trimLayout } from './trims.js';
-import { sectionOf } from './trim-profiles.js';
+import { sectionOf, crownRelief } from './trim-profiles.js';
 
 // ---------- wall trim ----------
 // Each trim record (trims.js) is a group in its wall's frame, like the wall itself: every part
@@ -81,6 +81,13 @@ export function trimMeshParts(t, wall, view, openings) {
       const yOf = a => part.crown ? H - a : part.y + a;
       sweepInto(out, sec, (k, end) => { const [a, d] = sec[k]; return [end ? xe(d) : xs(d), yOf(a), z(d)]; },
         [0, part.crown ? -1 : 1, 0], OUT, [-1, 0, 0], [1, 0, 0]);
+      if (part.crown) {
+        const relief = crownRelief(part.profile, part.W, part.T, Math.max(part.x0, o0), Math.min(part.x1, o1));
+        if (relief) for (const contour of relief.contours) {
+          sweepInto(out, contour, (k, end) => [contour[k][0], yOf(contour[k][1]), z(end ? relief.front : relief.rear)],
+            [1, 0, 0], [0, -1, 0], [0, 0, -side], OUT);
+        }
+      }
     } else if (part.kind === 'frame') {
       const sec = sectionOf(part.profile, part.W, part.T);
       const { x0, x1, y0, y1 } = part;

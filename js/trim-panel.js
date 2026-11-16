@@ -9,8 +9,9 @@
 import { escapeHtml, fmtLen, parseLen, fmtMoney } from './store.js';
 import { materialSelectHtml } from './materials.js';
 import { TRIM_STYLES, STYLE_GROUPS, trimStyle, trimProduct, trimLabel, isField, catalogInOrder } from './trims.js';
-import { profilePath } from './trim-profiles.js';
-import { catalogFor } from './trim-catalog.js';
+import { CROWN_PRESETS, WAINSCOT_PRESETS, FRAME_PRESETS } from './trim-presets.js';
+import { trimCutaway, trimElevation } from './trim-previews.js';
+import { catalogFor, catalogItem } from './trim-catalog.js';
 
 const IN = 0.0254;
 let groupFilter = '';            // the catalog's group filter, kept between selections
@@ -31,20 +32,18 @@ export function sizeLabel(p) {
   return frac(inches(p.T)) + ' x ' + frac(inches(p.W)) + ' in';
 }
 
-function profileSvg(p, size = 34) {
-  return `<svg class="tp-prof" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" aria-hidden="true"><path d="${profilePath(p ? p.profile : 'flat', size, size)}"/></svg>`;
-}
-
 function productCardHtml(p, opts = {}) {
   if (!p) return '<div class="empty">No catalog entry.</div>';
   const price = p.price ? `${fmtMoney(p.price)}${p.priceUnit ? ' / ' + escapeHtml(p.priceUnit) : ''}` : '';
   return `<div class="tp-product">
-    ${profileSvg(p, 46)}
+    ${trimCutaway(p)}
     <div class="tp-product-text">
       <b>${escapeHtml(p.brand)} ${escapeHtml(p.model || '')}</b>
       <span>${escapeHtml(p.title)}</span>
       <span class="tp-meta">${escapeHtml(sizeLabel(p))} &middot; ${escapeHtml(p.material || '')}${price ? ' &middot; ' + price : ''}</span>
       <span class="tp-meta">${escapeHtml(p.store || '')}${p.sku ? ' item ' + escapeHtml(p.sku) : ''}${p.url ? ` &middot; <a href="${escapeHtml(p.url)}" target="_blank" rel="noopener">product page</a>` : ''}</span>
+      ${p.specUrl ? `<span class="tp-meta"><a href="${escapeHtml(p.specUrl)}" target="_blank" rel="noopener">Manufacturer specification</a></span>` : ''}
+      ${p.panelUrl ? `<span class="tp-meta"><a href="${escapeHtml(p.panelUrl)}" target="_blank" rel="noopener">Panel sheet</a> &middot; ${escapeHtml(fmtLen(p.panelThickness))} thick</span>` : ''}
       ${opts.evidence && p.evidence ? `<span class="tp-meta tp-evidence">${escapeHtml(p.evidence)}</span>` : ''}
     </div>
   </div>`;
@@ -58,7 +57,7 @@ function catalogHtml(current) {
     lastStyle = p.style;
     const on = current.has(p.id);
     return `${head}<button type="button" class="tp-cat-item${on ? ' active' : ''}" data-cat="${escapeHtml(p.id)}" title="${escapeHtml(p.title)}">
-      ${profileSvg(p)}
+      ${trimCutaway(p)}
       <span class="tp-cat-text"><b>${escapeHtml(p.short || p.title)}</b><span>${escapeHtml(p.brand)} ${escapeHtml(p.model || '')} &middot; ${escapeHtml(sizeLabel(p))}</span>
       <span>${escapeHtml(p.store || '')}${p.price ? ' &middot; ' + fmtMoney(p.price) + (p.priceUnit ? '/' + escapeHtml(p.priceUnit) : '') : ''}</span></span>
     </button>`;
@@ -72,6 +71,29 @@ function catalogHtml(current) {
 
 const same = (list, f) => { const v = list.map(f); return v.every(x => x === v[0]) ? v[0] : undefined; };
 const lenField = (label, key, value, ph, attr = 'data-len') => `<div class="field"><label>${escapeHtml(label)}</label><input type="text" ${attr}="${key}" value="${value === undefined || value === null ? '' : escapeHtml(fmtLen(value))}" placeholder="${escapeHtml(ph || (value === undefined ? 'several' : ''))}"></div>`;
+
+function presetPicker(label, key, choices, selected, preview, hint = '') {
+  const detail = choices.find(([, id]) => id === selected)?.[0] || hint;
+  return `<details class="tp-picker" data-picker="${key}">
+    <summary>${escapeHtml(label)} ${detail ? `<span>${escapeHtml(detail)}</span>` : ''}</summary>
+    <div class="tp-picker-options">${choices.map(([name, id]) => `<button type="button" data-choice="${id}" aria-pressed="${id === selected}">${preview(id)}<span>${escapeHtml(name)}</span></button>`).join('')}</div>
+  </details>`;
+}
+const crownPicker = id => presetPicker('Crown style', 'crown', CROWN_PRESETS, id, key => trimCutaway(catalogItem(key)));
+const wainscotPicker = id => presetPicker('Wainscoting style', 'wainscot', WAINSCOT_PRESETS, id, key => trimElevation(catalogItem(key)));
+const frameChoices = [['Custom', ''], ...Object.entries(FRAME_PRESETS).sort().map(([id, preset]) => [id + ' · ' + preset.label, id])];
+const framePicker = (id, product) => presetPicker('Picture-frame layout', 'frame', frameChoices, id, key => trimElevation(product, key), 'Several layouts');
+
+function stylePickersHtml(ctx) {
+  const crown = ctx.reach.filter(t => t.style === 'crown');
+  const wainscot = ctx.reach.filter(isField);
+  const frames = wainscot.filter(t => t.style === 'picture-frame');
+  return [
+    crown.length ? crownPicker(same(crown, t => t.product)) : '',
+    wainscot.length ? wainscotPicker(WAINSCOT_PRESETS.find(([, id]) => catalogItem(id).style === same(wainscot, t => t.style))?.[1]) : '',
+    frames.length ? framePicker(same(frames, t => t.frameLayout || ''), trimProduct(frames[0])) : '',
+  ].join('');
+}
 
 // How far a change reaches, as four buttons with what each covers.
 function scopeHtml(ctx) {
@@ -98,10 +120,11 @@ function layoutHtml(ctx, one) {
   const list = ctx.trims, vals = list.map(ctx.values);
   if (!vals.every(v => v && (v.boxes || v.bays)) || new Set(list.map(t => t.style)).size !== 1) return '';
   const v = vals[0], sameV = k => same(vals, x => x[k]);
+  const preset = v.frame && ctx.reach.some(t => t.style === 'picture-frame' && t.frameLayout);
   const fitted = fmtLen(v.aim || 0);
   let html = `<div class="tp-sub">PANEL LAYOUT (${ctx.reach.length} ${ctx.reach.length === 1 ? 'SECTION' : 'SECTIONS'})</div>
     <div class="field-row">
-      <div class="field"><label>${v.bays ? 'Batten spacing to aim for' : 'Box width to aim for'}</label><input type="text" data-design="aim" value="${vals.every(x => x.aimSet) && sameV('aim') !== undefined ? escapeHtml(fmtLen(v.aim)) : ''}" placeholder="${vals.every(x => x.aimSet) ? 'several' : escapeHtml(v.aim ? fitted : 'square')}" title="Each stretch of wall takes the whole number of equal ${v.bays ? 'bays' : 'boxes'} that comes closest to this. Blank goes back to the usual width."></div>
+      ${preset ? '' : `<div class="field"><label>${v.bays ? 'Batten spacing to aim for' : 'Box width to aim for'}</label><input type="text" data-design="aim" value="${vals.every(x => x.aimSet) && sameV('aim') !== undefined ? escapeHtml(fmtLen(v.aim)) : ''}" placeholder="${vals.every(x => x.aimSet) ? 'several' : escapeHtml(v.aim ? fitted : 'square')}" title="Each stretch of wall takes the whole number of equal ${v.bays ? 'bays' : 'boxes'} that comes closest to this. Blank goes back to the usual width."></div>`}
       ${v.frame ? lenField('Gap between boxes', 'gap', sameV('gap'), '', 'data-design') : ''}
     </div>`;
   if (v.frame) {
@@ -109,7 +132,7 @@ function layoutHtml(ctx, one) {
       <button class="btn" data-reveal title="Sets the margins at the ends, above and below equal to the gap between boxes: one reveal all round, the usual practice.">ONE REVEAL ALL ROUND</button>`;
   }
   html += `<div class="field-row">
-      ${v.boxes || list[0].style === 'grid' ? `<div class="field"><label>Rows</label><input type="number" min="1" max="12" step="1" data-design-int="rows" value="${sameV('rows') || ''}" placeholder="several"></div>` : ''}
+      ${!preset && (v.boxes || list[0].style === 'grid') ? `<div class="field"><label>Rows</label><input type="number" min="1" max="12" step="1" data-design-int="rows" value="${sameV('rows') || ''}" placeholder="several"></div>` : ''}
       ${v.frame ? `<div class="field"><label>Leave out boxes narrower than</label><input type="text" data-design="minBox" value="${sameV('minBox') ? escapeHtml(fmtLen(v.minBox)) : ''}" placeholder="no limit" title="A stretch of wall whose boxes would be narrower than this is left plain."></div>` : ''}
     </div>`;
   const sum = ctx.summary;
@@ -121,8 +144,8 @@ function layoutHtml(ctx, one) {
       ${sum.empty ? `<div class="stat-line"><span>Stretches left plain</span><b>${sum.empty}</b></div>` : ''}`;
   }
   html += ctx.notes.map(n => `<div class="empty tp-note">${escapeHtml(n)}</div>`).join('');
-  if (vals.some(x => x.pinned)) html += `<button class="btn" data-fit title="Counts and widths set by hand go back to fitting the width aimed for.">FIT THE PANELS AGAIN</button>`;
-  if (one) {
+  if (!preset && vals.some(x => x.pinned)) html += `<button class="btn" data-fit title="Counts and widths set by hand go back to fitting the width aimed for.">FIT THE PANELS AGAIN</button>`;
+  if (!preset && one) {
     const lay = ctx.layoutOf(one), st = ctx.stretches(one);
     if (st.length) {
       html += `<div class="tp-sub">${st.length > 1 ? 'PANELS IN EACH STRETCH OF THIS WALL' : 'PANELS ON THIS WALL'} (BLANK = FIT)</div>
@@ -165,6 +188,7 @@ export function trimPanelHtml(ctx) {
     ${one ? `<div class="stat-line"><span>${escapeHtml(trimLabel(one))}</span><b></b></div><div class="stat-line"><span>Face</span><b>${escapeHtml(ctx.faceName(one))}</b></div>` : `<div class="stat-line"><span>${escapeHtml(style ? style.label : 'Several styles')}</span><b>${list.length} selected</b></div>`}
     ${scopeHtml(ctx)}
     ${ctx.scope !== 'selected' && ctx.poolCount > list.length ? `<button class="btn" data-select-reach title="Select every section in this reach, of any kind of trim.">SELECT THE ${escapeHtml(ctx.scopes.find(x => x.id === ctx.scope).label)}'S TRIM (${ctx.poolCount})</button>` : ''}
+    ${stylePickersHtml(ctx)}
     <button class="btn${ctx.editing ? ' primary' : ''}" data-tp-edit title="E. Drag in the view: a rail or the inside of a box moves that height; a box's side resizes every box; the space between boxes is the gap; the space round them the margins.">${ctx.editing ? 'DONE EDITING (E)' : 'EDIT BY DRAGGING (E)'}</button>
     ${ctx.editing ? '<div class="empty" style="margin:6px 0">Drag a rail, or the inside of a box, up or down to move that height line. Drag a box\'s side to make every box narrower or wider: each wall takes as many as fit. Drag the space between two boxes to change the gap, and the space round the boxes to change the margins (Shift keeps gap and margins equal; Alt on a gap moves that one divider). The outline shows every section the drag will change. Right-click a section for more.</div>' : ''}
     ${mouldingsHtml(ctx)}
@@ -193,6 +217,11 @@ export function bindTrimPanel(root, ctx) {
   const list = ctx.trims, one = list.length === 1 ? list[0] : null;
   const q = s => root.querySelector(s);
   q('[data-tp-edit]').onclick = () => ctx.toggleEdit();
+  root.querySelectorAll('[data-picker] [data-choice]').forEach(btn => btn.onclick = () => {
+    const key = btn.closest('[data-picker]').dataset.picker;
+    ctx.preset(key, btn.dataset.choice);
+    q(`[data-picker="${key}"] summary`)?.focus();
+  });
   root.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => ctx.setScope(b.dataset.scope));
   const reachBtn = q('[data-select-reach]'); if (reachBtn) reachBtn.onclick = () => ctx.selectReach(ctx.scope);
   root.querySelectorAll('[data-role-product]').forEach(sel => sel.onchange = () => { if (sel.value) ctx.swapStyle(sel.dataset.roleProduct, sel.value); });
@@ -285,15 +314,44 @@ export function addTrimHtml(faces, opts = {}) {
   }).join('') + (last ? '</optgroup>' : '');
   return `<div class="tp-sub">ADD WALL TRIM</div>
     ${faces.length > 1 ? `<div class="field"><label>Face</label><select data-trim-face>${faces.map((f, i) => `<option value="${i}" ${i === (opts.face || 0) ? 'selected' : ''}>${escapeHtml(f.label)}</option>`).join('')}</select></div>` : ''}
-    <div class="field"><label>Trim</label><select data-trim-product>${options}</select></div>
+    <div class="field"><label>Trim</label><select aria-label="Trim product" data-trim-product>${options}</select></div>
+    ${crownPicker()}
+    ${wainscotPicker()}
+    <div data-add-frame></div>
     <button class="btn" data-trim-add>${escapeHtml(opts.button || 'ADD TRIM')}</button>`;
 }
 export function bindAddTrim(root, faces, add) {
   const btn = root.querySelector('[data-trim-add]');
   if (!btn) return;
+  const product = root.querySelector('[data-trim-product]');
+  const frame = root.querySelector('[data-add-frame]');
+  let layout = '';
+  const renderFrame = () => {
+    const p = catalogItem(product.value);
+    frame.innerHTML = p?.style === 'picture-frame' ? framePicker(layout, p) : '';
+  };
+  renderFrame();
+  product.onchange = () => { if (catalogItem(product.value)?.style !== 'picture-frame') layout = ''; renderFrame(); };
+  for (const picker of root.querySelectorAll('[data-picker]:not([data-picker="frame"])')) {
+    picker.onclick = e => {
+      const choice = e.target.closest('[data-choice]');
+      if (!choice) return;
+      product.value = choice.dataset.choice;
+      product.onchange();
+      picker.open = false;
+      picker.querySelector('summary').focus();
+    };
+  }
+  frame.onclick = e => {
+    const choice = e.target.closest('[data-choice]');
+    if (!choice) return;
+    layout = choice.dataset.choice;
+    renderFrame();
+    frame.querySelector('summary').focus();
+  };
   btn.onclick = () => {
     const faceSel = root.querySelector('[data-trim-face]');
     const face = faces[faceSel ? +faceSel.value : 0];
-    add(root.querySelector('[data-trim-product]').value, face);
+    add(product.value, face, layout);
   };
 }

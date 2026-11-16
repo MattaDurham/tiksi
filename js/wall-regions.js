@@ -58,7 +58,7 @@ export function trimDivides(t) {
   const s = trimStyle(t);
   if (!s) return null;
   if (s.kind === 'run' || s.kind === 'crown') return 'run';
-  if (s.planks || t.style === 'raised-panel') return 'cover';
+  if (s.planks || t.style === 'raised-panel' || t.style === 'flat-panel' || t.style === 'full-height-paneling') return 'cover';
   if (t.style === 'picture-frame') return null;
   return 'inside';
 }

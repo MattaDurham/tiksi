@@ -72,7 +72,7 @@ import { ModelMirrors } from './model-mirrors.js';
 import { componentKeyOf } from './model-components.js';
 import { modelObjectTree, objectForClick, objectBelow, objectOffset, setObjectOffset, applyPartOffsets, objectBox } from './model-objects.js';
 import { renderObjectList, showListTab, revealInList, objectThing, hiddenState } from './object-list.js';
-import { trimTemplate, swapTrimProduct, setTrimY, trimExtent, trimStyle, trimProduct, trimLabel, isField, roomFaces } from './trims.js';
+import { trimTemplate, swapTrimProduct, swapWainscot, setFrameLayout, setTrimY, trimExtent, trimStyle, trimProduct, trimLabel, isField, roomFaces } from './trims.js';
 import { trimDesign, designValues, setDesignParam, stickySnap, SCOPE_LABELS } from './trim-design.js';
 import { trimPanelHtml, bindTrimPanel, addTrimHtml, bindAddTrim } from './trim-panel.js';
 import { createPaintTool } from './paint-tool.js';
@@ -142,8 +142,9 @@ let mirrors = null;
 const SETTLE_MS = 150;
 let lastMotion = -Infinity, lastFrameFast = false, aoWanted = true;
 let cameraLight = null, detailLight = null;
-// Candela of the camera light at CAMERA LIGHT 1 (about a 100 W bulb's worth, softened).
+// Keep the camera light useful across a room and soft when inspecting a surface up close.
 const CAMERA_LIGHT_CD = 10;
+const CAMERA_LIGHT_SOFT_RADIUS = 2.7;
 const frameCounts = { fastFrames: 0, fullFrames: 0, shadowRefreshes: 0, skyBakes: 0, modelBuilds: 0 };
 function markMotion() { lastMotion = performance.now(); }
 const moving = () => performance.now() - lastMotion < SETTLE_MS;
@@ -292,6 +293,17 @@ function ensureRenderer() {
   if (renderer) return renderer;
   try { renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', stencil: false }); }
   catch (e) { renderer = null; throw Object.assign(new Error('This browser could not start 3D graphics.'), { cause: e, graphics: true }); }
+  // Three passes each light's distance through to this shader. A negative distance is
+  // reserved here for the soft radius of the fixture and camera lights.
+  THREE.ShaderChunk.lights_pars_begin = THREE.ShaderChunk.lights_pars_begin.replace(
+    'float distanceFalloff =', `
+    if ( cutoffDistance < 0.0 ) {
+      float d2 = lightDistance * lightDistance;
+      float r2 = cutoffDistance * cutoffDistance;
+      float shoulder = max( 0.0, 1.0 - 0.5 * d2 / r2 );
+      return 1.0 / ( d2 + r2 * shoulder * shoulder );
+    }
+    float distanceFalloff =`);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.AgXToneMapping || THREE.ACESFilmicToneMapping;
   renderer.shadowMap.enabled = true;
@@ -423,7 +435,7 @@ function setupScene() {
 
   // CAMERA LIGHT: a soft lamp just above the camera that goes where it goes. It stays in the
   // scene at zero when it is off, so turning it on never recompiles a shader.
-  cameraLight = new THREE.PointLight(0xfff3e4, 0, 0, 2);
+  cameraLight = new THREE.PointLight(0xfff3e4, 0, -CAMERA_LIGHT_SOFT_RADIUS, 2);
   cameraLight.name = 'camera light';
   scene.add(cameraLight);
 
@@ -567,7 +579,10 @@ function setupComposer() {
     enableMaskClipping(p.prepareMaskMaterial);
   }
 
-  passes.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.28, 0.4, 2.2);
+  // Let bloom build gradually in strong highlights. A hard cutoff made bright paint
+  // throw a halo across the darker fixture details beside it.
+  passes.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.28, 0.4, 3);
+  passes.bloom.highPassUniforms.smoothWidth.value = 1.5;
   passes.smaa = new SMAAPass();
   passes.output = new OutputPass();
   // Grade the displayed tones in the existing output pass, so the same control works on
@@ -835,6 +850,10 @@ function rebuildGround() {
 // fixture, so fixtures keep their true proportions to each other; the balance against the sun is
 // that of a camera exposed for the interior, since a screen cannot show both at their real ratio.
 const LUMEN_SCALE = 0.1;
+// Bound how much one fixture can light its own housing or an adjacent surface at full
+// output. The soft radius grows with the source's candela and the falloff rejoins inverse
+// square once the light has spread out. The dimmer still scales light at every distance.
+const FIXTURE_PEAK_IRRADIANCE = 8;
 // Lights are worked out for every pixel of every lit surface, so their number is capped: a
 // computer lights this many of each kind, a touch device its own limit (render-quality.js
 // deviceLimits). Over the cap, the fixtures in the camera's room come first, then the nearest.
@@ -880,7 +899,7 @@ function collectLampSources() {
     const room = (prop.rooms || []).find(x => x.id === r.id);
     const holds = s => s.pos.y >= r.y - 0.05 && s.pos.y <= r.top + 0.3 && pointInPolygon(s.pos.x, s.pos.z, room.pts);
     if (out.some(s => s.kind !== 'room' && holds(s))) continue;
-    out.push({ kind: 'room', label: FIXTURE_LABELS.room, lumens: roomLumens(polygonArea(room.pts)), kelvin: null, cone: false, id: r.id, room: r.id, pos: new THREE.Vector3(r.x, r.top - 0.12, r.z), disc: new THREE.Vector3(r.x, r.top - 0.035, r.z) });
+    out.push({ kind: 'room', label: FIXTURE_LABELS.room, lumens: roomLumens(polygonArea(room.pts)), kelvin: null, cone: false, id: r.id, room: r.id, pos: new THREE.Vector3(r.x, r.top - 0.12, r.z) });
   }
   return out;
 }
@@ -951,12 +970,14 @@ function cameraRoom() {
 let lampLevelNow = 0;
 function lightLamps() {
   const lit = lightingSettings(prop.env);
-  const dim = lampLevelNow * lit.lampBrightness * LUMEN_SCALE;
+  const dim = lampLevelNow * lit.lampBrightness;
   const fallback = kelvinToRgb(lit.lampKelvin);
   for (const kind of ['point', 'cone']) for (const light of lampPools[kind]) {
     const s = light.userData.source;
     if (!s) { light.intensity = 0; continue; }
-    light.intensity = dim * candela(s.lumens, light.isSpotLight ? DOWNLIGHT_HALF_ANGLE : null);
+    const strength = LUMEN_SCALE * candela(s.lumens, light.isSpotLight ? DOWNLIGHT_HALF_ANGLE : null);
+    light.intensity = dim * strength;
+    light.distance = -Math.sqrt(strength / FIXTURE_PEAK_IRRADIANCE);
     const [r, g, b] = s.kelvin ? kelvinToRgb(s.kelvin) : fallback;
     light.color.setRGB(r, g, b);
   }
@@ -1084,9 +1105,6 @@ function applyEnvironment() {
   lampLevelNow = lampMix;
   lightRoot.visible = lampMix > 0 && lit.lampBrightness > 0;
   lightLamps();
-  const discI = 5 * lampMix * Math.min(lit.lampBrightness, 1.5);
-  const [lr, lg, lb] = kelvinToRgb(lit.lampKelvin);
-  lightRoot.traverse(o => { if (o.isMesh) { o.material.emissiveIntensity = discI; o.material.emissive.setRGB(lr, lg, lb); } });
   if (modelGroup && modelGroup.userData.glass) {
     const g = modelGroup.userData.glass;
     g.emissive.setHex(0xffcf9a);
@@ -2605,7 +2623,7 @@ function roomTrimCountHtml(r) {
   return n ? `<button class="btn" data-room-trims>SELECT THIS ROOM'S TRIM (${n})</button>` : '';
 }
 // New sections of one catalog entry on these faces, then selected so the catalog can swap them.
-function addTrims(productId, faces) {
+function addTrims(productId, faces, frameLayout) {
   const p = catalogItem(productId);
   if (!p || !faces.length) { if (!faces.length) toast('No wall faces look into this room.', 'warn'); return; }
   beginGeometryEdit(prop, 'add wall trim');
@@ -2617,9 +2635,11 @@ function addTrims(productId, faces) {
   const ids = [];
   for (const { wall, side } of faces) {
     const t = trimTemplate(p.style, p.id, wall, side, { wallHeight: wallHeightOf(prop, wall) });
+    setFrameLayout(t, frameLayout);
     t.id = uid('trim');
     // A field starts above the baseboard already on that face.
-    if (isField(t)) {
+    if (trimStyle(t).fullHeight) fitFullHeightPanel(t);
+    else if (isField(t)) {
       const base = prop.trims.filter(x => x.wallId === wall.id && x.side === side && trimStyle(x) && trimStyle(x).group === 'Base')
         .reduce((m, x) => Math.max(m, trimExtent(x, wallHeightOf(prop, wall)).y1), 0);
       if (base > t.y) { t.h = Math.max(.1, t.h - (base - t.y)); t.y = base; }
@@ -2629,6 +2649,18 @@ function addTrims(productId, faces) {
   touch(); rebuildModel(); renderToolCol();
   selectTrims(ids);
   toast('Added ' + p.short + ' to ' + ids.length + (ids.length === 1 ? ' wall face.' : ' wall faces.'), 'ok');
+}
+function fitFullHeightPanel(t) {
+  const H = trimWallHeight(t);
+  let bottom = 0, top = H;
+  for (const x of prop.trims) {
+    if (x.wallId !== t.wallId || x.side !== t.side || x.f0 > t.f0 + .001 || x.f1 < t.f1 - .001) continue;
+    const style = trimStyle(x);
+    if (style?.group === 'Base') bottom = Math.max(bottom, trimExtent(x, H).y1);
+    if (style?.kind === 'crown') top = Math.min(top, trimExtent(x, H).y0);
+  }
+  t.y = bottom;
+  t.h = Math.max(.08, top - bottom);
 }
 function deleteTrims(ids) {
   if (!ids.length) return;
@@ -2689,6 +2721,15 @@ function renderTrimPanel() {
     design: (key, value, label) => editTrims(t => setDesignParam(t, key, value), label || 'trim layout', true),
     line: (t, edge, dy, label) => moveTrimLine(t, edge, dy, label),
     swapStyle: (style, productId) => editTrims(t => swapTrimProduct(t, productId, trimWallHeight(t)), 'swap trim', true, style),
+    preset: (kind, id) => {
+      if (kind === 'frame') return editTrims(t => setFrameLayout(t, id), 'picture-frame layout', true, 'picture-frame');
+      if (kind === 'crown') return ctx.swapStyle('crown', id);
+      const target = catalogItem(id)?.style;
+      editTrims(t => {
+        if (!isField(t) || t.style === target) return;
+        if (swapWainscot(t, id, trimWallHeight(t)) && trimStyle(t).fullHeight) fitFullHeightPanel(t);
+      }, 'wainscoting style', true);
+    },
     stretches: t => { const lay = design.layout(t); return lay.rects.map((r, k) => r.full ? { x: (r.x0 + r.x1) / 2, w: r.x1 - r.x0, n: lay.boxes.filter(b => b.rect === k && b.row === 0).length } : null).filter(Boolean); },
     setStretch: (t, i, n) => editTrims(x => {
       if (x !== t) return;
@@ -2757,6 +2798,11 @@ function trimGrab(e, hit) {
   const p = trimProduct(t), W = p ? p.W : .03;
   const lay = designNow().layout(t);
   const line = Math.max(.012, Math.min(.03, t.h / 8));
+  if (v.preset) {
+    if (Math.abs(at.y - (t.y + t.h)) < line) return { mode: 'top', t, at };
+    if (Math.abs(at.y - t.y) < line) return { mode: 'bottom', t, at };
+    return { mode: 'move', t, at };
+  }
   if (!v.frame) {
     // Framed panels, battens and planks: the field's edges are its rails.
     const tol = Math.max(.02, Math.min(.06, t.h / 6));
@@ -2977,7 +3023,7 @@ function trimMenuItems(found) {
   const pick = () => { if (!trimIds().includes(t.id)) selectTrims([t.id]); };
   const info = design.info(t);
   items.push(['trim-info', trimLabel(t) + (info ? ', ' + info.roomName : ''), null]);
-  if (v && (v.boxes || v.bays)) {
+  if (v && !v.preset && (v.boxes || v.bays)) {
     const word = v.bays ? 'BAY' : 'PANEL';
     items.push(['trim-add', 'ADD A ' + word + ' HERE', () => { pick(); stepTrimCols(t, at.x, 1); }]);
     items.push(['trim-less', 'REMOVE A ' + word + ' HERE', () => { pick(); stepTrimCols(t, at.x, -1); }]);
@@ -2986,8 +3032,8 @@ function trimMenuItems(found) {
       items.push(['trim-row', 'ADD A ROW', () => { pick(); editTrims(x => setDesignParam(x, 'rows', (x.rows || 1) + 1), 'add trim row', true); }]);
       if ((t.rows || 1) > 1) items.push(['trim-row-less', 'REMOVE A ROW', () => { pick(); editTrims(x => setDesignParam(x, 'rows', (x.rows || 1) - 1), 'remove trim row', true); }]);
     }
-    if (v.frame) items.push(['trim-reveal', 'ONE REVEAL ALL ROUND (' + fmtLen(v.gap) + ')', () => { pick(); editTrims(x => setDesignParam(x, 'reveal', v.gap), 'even trim reveal', true); }]);
   }
+  if (v?.frame) items.push(['trim-reveal', 'ONE REVEAL ALL ROUND (' + fmtLen(v.gap) + ')', () => { pick(); editTrims(x => setDesignParam(x, 'reveal', v.gap), 'even trim reveal', true); }]);
   items.push(null);
   for (const s of design.scopes(ids)) {
     if (s.id === 'selected') continue;
@@ -5875,7 +5921,7 @@ function renderInspectorBody() {
       ${addTrimHtml(wallTrimFaces(w), { face: wallFaceClicked === -1 ? 1 : 0, button: 'ADD TRIM TO THIS FACE' })}
       ${trimCountHtml(w)}
       <button class="btn" data-walk>WALK HERE</button>`;
-    bindAddTrim(inspEl, wallTrimFaces(w), (productId, face) => addTrims(productId, [{ wall: w, side: face.side }]));
+    bindAddTrim(inspEl, wallTrimFaces(w), (productId, face, layout) => addTrims(productId, [{ wall: w, side: face.side }], layout));
     const wt = inspEl.querySelector('[data-wall-trims]');
     if (wt) wt.onclick = () => selectTrims((prop.trims || []).filter(t => t.wallId === w.id).map(t => t.id));
     inspEl.querySelector('[data-mat]').onchange = e => { beginGeometryEdit(prop, 'change wall material'); w.material = e.target.value || null; touch(); rebuildModel(); };
@@ -5934,7 +5980,7 @@ function renderInspectorBody() {
       <button class="btn" data-room-faces title="Select every wall face of this room, to read their square feet and lengths">SELECT THIS ROOM'S WALLS</button>
       <button class="btn" data-walk>WALK INTO ROOM</button>`;
     inspEl.querySelector('[data-room-faces]').onclick = () => selectFaces(allFaces().filter(f => f.roomId === r.id).map(f => f.id));
-    bindAddTrim(inspEl, [{}], productId => addTrims(productId, roomTrimFaces(r)));
+    bindAddTrim(inspEl, [{}], (productId, face, layout) => addTrims(productId, roomTrimFaces(r), layout));
     const rt = inspEl.querySelector('[data-room-trims]');
     if (rt) rt.onclick = () => selectTrims(roomTrimIds(r));
     inspEl.querySelector('[data-name]').onchange = e => { beginGeometryEdit(prop, 'rename room'); r.name = e.target.value; touch(); };
