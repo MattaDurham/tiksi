@@ -23,7 +23,7 @@ import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
 import { applyPlanTagVisibility } from './tags-scene.js';
 import { cutPrism } from './section-planes.js';
 import { thresholdFloors as derivedThresholdFloors } from './threshold-floors.js';
-import { wallFrame, wallEnds, wallFaceSpan, wallFootprint } from './wall-joins.js';
+import { wallFrame, wallEnds, wallFaceSpan, wallSliceFootprint } from './wall-joins.js';
 import { roomFaces } from './room-faces.js';
 import { faceRegions, wallPartFinish } from './wall-regions.js';
 import { trimMeshParts } from './trim-mesh.js';
@@ -529,7 +529,7 @@ export function buildWallGroup(wall, openings, property, ctx) {
     return baseEnds.get(depth);
   };
   for (const s of solids) {
-    const fp = wallFootprint(ends, h, s.s0 > 0 ? s.s0 : -Infinity, s.s1 < L ? s.s1 : Infinity);
+    const fp = wallSliceFootprint(s, f, ends);
     if (fp.length < 3) continue;
     const edgeKinds = fp.map(([x, z], i) => {
       const [nextX, nextZ] = fp[(i + 1) % fp.length];
@@ -936,7 +936,7 @@ export function wallCapRects(property, height, opts) {
       const ends = wallEnds(wall, walls, 0);
       for (const s of solids) {
         if (s.v0 > local || s.v1 < local) continue;
-        const fp = solidFootprint(s, L, f.h, ends).map(([x, z]) => [wall.ax + f.ux * x + f.nx * z, wall.ay + f.uy * x + f.ny * z]);
+        const fp = wallSliceFootprint(s, f, ends).map(([x, z]) => [wall.ax + f.ux * x + f.nx * z, wall.ay + f.uy * x + f.ny * z]);
         // The viewer draws four-corner quads: fan a pointed footprint into quads, repeating the last corner.
         for (let i = 1; i + 1 < fp.length; i += 2) rects.push([fp[0], fp[i], fp[i + 1], fp[Math.min(i + 2, fp.length - 1)]]);
       }
@@ -963,7 +963,7 @@ export function wallCapPolygons(property, n, d, opts) {
       const f = wallFrame(wall);
       const ends = wallEnds(wall, walls, 0);
       for (const s of solids) {
-        const fp = solidFootprint(s, L, f.h, ends).map(([x, z]) => [wall.ax + f.ux * x + f.nx * z, wall.ay + f.uy * x + f.ny * z]);
+        const fp = wallSliceFootprint(s, f, ends).map(([x, z]) => [wall.ax + f.ux * x + f.nx * z, wall.ay + f.uy * x + f.ny * z]);
         const poly = cutPrism(fp, lvl.elevation + s.v0, lvl.elevation + s.v1, n, d);
         if (poly) polys.push(poly);
       }

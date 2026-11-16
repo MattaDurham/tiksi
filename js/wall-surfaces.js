@@ -1,7 +1,7 @@
 // The vertical boundary of the joined wall solids in plan and elevation.
 // Each edge keeps its original wall and coordinates for finishes, tags and picks.
 
-import { wallEnds, wallFootprint, wallFrame } from './wall-joins.js';
+import { wallEnds, wallFootprint, wallFrame, wallSliceFootprint } from './wall-joins.js';
 import { wallSolids } from './wall-solids.js';
 
 const EPS = 1e-8;
@@ -122,7 +122,7 @@ export function wallSurfaces(walls, byWall, heightOf) {
     const ends = wallEnds(wall, walls, 0), foot = wallFootprint(ends, f.h);
     const { solids, H } = wallSolids(wall, byWall.get(wall.id) || [], heightOf(wall));
     const slices = solids.flatMap(s => {
-      const points = wallFootprint(ends, f.h, s.s0 > 0 ? s.s0 : -Infinity, s.s1 < f.L ? s.s1 : Infinity).map(toPlan);
+      const points = wallSliceFootprint(s, f, ends).map(toPlan);
       return points.length < 3 ? [] : [{ ...s, points, box: bounds(points) }];
     });
     data.push({ wall, f, H, edges: outline(foot, toPlan, f.L, f.h), slices, box: bounds(foot.map(toPlan)) });

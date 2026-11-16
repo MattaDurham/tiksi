@@ -182,3 +182,7 @@ export function wallFootprint(ends, h, s0 = -Infinity, s1 = Infinity) {
   return points;
 }
 
+export function wallSliceFootprint(s, frame, ends) {
+  return wallFootprint(ends, frame.h, s.s0 > 0 ? s.s0 : -Infinity, s.s1 < frame.L ? s.s1 : Infinity);
+}
+
