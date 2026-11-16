@@ -21,6 +21,7 @@ const T = await import('../js/trims.js');
 const { TRIM_CATALOG, catalogItem, catalogFor } = await import('../js/trim-catalog.js');
 const { sectionOf } = await import('../js/trim-profiles.js');
 const { trimMeshParts } = await import('../js/trim-mesh.js');
+const { CROWN_PRESETS, WAINSCOT_PRESETS, FRAME_PRESETS } = await import('../js/trim-presets.js');
 
 const X = { matOpts: { transparent: true, opacity: 0.5 } };
 const WALL = { id: 'w1', ax: 0, ay: 0, bx: 4, by: 0, thickness: 0.114, height: 2.44, level: 'l1' };
@@ -34,11 +35,50 @@ test('every trim style has real store products with a size, a page and a known s
   for (const p of TRIM_CATALOG) {
     assert.ok(!ids.has(p.id), 'unique id ' + p.id); ids.add(p.id);
     assert.ok(T.TRIM_STYLES[p.style], p.id + ' style');
-    assert.match(p.url, /^https:\/\/www\.(homedepot|lowes)\.com\//, p.id + ' is a Home Depot or Lowe\'s page');
-    assert.ok(/Home Depot|Lowe's/.test(p.store), p.id + ' store');
+    assert.match(p.url, /^https:\/\/www\.(homedepot|lowes|ekenamillwork)\.com\//, p.id + ' supplier page');
+    assert.ok(/Home Depot|Lowe's|Ekena Millwork/.test(p.store), p.id + ' supplier');
     assert.ok(p.W > 0.005 && p.W < 1.3 && p.T > 0.002 && p.T < 0.2, p.id + ' size in metres');
     assert.ok(sectionOf(p.profile, p.W, p.T).length >= 4, p.id + ' section');
   }
+});
+
+test('the style picker entries resolve to sourced profiles and assemblies', () => {
+  assert.equal(new Set(CROWN_PRESETS.map(([, id]) => {
+    const p = catalogItem(id);
+    assert.equal(p.style, 'crown');
+    return JSON.stringify(sectionOf(p.profile, p.W, p.T));
+  })).size, 9);
+  assert.equal(new Set(WAINSCOT_PRESETS.map(([, id]) => T.TRIM_STYLES[catalogItem(id).style].kind)).size, 1);
+  const t = T.trimTemplate('picture-frame', null, WALL, 1, { y: .3, h: .65, f0: .15, f1: .9 });
+  t.material = 'mat-selected'; T.setFrameLayout(t, '10');
+  assert.ok(T.swapWainscot(t, 'hd-8203035', WALL.height));
+  assert.deepEqual([t.y, t.h, t.material, t.f0, t.f1, t.frameLayout], [.3, .65, 'mat-selected', .15, .9, undefined]);
+  assert.ok(T.swapWainscot(t, 'flat-hd-10005558', WALL.height));
+  assert.ok(T.trimLayout(t, WALL, []).parts.some(p => p.profile === 'flat' && p.T === T.trimProduct(t).panelThickness));
+  assert.ok(T.swapWainscot(t, 'full-hd-10005558', WALL.height));
+  assert.equal(T.trimExtent(t, WALL.height).y1, WALL.height);
+});
+
+test('picture-frame presets draw ten distinct layouts, fit around openings and preserve custom settings', () => {
+  const t = T.trimTemplate('picture-frame', null, WALL, 1);
+  t.cols = 2; t.widths = [1, 2];
+  const custom = T.trimLayout(t, WALL, []).parts;
+  const layouts = new Set();
+  for (const id of Object.keys(FRAME_PRESETS)) {
+    T.setFrameLayout(t, id);
+    const saved = T.normaliseTrim(JSON.parse(JSON.stringify(t)), { walls: [WALL] });
+    assert.equal(saved.frameLayout, id);
+    const layout = T.trimLayout(t, WALL, []);
+    assert.ok(layout.boxes.length >= 3, id + ' draws on the default field height');
+    layouts.add(JSON.stringify(layout.parts));
+    const [block] = T.openingBlocks(WALL, [DOOR], 4, WALL.height);
+    for (const part of T.trimLayout(t, WALL, [DOOR]).parts)
+      assert.ok(part.x1 <= block.x0 || part.x0 >= block.x1, id + ' leaves the casing clear');
+  }
+  assert.equal(layouts.size, 10);
+  T.setFrameLayout(t, '');
+  assert.deepEqual(T.trimLayout(t, WALL, []).parts, custom);
+  assert.equal(T.normaliseTrim({ ...t, frameLayout: 'unknown' }).frameLayout, undefined);
 });
 
 test('a wall draws no baseboard of its own: only its solids and its door', () => {

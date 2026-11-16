@@ -59,6 +59,21 @@ const CROWN = {
   // A concave quarter circle bowing toward the corner, centred at the room-side corner (1, 1).
   'crown-cove': [[1, 0], ...Array.from({ length: 9 }, (_, i) => { const t = i / 8 * Math.PI / 2; return [1 - .9 * Math.sin(t), 1 - .9 * Math.cos(t)]; }), [0, 1]],
   'crown-stepped': [[1, 0], [1, .16], [.74, .16], [.74, .46], [.46, .46], [.46, .76], [.16, .76], [.16, 1], [0, 1]],
+  'crown-craftsman': [[1, 0], [1, .13], [.9, .19], [.77, .22], [.63, .26], [.49, .34],
+    [.37, .44], [.25, .58], [.14, .76], [.06, .93], [0, 1]],
+  'crown-foster': [[1, 0], [1, .14], [.94, .17], [.91, .15], [.85, .19], [.81, .17],
+    [.72, .2], [.69, .2], [.63, .23], [.59, .22], [.52, .27], [.48, .26], [.41, .32], [.38, .31],
+    [.31, .4], [.28, .4], [.23, .5], [.2, .5], [.15, .64], [.13, .63], [.09, .78], [.06, .82], [0, 1]],
+  'crown-traditional': [[1, 0], [1, .14], [.93, .14], [.9, .23], [.84, .25], [.8, .2],
+    [.75, .2], [.66, .23], [.54, .31], [.42, .45], [.32, .62], [.26, .77], [.23, .91],
+    [.17, .95], [.1, .92], [.1, 1], [0, 1]],
+  'crown-attica': [[1, 0], [1, .17], [.94, .17], [.94, .3], [.87, .34], [.84, .46],
+    [.61, .46], [.58, .48], [.54, .56], [.5, .51], [.41, .53], [.33, .61], [.23, .75],
+    [.19, .88], [.14, .9], [.09, .87], [.09, 1], [0, 1]],
+  'crown-nestor': [[1, 0], [1, .17], [.96, .2], [.91, .19], [.91, .34], [.86, .42],
+    [.56, .42], [.53, .47], [.5, .56], [.45, .52], [.34, .59], [.24, .72], [.18, .85],
+    [.12, .85], [.12, 1], [0, 1]],
+  'crown-fascia': [[1, 0], [1, .5], [5 / 14, .5], [5 / 14, 1], [0, 1]],
 };
 
 export const PROFILE_NAMES = {
@@ -67,6 +82,8 @@ export const PROFILE_NAMES = {
   'chair-colonial': 'Colonial', 'chair-flat': 'Modern flat', 'picture-rail': 'Picture rail', 'wainscot-cap': 'Rabbeted cap',
   'panel-ogee': 'Ogee panel', 'panel-bead': 'Bead panel', 'panel-step': 'Stepped panel', 'v-plank': 'V-groove', 'bead-plank': 'Beaded',
   reed: 'Fluted', 'raised-bevel': 'Raised bevel', 'crown-colonial': 'Colonial crown', 'crown-cove': 'Cove crown', 'crown-stepped': 'Stepped crown',
+  'crown-traditional': 'Traditional crown', 'crown-attica': 'Attica crown', 'crown-nestor': 'Nestor crown', 'crown-fascia': 'Square fascia and cap',
+  'crown-craftsman': 'Timeless Craftsman crown', 'crown-foster': 'Foster cove crown',
 };
 
 export function isCrownProfile(name) { return !!CROWN[name]; }
@@ -74,17 +91,34 @@ export function isCrownProfile(name) { return !!CROWN[name]; }
 // The section of `profile` for a product `W` wide and `T` thick (metres), as [a, d] points.
 // For crown, W is the drop down the wall and T the projection along the ceiling.
 export function sectionOf(profile, W, T) {
-  if (CROWN[profile]) return CROWN[profile].map(([u, v]) => [u * W, v * T]);
+  if (CROWN[profile]) return [...CROWN[profile], [0, 0]].map(([u, v]) => [u * W, v * T]);
   const shape = SHAPES[profile] || SHAPES.flat;
   return shape.map(([u, v]) => [u * W, v * T]);
 }
 
-// The outline as an SVG path in a w x h box (the catalog cards' little end view). Crown is
-// drawn with the ceiling along the top and the wall on the left, like a real end view.
-export function profilePath(profile, w = 40, h = 40) {
-  const crown = !!CROWN[profile];
-  const pts = crown ? CROWN[profile] : (SHAPES[profile] || SHAPES.flat);
-  const xy = crown ? pts.map(([u, v]) => [v, u]) : pts.map(([u, v]) => [v, 1 - u]);
-  const all = crown ? [[0, 0], ...xy] : [[0, 1], ...xy, [0, 0]];
-  return 'M' + all.map(([x, y]) => (2 + x * (w - 4)).toFixed(1) + ' ' + (2 + y * (h - 4)).toFixed(1)).join(' L') + ' Z';
+// Simplified relief traced from the manufacturer product views. Coordinates in each
+// motif run along the moulding and down the flat frieze, as shares of one repeat.
+const KEY = [[.05, .1], [.05, .9], [.45, .9], [.45, .13], [.16, .13], [.16, .67], [.34, .67],
+  [.34, .26], [.26, .26], [.26, .53], [.24, .53], [.24, .25], [.37, .25], [.37, .78], [.13, .78], [.13, .1]];
+const LEAF = [[.49, .94], [.33, .79], [.25, .67], [.22, .52], [.32, .6], [.27, .45], [.28, .3],
+  [.37, .43], [.35, .25], [.39, .12], [.46, .31], [.45, .17], [.5, .04], [.55, .17], [.54, .31],
+  [.61, .12], [.65, .25], [.63, .43], [.72, .3], [.73, .45], [.68, .6], [.78, .52], [.75, .67],
+  [.67, .79], [.51, .94]];
+const RELIEF = {
+  'crown-nestor': { pitch: .62, top: .58, bottom: .84, rear: .42, front: .445, contours: [KEY, KEY.map(([x, y]) => [x + .5, 1 - y])] },
+  'crown-attica': { pitch: 1.1, top: .62, bottom: .83, rear: .46, front: .51,
+    contours: [LEAF, [[.04, .28], [.17, .28], [.17, .39], [.04, .39]], [[.83, .28], [.96, .28], [.96, .39], [.83, .39]],
+      [[.04, .70], [.17, .70], [.17, .80], [.04, .80]], [[.83, .70], [.96, .70], [.96, .80], [.83, .80]]] },
+};
+
+export function crownRelief(profile, W, T, start, end) {
+  const spec = RELIEF[profile];
+  if (!spec) return null;
+  const repeat = spec.pitch * W, count = Math.min(400, Math.floor((end - start) / repeat));
+  const left = (start + end - count * repeat) / 2;
+  const contours = [];
+  for (let i = 0; i < count; i++) for (const contour of spec.contours) {
+    contours.push(contour.map(([x, y]) => [left + (i + x) * repeat, (spec.top + y * (spec.bottom - spec.top)) * W]));
+  }
+  return { rear: (spec.rear - .002) * T, front: spec.front * T, contours };
 }

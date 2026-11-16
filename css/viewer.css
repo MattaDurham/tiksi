@@ -435,14 +435,30 @@ html.phone .v-objects { display: none !important; }
 
 /* ---------- wall trim panel (trim-panel.js) ---------- */
 .tp-sub { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.12em; color: var(--dim); margin: 12px 0 6px; }
-.tp-product { display: flex; gap: 10px; align-items: flex-start; padding: 8px; margin: 8px 0; border: 1px solid var(--line-2); border-radius: var(--radius); background: rgba(255, 255, 255, 0.03); }
+.tp-product { display: grid; gap: 8px; padding: 8px; margin: 8px 0; border: 1px solid var(--line-2); border-radius: var(--radius); background: rgba(255, 255, 255, 0.03); }
 .tp-product-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 11.5px; line-height: 1.35; }
 .tp-product-text b { color: var(--ink); font-size: 12px; }
 .tp-meta { color: var(--dim); font-size: 10.5px; }
 .tp-meta a { color: var(--accent); }
 .tp-evidence { color: var(--faint); }
-.tp-prof { flex: none; background: #f2efe8; border-radius: 4px; }
-.tp-prof path { fill: #c9c2b4; stroke: #4a4640; stroke-width: 1; stroke-linejoin: round; }
+.tp-prof { display: block; width: 100%; height: auto; background: #f3f0e9; border-radius: 4px; }
+.tp-product .tp-prof { max-width: 255px; }
+.tp-prof-cut { fill: #45484a; stroke: #353739; stroke-width: .65; stroke-linejoin: round; }
+.tp-prof-relief { fill: #f1ede5; stroke: #968d7e; stroke-width: .55; }
+.tp-prof-dims { fill: none; stroke: #55514c; stroke-width: .7; }
+.tp-prof text { fill: #33312d; font: 10px var(--mono); }
+.tp-picker { margin: 6px 0; border: 1px solid var(--line-2); border-radius: var(--radius); }
+.tp-picker summary { cursor: pointer; padding: 7px 8px; font-size: 12px; color: var(--ink); }
+.tp-picker summary span { display: block; margin: 3px 0 0 14px; color: var(--dim); font-size: 11px; }
+.tp-picker-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; padding: 0 6px 6px; }
+.tp-picker-options button { min-width: 0; display: grid; align-content: start; gap: 4px; border: 1px solid var(--line-2); border-radius: 5px; padding: 4px; background: transparent; color: var(--ink); cursor: pointer; font-size: 11px; text-align: left; }
+.tp-picker-options button:hover, .tp-picker-options button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.tp-picker :is(summary, button):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.tp-elevation { display: block; width: 100%; height: auto; border-radius: 3px; background: #e6dfd3; }
+.tp-elevation path { fill: none; stroke: #655b50; stroke-width: 1.5; }
+.tp-elevation-frame { fill: none; stroke: #5c5147; stroke-width: 1.05; }
+.tp-elevation-board { fill: #a99d8f; stroke: #776d61; stroke-width: .25; }
+.tp-elevation-panel { fill: #c2b4a4; }
 .tp-cat-filter { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
 .tp-chip { border: 1px solid var(--line-2); background: transparent; color: var(--dim); border-radius: 999px; padding: 3px 8px; font-size: 10.5px; cursor: pointer; }
 .tp-chip:hover { color: var(--ink); }
@@ -450,7 +466,7 @@ html.phone .v-objects { display: none !important; }
 .tp-cat-list { position: relative; max-height: 340px; overflow-y: auto; border: 1px solid var(--line-2); border-radius: var(--radius); padding: 4px; outline: none; }
 .tp-cat-list:focus-visible { box-shadow: var(--focus); }
 .tp-cat-head { font-family: var(--mono); font-size: 9px; letter-spacing: 0.12em; color: var(--faint); text-transform: uppercase; padding: 8px 4px 3px; }
-.tp-cat-item { display: flex; gap: 8px; align-items: center; width: 100%; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 5px; padding: 5px; color: var(--ink); cursor: pointer; }
+.tp-cat-item { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 6px; align-items: center; width: 100%; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 5px; padding: 5px; color: var(--ink); cursor: pointer; }
 .tp-cat-item:hover { background: rgba(255, 255, 255, 0.05); }
 .tp-cat-item.active { border-color: var(--accent); background: var(--accent-soft); }
 .tp-cat-text { display: flex; flex-direction: column; min-width: 0; font-size: 10.5px; color: var(--dim); line-height: 1.3; }

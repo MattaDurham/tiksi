@@ -1,4 +1,4 @@
-// The wall trim catalog: real mouldings, boards and panels stocked by Home Depot and Lowe's,
+// The wall trim catalog: real mouldings, boards and panels from suppliers and manufacturers,
 // one or more for every style of wall trim Tiksi draws (trims.js TRIM_STYLES). Every project
 // has the whole list. Each entry keeps its store page, item and model numbers, size, material
 // and price as seen on 2026-11-13, what was read on the page (evidence) and what was inferred
@@ -451,7 +451,7 @@ export const TRIM_CATALOG = [
   "style": "chair-rail",
   "profile": "chair-colonial",
   "short": "Slim chair rail 1-3/8 in",
-  "title": "RELIABILT 3/8-in T x 1-3/8-in W x 8-ft L Primed MDF Wm134 Chair Rail Moulding",
+  "title": "RELIABILT WM134 Primed MDF Chair Rail Moulding",
   "brand": "RELIABILT",
   "model": "134-MDF8",
   "store": "Lowe's",
@@ -725,7 +725,7 @@ export const TRIM_CATALOG = [
  {
   "id": "hd-mld06x06x09fo",
   "style": "crown",
-  "profile": "crown-cove",
+  "profile": "crown-foster",
   "short": "Large cove crown 6-1/2 in",
   "title": "6-1/2 in. x 6-1/4 in. x 94-1/2 in. Polyurethane Foster Cove Crown Moulding",
   "brand": "Ekena Millwork",
@@ -738,12 +738,13 @@ export const TRIM_CATALOG = [
   "length": "94.5 in piece",
   "material": "High-density polyurethane",
   "finish": "Factory primed",
-  "T": 0.15875,
-  "W": 0.1651,
+  "T": 0.1651,
+  "W": 0.15875,
   "size": "6-1/2 x 6-1/4 in",
-  "profileText": "Large cove crown: deep concave cove between small fillets/steps; sprung to wall and ceiling",
-  "evidence": "Seen on the store page 2026-11-13: HD page data: title, brand, model, SKU, dims, material, finish; price from HD search data; profile inferred",
-  "notes": "Drop and projection from the product title (which is which is not stated). Title gives 6-1/2 x 6-1/4 in (projection/drop, assignment not stated); HD spec lists 6.5 x 6.5. Stock thickness not applicable (hollow-back poly)."
+  "profileText": "Large cove with closely spaced horizontal beads",
+  "evidence": "Manufacturer product page, 2026-11-16. Drop and projection documented. Profile inferred from product view.",
+  "specUrl": "https://www.ekenamillwork.com/Ekena-Millwork-Moulding-Trim-MLD06X06X09FO",
+  "notes": "Manufacturer specifies 6 1/4\" drop and 6 1/2\" projection. Model uses the installed envelope."
  },
  {
   "id": "hd-10000683",
@@ -771,7 +772,7 @@ export const TRIM_CATALOG = [
  {
   "id": "hd-10026983",
   "style": "crown",
-  "profile": "crown-stepped",
+  "profile": "crown-craftsman",
   "short": "Craftsman crown 4-1/4 in",
   "title": "425 11/16 in. x 4-1/4 in. x 96 in. Primed MDF Craftsman Crown Moulding (Timeless Craftsman)",
   "brand": "Woodgrain Millwork",
@@ -787,9 +788,10 @@ export const TRIM_CATALOG = [
   "T": 0.07633,
   "W": 0.07633,
   "size": "11/16 x 4-1/4 in",
-  "profileText": "Timeless Craftsman crown: simple stepped/flat face with a small cove, clean modern-craftsman line",
-  "evidence": "Seen on the store page 2026-11-13: HD page data: title, brand, model, SKU, dims, material, finish; price from HD search data; profile inferred",
-  "notes": "Drop 3.01 in and projection 3.01 in worked out from the 4.25 in face sprung at 45 degrees from the wall (inferred). Woodgrain lists it as WCR425 in the Timeless Craftsman collection (documented on woodgrain.com). Profile shape inferred."
+  "profileText": "Timeless Craftsman crown: broad curved face with clipped edges",
+  "evidence": "Woodgrain WCR425 product page, 2026-11-16. Stock size documented. Profile traced from product view and installed dimensions inferred.",
+  "specUrl": "https://woodgrain.com/moulding/wcr425/",
+  "notes": "Model uses 3\" drop and projection to the nearest 1/16\", based on a 4 1/4\" face sprung at 45 degrees."
  },
  {
   "id": "hd-mld04x04x06er",
@@ -1344,6 +1346,34 @@ export const TRIM_CATALOG = [
   "rail": 0.0889
  }
 ];
+
+const IN = .0254;
+const crown = (model, short, profile, drop, projection, profileText) => ({
+  id: 'ekena-' + model.toLowerCase(), style: 'crown', profile, short, title: short,
+  brand: 'Ekena Millwork', model, store: 'Ekena Millwork',
+  url: 'https://www.ekenamillwork.com/Ekena-Millwork-Moulding-Trim-' + model,
+  material: 'Polyurethane', finish: 'Factory primed', length: "7'-10 1/2\"", W: drop * IN, T: projection * IN,
+  evidence: 'Manufacturer product page, 2026-11-16. Model, drop and projection documented. Modelled section inferred from product views.',
+  profileText,
+});
+const stock = TRIM_CATALOG.find(p => p.id === 'hd-10005558');
+const flatPanel = {
+  ...stock, id: 'flat-hd-10005558', style: 'flat-panel', short: 'Flat panels with MDF rails and stiles',
+  panelThickness: .115 * IN, panelWidth: 47.7 * IN, panelLength: 95.7 * IN,
+  panelUrl: 'https://www.homedepot.com/p/202820158',
+  evidence: 'Proposed assembly using Woodgrain 10005558 rails and stiles and paintable tempered hardboard, Home Depot SKU 832777. Sheet size documented, joinery inferred.',
+};
+TRIM_CATALOG.push(
+  crown('MLD04X03X05TR', 'Traditional smooth crown', 'crown-traditional', 4, 3, 'Cove and rounded beads with stepped ceiling and wall edges.'),
+  crown('MLD05X05X07AT', 'Attica acanthus crown', 'crown-attica', 5.25, 5.25, 'Layered crown with acanthus relief. Relief detail and repeat are approximate.'),
+  crown('MLD05X04X07NS', 'Nestor Greek key crown', 'crown-nestor', 5.875, 4.75, 'Layered crown with a Greek key band. Relief detail and repeat are approximate.'),
+  { ...stock, id: 'farmhouse-hd-10005558', style: 'crown', short: 'Built-up square farmhouse crown',
+    profile: 'crown-fascia', T: stock.T * 2, size: undefined,
+    profileText: 'Flat fascia with a second layer of the same stock ripped to 1 1/4" for the projecting cap.',
+    evidence: 'Proposed assembly using two layers of Woodgrain 10005558 S4S MDF stock.' },
+  flatPanel,
+  { ...flatPanel, id: 'full-hd-10005558', style: 'full-height-paneling', short: 'Full-height panels with MDF rails and stiles' },
+);
 
 const byId = new Map(TRIM_CATALOG.map(p => [p.id, p]));
 export function catalogItem(id) { return (typeof id === 'string' && byId.get(id)) || null; }
