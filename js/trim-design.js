@@ -330,7 +330,8 @@ export function trimDesign(env) {
   function notes(records, len) {
     const out = [];
     const frames = records.filter(t => t.style === 'picture-frame');
-    const sum = summary(records);
+    // Box widths are a matter for boxes: battens are spaced as closely as the design wants.
+    const sum = summary(frames);
     if (sum.boxes) {
       if (sum.min < PRACTICE.skinny - 1e-6) out.push('The narrowest box is ' + len(sum.min) + '. Under ' + len(PRACTICE.skinny) + ' a box is usually left out and the wall kept plain: set LEAVE OUT BOXES NARROWER THAN.');
       if (sum.max > PRACTICE.split + 1e-6) out.push('The widest box is ' + len(sum.max) + '. Over ' + len(PRACTICE.split) + ' a box is usually made two: lower the width to aim for.');

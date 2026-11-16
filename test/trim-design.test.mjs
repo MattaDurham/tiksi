@@ -248,6 +248,7 @@ test('battens and framed panels follow an aim too; planks do not', () => {
   const row = d.layout(sh).boxes.filter(b => b.row === 0);
   assert.ok(Math.abs(row[0].x1 - row[0].x0 - 14 * IN) < 2.5 * IN, 'panels near the aim');
   assert.equal(D.setDesignParam(bead, 'aim', .3), false);
+  assert.deepEqual(d.notes([bb], m => String(m)), [], 'closely spaced battens draw no note about narrow boxes');
   assert.equal(D.designValues(h.add('crown', 's1', side)), null);
 });
 
