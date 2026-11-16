@@ -4,6 +4,9 @@
 // lightingSettings() fills what is missing and keeps every number inside its range.
 //
 //   exposure        BRIGHTNESS: the camera's exposure, as before (1 is the old default).
+//   contrast        CONTRAST: separates light and dark tones in the displayed picture.
+//   detailLight     ANGLED LIGHT: a neutral inspection light from above and to the left
+//                   of the view, so adjacent faces of a profile catch different light.
 //   sunStrength     SUN: how strong the sun (or the moon at night) is, times its natural level.
 //   fill            FILL LIGHT: the soft light from the sky and the ground that reaches surfaces
 //                   the sun does not, times its natural level. Raising it lifts every shadow
@@ -21,29 +24,34 @@
 // Inside, light is the sky's soft fill and the fixtures.
 
 export const LIGHTING_DEFAULTS = Object.freeze({
-  exposure: 1, sunStrength: 1, fill: 1, shading: 0.85,
+  exposure: 1, contrast: 0, detailLight: 0, sunStrength: 1, fill: 1, shading: 0.85,
   lamps: 'auto', lampBrightness: 1, lampKelvin: 3000, cameraLight: 0,
 });
 
 export const LIGHTING_RANGES = Object.freeze({
-  exposure: [0.3, 3], sunStrength: [0, 2], fill: [0, 3], shading: [0, 1],
+  exposure: [0.3, 3], contrast: [0, 1], detailLight: [0, 3], sunStrength: [0, 2], fill: [0, 3], shading: [0, 1],
   lampBrightness: [0, 4], lampKelvin: [2200, 5000], cameraLight: [0, 2],
 });
 export const LAMP_MODES = Object.freeze(['auto', 'on', 'off']);
 
 // Ready-made settings. Each sets every lighting value at once and leaves the sun's time and
 // place alone; the panel shows a preset as chosen while every value still matches it.
-//   natural  the defaults: sun, sky and corner shading as a camera would see them.
-//   overcast a soft day: weak sun, strong even fill, lighter corners.
-//   bright   a work light for arranging things: bright and even inside, from strong fill,
-//            every fixture on and the camera light; the sun still only comes in through the
-//            windows and doors.
 export const LIGHTING_PRESETS = Object.freeze({
+  trim: Object.freeze({ ...LIGHTING_DEFAULTS, exposure: 2.05, contrast: 0.8, detailLight: 2.6, fill: 0.25, sunStrength: 0.35, shading: 1 }),
+  bright: Object.freeze({ ...LIGHTING_DEFAULTS, exposure: 1.2, fill: 2.6, shading: 0.35, lamps: 'on', cameraLight: 0.8 }),
   natural: Object.freeze({ ...LIGHTING_DEFAULTS }),
   overcast: Object.freeze({ ...LIGHTING_DEFAULTS, exposure: 1.1, sunStrength: 0.3, fill: 1.8, shading: 0.6 }),
-  bright: Object.freeze({ ...LIGHTING_DEFAULTS, exposure: 1.2, fill: 2.6, shading: 0.35, lamps: 'on', cameraLight: 0.8 }),
+  interior: Object.freeze({ ...LIGHTING_DEFAULTS, exposure: 1.25, sunStrength: 0.45, fill: 1.25, lamps: 'on', cameraLight: 0.25, detailLight: 0.3 }),
+  lamplight: Object.freeze({ ...LIGHTING_DEFAULTS, sunStrength: 0, fill: 0.25, lamps: 'on' }),
 });
-export const PRESET_LABELS = Object.freeze({ natural: 'Natural', overcast: 'Overcast', bright: 'Bright work light' });
+export const PRESET_LABELS = Object.freeze({
+  trim: ['Trim detail', 'Bright, defined edges'],
+  bright: ['Bright work light', 'Even light for layout'],
+  natural: ['Natural', 'Sun and sky as set'],
+  overcast: ['Overcast', 'Soft, muted shadows'],
+  interior: ['Soft interior', 'Gentle light indoors'],
+  lamplight: ['Lamplight', 'See modeled fixtures'],
+});
 
 const clamp = (v, [lo, hi]) => Math.min(hi, Math.max(lo, v));
 

@@ -58,6 +58,17 @@ try {
     box(1.2, 0.9, 0.1, 3, 0.45, 0, '#ece8df', 'Sill'); box(1.2, 0.5, 0.1, 3, 2.35, 0, '#ece8df', 'Head');
     box(2.2, 0.8, 0.9, 1.5, 0.4, 4.4, '#6d6a64', 'Sofa'); box(1.2, 0.45, 0.7, 1.5, 0.22, 3.2, '#5a4632', 'Table');
     box(0.6, 2.2, 3, 5.65, 1.1, 3, '#d9d4c8', 'Cabinets');
+    // A same-paint trim profile: top bevel, face and lower bevel. Stretch the section along
+    // the wall so the rendered bands can be sampled away from its left and right ends.
+    const profile = new THREE.Shape().moveTo(1.40, 4.95)
+      .lineTo(1.40, 4.91).lineTo(1.46, 4.84).lineTo(1.54, 4.84)
+      .lineTo(1.60, 4.91).lineTo(1.60, 4.95).closePath();
+    const trimGeo = new THREE.ExtrudeGeometry(profile, { depth: 1.6, bevelEnabled: false });
+    trimGeo.applyMatrix4(new THREE.Matrix4().makeBasis(
+      new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(1, 0, 0)));
+    trimGeo.deleteAttribute('normal'); trimGeo.deleteAttribute('uv');
+    const trim = new THREE.Mesh(trimGeo, new THREE.MeshStandardMaterial({ color: '#ece8df', roughness: 0.9, side: THREE.DoubleSide }));
+    trim.position.x = 2.2; trim.name = 'Painted trim'; g.add(trim);
     // Light fixtures, named as SketchUp and Blender exports name them: four downlights, a
     // two-globe sconce drawn as three parts, a pendant that states its colour, and a switch.
     for (const [x, z] of [[1.5, 1.5], [4.5, 1.5], [1.5, 3.5], [4.5, 3.5]]) box(0.17, 0.02, 0.17, x, 2.59, z, '#ffffff', 'Recessed downlight - 6 in LED trim (Halo RL6 class, proposed)');
@@ -105,6 +116,15 @@ try {
   // The LIGHT panel: presets and sliders change the picture and are saved with the property.
   await page.locator('[data-environment]').click();
   const panel = page.locator('.v-wrap > .v-env');
+  const sun = panel.getByText('Sun and sky', { exact: true });
+  const tune = panel.getByText('Fine tune lights', { exact: true });
+  assert.equal(await panel.locator('[data-light-preset]').count(), 6);
+  assert.equal(await panel.getByRole('slider', { name: 'Contrast' }).isVisible(), true);
+  assert.equal(await panel.getByRole('slider', { name: 'Fill light' }).isVisible(), false);
+  const trimView = { position: [3, 1.5, 2.85], target: [3, 1.5, 4.95] };
+  const regions = { top: [.45, .456, .55, .463], face: [.45, .485, .55, .515], bottom: [.45, .537, .55, .544], wall: [.45, .32, .55, .37] };
+  const sampleTrim = (fast = false) => page.evaluate(async opts => (await import('/js/viewer3d.js')).frameBrightness(opts), { view: trimView, regions, fast });
+  const naturalTrim = await sampleTrim();
   // Room lights carried over as off: that is not NATURAL (after dark), so no preset is lit.
   assert.equal(await panel.locator('.v-light-presets [aria-pressed=true]').count(), 0);
   await panel.locator('[data-light-preset=bright]').click();
@@ -120,6 +140,28 @@ try {
   const slide = async (key, value) => {
     await panel.locator(`[data-env=${key}]`).evaluate((input, value) => { input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); }, String(value));
   };
+  const evenTrim = await sampleTrim();
+  await page.screenshot({ path: resolve(output, 'trim-even.png') });
+  await panel.locator('[data-light-preset=trim]').click();
+  assert.equal(await panel.locator('[data-light-preset=trim]').evaluate(b => document.activeElement === b), true);
+  assert.equal(await panel.locator('[data-light-choice]').textContent(), 'Trim detail');
+  assert.equal((await env()).time, opened.time, 'changing the look does not change the sun time');
+  const detailedTrim = await sampleTrim();
+  const movingTrim = await sampleTrim(true);
+  await page.screenshot({ path: resolve(output, 'trim-detail.png') });
+  const relief = l => Math.abs(l.top - l.bottom);
+  const measured = JSON.stringify({ naturalTrim, evenTrim, detailedTrim, movingTrim });
+  assert.ok(detailedTrim.face > naturalTrim.face + 0.04 && detailedTrim.wall > naturalTrim.wall + 0.04, 'trim and wall are brighter than Natural: ' + measured);
+  assert.ok(relief(detailedTrim) > relief(evenTrim) + 0.06 && relief(movingTrim) > relief(evenTrim) + 0.06, 'the bevels separate even without contact shadows: ' + measured);
+  await slide('contrast', 0);
+  const noContrast = await sampleTrim();
+  assert.ok(relief(detailedTrim) > relief(noContrast) + 0.01, 'Contrast increases separation at the same exposure: ' + measured + ' -> ' + JSON.stringify(noContrast));
+  assert.equal((await env()).exposure, 2.05);
+  assert.equal(await panel.locator('[data-light-choice]').textContent(), 'Custom');
+  console.log('ok   same-paint trim at rest and in motion:', measured);
+  await tune.click();
+  await panel.locator('[data-light-preset=bright]').click();
+  assert.equal(await panel.getByRole('slider', { name: 'Fill light' }).isVisible(), true);
   await slide('fill', 3);
   assert.equal((await env()).fill, 3);
   assert.equal(await panel.locator('[data-light-preset=bright]').getAttribute('aria-pressed'), 'false', 'a value changed by hand is no longer the preset');
@@ -155,6 +197,7 @@ try {
     const part = scene.modelParts(wrapper).find(x => x.object === ceiling);
     tags.assignTag(p, [scene.partKey(p.scans[0].id, part)], tags.CANON.ceiling.id);
   });
+  await panel.locator('[data-toggle]').click();   // collapse LIGHT so it does not cover the tag list
   await page.locator('.v-objects [data-ol-tab="tags"]').click();   // the tag list is the second tab of the component list
   await page.locator('[data-tag-eye="tag-ceiling"]').click();
   assert.equal(await page.evaluate(() => window.testScene.getObjectByName('Ceiling').visible), false, 'the ceiling is hidden from view');
@@ -163,6 +206,8 @@ try {
   await page.locator('[data-tag-eye="tag-ceiling"]').click();
 
   // After dark the fixtures light the room; switched off, it is dark.
+  await panel.locator('[data-toggle]').click();
+  await sun.click();
   await slide('time', 22);
   const night = await brightness(false);
   await panel.locator('[data-env=lamps]').selectOption('off');
@@ -173,6 +218,10 @@ try {
   const dimmed = await brightness(false);
   assert.ok(dimmed < night - 0.03 && dimmed > dark, `LAMP LEVEL dims them: ${night.toFixed(3)} -> ${dimmed.toFixed(3)}`);
   assert.match(await panel.locator('.v-light-list summary').innerText(), /6 light fixtures · 5,100 lm estimated/);
+  await panel.locator('[data-light-preset=trim]').click();
+  const nightTrim = await sampleTrim();
+  assert.ok(nightTrim.face > naturalTrim.face && relief(nightTrim) > relief(evenTrim) + 0.06, 'Trim detail works after dark: ' + JSON.stringify(nightTrim));
+  console.log('ok   same-paint trim after dark:', JSON.stringify(nightTrim));
   assert.deepEqual(errors, []);
   console.log('ok   SketchUp-style model keeps its brightness at rest, old night-lights switch carried over, fixtures found with estimated lumens, presets, sliders, saved values, natural restore, corner shading off, hidden ceiling keeps the sun out, fixtures light the room at night and dim');
 } finally { await browser.close(); server.close(); }
