@@ -58,6 +58,11 @@ Instructions live in these AGENTS files; do not add model-specific rule files.
   `local-data/.sketchup-journal/`, `--code` takes builder files, and `--post`
   and `--step` record local post-steps. No hook reminder after `save_model`
   means no journal: save the code you ran to files and use `--code`.
+- A rendering made from a saved view or a SketchUp scene belongs to that view: file it in the
+  project's renders folder with the view's name first (`Kitchen, north wall - walnut.png`), or
+  put it on the view in PHOTOS (SAVED VIEW). Tiksi's own RENDER THIS VIEW does this itself.
+  The client page shows a rendering only under its view, and only while SEND TO THE LAB has it
+  ticked; a rendering on no view is never sent.
 - Every SketchUp model a build script saves gets Tiksi's standard scenes (an
   overview, a plan per level, a cut-open elevation per wall of each room) by
   the rules MODEL uses: `python3 scripts/standard-scenes.py <in.skp> <out.skp>

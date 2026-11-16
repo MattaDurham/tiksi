@@ -20,6 +20,7 @@ import { diskWorkspace } from './disk-workspace.js';
 import { addDocumentFromFile, documentCanvas, isPdfDocument } from './documents.js';
 import { FOUND_SOURCES } from './photo-match.js';
 import { ROLE_LABELS } from './positions.js';
+import { viewOfPicture, tagPicture } from './view-renderings.js';
 import { addCustomMaterial } from './materials.js';
 import { isVideoFile, importVideos } from './videos.js';
 
@@ -762,6 +763,18 @@ function elementOptionsHtml(p) {
   return (rooms ? `<optgroup label="Rooms / floors">${rooms}</optgroup>` : '') + (walls ? `<optgroup label="Walls">${walls}</optgroup>` : '');
 }
 
+// The saved view a picture shows with on the client page (view-renderings.js): chosen here, set
+// by RENDER THIS VIEW in MODEL, or read from a rendering's file name.
+function savedViewField(p) {
+  const views = prop.savedViews || [];
+  if (p.kind !== 'photo' || groupOf(p) === 'scan' || !views.length) return '';
+  const hit = viewOfPicture(prop, p);
+  return `<div class="field"><label>Saved view</label>
+        <select data-f="savedViewId" aria-label="Saved view this picture shows with"><option value="">(none)</option>${views.map(v =>
+          `<option value="${escapeHtml(v.id)}" ${hit && hit.view.id === v.id ? 'selected' : ''}>${escapeHtml(v.name)}</option>`).join('')}</select>
+        <div class="ph-note">${hit && hit.by === 'name' ? 'On this view because its file is named for it. ' : ''}A picture on a saved view shows under that view on the client page, when SEND TO THE LAB has it ticked.</div></div>`;
+}
+
 function renderDetail() {
   const pane = el.querySelector('.ph-detail');
   if (!pane) return;
@@ -816,6 +829,7 @@ function renderDetail() {
       <div class="field"><label>Room</label>
         <select data-f="roomId"><option value="">(none)</option>${prop.rooms.map(r =>
           `<option value="${escapeHtml(r.id)}" ${p.roomId === r.id ? 'selected' : ''}>${escapeHtml(roomLabel(r))}</option>`).join('')}</select></div>
+      ${savedViewField(p)}
       <div class="field"><label>Notes</label><textarea data-f="notes" placeholder="What does this show? Conditions, measurements, ideas.">${escapeHtml(p.notes || '')}</textarea></div>
       <div class="field"><label>Scope items (cut sheets)</label>
         <select multiple size="4" data-multi="itemIds" aria-label="Linked scope items">${scopeOptionsHtml(p)}</select>
@@ -860,6 +874,8 @@ function renderDetail() {
   };
   pane.querySelector('[data-f=notes]').onchange = e => { kept().notes = e.target.value; touch(); };
   pane.querySelector('[data-f=roomId]').onchange = e => { kept().roomId = e.target.value; touch(); renderGrid(); };
+  const onView = pane.querySelector('[data-f=savedViewId]');
+  if (onView) onView.onchange = e => { tagPicture(kept(), e.target.value); touch(); renderDetail(); };
   pane.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => {
     if (p.kind === b.dataset.kind) return;
     kept().kind = b.dataset.kind;

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="tiksi-storage" content="client">
+<meta name="robots" content="noindex">
+<title>Tiksi: pictures of the saved views</title>
+<style>html, body { margin: 0; height: 100%; background: #090c0f; }</style>
+<script type="importmap">
+{ "imports": { "three": "../vendor/three.module.min.js", "three/addons/": "../vendor/addons/" } }
+</script>
+</head>
+<body>
+<!-- The client page of a property, opened in a small frame by SEND TO THE LAB to take the
+     pictures of the saved views (lab-pictures.js). It is handed the copy about to be sent and
+     shows it exactly as client.html would; nothing here reads or keeps the open workspace. -->
+<script type="module">
+import { startPictures, endPictures } from './client-view.js';
+window.tiksiPictures = startPictures;
+window.tiksiPicturesEnd = endPictures;
+</script>
+</body>
+</html>
