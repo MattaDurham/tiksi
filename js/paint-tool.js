@@ -14,7 +14,7 @@
 //   THE WHOLE WALL OR GROUP    (Cmd, or the Windows key) a wall face floor to ceiling; a trim
 //                              section with the rest of its group, or of its wall face
 // Alt-click picks up the finish under the pointer. PAINT THE SELECTED paints what SELECT has
-// selected (wall faces, trim, rooms). Every click is one UNDO step.
+// selected (wall faces, trim, doors and windows, rooms' floors). Every click is one UNDO step.
 //
 // viewer3d.js owns the scene and hands this module what it needs (`host`); nothing here keeps a
 // reference to the scene between calls.
@@ -229,6 +229,7 @@ export function createPaintTool(host) {
       if (!s) continue;
       if (s.kind === 'face') { const l = (host.levels() || []).find(x => (x.group.userData.faces || []).some(f => f.id === s.id)); if (l) out.push({ type: 'face', levelId: l.id, faceId: s.id }); }
       else if (s.kind === 'trim') out.push({ type: 'trim', id: s.id });
+      else if (s.kind === 'opening' && unitForHit({ kind: 'opening', id: s.id })) out.push({ type: 'opening', id: s.id });
       else if (s.kind === 'room') out.push({ type: 'floor', id: s.id });
     }
     return out;

@@ -6643,6 +6643,9 @@ function openModel(root) {
     camera.position.fromArray(kept.position); controls.target.fromArray(kept.target);
     adoptFov(kept.fov); camera.updateProjectionMatrix(); controls.update();
     parallel = kept.parallel === true;
+    // PAINT stays in hand through such a rebuild (a save answered from the Mac, another device's
+    // change): the finish and the reach are paint-tool.js's own and were never lost.
+    if (kept.painting && !fieldLayout()) setTool('paint');
   }
 
   const focus=pendingScanFocus || prop.modelSourceId,token=mountId,focusVersion=selectionVersion;pendingScanFocus=null;
@@ -6867,7 +6870,7 @@ function rememberView() {
   const dir = camera.getWorldDirection(new THREE.Vector3());
   const t = controls && controls.target && controls.enabled !== false ? controls.target.clone() : camera.position.clone().addScaledVector(dir, 5);
   if (t.distanceTo(camera.position) < 1e-3) t.copy(camera.position).addScaledVector(dir, 5);
-  lastView = { propId: prop.id, position: camera.position.toArray(), target: t.toArray(), fov: camera.fov, parallel };
+  lastView = { propId: prop.id, position: camera.position.toArray(), target: t.toArray(), fov: camera.fov, parallel, painting: tool === 'paint' };
 }
 
 export function unmount() {

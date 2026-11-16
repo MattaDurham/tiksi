@@ -10,8 +10,10 @@
 //   whole wall   Cmd-click paints the face floor to ceiling and clears the marks on it
 //   floor        a click on a floor paints that room's floor
 //   a door       a click on a door paints it with its frame and casing
+//   a rebuild    PAINT stays in hand, with its finish, when the page is rebuilt after a save
 //   paint off    NO PAINT OF ITS OWN takes a piece's paint off again
 //   select       back in SELECT, a divided wall face lists its pieces with their finishes
+//   selection    PAINT THE SELECTED paints what SELECT had selected
 //
 // Synthetic project and temporary runtime only; never uses the owner's stores.
 // Run: node tools/e2e-paint.mjs (Playwright + Chromium installed).
@@ -70,7 +72,9 @@ try {
     for (let i = 0; i < tries; i++) { if (await check()) return; await page.waitForTimeout(200); }
     assert.fail('timed out waiting until ' + what + (errors.length ? ' (page errors: ' + errors.join(' | ') + ')' : ''));
   };
-  const idle = () => waitUntil(() => page.evaluate(async () => (await import('/js/viewer3d.js')).viewerIdle()), 'MODEL has settled');
+  // Settled, and there: a save answered by the Mac can rebuild the page under a busy test, and
+  // viewerIdle() alone also says yes while MODEL is not mounted.
+  const idle = () => waitUntil(() => page.evaluate(async () => { const v = await import('/js/viewer3d.js'); return v.viewerIdleState().mounted && v.viewerIdle() && !!v.markupState(); }), 'MODEL is open and has settled');
   const canvas = page.locator('canvas.v-canvas'), heading = page.locator('.inspector h3').first();
   const screenOf = p => page.evaluate(async p => {
     const THREE = await import('three'), c = (await import('/js/viewer3d.js')).markupState().camera;
@@ -109,8 +113,13 @@ try {
   await page.locator('#rail [data-view=model]').click();
   await canvas.waitFor();
   await idle();
-  await page.evaluate(() => document.querySelector('[data-view-go="v-west"]').click());
-  await page.waitForTimeout(900); await idle();
+  const goTo = async id => {
+    await idle();
+    await page.locator(`[data-view-go="${id}"]`).first().waitFor({ state: 'attached' });
+    await page.evaluate(id => document.querySelector(`[data-view-go="${id}"]`).click(), id);
+    await page.waitForTimeout(900); await idle();
+  };
+  await goTo('v-west');
   // Points on the kitchen's west wall face (x = 0.075): above and below the rail (0.84 m up).
   // They lie right of the component list, which covers the left of the view.
   const ABOVE = [0.076, 1.6, 1.3], BELOW = [0.076, 0.5, 1.3], RAIL = [0.085, 0.87, 1.3], FLOOR = [0.6, 0.001, 1.6];
@@ -209,8 +218,7 @@ try {
   ok('a click on a floor paints that room\'s floor');
 
   // ---------- a door ----------
-  await page.evaluate(() => document.querySelector('[data-view-go="v-east"]').click());
-  await page.waitForTimeout(900); await idle();
+  await goTo('v-east');
   // The partition's door, from the kitchen: find its casing beside the opening (0.9 m wide at z = 2).
   let doorAt = null;
   for (const z of [1.5, 1.49, 1.48, 2.5, 2.51, 2.52]) {
@@ -224,11 +232,22 @@ try {
   await undo();
   await waitUntil(() => page.evaluate(() => window.testStore.activeProperty().openings.find(o => o.id === 'door').trimMaterial === undefined), 'UNDO puts the trim paint back');
   ok('a click on a door paints it with its frame and casing');
-  await page.evaluate(() => document.querySelector('[data-view-go="v-west"]').click());
-  await page.waitForTimeout(900); await idle();
+  await goTo('v-west');
+
+  // ---------- a rebuild ----------
+  // The page is rebuilt with its camera kept when a save comes back changed or another device
+  // edits the house (main.js). PAINT stays in hand, with its finish.
+  await choose('mat-paint-navy');
+  await page.evaluate(async () => {
+    const v = await import('/js/viewer3d.js'), root = document.getElementById('view');
+    v.keepViewOnNextMount(); v.unmount(); root.innerHTML = ''; v.mount(root);
+  });
+  await idle();
+  await waitUntil(async () => (await heading.textContent()) === 'PAINT', 'PAINT is still open after the page was rebuilt');
+  assert.equal(await page.evaluate(async () => (await import('/js/viewer3d.js')).paintState().material), 'mat-paint-navy');
+  ok('PAINT stays in hand, with its finish, when the page is rebuilt');
 
   // ---------- paint off ----------
-  await choose('mat-paint-navy');
   await clickAt(ABOVE);
   await waitUntil(async () => (await marks()).w.length === 1, 'navy above the rail again');
   await choose('');
@@ -260,6 +279,18 @@ try {
   assert.match(pieces[0], /^Below the chair rail · .*Paint, terracotta$/);
   assert.match(pieces[1], /^Above the chair rail · .*White Dove$/);
   ok('SELECT lists a divided face\'s pieces with their square feet and finishes');
+
+  // ---------- the selection ----------
+  await page.keyboard.press('b');
+  await waitUntil(async () => (await heading.textContent()) === 'PAINT', 'B opens PAINT with the face still selected');
+  await choose('mat-paint-sage');
+  const selected = page.locator('.inspector [data-pt-selected]');
+  assert.equal((await selected.textContent()).trim(), 'PAINT THE 1 SELECTED');
+  await selected.click();
+  await waitUntil(() => page.evaluate(() => window.testStore.activeProperty().walls.find(w => w.id === 'w').materialPos === 'mat-paint-sage'), 'PAINT THE SELECTED paints the selected face');
+  assert.deepEqual((await marks()).w, [], 'floor to ceiling: the marks on it are cleared');
+  ok('PAINT THE SELECTED paints what SELECT had selected');
+  await page.keyboard.press('Escape');
   await saved();
 
   assert.deepEqual(errors, [], 'no page errors');
