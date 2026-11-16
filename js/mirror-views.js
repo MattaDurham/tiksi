@@ -11,7 +11,7 @@
 // A view made from an imported model's own scenes (sketchup-scenes.js, source.app 'sketchup')
 // belongs to that model, not to the sync file, and is not written. Pure data only.
 
-import { tagById } from './tags.js';
+import { PHASES, phaseOverrideKey, phasedTagName } from './tags.js';
 import { planeNormal } from './section-planes.js';
 import { sceneCamera } from './sketchup-scenes.js';
 import { normalizeSavedView } from './saved-views.js';
@@ -31,9 +31,12 @@ export const levelTagName = level => 'Tiksi: ' + (level.name || level.id);
 
 export function mirrorsView(v) { return !!(v && v.camera && !(v.source && v.source.app === 'sketchup')); }
 
-// The names SketchUp knows for the things a view can hide: Tiksi's tags and the level tags.
+// The names SketchUp knows for the things a view can hide: each half of Tiksi's tags
+// ("Walls_e" -> 'tagId:e'), Tiksi's tags by their plain name as files before the halves wrote
+// them, and the level tags.
 function knownNames(prop) {
   const tags = new Map(), levels = new Map();
+  for (const t of prop.tags || []) for (const ph of PHASES) { const n = text(t && phasedTagName(t.name, ph), 120); if (n && !tags.has(n)) tags.set(n, phaseOverrideKey(t.id, ph)); }
   for (const t of prop.tags || []) { const n = text(t && t.name, 120); if (n && !tags.has(n)) tags.set(n, t.id); }
   for (const l of prop.levels || []) if (l && l.id) levels.set(levelTagName(l), l.id);
   return { tags, levels };
@@ -47,8 +50,11 @@ export function viewForm(prop, v) {
   const form = { name: text(v.name, 200) || 'View', perspective: !parallel, eye, target };
   if (parallel) form.height = r6(2 * Math.hypot(...sub(eye, target)) * Math.tan(fov * DEG / 2));
   else form.fov = r6(fov);
-  const hidden = [];
-  for (const [id, on] of Object.entries(v.tags || {})) { const t = on === false && tagById(prop, id); if (t && text(t.name, 120)) hidden.push(text(t.name, 120)); }
+  const hidden = [], vt = v.tags || {};
+  // A half is hidden when the view hides its tag, that half of the tag, or that half everywhere.
+  for (const t of prop.tags || []) for (const ph of PHASES) {
+    if (vt[t.id] === false || vt[phaseOverrideKey(t.id, ph)] === false || vt[phaseOverrideKey('', ph)] === false) { const n = text(phasedTagName(t.name, ph), 120); if (n) hidden.push(n); }
+  }
   for (const id of v.hiddenLevels || []) { const l = (prop.levels || []).find(x => x.id === id); if (l) hidden.push(levelTagName(l)); }
   form.hidden = [...new Set(hidden)].sort();
   const s = v.section || {}, plane = s.on && (s.planes || []).find(p => p.id === s.active) || (s.on && (s.planes || [])[0]);
@@ -132,6 +138,7 @@ export function applySceneToView(prop, view, scene, now, base) {
     const { tags, levels } = knownNames(prop), hidden = new Set(now.hidden);
     out.tags = { ...(out.tags || {}) };
     for (const n of new Set([...(base.hidden || []), ...now.hidden])) if (tags.has(n)) out.tags[tags.get(n)] = !hidden.has(n);
+    foldHalves(prop, out.tags);
     out.hiddenLevels = [...levels].filter(([n]) => hidden.has(n)).map(([, id]) => id);
   }
   if (scene.origin === 'tiksi' && JSON.stringify(now.cut) !== JSON.stringify(base.cut) && viewSig({ eye: [0, 0, 0], target: [0, 0, 1], cut: now.cut }) !== viewSig({ eye: [0, 0, 0], target: [0, 0, 1], cut: base.cut })) {
@@ -153,6 +160,22 @@ export function applySceneToView(prop, view, scene, now, base) {
   return normalizeSavedView({ ...out, id: view.id }, new Set()) || view;
 }
 
+// A half shown in SketchUp shows in Tiksi too: when the scene shows "Walls_e" but the view hides
+// the whole tag (or every existing half), the view shows that tag (or every existing half) again
+// and hides its other halves one by one instead.
+function foldHalves(prop, tags) {
+  for (const t of prop.tags || []) if (tags[t.id] === false && PHASES.some(ph => tags[phaseOverrideKey(t.id, ph)] === true)) {
+    tags[t.id] = true;
+    for (const ph of PHASES) if (tags[phaseOverrideKey(t.id, ph)] !== true) tags[phaseOverrideKey(t.id, ph)] = false;
+  }
+  for (const ph of PHASES) {
+    const all = phaseOverrideKey('', ph);
+    if (tags[all] !== false || !(prop.tags || []).some(t => tags[phaseOverrideKey(t.id, ph)] === true)) continue;
+    tags[all] = true;
+    for (const t of prop.tags || []) if (tags[phaseOverrideKey(t.id, ph)] !== true) tags[phaseOverrideKey(t.id, ph)] = false;
+  }
+}
+
 // A new saved view from a scene added in SketchUp.
 export function viewFromScene(prop, scene, id, taken) {
   const now = sceneForm(prop, scene);
@@ -161,6 +184,7 @@ export function viewFromScene(prop, scene, id, taken) {
   const v = { name: text(now.name, 60), camera, mode, tags: {}, section: { on: false, height: 1.2 }, xray: false,
     hiddenLevels: [...levels].filter(([n]) => hidden.has(n)).map(([, l]) => l), source: { app: 'sketchup-sync', scene: now.name } };
   for (const [n, t] of tags) v.tags[t] = !hidden.has(n);
+  foldHalves(prop, v.tags);
   if (id) v.id = id;
   // A standard scene a build script added (server/standard_scenes.py) is a view of the set.
   const st = scene.base && scene.base.standard;

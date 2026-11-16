@@ -65,7 +65,8 @@ async function scanObject(scan) {
 
 // What decides which parts a view shows: the tags, every assignment and the view's own overrides.
 export function tagSignature(prop, v) {
-  return JSON.stringify([prop.tags, prop.tagOf, prop.tagDefaults, prop.tagUntaggedVisible, prop.hidden || null, (v && v.tags) || null]);
+  return JSON.stringify([prop.tags, prop.tagOf, prop.tagDefaults, prop.tagUntaggedVisible, prop.hidden || null, prop.phaseOf || null, prop.phaseShown || null,
+    ['walls', 'openings', 'rooms', 'fixtures', 'trims', 'scans'].flatMap(k => (prop[k] || []).filter(r => r && r.projectId).map(r => r.id + '>' + r.projectId)), (v && v.tags) || null]);
 }
 // Show or hide the built model's parts for one view (the group is shared between views).
 function applyViewTags(prop, group, overrides) {

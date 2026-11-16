@@ -98,7 +98,7 @@ test('a saved view becomes the scene SketchUp needs, and an imported model\'s vi
   v.tags = { [furniture.id]: false };
   p.levels.push({ id: 'lvl-up', name: 'Upper', elevation: 3, height: 2.4 });
   v.hiddenLevels = ['lvl-up'];
-  assert.deepEqual(MV.viewScene(p, v).hidden, ['Furniture', 'Tiksi: Upper']);
+  assert.deepEqual(MV.viewScene(p, v).hidden, ['Furniture_e', 'Furniture_p', 'Tiksi: Upper'], 'a hidden tag hides both its halves in SketchUp');
   p.savedViews.push({ ...v, id: 'view-imported', source: { app: 'sketchup', scan: 'scan-a', scene: 'A1' } });
   const spec = mirror.mirrorSpec(p, []);
   assert.equal(spec.views.length, 10);

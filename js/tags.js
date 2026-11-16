@@ -15,10 +15,36 @@
 //                          the model's root ('0/3/1'), or '*' for a whole point cloud or splat.
 // Plan elements without an explicit assignment follow tagDefaults by kind; a model's meshes
 // are assigned when the model first loads (detectTag below) and the result is stored.
+//
+// Existing and proposed: every object is also existing (e) or proposed (p), so each tag has
+// two halves that show and hide on their own ("hide existing furniture, show proposed").
+//   prop.phaseOf           { key: 'e' | 'p' }   an object's own phase, set by hand, by a
+//                          SketchUp tag (Furniture_p) or by a model file's tag
+//   prop.phaseShown        { e, p }   the two halves of the whole model (default both shown)
+//   tag.phases             { e, p }   the two halves of one tag (default both shown)
+// An object without its own phase is proposed when it belongs to a project (its record's
+// projectId; a model mesh follows its model's record) and existing otherwise. In SketchUp each
+// tag is written twice, "<name>_e" and "<name>_p", in the tag folders Existing and Proposed.
+// A view's overrides take 'tagId:e' / 'tagId:p' and '_phase:e' / '_phase:p' as well.
 
 export const UNTAGGED = '';
 export const UNTAGGED_LABEL = 'Untagged';
 export const OVERRIDE_UNTAGGED = '_untagged';   // a viewport's override key for Untagged
+
+export const PHASES = ['e', 'p'];
+export const PHASE_LABEL = { e: 'Existing', p: 'Proposed' };
+export const PHASE_FOLDER = PHASE_LABEL;              // SketchUp tag folder of each half
+const PHASE_SUFFIX_RE = /^(.*\S)\s*_(e|p)$/i;
+export const OVERRIDE_PHASE = '_phase';               // view override key prefix for the whole model's halves
+export const phaseOverrideKey = (tagId, phase) => (tagId || OVERRIDE_PHASE) + ':' + phase;
+// A tag name as SketchUp carries it: "Furniture and fixtures" + existing -> "Furniture and fixtures_e".
+export const phasedTagName = (name, phase) => name ? name + '_' + (phase === 'p' ? 'p' : 'e') : '';
+// The other way: "Walls_p" -> { name: 'Walls', phase: 'p' }; a name without the suffix has no phase.
+export function splitPhaseName(name) {
+  const s = String(name == null ? '' : name).trim();
+  const m = PHASE_SUFFIX_RE.exec(s);
+  return m ? { name: m[1].trim(), phase: m[2].toLowerCase() } : { name: s, phase: null };
+}
 
 // The tags Tiksi creates itself. Ids are fixed so detection on any model finds the same one.
 export const CANON = {
@@ -89,6 +115,8 @@ export function normalizeTags(p) {
     const canon = Object.values(CANON).find(c => c.id === t.id);
     const tag = { id: t.id, name: cleanName(t.name) || (canon ? canon.name : 'Tag'), visible: t.visible !== false, color: COLOR_RE.test(t.color) ? t.color.toLowerCase() : (canon ? canon.color : PALETTE[list.length % PALETTE.length]) };
     tag.name = uniqueName({ tags: list }, tag.name);
+    const ph = cleanPhases(t.phases);
+    if (ph) tag.phases = ph;
     list.push(tag);
   }
   p.tags = list;
@@ -140,7 +168,27 @@ export function normalizeTags(p) {
     hidden[key] = true; n++;
   }
   p.hidden = hidden;
+  // Objects' own phases, under the same rules; the whole model's halves.
+  const phaseOf = {};
+  n = 0;
+  if (isObj(p.phaseOf)) for (const [key, v] of Object.entries(p.phaseOf)) {
+    if (n >= MAX_ASSIGN) break;
+    if (v !== 'e' && v !== 'p') continue;
+    const k = parseKey(key);
+    if (!k || !(k.kind === 'node' ? live.scan.has(k.scanId) : live[k.kind].has(k.id))) continue;
+    phaseOf[key] = v; n++;
+  }
+  p.phaseOf = phaseOf;
+  const shown = cleanPhases(p.phaseShown);
+  if (shown) p.phaseShown = shown; else delete p.phaseShown;
   return p;
+}
+
+// { e, p } with both true is the default and is not stored.
+function cleanPhases(v) {
+  if (!isObj(v)) return null;
+  const out = { e: v.e !== false, p: v.p !== false };
+  return out.e && out.p ? null : out;
 }
 
 export function ensureCanonTag(prop, canonKey) {
@@ -178,8 +226,63 @@ export function tagShown(prop, tagId, overrides) {
   const t = tagById(prop, id);
   return t ? t.visible !== false : prop.tagUntaggedVisible !== false;
 }
-// An object shows when it is not hidden itself and its tag shows.
-export function keyShown(prop, key, overrides) { return !isHidden(prop, key) && tagShown(prop, tagIdOf(prop, key), overrides); }
+// An object shows when it is not hidden itself, its tag shows and its half of the tag shows.
+export function keyShown(prop, key, overrides) {
+  const tagId = tagIdOf(prop, key);
+  return !isHidden(prop, key) && tagShown(prop, tagId, overrides) && phaseShown(prop, tagId, phaseOfKey(prop, key), overrides);
+}
+
+// ---------- existing and proposed ----------
+
+const RECORDS = { wall: 'walls', opening: 'openings', room: 'rooms', ceiling: 'rooms', fixture: 'fixtures', trim: 'trims' };
+// The record a key's phase comes from: the plan element, or a model mesh's model.
+function phaseRecord(prop, k) {
+  if (k.kind === 'node') return (prop.scans || []).find(s => s && s.id === k.scanId) || null;
+  return (prop[RECORDS[k.kind]] || []).find(r => r && r.id === k.id) || null;
+}
+// 'e' or 'p': the object's own phase, else proposed when it belongs to a project.
+export function phaseOfKey(prop, key) {
+  const own = prop.phaseOf && prop.phaseOf[key];
+  if (own === 'e' || own === 'p') return own;
+  const k = parseKey(key);
+  const rec = k && phaseRecord(prop, k);
+  return rec && typeof rec.projectId === 'string' && rec.projectId ? 'p' : 'e';
+}
+// Give these objects their own phase ('e' | 'p'), or null to follow their project again. Returns how many changed.
+export function setPhase(prop, keys, phase) {
+  prop.phaseOf = prop.phaseOf || {};
+  let changed = 0;
+  for (const key of keys) {
+    if (!parseKey(key)) continue;
+    const before = prop.phaseOf[key];
+    if (phase === 'e' || phase === 'p') { if (before === phase) continue; prop.phaseOf[key] = phase; }
+    else { if (before === undefined) continue; delete prop.phaseOf[key]; }
+    changed++;
+  }
+  return changed;
+}
+// Whether one half of a tag shows: the whole model's half, then the tag's own half.
+export function phaseShown(prop, tagId, phase, overrides) {
+  const ph = phase === 'p' ? 'p' : 'e';
+  const all = overrides && overrides[phaseOverrideKey('', ph)];
+  if (typeof all === 'boolean' ? !all : (prop.phaseShown && prop.phaseShown[ph] === false)) return false;
+  if (!tagId) return true;
+  const own = overrides && overrides[phaseOverrideKey(tagId, ph)];
+  if (typeof own === 'boolean') return own;
+  const t = tagById(prop, tagId);
+  return !(t && t.phases && t.phases[ph] === false);
+}
+// Show or hide one half of a tag (tagId), or of the whole model (tagId '').
+export function setPhaseShown(prop, tagId, phase, on) {
+  const ph = phase === 'p' ? 'p' : 'e';
+  const holder = tagId ? tagById(prop, tagId) : prop;
+  if (!holder) return false;
+  const field = tagId ? 'phases' : 'phaseShown';
+  const next = { e: !(holder[field] && holder[field].e === false), p: !(holder[field] && holder[field].p === false) };
+  next[ph] = !!on;
+  if (next.e && next.p) delete holder[field]; else holder[field] = next;
+  return true;
+}
 
 // ---------- hiding one object ----------
 // Hiding is the object's own switch, as SketchUp's Hide is: it does not touch the tag, and the
@@ -269,6 +372,14 @@ export function tagCounts(prop) {
   for (const [key, id] of Object.entries(prop.tagOf || {})) if (key.startsWith('node:')) bump(id);
   return counts;
 }
+// Object counts by half: Map tagId|'' -> { e, p }.
+export function phaseCounts(prop) {
+  const counts = new Map([[UNTAGGED, { e: 0, p: 0 }], ...(prop.tags || []).map(t => [t.id, { e: 0, p: 0 }])]);
+  const bump = (id, key) => { const c = counts.get(id && counts.has(id) ? id : UNTAGGED); c[phaseOfKey(prop, key)]++; };
+  for (const key of planKeys(prop)) bump(tagIdOf(prop, key), key);
+  for (const [key, id] of Object.entries(prop.tagOf || {})) if (key.startsWith('node:')) bump(id, key);
+  return counts;
+}
 // The keys a tag holds (plan elements and assigned model meshes).
 export function keysOnTag(prop, tagId) {
   const out = planKeys(prop).filter(k => (tagIdOf(prop, k) || UNTAGGED) === (tagId || UNTAGGED));
@@ -285,6 +396,7 @@ export function forgetScanTags(prop, scanId) {
   const pre = 'node:' + scanId + '#';
   for (const k of Object.keys(prop.tagOf || {})) if (k.startsWith(pre)) delete prop.tagOf[k];
   for (const k of Object.keys(prop.hidden || {})) if (k.startsWith(pre)) delete prop.hidden[k];
+  for (const k of Object.keys(prop.phaseOf || {})) if (k.startsWith(pre)) delete prop.phaseOf[k];
 }
 
 // ---------- detection ----------
@@ -352,9 +464,14 @@ export function levelFor(levels, y0) {
 // `record` is the whole model's kind from view-layers.js scanLayer: a scan capture or a
 // furniture model puts every mesh on that tag.
 //   -> { tag: canon key, or name: file tag name, from: 'file'|'record'|'name'|'geometry' }
+// A file tag with the phase suffix ("Furniture and fixtures_p") lands on the tag without it and
+// also gives the mesh its phase: { name, phase, from: 'file' }.
 export function detectTag({ fileTag, names, stats, level, record } = {}) {
   const file = cleanName(fileTag);
-  if (file) return { name: file, from: 'file' };
+  if (file) {
+    const split = splitPhaseName(file);
+    return split.phase ? { name: cleanName(split.name), phase: split.phase, from: 'file' } : { name: file, from: 'file' };
+  }
   if (record === 'scan') return { tag: 'scan', from: 'record' };
   if (record === 'furnishings') return { tag: 'furniture', from: 'record' };
   for (const n of names || []) { const t = nameTag(n); if (t) return { tag: t, from: 'name' }; }

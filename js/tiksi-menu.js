@@ -8,7 +8,8 @@
 //
 // The left pane holds every command the current page offers, in groups. A page registers them
 // with setMenuProvider(() => groups), where a group is
-//   { title, screen?: { id, on, label }, items: [{ label, key?, active?, run, icon?, dot?, act?, data?, cls?, title?, disabled? }] }
+//   { title, screen?: { id, on, label }, items: [{ label, key?, active?, run, icon?, dot?, act?, data?, cls?, title?, disabled?,
+//       chips?: [{ label, on, title, run }] }] }   chips: small switches at the end of the row (a tag's E and P)
 // Each group folds to its header and opens again (a click on the header); that choice is this
 // browser's. `screen` is an element over the page that the group's eye shows or hides (the saved
 // view tabs, the display bar, ...); that choice is this browser's too (localStorage), the same for
@@ -82,7 +83,9 @@ function itemHtml(it, gi, ii) {
   return `<button type="button" class="sd-item${it.cls ? ' ' + esc(it.cls) : ''}${it.active ? ' active' : ''}" data-item="${gi}:${ii}"${it.act ? ` data-act="${esc(it.act)}"` : ''}${data}${it.disabled ? ' disabled' : ''}${it.pressed != null ? ` aria-pressed="${!!it.pressed}"` : ''} title="${esc(title)}">`
     + (it.icon ? icon(it.icon) : '<span class="sd-gap"></span>')
     + (it.dot != null ? `<i class="sd-dot" style="background:${esc(it.dot)}"></i>` : '')
-    + `<span class="sd-label">${esc(it.label)}</span>${it.key ? `<kbd class="key">${esc(it.key)}</kbd>` : ''}</button>`;
+    + `<span class="sd-label">${esc(it.label)}</span>${it.key ? `<kbd class="key">${esc(it.key)}</kbd>` : ''}`
+    + (it.chips || []).map((c, ci) => `<span class="sd-chip${c.on ? ' on' : ''}" role="switch" aria-checked="${!!c.on}" data-chip="${gi}:${ii}:${ci}" title="${esc(c.title || c.label)}">${esc(c.label)}</span>`).join('')
+    + `</button>`;
 }
 function renderPane() {
   const side = document.getElementById('side'), app = document.getElementById('app');
@@ -125,6 +128,12 @@ function bindPane() {
     }
     const eye = e.target.closest('[data-screen]');
     if (eye) { setOnScreen(eye.dataset.screen, eye.getAttribute('aria-pressed') !== 'true'); return; }
+    const chip = e.target.closest('[data-chip]');
+    if (chip) {
+      const [gi, ii, ci] = chip.dataset.chip.split(':').map(Number), c = paneGroups[gi] && paneGroups[gi].items[ii] && (paneGroups[gi].items[ii].chips || [])[ci];
+      if (c) { c.run(); refreshPane(); }
+      return;
+    }
     const b = e.target.closest('[data-item]');
     if (!b || b.disabled) return;
     const [gi, ii] = b.dataset.item.split(':').map(Number), it = paneGroups[gi] && paneGroups[gi].items[ii];
