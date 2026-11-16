@@ -288,7 +288,7 @@ export function createPaintTool(host) {
   function usedIds() {
     const p = prop(), ids = new Set(['mat-trim']);
     for (const w of p.walls || []) {
-      for (const k of ['material', 'materialIn', 'materialPos', 'materialNeg']) if (w[k]) ids.add(w[k]);
+      for (const k of ['material', 'materialIn', 'materialPos', 'materialNeg', 'materialEndA', 'materialEndB']) if (w[k]) ids.add(w[k]);
       for (const m of wallPaint(w)) ids.add(m.material);
     }
     for (const r of p.rooms || []) { if (r.material) ids.add(r.material); if (r.ceilingMaterial) ids.add(r.ceilingMaterial); }
