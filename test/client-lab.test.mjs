@@ -1,4 +1,4 @@
-// The client page in the lab: walking by tap (walk-hops.js) and the copy SEND TO THE LAB makes
+// The client page in the lab: going to a spot while walking (walk-hops.js) and the copy SEND TO THE LAB makes
 // (lab-publish.js): what goes in, what is left out, and the send settings. Synthetic data only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -67,26 +67,7 @@ function workspace() {
   };
 }
 
-test('doorways are doors and openings, not windows, with an arrow on each side pointing through', () => {
-  const d = W.doorways(house());
-  assert.deepEqual(d.map(x => x.id), ['o-door']);
-  assert.deepEqual([d[0].x, d[0].z], [4, 2]);
-  const [a, b] = W.doorwayArrows(d[0]);
-  // The wall runs along +z, so its left normal is -x: side 1 is west, side -1 is east.
-  assert.ok(a.x < 4 && b.x > 4);
-  assert.ok(a.dx > 0 && a.to.x > 4, 'the west arrow points east, into the other room');
-  assert.ok(b.dx < 0 && b.to.x < 4);
-});
-
-test('a person sees the arrow on their own side of each nearby doorway', () => {
-  const near = W.arrowsNear(house(), 1, 2, 0);
-  assert.equal(near.length, 1);
-  assert.ok(near[0].x < 4, 'the arrow in this room, not the one behind the wall');
-  assert.equal(W.arrowsNear(house(), 1, 2, 3).length, 0, 'another floor sees none');
-  assert.equal(W.arrowsNear(house(), -20, 2, 0).length, 0, 'out of range');
-});
-
-test('a tap walks to the point, or stops short of a wall in the way', () => {
+test('going to a spot ends at the point, or short of a wall in the way', () => {
   assert.deepEqual(W.walkTarget({ x: 0, z: 0 }, { x: 3, z: 4 }), { x: 3, z: 4, dist: 5 });
   const short = W.walkTarget({ x: 0, z: 0 }, { x: 5, z: 0 }, 2);
   assert.ok(Math.abs(short.x - (2 - W.STOP_SHORT)) < 1e-9);

@@ -174,7 +174,7 @@ The left pane holds MODEL's views, tools and switches, in groups that fold to th
 
 **Undo and redo.** Press Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (Ctrl+Y also redoes), or choose UNDO and REDO in the Tiksi menu (on a phone, in the top bar). MODEL and MEASURE share up to 80 edits per project during this session, such as finishes, door states, trim and applied tape readings. Disk saves and view switches retain history; a reload or file import starts fresh. Unrelated shared edits are kept; a conflicting change disables restoration rather than overwriting it. Photos, notes and imported references are outside this undo.
 
-**Walk mode.** Choose WALK, then use W/A/S/D or the arrow keys to move and Shift to move faster. Drag to look or click the canvas to capture the mouse. Escape releases it or exits walk mode.
+**Walk mode.** Choose WALK, then use W/A/S/D or the arrow keys to move and Shift to move faster. Drag to look or click the canvas to capture the mouse; looking only turns you where you stand. Double-click a spot (double-tap on a touch screen) to go there. Walls, fixtures and the surfaces of imported models are solid: you stop about a foot short of them and slide along them, and doors let you through. Escape releases the mouse or exits walk mode.
 
 **Measure surfaces.** Choose MEASURE and click two surface points to display a distance. CLEAR MEASURES removes temporary measurements; image export can include them.
 
