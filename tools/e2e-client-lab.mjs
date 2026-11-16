@@ -70,7 +70,18 @@ const server = createServer(async (req, res) => {
   const send = (body, type) => { res.setHeader('Content-Type', type); res.end(body); };
   const json = v => send(JSON.stringify(v), 'application/json');
   if (path === '/api/lab/capabilities') return json({ token: 'check', upload: false, site: 'https://lab.invalid/', preview: '/lab-preview/', reason: 'This check has no upload key: sends go to the preview copy only.' });
-  if (path.startsWith('/api/lab/app/')) return json({ app: CODE, sent: 0 });
+  if (path.startsWith('/api/lab/app/')) {
+    // As the Mac does when asked to stream: a line per file finished, then the result.
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    if (!JSON.parse(Buffer.concat(chunks).toString() || '{}').stream) return json({ app: CODE, sent: 0, copied: 0 });
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    for (let done = 0; done <= 4; done++) {
+      res.write(JSON.stringify({ done, total: 4, bytes: done * 1e6, totalBytes: 4e6, copied: done > 1 ? done - 1 : 0 }) + '\n');
+      await new Promise(r => setTimeout(r, 150));
+    }
+    return res.end(JSON.stringify({ app: CODE, sent: 1, copied: 3 }) + '\n');
+  }
   if (path.startsWith('/api/lab/prune/')) return json({ removed: 0 });
   if (path.startsWith('/api/lab/files/') && req.method === 'PUT') {
     const chunks = [];
@@ -265,6 +276,9 @@ try {
   const said = await edit.locator('[data-lab-status]').innerText();
   check(said.includes('3 saved views and 3 renderings') && !said.includes('could not'), 'the send says what went: ' + said);
   check(await edit.$$eval('.lab-pictures', e => e.length) === 0, 'the frame is gone when the pictures are taken');
+  const parts = await edit.$$eval('.lab-dialog [data-lab-step]', els => els.map(e => [e.dataset.labStep, e.className.replace('lab-step ', ''), e.querySelector('.lab-step-text').textContent]));
+  check(JSON.stringify(parts) === JSON.stringify([['code', 'done', '1 of 4 files changed and sent; 3 copied online'], ['files', 'none', 'None to send'], ['renderings', 'done', '3 sent'],
+    ['pictures', 'done', '5 pictures of 3 views'], ['property', 'done', 'The page shows this copy now'], ['tidy', 'done', 'Done']]), 'the send window lists each part of the send as done, with what it did: ' + JSON.stringify(parts));
   const cur = JSON.parse(sent.get('synthetic-house/current.json').body.toString());
   const got = JSON.parse(sent.get(`synthetic-house/v/${cur.version}/property.json`).body.toString());
   check(got.property.savedViews.map(v => v.id).join() === 'v-a,v-b,v-w', 'the copy has the three views ticked');

@@ -7,7 +7,7 @@
 // through the Mac.
 
 import { ws, escapeHtml, touch } from './store.js';
-import { labSettings, labStatus, sendToLab, renderingLabel, MAX_RENDERINGS } from './lab-publish.js';
+import { labSettings, labStatus, sendToLab, renderingLabel, MAX_RENDERINGS, SEND_STEPS } from './lab-publish.js';
 import { viewPictures } from './lab-pictures.js';
 import { picturesByView, looseRenderings, tagPicture, pictureDay } from './view-renderings.js';
 import { loadFolderPhotos, folderOnlyPictures, folderPreviewUrl, keepRecord, photoById } from './photos-store.js';
@@ -39,8 +39,8 @@ export async function openLabDialog(prop) {
     <p class="lab-summary" data-lab-summary></p>
     <div class="file-actions"><button class="btn primary" data-lab-send>SEND</button></div>
     <progress data-lab-progress max="1" value="0" hidden></progress>
-    <div data-lab-pictures></div>
     <p role="status" data-lab-status></p>
+    <ol class="lab-steps" data-lab-steps hidden></ol>
     <div class="file-actions" data-lab-done hidden></div>`;
   document.body.append(dialog);
   dialog.showModal();
@@ -155,6 +155,48 @@ export async function openLabDialog(prop) {
     drawViews();
   }).catch(e => console.warn('The project folder\'s pictures could not be listed:', e));
 
+  // ---------- the send, a part at a time ----------
+  // Each part of SEND_STEPS is a row: waiting, under way (with its count, a small bar and how long
+  // it has taken so far), done, or nothing to do. The rendering being sent shows beside its row,
+  // and the client page taking the views' pictures shows in theirs.
+  const clock = ms => { const t = Math.max(0, Math.round(ms / 1000)); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
+  let rows = new Map(), ticker = 0;
+  const startSteps = () => {
+    const list = q('[data-lab-steps]');
+    for (const r of rows.values()) if (r.url) URL.revokeObjectURL(r.url);
+    list.innerHTML = SEND_STEPS.map(x => `<li class="lab-step waiting" data-lab-step="${x.id}"><span class="lab-step-mark" aria-hidden="true"></span>
+      <div class="lab-step-body"><div class="lab-step-head"><b>${escapeHtml(x.name)}</b><time></time></div><span class="lab-step-text">Waiting</span>
+      <progress max="1" value="0" hidden></progress><div class="lab-step-extra"></div></div><img class="lab-step-picture" alt="" hidden></li>`).join('');
+    list.hidden = false;
+    rows = new Map(SEND_STEPS.map(x => [x.id, { li: list.querySelector(`[data-lab-step="${x.id}"]`), state: 'waiting', started: 0, ended: 0, url: '' }]));
+    clearInterval(ticker);
+    ticker = setInterval(() => { for (const r of rows.values()) if (r.state === 'running') r.li.querySelector('time').textContent = clock(performance.now() - r.started); }, 500);
+  };
+  const showStep = st => {
+    const r = st && rows.get(st.id);
+    if (!r) return;
+    const now = performance.now();
+    if (st.state === 'running' && r.state !== 'running') r.started = now;
+    if (st.state !== 'running' && r.state === 'running') r.ended = now;
+    r.state = st.state;
+    r.li.className = 'lab-step ' + st.state;
+    if (st.text) r.li.querySelector('.lab-step-text').textContent = st.text;
+    r.li.querySelector('time').textContent = r.started ? clock((st.state === 'running' ? now : r.ended || now) - r.started) : '';
+    const bar = r.li.querySelector('progress');
+    const f = typeof st.fraction === 'number' ? st.fraction : st.total ? st.done / st.total : null;
+    bar.hidden = st.state !== 'running' || f === null;
+    if (f !== null) bar.value = Math.min(1, Math.max(0, f));
+    const img = r.li.querySelector('.lab-step-picture');
+    if (st.picture) { if (r.url) URL.revokeObjectURL(r.url); r.url = URL.createObjectURL(st.picture); img.src = r.url; img.hidden = false; }
+    if (st.state !== 'running') img.hidden = true;
+    if (st.state === 'running') {
+      // Every part before this one is over by now.
+      for (const [id, o] of rows) { if (id === st.id) break; if (o.state === 'waiting') showStep({ id, state: 'none', text: 'Nothing to do' }); }
+    }
+  };
+  const failSteps = () => { for (const [id, r] of rows) if (r.state === 'running') showStep({ id, state: 'failed', text: 'Stopped here' }); clearInterval(ticker); };
+  dialog.addEventListener('close', () => { clearInterval(ticker); for (const r of rows.values()) if (r.url) URL.revokeObjectURL(r.url); });
+
   q('[data-lab-send]').onclick = async () => {
     const btn = q('[data-lab-send]'), bar = q('[data-lab-progress]'), out = q('[data-lab-status]'), done = q('[data-lab-done]');
     const g = going();
@@ -165,11 +207,13 @@ export async function openLabDialog(prop) {
       views: g.views.map(v => v.id), renderings: g.renderings, keep: keep(),
     };
     btn.disabled = true; bar.hidden = false; done.hidden = true; out.textContent = '';
+    startSteps();
     try {
       const r = await sendToLab(prop.id, choice, {
-        progress: (text, f) => { out.textContent = text; bar.value = f; },
-        pictures: opts => viewPictures({ ...opts, host: q('[data-lab-pictures]') }),
+        progress: (text, f, st) => { if (text) out.textContent = text; bar.value = f; showStep(st); },
+        pictures: opts => viewPictures({ ...opts, host: rows.get('pictures').li.querySelector('.lab-step-extra') }),
       });
+      clearInterval(ticker);
       out.textContent = (r.uploaded ? 'Sent. The lab page shows this copy now.' : 'Sent to this Mac\'s preview copy. It is not online: this Mac has no upload key for the lab.')
         + ' It has ' + r.views + ' saved view' + (r.views === 1 ? '' : 's') + ' and ' + r.renderings + ' rendering' + (r.renderings === 1 ? '' : 's') + '.' + (r.notes.length ? ' ' + r.notes.join(' ') : '');
       done.innerHTML = `<a class="btn primary" href="${escapeHtml(r.preview)}" target="_blank" rel="noopener">OPEN THE PREVIEW</a>${r.uploaded ? `<a class="btn" href="${escapeHtml(r.url)}" target="_blank" rel="noopener">OPEN THE LAB PAGE</a>` : ''}`;
@@ -177,6 +221,7 @@ export async function openLabDialog(prop) {
       s.renderingsSent = (prop.lab && prop.lab.renderingsSent) || [];
       drawViews();
     } catch (e) {
+      failSteps();
       out.textContent = e.message + ' The page in the lab still shows what was sent before.';
     } finally { btn.disabled = false; }
   };

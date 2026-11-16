@@ -14,6 +14,12 @@ What is sent, in the order that keeps a viewer's page whole while a new copy goe
                            switches from the old copy to the new one in one step
 Older versions are removed after a send, keeping the newest two, and older code with them.
 
+The code is about three hundred files. They go up several at a time, and a file that is the same
+as in the code sent last time is copied inside the file storage instead of sent from this Mac
+again, so a send after a small change to the code takes seconds. The page can ask to hear how far
+the code has got (`{"stream": true}`): the answer is then one line of JSON per step, the last one
+the result.
+
 The upload key is read from ~/.r2-credentials (R2_ACCOUNT_ID, R2_ACCESS_KEY_ID,
 R2_SECRET_ACCESS_KEY, one KEY=VALUE per line), the file the website's own tools use. It never
 leaves this Mac and is never shown. Without it, sends go to this Mac's copy only, and
@@ -30,6 +36,7 @@ import secrets
 import shutil
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -43,6 +50,8 @@ MAX_FILE = 512 * 1024 * 1024
 BUCKET = 'thedurham-lab-data'
 SITE = 'https://thedurham.nyc/lab/'
 KEEP_VERSIONS = 2
+# How many code files go up at once.
+UPLOADS_AT_ONCE = 12
 # The code the client page needs. pdf.js and Spark (splats) load only on demand, and a client
 # page opens neither, so they stay behind.
 APP_DIRS = ('js', 'css', 'vendor/addons')
@@ -122,6 +131,12 @@ class R2:
     def put(self, key, body, ctype):
         status, data = self._request('PUT', key, body=body, headers={'content-type': ctype})
         if status >= 300: raise LabError(f'The website\'s file storage refused {key} ({status}): ' + data[:200].decode('utf-8', 'replace'), 502)
+
+    def copy(self, source, key):
+        """Copy `source` to `key` inside the bucket (S3 CopyObject), keeping its content type."""
+        status, data = self._request('PUT', key, headers={'x-amz-copy-source': '/' + urllib.parse.quote(self.bucket + '/' + source, safe='/-_.~')})
+        # S3 can answer 200 to a copy that failed part way, with the error in the body.
+        if status >= 300 or b'<Error>' in data[:400]: raise LabError(f'The website\'s file storage would not copy {source} ({status})', 502)
 
     def exists(self, key):
         status, _ = self._request('HEAD', key)
@@ -226,23 +241,65 @@ class LabPublishService:
         if r: r.put(f'{slug}/data/{rel}', body, content_type(rel))
         return {'path': rel, 'bytes': len(body), 'uploaded': bool(r)}
 
-    def send_app(self, slug):
-        """The code the page runs, sent once per version of it; returns its version name."""
+    def send_app(self, slug, progress=None):
+        """The code the page runs, sent once per version of it; returns {'app': its version name,
+        'sent': files put, 'copied': files copied online from the code sent last time}.
+        `progress(dict)` hears {'done', 'total', 'bytes', 'totalBytes', 'copied'} as files finish."""
         if not SLUG.match(slug): raise LabError('Not a lab page name: ' + slug[:80])
+        tell = progress or (lambda event: None)
         snapshot, version = app_snapshot(self.root)
         marker = f'app/{version}/.complete'
         remote = self.remote()
         here = self.local_path(slug, marker).exists()
         there = remote.exists(f'{slug}/data/{marker}') if remote else True
-        if here and there: return {'app': version, 'sent': 0}
-        sent = 0
-        for rel in sorted(snapshot):
-            body = snapshot[rel]
-            key = f'app/{version}/{rel}'
-            self.store_raw(slug, key, body, remote if not there else None)
-            sent += 1
-        self.store_raw(slug, marker, b'ok\n', remote if not there else None)
-        return {'app': version, 'sent': sent}
+        if here and there:
+            tell({'done': 0, 'total': 0, 'bytes': 0, 'totalBytes': 0, 'copied': 0})
+            return {'app': version, 'sent': 0, 'copied': 0}
+        online = remote if not there else None
+        # The code sent last time, when it is complete online too: a file the same as there is
+        # copied inside the file storage rather than sent from this Mac again.
+        before = self.last_app(slug)
+        if online and before and before != version and not online.exists(f'{slug}/data/app/{before}/.complete'): before = None
+        def same_as_before(rel, body):
+            if not (online and before and before != version): return False
+            try: return self.local_path(slug, f'app/{before}/{rel}').read_bytes() == body
+            except OSError: return False
+        files = sorted(snapshot)
+        total_bytes = sum(len(snapshot[rel]) for rel in files)
+        done = done_bytes = copied = 0
+        tell({'done': 0, 'total': len(files), 'bytes': 0, 'totalBytes': total_bytes, 'copied': 0})
+
+        def one(rel):
+            body, key = snapshot[rel], f'app/{version}/{rel}'
+            self.store_raw(slug, key, body, None)
+            if not online: return False
+            if same_as_before(rel, body):
+                try:
+                    online.copy(f'{slug}/data/app/{before}/{rel}', f'{slug}/data/{key}')
+                    return True
+                except LabError: pass   # sent from here instead
+            online.put(f'{slug}/data/{key}', body, content_type(key))
+            return False
+
+        with ThreadPoolExecutor(max_workers=UPLOADS_AT_ONCE) as pool:
+            jobs = {pool.submit(one, rel): rel for rel in files}
+            try:
+                for job in as_completed(jobs):
+                    was_copied = job.result()
+                    done += 1; done_bytes += len(snapshot[jobs[job]]); copied += 1 if was_copied else 0
+                    tell({'done': done, 'total': len(files), 'bytes': done_bytes, 'totalBytes': total_bytes, 'copied': copied})
+            except BaseException:
+                for j in jobs: j.cancel()
+                raise
+        # Written last: the code is all there.
+        self.store_raw(slug, marker, b'ok\n', online)
+        return {'app': version, 'sent': len(files) - copied, 'copied': copied}
+
+    def last_app(self, slug):
+        """The code version the last send of `slug` switched the page to, from this Mac's copy."""
+        try: app = json.loads(self.local_path(slug, 'current.json').read_text(encoding='utf-8')).get('app')
+        except (OSError, ValueError, AttributeError): return None
+        return app if isinstance(app, str) and PART.match(app) else None
 
     def store_raw(self, slug, key, body, remote):
         target = self.local_path(slug, key)
@@ -263,9 +320,7 @@ class LabPublishService:
             for p in versions:
                 if p.name not in keep: shutil.rmtree(p, ignore_errors=True); removed += 1
         # The code: only the version current.json names is kept.
-        app = None
-        try: app = json.loads(self.local_path(slug, 'current.json').read_text(encoding='utf-8')).get('app')
-        except (OSError, ValueError, AttributeError): pass
+        app = self.last_app(slug)
         codes = self.mirror / slug / 'data' / 'app'
         if app and codes.is_dir():
             for p in codes.iterdir():
@@ -306,6 +361,7 @@ class LabPublishService:
             if len(parts) == 2 and parts[0] in ('app', 'prune') and h.command == 'POST':
                 request = json.loads(h.rfile.read(length) or b'{}') if length else {}
                 with self.lock:
+                    if parts[0] == 'app' and isinstance(request, dict) and request.get('stream'): return self.stream_app(h, parts[1])
                     if parts[0] == 'app': return self.reply(h, 200, self.send_app(parts[1]))
                     return self.reply(h, 200, self.prune(parts[1], request.get('keep') or []))
             raise LabError('Lab endpoint not found', 404)
@@ -339,6 +395,29 @@ class LabPublishService:
         h.send_header('Cache-Control', 'no-store')
         h.end_headers()
         if h.command != 'HEAD' and not getattr(h, 'drop_body', False): h.wfile.write(body)
+        return True
+
+    def stream_app(self, h, slug):
+        """Send the code, answering with one line of JSON per file finished ({'done', 'total', ...})
+        and a last line that is the result ({'app', ...}) or what went wrong ({'error'})."""
+        if not SLUG.match(slug): raise LabError('Not a lab page name: ' + slug[:80])
+        h.close_connection = True
+        h.send_response(200)
+        h.send_header('Content-Type', 'application/x-ndjson')
+        h.send_header('Cache-Control', 'no-store')
+        h.send_header('Connection', 'close')
+        h.end_headers()
+        last = [0.0]
+        def line(value, force=False):
+            # At most ten lines a second, and always the first and the last.
+            now = time.monotonic()
+            if not force and now - last[0] < 0.1 and value.get('done') != value.get('total'): return
+            last[0] = now
+            h.wfile.write((json.dumps(value) + '\n').encode('utf-8')); h.wfile.flush()
+        try: result = self.send_app(slug, progress=line)
+        except LabError as e: result = {'error': str(e)}
+        except Exception: result = {'error': 'The lab send failed; what was already online is unchanged.'}
+        line(result, force=True)
         return True
 
     @staticmethod
