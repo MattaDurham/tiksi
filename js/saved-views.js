@@ -5,7 +5,7 @@
 // them as tabs over the view, and a DOCUMENTS 3D view can start from one.
 //
 // prop.savedViews = [{ id, name, camera: { position: [x,y,z], target: [x,y,z], fov, parallel? },
-//   mode: 'orbit' | 'top', tags: { tagId | '_untagged': shown },
+//   mode: 'orbit' | 'top', tags: { tagId | '_untagged' | 'tagId:e|p' | '_phase:e|p': shown },
 //   section: { on, height, planes: [{ id, kind, q, pos }], active, done }, xray, hiddenLevels: [levelId],
 //   hidden: [object key], models: { scanId: shown }, compare: 'before' | 'after',
 //   markers: { pins, notes }, xrayOpacity, uncertainty, source? }]
@@ -18,7 +18,7 @@
 // `hidden`, `models`, `compare`, `markers`, `xrayOpacity` or `uncertainty` has none of them, and
 // going to it leaves those as they are.
 
-import { OVERRIDE_UNTAGGED, parseKey } from './tags.js';
+import { OVERRIDE_UNTAGGED, parseKey, PHASES, phaseOverrideKey, phaseShown, setPhaseShown, tagById } from './tags.js';
 import { normalizeSections } from './section-planes.js';
 import { VFOV_MIN, VFOV_MAX, DEFAULT_VFOV } from './lens.js';
 
@@ -97,11 +97,16 @@ export function normalizeSavedViews(p) {
   return p;
 }
 
-// Which tags show right now: every tag and Untagged, as a view stores them.
+// Which tags show right now: every tag and Untagged, and the existing and proposed halves of
+// every tag and of the whole model ('tagId:e', '_phase:p'), as a view stores them.
 export function tagState(prop) {
   const out = {};
-  for (const t of prop.tags || []) out[t.id] = t.visible !== false;
+  for (const t of prop.tags || []) {
+    out[t.id] = t.visible !== false;
+    for (const ph of PHASES) out[phaseOverrideKey(t.id, ph)] = !(t.phases && t.phases[ph] === false);
+  }
   out[OVERRIDE_UNTAGGED] = prop.tagUntaggedVisible !== false;
+  for (const ph of PHASES) out[phaseOverrideKey('', ph)] = phaseShown(prop, '', ph);
   return out;
 }
 
@@ -114,6 +119,13 @@ export function applySavedTags(prop, view) {
   }
   const u = view.tags[OVERRIDE_UNTAGGED];
   if (typeof u === 'boolean' && (prop.tagUntaggedVisible !== false) !== u) { prop.tagUntaggedVisible = u; changed++; }
+  // The halves: a view saved before existing/proposed leaves them as they are.
+  for (const id of ['', ...(prop.tags || []).map(t => t.id)]) for (const ph of PHASES) {
+    const want = view.tags[phaseOverrideKey(id, ph)];
+    if (typeof want !== 'boolean') continue;
+    const now = id ? !(tagById(prop, id).phases && tagById(prop, id).phases[ph] === false) : phaseShown(prop, '', ph);
+    if (now !== want) { setPhaseShown(prop, id, ph, want); changed++; }
+  }
   return changed;
 }
 

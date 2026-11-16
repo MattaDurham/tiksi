@@ -1,13 +1,16 @@
 // The MODEL inspector for wall trim (trims.js): one section or several selected together.
-// Shows the product each is made of, its heights, its boxes or bays, and the trim catalog
-// (trim-catalog.js) as a list to scroll through: a click on an entry, or the arrow keys
-// while the list has focus, swaps every selected section to that entry at once.
+// CHANGES REACH says how far a change here goes (trim-design.js): the sections selected, their
+// group, the whole room or the whole project. Under it: the moulding of each kind of trim in
+// the selection as a dropdown, the heights, the panel layout (the box width aimed for, the gap,
+// the margins, rows), and the trim catalog (trim-catalog.js) as a list to scroll through: a
+// click on an entry, or the arrow keys while the list has focus, swaps the trim to that entry.
 // HTML builders and a binder; the viewer passes a context of callbacks (viewer3d.js).
 
 import { escapeHtml, fmtLen, parseLen, fmtMoney } from './store.js';
 import { materialSelectHtml } from './materials.js';
 import { TRIM_STYLES, STYLE_GROUPS, trimStyle, trimProduct, trimLabel, isField, catalogInOrder } from './trims.js';
 import { profilePath } from './trim-profiles.js';
+import { catalogFor } from './trim-catalog.js';
 
 const IN = 0.0254;
 let groupFilter = '';            // the catalog's group filter, kept between selections
@@ -68,10 +71,86 @@ function catalogHtml(current) {
 }
 
 const same = (list, f) => { const v = list.map(f); return v.every(x => x === v[0]) ? v[0] : undefined; };
-const lenField = (label, key, value, ph) => `<div class="field"><label>${escapeHtml(label)}</label><input type="text" data-len="${key}" value="${value === undefined || value === null ? '' : escapeHtml(fmtLen(value))}" placeholder="${escapeHtml(ph || (value === undefined ? 'several' : ''))}"></div>`;
+const lenField = (label, key, value, ph, attr = 'data-len') => `<div class="field"><label>${escapeHtml(label)}</label><input type="text" ${attr}="${key}" value="${value === undefined || value === null ? '' : escapeHtml(fmtLen(value))}" placeholder="${escapeHtml(ph || (value === undefined ? 'several' : ''))}"></div>`;
 
-// ctx: { trims, wallOf(t) -> wall, wallHeight(t), wallLength(t), layoutOf(t) -> {cols, boxes, rects}, editing,
-//        swap(productId), set(fn, label), remove(), toggleEdit(), selectWall(), faceName(t) }
+// How far a change reaches, as four buttons with what each covers.
+function scopeHtml(ctx) {
+  const now = ctx.scopes.find(x => x.id === ctx.scope) || ctx.scopes[0];
+  return `<div class="tp-sub">CHANGES REACH</div>
+    <div class="tp-scope" role="radiogroup" aria-label="How far a change to this trim reaches">${ctx.scopes.map(x => `<button type="button" role="radio" aria-checked="${x.id === ctx.scope}" class="tp-scope-btn${x.id === ctx.scope ? ' active' : ''}" data-scope="${x.id}" title="${escapeHtml(x.title)}">${escapeHtml(x.label)}<span>${x.count}</span></button>`).join('')}</div>
+    <div class="empty tp-scope-note">${escapeHtml(now.title)}</div>`;
+}
+// One dropdown for each kind of trim in the selection: the moulding it is made of.
+function mouldingsHtml(ctx) {
+  const styles = Object.keys(TRIM_STYLES).filter(k => ctx.trims.some(t => t.style === k));
+  return `<div class="tp-sub">MOULDINGS</div>` + styles.map(k => {
+    const mine = ctx.reach.filter(t => t.style === k);
+    const ids = new Set(mine.map(t => t.product));
+    const cur = ids.size === 1 ? [...ids][0] : '';
+    const items = catalogFor(k);
+    const options = (cur ? '' : '<option value="" selected>(several)</option>') + items.map(p => `<option value="${escapeHtml(p.id)}" ${p.id === cur ? 'selected' : ''}>${escapeHtml(p.short || p.title)} (${escapeHtml(p.brand)} ${escapeHtml(p.model || '')}, ${escapeHtml(sizeLabel(p))})</option>`).join('')
+      + (cur && !items.some(p => p.id === cur) ? `<option value="${escapeHtml(cur)}" selected>${escapeHtml(cur)}</option>` : '');
+    return `<div class="field"><label>${escapeHtml(TRIM_STYLES[k].label)} (${mine.length} ${mine.length === 1 ? 'section' : 'sections'})</label><select data-role-product="${k}">${options}</select></div>`;
+  }).join('');
+}
+// The layout numbers of boxes, panels and bays: one set for every section the change reaches.
+function layoutHtml(ctx, one) {
+  const list = ctx.trims, vals = list.map(ctx.values);
+  if (!vals.every(v => v && (v.boxes || v.bays)) || new Set(list.map(t => t.style)).size !== 1) return '';
+  const v = vals[0], sameV = k => same(vals, x => x[k]);
+  const fitted = fmtLen(v.aim || 0);
+  let html = `<div class="tp-sub">PANEL LAYOUT (${ctx.reach.length} ${ctx.reach.length === 1 ? 'SECTION' : 'SECTIONS'})</div>
+    <div class="field-row">
+      <div class="field"><label>${v.bays ? 'Batten spacing to aim for' : 'Box width to aim for'}</label><input type="text" data-design="aim" value="${vals.every(x => x.aimSet) && sameV('aim') !== undefined ? escapeHtml(fmtLen(v.aim)) : ''}" placeholder="${vals.every(x => x.aimSet) ? 'several' : escapeHtml(v.aim ? fitted : 'square')}" title="Each stretch of wall takes the whole number of equal ${v.bays ? 'bays' : 'boxes'} that comes closest to this. Blank goes back to the usual width."></div>
+      ${v.frame ? lenField('Gap between boxes', 'gap', sameV('gap'), '', 'data-design') : ''}
+    </div>`;
+  if (v.frame) {
+    html += `<div class="field-row">${lenField('Margin at ends', 'sides', sameV('sides'), '', 'data-design')}${lenField('Above', 'top', sameV('top'), '', 'data-design')}${lenField('Below', 'bottom', sameV('bottom'), '', 'data-design')}</div>
+      <button class="btn" data-reveal title="Sets the margins at the ends, above and below equal to the gap between boxes: one reveal all round, the usual practice.">ONE REVEAL ALL ROUND</button>`;
+  }
+  html += `<div class="field-row">
+      ${v.boxes || list[0].style === 'grid' ? `<div class="field"><label>Rows</label><input type="number" min="1" max="12" step="1" data-design-int="rows" value="${sameV('rows') || ''}" placeholder="several"></div>` : ''}
+      ${v.frame ? `<div class="field"><label>Leave out boxes narrower than</label><input type="text" data-design="minBox" value="${sameV('minBox') ? escapeHtml(fmtLen(v.minBox)) : ''}" placeholder="no limit" title="A stretch of wall whose boxes would be narrower than this is left plain."></div>` : ''}
+    </div>`;
+  const sum = ctx.summary;
+  if (sum.boxes) {
+    const range = (a, b) => Math.abs(a - b) < .0008 ? fmtLen(a) : fmtLen(a) + ' to ' + fmtLen(b);
+    html += `<div class="stat-line"><span>${v.bays ? 'Bays' : 'Boxes'}</span><b>${sum.boxes} on ${sum.sections} ${sum.sections === 1 ? 'section' : 'sections'}</b></div>
+      <div class="stat-line"><span>Widths</span><b>${escapeHtml(range(sum.min, sum.max))}</b></div>
+      <div class="stat-line"><span>Heights</span><b>${escapeHtml(range(sum.hMin, sum.hMax))}</b></div>
+      ${sum.empty ? `<div class="stat-line"><span>Stretches left plain</span><b>${sum.empty}</b></div>` : ''}`;
+  }
+  html += ctx.notes.map(n => `<div class="empty tp-note">${escapeHtml(n)}</div>`).join('');
+  if (vals.some(x => x.pinned)) html += `<button class="btn" data-fit title="Counts and widths set by hand go back to fitting the width aimed for.">FIT THE PANELS AGAIN</button>`;
+  if (one) {
+    const lay = ctx.layoutOf(one), st = ctx.stretches(one);
+    if (st.length) {
+      html += `<div class="tp-sub">${st.length > 1 ? 'PANELS IN EACH STRETCH OF THIS WALL' : 'PANELS ON THIS WALL'} (BLANK = FIT)</div>
+        <div class="tp-widths">${st.map((x, i) => `<input type="number" min="${v.frame ? 0 : 1}" max="60" step="1" data-stretch="${i}" value="${one.colsAt && one.colsAt[i] != null ? one.colsAt[i] : st.length === 1 && one.cols ? one.cols : ''}" placeholder="${x.n}" title="Stretch ${i + 1}, ${escapeHtml(fmtLen(x.w))} wide">`).join('')}</div>`;
+    }
+    // The boxes of the first full stretch, left to right: type a width; the others share the rest.
+    const first = lay.boxes.filter(b => b.row === 0 && lay.rects[b.rect] && lay.rects[b.rect].full);
+    const rect0 = first.length ? first[0].rect : -1;
+    const row0 = first.filter(b => b.rect === rect0);
+    if (row0.length > 1) {
+      html += `<div class="tp-sub">BOX WIDTHS${lay.rects.filter(r => r.full).length > 1 ? ' (FIRST STRETCH)' : ''}</div>
+        <div class="tp-widths">${row0.map((b, i) => `<input type="text" data-width="${i}" value="${escapeHtml(fmtLen(b.x1 - b.x0))}" title="Box ${i + 1}">`).join('')}</div>
+        <button class="btn" data-even ${one.widths ? '' : 'disabled'}>EVEN WIDTHS</button>`;
+    }
+    const rows = lay.boxes.filter(b => b.col === 0 && b.rect === rect0);
+    if (rows.length > 1) {
+      html += `<div class="tp-sub">ROW HEIGHTS, BOTTOM TO TOP</div>
+        <div class="tp-widths">${rows.map((b, i) => `<input type="text" data-rowh="${i}" value="${escapeHtml(fmtLen(b.y1 - b.y0))}" title="Row ${i + 1}">`).join('')}</div>
+        <button class="btn" data-even-rows ${one.heights ? '' : 'disabled'}>EVEN ROWS</button>`;
+    }
+  }
+  return html;
+}
+
+// ctx: { trims, reach (the sections a change goes to), scope, scopes, setScope(id), values(t), summary, notes,
+//        wallHeight(t), wallLength(t), layoutOf(t) -> {cols, boxes, rects}, stretches(t), editing,
+//        design(key, value, label), line(t, edge, dy, label), swap(productId), swapStyle(style, productId),
+//        set(fn, label, reach), setStretch(t, i, n), selectReach(scope), remove(), toggleEdit(), selectWall(), faceName(t) }
 export function trimPanelHtml(ctx) {
   const list = ctx.trims;
   const one = list.length === 1 ? list[0] : null;
@@ -84,44 +163,20 @@ export function trimPanelHtml(ctx) {
   const crownOnly = kinds.size === 1 && kinds.has('crown');
   let html = `<h3>${one ? 'WALL TRIM' : list.length + ' TRIM SECTIONS'}</h3>
     ${one ? `<div class="stat-line"><span>${escapeHtml(trimLabel(one))}</span><b></b></div><div class="stat-line"><span>Face</span><b>${escapeHtml(ctx.faceName(one))}</b></div>` : `<div class="stat-line"><span>${escapeHtml(style ? style.label : 'Several styles')}</span><b>${list.length} selected</b></div>`}
-    <button class="btn${ctx.editing ? ' primary' : ''}" data-tp-edit title="E. Drag a selected section up or down in the view; a field's top or bottom edge resizes it; a gap between boxes moves that divider.">${ctx.editing ? 'DONE EDITING (E)' : 'EDIT BY DRAGGING (E)'}</button>
-    ${ctx.editing ? '<div class="empty" style="margin:6px 0">Drag any selected section up or down. On wainscoting, drag its top or bottom edge to resize it, or the gap between two boxes to resize them. Shift-click adds sections.</div>' : ''}
-    ${p ? productCardHtml(p, { evidence: true }) : '<div class="empty">Several products.</div>'}`;
+    ${scopeHtml(ctx)}
+    ${ctx.scope !== 'selected' && ctx.poolCount > list.length ? `<button class="btn" data-select-reach title="Select every section in this reach, of any kind of trim.">SELECT THE ${escapeHtml(ctx.scopes.find(x => x.id === ctx.scope).label)}'S TRIM (${ctx.poolCount})</button>` : ''}
+    <button class="btn${ctx.editing ? ' primary' : ''}" data-tp-edit title="E. Drag in the view: a rail or the inside of a box moves that height; a box's side resizes every box; the space between boxes is the gap; the space round them the margins.">${ctx.editing ? 'DONE EDITING (E)' : 'EDIT BY DRAGGING (E)'}</button>
+    ${ctx.editing ? '<div class="empty" style="margin:6px 0">Drag a rail, or the inside of a box, up or down to move that height line. Drag a box\'s side to make every box narrower or wider: each wall takes as many as fit. Drag the space between two boxes to change the gap, and the space round the boxes to change the margins (Shift keeps gap and margins equal; Alt on a gap moves that one divider). The outline shows every section the drag will change. Right-click a section for more.</div>' : ''}
+    ${mouldingsHtml(ctx)}
+    ${p ? productCardHtml(p, { evidence: true }) : ''}`;
   if (!crownOnly) {
     const yVal = same(list, t => t.y);
     html += `<div class="field-row">${lenField(fields ? 'Bottom edge' : 'Height to bottom', 'y', yVal)}${fields ? lenField('Field height', 'h', same(list, t => t.h)) : ''}</div>`;
     // Several sections at different heights move together by the same amount.
     if (!one) html += `<div class="field-row"><div class="field"><label>Raise by (minus lowers)</label><input type="text" data-raise value="" placeholder="${escapeHtml(fmtLen(IN))}" title="Every selected section moves up by this much; start with a minus sign to lower them."></div></div>`;
   }
-  if (one && style && style.kind === 'field') {
-    const lay = ctx.layoutOf(one);
-    if (style.boxes || style.bays) {
-      const what = style.bays ? 'Bays across' : 'Boxes across';
-      html += `<div class="field-row">
-        <div class="field"><label>${what} (blank = fit)</label><input type="number" min="1" max="60" step="1" data-int="cols" value="${one.cols || ''}" placeholder="${lay.cols || ''}"></div>
-        <div class="field"><label>Rows</label><input type="number" min="1" max="12" step="1" data-int="rows" value="${one.rows || 1}"></div>
-      </div>`;
-      if (one.style === 'picture-frame') html += `<div class="field-row">${lenField('Gap between boxes', 'gap', one.gap, fmtLen(.1))}${lenField('Inset from edges', 'inset', one.inset, fmtLen(.09))}</div>`;
-      if (style.bays) html += `<div class="field-row">${lenField('Batten spacing (when fitting)', 'spacing', one.spacing, fmtLen(p && p.spacing || .45))}</div>`;
-      // The boxes of the first full stretch, left to right: type a width; the others share the rest.
-      const first = lay.boxes.filter(b => b.row === 0 && lay.rects[b.rect] && lay.rects[b.rect].full);
-      const rect0 = first.length ? first[0].rect : -1;
-      const row0 = first.filter(b => b.rect === rect0);
-      if (row0.length > 1) {
-        html += `<div class="tp-sub">BOX WIDTHS${lay.rects.filter(r => r.full).length > 1 ? ' (FIRST STRETCH)' : ''}</div>
-          <div class="tp-widths">${row0.map((b, i) => `<input type="text" data-width="${i}" value="${escapeHtml(fmtLen(b.x1 - b.x0))}" title="Box ${i + 1}">`).join('')}</div>
-          <button class="btn" data-even ${one.widths ? '' : 'disabled'}>EVEN WIDTHS</button>`;
-      }
-      const rows = lay.boxes.filter(b => b.col === 0 && b.rect === rect0);
-      if (rows.length > 1) {
-        html += `<div class="tp-sub">ROW HEIGHTS, BOTTOM TO TOP</div>
-          <div class="tp-widths">${rows.map((b, i) => `<input type="text" data-rowh="${i}" value="${escapeHtml(fmtLen(b.y1 - b.y0))}" title="Row ${i + 1}">`).join('')}</div>
-          <button class="btn" data-even-rows ${one.heights ? '' : 'disabled'}>EVEN ROWS</button>`;
-      }
-    } else if (style.planks) {
-      html += `<div class="field-row">${lenField('Board spacing', 'spacing', one.spacing, fmtLen(p ? (p.pitch || p.W) : .09))}</div>`;
-    }
-  }
+  html += layoutHtml(ctx, one);
+  if (one && style && style.kind === 'field' && style.planks) html += `<div class="field-row">${lenField('Board spacing', 'spacing', one.spacing, fmtLen(p ? (p.pitch || p.W) : .09))}</div>`;
   if (one) {
     const L = ctx.wallLength(one);
     html += `<div class="field-row">${lenField('Starts at (from wall end)', 'from', one.f0 * L)}${lenField('Ends at', 'to', one.f1 * L)}</div>`;
@@ -138,18 +193,42 @@ export function bindTrimPanel(root, ctx) {
   const list = ctx.trims, one = list.length === 1 ? list[0] : null;
   const q = s => root.querySelector(s);
   q('[data-tp-edit]').onclick = () => ctx.toggleEdit();
-  root.querySelectorAll('[data-len]').forEach(inp => inp.onchange = () => {
-    const key = inp.dataset.len, raw = inp.value.trim();
-    if (!raw && ['gap', 'inset', 'spacing'].includes(key)) return ctx.set(t => { t[key] = null; }, 'trim ' + key);
+  root.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => ctx.setScope(b.dataset.scope));
+  const reachBtn = q('[data-select-reach]'); if (reachBtn) reachBtn.onclick = () => ctx.selectReach(ctx.scope);
+  root.querySelectorAll('[data-role-product]').forEach(sel => sel.onchange = () => { if (sel.value) ctx.swapStyle(sel.dataset.roleProduct, sel.value); });
+  // Layout numbers go to every section the change reaches.
+  root.querySelectorAll('[data-design]').forEach(inp => inp.onchange = () => {
+    const key = inp.dataset.design, raw = inp.value.trim();
+    if (!raw) { if (key === 'aim') return ctx.design('aim', null, 'trim box width'); if (key === 'minBox') return ctx.design('minBox', 0, 'trim least box'); return ctx.rerender(); }
     const v = parseLen(raw, 'inches');
     if (!Number.isFinite(v) || v < 0) return ctx.rerender();
-    if (key === 'y') return ctx.set(t => ctx.setY(t, v), 'trim height');
-    if (key === 'h') return ctx.set(t => { if (isField(t)) t.h = Math.max(.08, Math.min(v, ctx.wallHeight(t) - t.y)); }, 'trim field height');
+    ctx.design(key, v, 'trim ' + ({ aim: 'box width', gap: 'gap', sides: 'margins', top: 'margins', bottom: 'margins', minBox: 'least box' })[key]);
+  });
+  root.querySelectorAll('[data-design-int]').forEach(inp => inp.onchange = () => {
+    const n = parseInt(inp.value, 10);
+    if (!Number.isInteger(n) || n < 1) return ctx.rerender();
+    ctx.design(inp.dataset.designInt, n, 'trim rows');
+  });
+  const reveal = q('[data-reveal]'); if (reveal) reveal.onclick = () => ctx.design('reveal', ctx.values(list[0]).gap, 'even trim reveal');
+  const fit = q('[data-fit]'); if (fit) fit.onclick = () => ctx.design('fit', null, 'fit trim panels');
+  root.querySelectorAll('[data-stretch]').forEach(inp => inp.onchange = () => {
+    const n = parseInt(inp.value, 10);
+    ctx.setStretch(one, +inp.dataset.stretch, Number.isInteger(n) && n >= 0 ? Math.min(60, n) : null);
+  });
+  root.querySelectorAll('[data-len]').forEach(inp => inp.onchange = () => {
+    const key = inp.dataset.len, raw = inp.value.trim();
+    if (!raw && key === 'spacing') return ctx.set(t => { t.spacing = null; }, 'trim spacing', true);
+    const v = parseLen(raw, 'inches');
+    if (!Number.isFinite(v) || v < 0) return ctx.rerender();
+    // A typed height moves the line the section is on, with everything the change reaches.
+    const yNow = same(list, t => t.y), hNow = same(list, t => t.h);
+    if (key === 'y') return yNow !== undefined ? ctx.line(list[0], 'move', v - yNow, 'trim height') : ctx.set(t => ctx.setY(t, v), 'trim height');
+    if (key === 'h') return hNow !== undefined && isField(list[0]) ? ctx.line(list[0], 'top', v - hNow, 'trim field height') : ctx.set(t => { if (isField(t)) t.h = Math.max(.08, Math.min(v, ctx.wallHeight(t) - t.y)); }, 'trim field height');
     if (key === 'from' || key === 'to') return ctx.set(t => {
       const L = ctx.wallLength(t), f = Math.max(0, Math.min(1, v / L));
       if (key === 'from') t.f0 = Math.min(f, t.f1 - .01); else t.f1 = Math.max(f, t.f0 + .01);
     }, 'trim extent');
-    ctx.set(t => { t[key] = v; }, 'trim ' + key);
+    ctx.set(t => { t[key] = v; }, 'trim ' + key, key === 'spacing');
   });
   const raise = q('[data-raise]');
   if (raise) raise.onchange = () => {
@@ -158,13 +237,6 @@ export function bindTrimPanel(root, ctx) {
     if (!raw || !Number.isFinite(v) || v <= 0) return ctx.rerender();
     ctx.raise(sign * v);
   };
-  root.querySelectorAll('[data-int]').forEach(inp => inp.onchange = () => {
-    const key = inp.dataset.int, n = parseInt(inp.value, 10);
-    ctx.set(t => {
-      if (key === 'cols') { t.cols = Number.isInteger(n) && n >= 1 ? Math.min(60, n) : null; t.widths = null; }
-      else { t.rows = Number.isInteger(n) && n >= 1 ? Math.min(12, n) : 1; t.heights = null; }
-    }, 'trim boxes');
-  });
   // Box widths: the typed box takes that width, the others keep their shares of what is left.
   const shares = (inputs, attr, prop) => inputs.forEach(inp => inp.onchange = () => {
     const i = +inp.dataset[attr], v = parseLen(inp.value.trim(), 'inches');
@@ -173,13 +245,13 @@ export function bindTrimPanel(root, ctx) {
     const total = now.reduce((s, x) => s + x, 0), others = total - now[i], rest = total - v;
     if (rest <= .02 * (now.length - 1) || others <= 0) return ctx.rerender();
     const out = now.map((x, k) => k === i ? v : x * rest / others);
-    ctx.set(t => { t[prop] = out.map(x => Math.round(x * 10000) / 10000); if (prop === 'widths') t.cols = t.cols || out.length; }, prop === 'widths' ? 'trim box width' : 'trim row height');
+    ctx.set(t => { t[prop] = out.map(x => Math.round(x * 10000) / 10000); if (prop === 'widths') { t.cols = out.length; t.colsAt = null; } }, prop === 'widths' ? 'trim box width' : 'trim row height');
   });
   shares(root.querySelectorAll('[data-width]'), 'width', 'widths');
   shares(root.querySelectorAll('[data-rowh]'), 'rowh', 'heights');
   const even = q('[data-even]'); if (even) even.onclick = () => ctx.set(t => { t.widths = null; }, 'even box widths');
   const evenRows = q('[data-even-rows]'); if (evenRows) evenRows.onclick = () => ctx.set(t => { t.heights = null; }, 'even row heights');
-  const mat = q('[data-tp-mat]'); if (mat) mat.onchange = () => ctx.set(t => { t.material = mat.value || null; }, 'trim finish');
+  const mat = q('[data-tp-mat]'); if (mat) mat.onchange = () => ctx.set(t => { t.material = mat.value || null; }, 'trim finish', true);
   root.querySelectorAll('[data-group]').forEach(b => b.onclick = () => { groupFilter = b.dataset.group; listScroll = 0; ctx.rerender(); });
   const listEl = q('[data-cat-list]');
   if (listEl) {
