@@ -25,6 +25,7 @@ import { cutPrism } from './section-planes.js';
 import { thresholdFloors as derivedThresholdFloors } from './threshold-floors.js';
 import { wallFrame, wallEnds } from './wall-joins.js';
 import { roomFaces } from './room-faces.js';
+import { faceRegions } from './wall-regions.js';
 import { trimMeshParts } from './trim-mesh.js';
 
 const FALLBACK_WALL = '#d8d4cc';
@@ -67,8 +68,14 @@ function matFor(record, fallbackColor, fallbackRough, opts) {
   return m;
 }
 // Wall tops, bottoms and reveals once the room faces carry the paint: plain, untextured.
-function capMat(opts) { return flatMat('#e4e1da', 0.95, opts); }
+// They are drawn a hair behind in depth: the wall is cut into pieces at every opening, and the
+// pieces' hidden ends meet the painted faces edge-on at each seam, where they would otherwise
+// sparkle through a dark colour as a light hairline.
+function capMat(opts) { return flatMat('#e4e1da', 0.95, { ...(opts || {}), polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 8 }); }
 function trimMat(opts) { return matFor(materialById('mat-trim'), FALLBACK_TRIM, 0.55, opts); }
+// A door's or window's frame, casing and sash: its own paint (o.trimMaterial, put on by PAINT)
+// or the trim paint.
+function openingTrimMat(o, opts) { return o && o.trimMaterial ? matFor(materialById(o.trimMaterial), FALLBACK_TRIM, 0.55, opts) : trimMat(opts); }
 function ceilingMat(id, opts) { return matFor(materialById(id || 'mat-ceiling'), FALLBACK_CEILING, 0.95, opts); }
 
 function glassMat() {
@@ -293,7 +300,7 @@ function buildDoor(o, s0, s1, top, th, sides, ctx) {
   if (plainOpening(o)) return g;
   const trim = [];
   const w = s1 - s0;
-  const tm = trimMat(ctx.matOpts);
+  const tm = openingTrimMat(o, ctx.matOpts);
   const proud = 0.008;
   const interior = !!(sides.pos && sides.neg);
   const detail = doorDetail(o, w, top, interior, sides);
@@ -337,7 +344,9 @@ function doorLeaf(o, leafW, leafH, px, rotY, ctx, detail) {
   pivot.position.set(px, 0.01, 0);
   pivot.rotation.y = rotY;
   const ghost = !!(ctx.matOpts && ctx.matOpts.transparent);
-  const leafFinish = detail.leafMaterial ? matFor(materialById(detail.leafMaterial), '#f1eee7', 0.45, ctx.matOpts) : flatMat('#f1eee7', 0.45, ctx.matOpts);
+  // The leaf wears its own finish, else the paint put on the whole door, else the stock panel door.
+  const leafId = detail.leafMaterial || o.trimMaterial || null;
+  const leafFinish = leafId ? matFor(materialById(leafId), '#f1eee7', 0.45, ctx.matOpts) : flatMat('#f1eee7', 0.45, ctx.matOpts);
   const userData = { kind: 'opening', id: o.id, wallId: ctx.wall.id, noCollide: true };
   const glazing = ghost ? null : leafGlazing(doorGlass(o), leafW, leafH);
   if (glazing) {
@@ -374,7 +383,7 @@ function doorLeaf(o, leafW, leafH, px, rotY, ctx, detail) {
     const leaf = mergedMesh(parts, leafFinish, userData);
     leaf.userData.leafWidth = leafW; pivot.add(leaf);
   } else {
-    const leaf = new THREE.Mesh(new THREE.BoxGeometry(leafW, leafH, LEAF_T), ghost || detail.leafMaterial || detail.style === 'slab' ? leafFinish : leafMaterials());
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(leafW, leafH, LEAF_T), ghost || leafId || detail.style === 'slab' ? leafFinish : leafMaterials());
     leaf.position.set(leafW / 2, leafH / 2, 0);
     leaf.castShadow = true; leaf.receiveShadow = true;
     leaf.userData = userData;
@@ -409,7 +418,7 @@ function buildWindow(o, s0, s1, v0, v1, th, sides, ctx) {
   const g = new THREE.Group();
   g.userData = { kind: 'opening', id: o.id, wallId: ctx.wall.id };
   const trim = [];
-  const tm = trimMat(ctx.matOpts);
+  const tm = openingTrimMat(o, ctx.matOpts);
   const w = s1 - s0, h = v1 - v0;
   const detail = windowDetail(o, w, h);
   const { frameWidth: FRAME_W, sashWidth: SASH_W, muntinWidth: MULLION_W, casingWidth: CASING_W, casingDepth: CASING_D } = detail;
@@ -518,7 +527,7 @@ export function buildWallGroup(wall, openings, property, ctx) {
   // With room faces (ctx.faces, room-faces.js) the wall's two long sides are drawn by the faces
   // it carries, and what is left (top, bottom, the reveals of its openings) wears a plain
   // finish: no room sees it, so it carries no paint and is never counted.
-  const parts = ctx.faces ? ctx.faces.flatMap(fc => fc.parts.filter(p => p.wallId === wall.id).map(p => ({ ...p, faceId: fc.id }))) : null;
+  const parts = ctx.faces ? ctx.faces.flatMap(fc => fc.parts.map((p, k) => ({ ...p, faceId: fc.id, k })).filter(p => p.wallId === wall.id)) : null;
   bucket(parts ? capMat(ctx.matOpts) : matOf(faceIds.other), FACE_OTHER);
   if (!parts) {
     bucket(matOf(faceIds.pos), FACE_POS);
@@ -594,19 +603,51 @@ export function buildWallGroup(wall, openings, property, ctx) {
   if (parts) {
     group.userData.faceParts = [];
     for (const p of parts) {
-      const geos = [];
-      for (const sp of solids) {
-        const [a, b] = faceSpan(sp, L, ends, p.side);
-        const x0 = Math.max(a, p.s0 - 0.001), x1 = Math.min(b, p.s1 + 0.001);
-        if (x1 - x0 < 1e-4) continue;
-        geos.push(faceQuad(x0, x1, sp.v0, sp.v1 >= H - 0.001 ? H + lift : sp.v1, p.side * h, p.side));
+      const own = p.side > 0 ? faceIds.pos : faceIds.neg;
+      const z = p.side * h;
+      const res = ctx.regions && ctx.regions.get(p.faceId);
+      // Without regions (wall-regions.js) the part is one mesh in its side's finish. With them,
+      // one mesh per region, each in its own finish (its paint mark's, else the side's).
+      const pieces = [];
+      const whole = () => {
+        const geos = [];
+        for (const sp of solids) {
+          const [a, b] = faceSpan(sp, L, ends, p.side);
+          const x0 = Math.max(a, p.s0 - 0.001), x1 = Math.min(b, p.s1 + 0.001);
+          if (x1 - x0 < 1e-4) continue;
+          geos.push(faceQuad(x0, x1, sp.v0, sp.v1 >= H - 0.001 ? H + lift : sp.v1, z, p.side));
+        }
+        pieces.push({ geos, finish: own, region: undefined });
+      };
+      if (!res || !res.regions.length) whole();
+      else {
+        // A region's rectangles keep to the wall's own cuts: where one reaches the end of a
+        // solid piece it takes that piece's mitred end, as the whole side does.
+        const quads = cells => {
+          const geos = [];
+          for (const c of cells) {
+            if (c.part !== p.k) continue;
+            const mid = (c.s0 + c.s1) / 2, up = (c.v0 + c.v1) / 2;
+            const sp = solids.find(x => mid > x.s0 && mid < x.s1 && up > x.v0 && up < x.v1);
+            if (!sp) continue;
+            const [a, b] = faceSpan(sp, L, ends, p.side);
+            const lo = Math.max(sp.s0, p.s0), hi = Math.min(sp.s1, p.s1);
+            const x0 = c.s0 <= lo + 1e-5 ? Math.max(a, p.s0 - 0.001) : c.s0, x1 = c.s1 >= hi - 1e-5 ? Math.min(b, p.s1 + 0.001) : c.s1;
+            if (x1 - x0 < 1e-4) continue;
+            geos.push(faceQuad(x0, x1, c.v0, c.v1 >= H - 0.001 ? H + lift : c.v1, z, p.side));
+          }
+          return geos;
+        };
+        for (const r of res.regions) pieces.push({ geos: quads([...r.cells, ...r.hidden]), finish: r.finish || own, region: r.key });
+        pieces.push({ geos: quads(res.rest), finish: own, region: undefined });
       }
-      const m = mergedMesh(geos, matOf(p.side > 0 ? faceIds.pos : faceIds.neg), { kind: 'wall', id: wall.id, faceId: p.faceId, side: p.side });
-      if (!m) continue;
       const holder = new THREE.Group();
       holder.position.copy(group.position); holder.rotation.copy(group.rotation);
-      holder.add(m);
-      group.userData.faceParts.push({ faceId: p.faceId, object: holder });
+      for (const piece of pieces) {
+        const m = mergedMesh(piece.geos, matOf(piece.finish), { kind: 'wall', id: wall.id, faceId: p.faceId, side: p.side, region: piece.region });
+        if (m) holder.add(m);
+      }
+      if (holder.children.length) group.userData.faceParts.push({ faceId: p.faceId, object: holder });
     }
   }
   const baseMesh = mergedMesh(baseGeos, trimMat(ctx.matOpts), { kind: 'wall', id: wall.id });
@@ -794,8 +835,13 @@ export function buildPropertyGroup(property, opts) {
       g.userData = { kind: 'face', id: fc.id, level: lvl.id };
       return [fc.id, g];
     }));
+    // Each face's regions (wall-regions.js): the pieces its trim and casings divide it into,
+    // each drawn in its own finish and painted on its own.
+    const levelTrims = (property.trims || []).filter(t => view.walls.some(w => w.id === t.wallId));
+    const regions = new Map(faces.map(fc => [fc.id, faceRegions(fc, { walls: view.walls, openings, trims: levelTrims, heightOf: w => w.height || H })]));
+    lg.userData.regions = regions;
     view.walls.forEach((wall, index) => {
-      const wg = buildWallGroup(wall, openings, view, Object.assign({ index, faces }, ctx));
+      const wg = buildWallGroup(wall, openings, view, Object.assign({ index, faces, regions }, ctx));
       for (const { faceId, object } of wg.userData.faceParts || []) faceGroups.get(faceId)?.add(object);
       delete wg.userData.faceParts;
       lg.add(wg);

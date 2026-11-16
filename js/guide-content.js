@@ -179,9 +179,12 @@ export const chapters = [
       'Adjust color, roughness and the controls offered by its pattern. For tile or plank patterns, set real repeat dimensions.',
       'Use DUPLICATE when you want a separate variation. Use NEW MATERIAL for a new custom finish.',
       'For a photographed finish, select its image in PHOTOS and choose MATERIAL, or select/upload a source image in the material editor.',
-      'Assign the material from a selected wall or room in MODEL. Use SOURCE THIS MATERIAL to research a purchasable match.',
+      'Put it on the model with PAINT in MODEL (Tools, or press B): choose the finish in the panel, then click a wall, a trim section, a door, a floor or a ceiling. Use SOURCE THIS MATERIAL to research a purchasable match.',
     ],
     features: [
+      ['Paint one piece at a time', 'A PAINT click paints the one piece under the pointer, as in paint by numbers. Trim and casings divide a wall: the wall above a chair rail is one piece and the wall below it another, and the panel names the piece under the pointer with its square feet and the finish it wears now. Every click is one UNDO step.'],
+      ['Paint more with one click', 'ONE CLICK PAINTS sets how far a click reaches. THE SAME AROUND THE ROOM (or Shift-click) paints the same band of every wall of the room, or all of the room\'s trim that wears the same finish. THE WHOLE WALL OR GROUP (or Cmd-click) paints a wall floor to ceiling, or a trim section with the rest of its group. PAINT THE SELECTED paints what SELECT has selected.'],
+      ['Pick up and take off', 'Alt-click, or PICK UP A FINISH FROM THE MODEL, takes the finish under the pointer as the one to paint with. NO PAINT OF ITS OWN takes a piece\'s paint off again. NEW PAINT COLOUR adds a colour with its maker and code and paints with it at once.'],
       ['Pattern controls', 'Color, accent, repeat size, roughness, metalness and normal strength let you tune procedural patterns. Drag the live preview to orbit; scroll to zoom.'],
       ['Usage links', 'The editor shows where a material is in use, helping you understand what an edit will change.'],
       ['Built-in reset', 'RESET TO DEFAULT restores a built-in material. Custom copies can be kept as separate alternatives.'],
