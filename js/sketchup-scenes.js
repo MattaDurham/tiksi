@@ -68,20 +68,17 @@ export function placement(scan) {
   return { point: v => { const w = turn(v); return [p[0] + s * w[0], p[1] + s * w[1], p[2] + s * w[2]]; }, direction: turn, scale: s };
 }
 
-// The saved view of one scene, through the model's placement. `tagNames` maps a tag name (lower
-// case) to the Tiksi tag id; `modelTags` is the set of tag ids this model's parts are on (a tag of
-// the model the scene does not hide is shown; any other Tiksi tag is left as it is).
-// `levels` are the property's level ids: Tiksi's own walls, floors and rooms are put away in the
-// view, as the SKP never had them (a traced wall would stand in front of an elevation the scene
-// cut open).
-export function sceneView(scene, scan, { tagNames = new Map(), modelTags = new Set(), levels = [] } = {}) {
-  const at = placement(scan), c = scene.camera;
+// A scene's camera as a saved view's camera, through a placement (`at`, placement() above; the
+// sync file's own frame needs none). `fov` is the angle a parallel camera keeps (a view already
+// made from the scene keeps its own). Returns { camera, mode }.
+const IDENTITY = { point: v => v.slice(), direction: v => v.slice(), scale: 1 };
+export function sceneCamera(c, at = IDENTITY, keepFov) {
   let eye = at.point(c.eye), target = at.point(c.target);
   const dir = unit(sub(target, eye)) || [0, 0, -1];
   if (len(sub(target, eye)) < 0.01) target = along(eye, dir, 1);
-  const up = unit(at.direction(c.up)) || [0, 1, 0];
+  const up = unit(at.direction(c.up || [0, 1, 0])) || [0, 1, 0];
   let fov, parallel = false;
-  if (c.perspective) {
+  if (c.perspective !== false) {
     fov = num(c.fov) > 0 ? c.fov : DEFAULT_VFOV;
     // A width angle becomes the height angle for the scene's own picture shape (16:10 if it has none).
     if (c.fovIsWidth) fov = 2 * Math.atan(Math.tan(fov * DEG / 2) / (c.aspect || 1.6)) / DEG;
@@ -90,8 +87,8 @@ export function sceneView(scene, scan, { tagNames = new Map(), modelTags = new S
     // Tiksi's parallel camera shows the height its perspective camera sees at the target
     // (viewer3d.js viewCamera): stand back by the distance that makes that the scene's height.
     parallel = true;
-    fov = DEFAULT_VFOV;
-    const height = (c.height || 5) * at.scale;
+    fov = num(keepFov) >= VFOV_MIN && num(keepFov) <= VFOV_MAX ? keepFov : DEFAULT_VFOV;
+    const height = (num(c.height) > 0 ? c.height : 5) * at.scale;
     eye = along(target, dir, -(height / 2) / Math.tan(fov * DEG / 2));
   }
   // Straight down is Tiksi's TOP; the camera stands a hair off plumb, toward the bottom of the
@@ -101,14 +98,24 @@ export function sceneView(scene, scan, { tagNames = new Map(), modelTags = new S
     const flat = unit([up[0], 0, up[2]]) || [0, 0, -1], d = len(sub(target, eye));
     eye = [target[0] - flat[0] * d * 0.002, target[1] + d, target[2] - flat[2] * d * 0.002];
   }
+  return { camera: { position: eye, target, fov, ...(parallel ? { parallel: true } : {}) }, mode: top && parallel ? 'top' : 'orbit' };
+}
+
+// The saved view of one scene, through the model's placement. `tagNames` maps a tag name (lower
+// case) to the Tiksi tag id; `modelTags` is the set of tag ids this model's parts are on (a tag of
+// the model the scene does not hide is shown; any other Tiksi tag is left as it is).
+// `levels` are the property's level ids: Tiksi's own walls, floors and rooms are put away in the
+// view, as the SKP never had them (a traced wall would stand in front of an elevation the scene
+// cut open).
+export function sceneView(scene, scan, { tagNames = new Map(), modelTags = new Set(), levels = [] } = {}) {
+  const { camera, mode } = sceneCamera(scene.camera, placement(scan));
   const tags = {};
   if (scene.useTags !== false) {
     const hidden = new Set(scene.hiddenTags.map(n => tagNames.get(n.toLowerCase())).filter(Boolean));
     for (const id of new Set([...modelTags, ...hidden])) tags[id] = !hidden.has(id);
   }
   return {
-    name: scene.name, camera: { position: eye, target, fov, ...(parallel ? { parallel: true } : {}) },
-    mode: top && parallel ? 'top' : 'orbit', tags, models: { [scan.id]: true }, hiddenLevels: levels,
+    name: scene.name, camera, mode, tags, models: { [scan.id]: true }, hiddenLevels: levels,
     source: { app: 'sketchup', scan: scan.id, scene: scene.name },
   };
 }

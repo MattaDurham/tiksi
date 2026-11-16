@@ -22,6 +22,7 @@ import { renderViewport, geometrySignature, tagSignature, modelBounds3d, release
 import { tagShown, UNTAGGED_LABEL, OVERRIDE_UNTAGGED } from './tags.js';
 import { sheetSvg } from './sheet-compose.js';
 import { modelBounds } from './geometry.js';
+import { planeOf } from './section-planes.js';
 import { photoBytes } from './photos-store.js';
 import { renderPdfPage, addDocumentFromFile } from './documents.js';
 import { lastCameraView } from './viewer3d.js';
@@ -305,7 +306,7 @@ function renderKey(v, px, py, geo = geometryKey()) {
   const base = { kind: v.kind, w: v.w, h: v.h, style: v.style, px, py };
   if (v.kind === 'image') return JSON.stringify({ ...base, photoId: v.photoId, page: v.page });
   const params = v.kind === 'plan' ? { levelId: v.levelId, cut: v.cut, center: v.center, scale: v.scale, model: v.layers.model }
-    : v.kind === 'view3d' ? { camera: v.camera } : { line: v.line, flip: v.flip, center: v.center, scale: v.scale, clip: v.clip, depth: v.depth };
+    : v.kind === 'view3d' ? { camera: v.camera, cut: v.cut } : { line: v.line, flip: v.flip, center: v.center, scale: v.scale, clip: v.clip, depth: v.depth };
   const tags = tagSignature(prop, v);
   return geo + ':' + hash(tags) + JSON.stringify({ ...base, ...params });
 }
@@ -644,7 +645,11 @@ function bindVpInspector(host, v) {
   host.querySelector('[data-saved-view]')?.addEventListener('change', e => {
     const sv = (prop.savedViews || []).find(x => x.id === e.target.value);
     if (!sv) return;
-    v.camera = { position: sv.camera.position.slice(), target: sv.camera.target.slice(), fov: sv.camera.fov };
+    // A parallel view stays parallel, and its section cut stays cut (a standard plan or
+    // cut-open elevation, standard-views.js, comes onto the sheet as MODEL shows it).
+    v.camera = { position: sv.camera.position.slice(), target: sv.camera.target.slice(), fov: sv.camera.fov, ...(sv.camera.parallel ? { parallel: true } : {}) };
+    const s = sv.section || {}, plane = s.on && ((s.planes || []).find(p => p.id === s.active) || (s.planes || [])[0]);
+    if (plane) { const { n, d } = planeOf(plane); v.cut = { normal: n, d }; } else delete v.cut;
     v.tags = { ...sv.tags };
     v.title = sv.name;
     renderLists();
