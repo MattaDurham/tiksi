@@ -24,16 +24,25 @@ serve = importlib.util.module_from_spec(spec); spec.loader.exec_module(serve)
 
 class FakeStorage:
     """An S3-shaped store: PUT, HEAD, DELETE on /<bucket>/<key> and ListObjectsV2 on /<bucket>."""
-    def __init__(self):
-        self.objects, self.requests = {}, []
+    def __init__(self, refuse=()):
+        self.objects, self.requests, self.refuse = {}, [], set(refuse)
+        self.lock = threading.Lock()
 
     def __call__(self, req, timeout=None):
+        with self.lock: return self.answer(req)
+
+    def answer(self, req):
         url = urlsplit(req.full_url)
         parts = url.path.lstrip('/').split('/', 1)
         key = unquote(parts[1]) if len(parts) > 1 else ''
         headers = {k.lower(): v for k, v in req.header_items()}
         self.requests.append((req.get_method(), key, headers, req.data))
         method = req.get_method()
+        if key in self.refuse: raise urllib.error.HTTPError(req.full_url, 500, 'Refused', {}, io.BytesIO(b'refused'))
+        if method == 'PUT' and 'x-amz-copy-source' in headers:
+            source = unquote(headers['x-amz-copy-source']).lstrip('/').split('/', 1)[1]
+            if source not in self.objects: return Reply(404, b'<Error><Code>NoSuchKey</Code></Error>')
+            self.objects[key] = self.objects[source]; return Reply(200, b'<CopyObjectResult></CopyObjectResult>')
         if method == 'PUT': self.objects[key] = (req.data, headers.get('content-type')); return Reply(200, b'')
         if method == 'HEAD':
             if key in self.objects: return Reply(200, b'')
@@ -100,14 +109,57 @@ class Units(unittest.TestCase):
         files = app_files(root)
         self.assertEqual(files, ['client.html', 'css/client.css', 'js/client-view.js', 'js/sub/x.js', 'vendor/addons/libs/f.js', 'vendor/three.module.min.js'])
         svc = LabPublishService(self.dir / 'state', credentials=credentials(self.dir), endpoint='https://r2.test', opener=store, root=root)
-        out = svc.send_app('house')
-        self.assertEqual(out, {'app': app_version(root), 'sent': len(files)})
+        heard = []
+        out = svc.send_app('house', progress=heard.append)
+        self.assertEqual(out, {'app': app_version(root), 'sent': len(files), 'copied': 0})
+        total = sum((root / f).stat().st_size for f in files)
+        self.assertEqual(heard[0], {'done': 0, 'total': len(files), 'bytes': 0, 'totalBytes': total, 'copied': 0})
+        self.assertEqual([e['done'] for e in heard], list(range(len(files) + 1)), 'one report per file finished')
+        self.assertEqual(heard[-1]['bytes'], total)
         puts = [k for m, k, _, _ in store.requests if m == 'PUT']
         self.assertEqual(puts[-1], f"house/data/app/{out['app']}/.complete")
         self.assertEqual(store.objects[f"house/data/app/{out['app']}/js/client-view.js"][1], 'text/javascript')
         self.assertEqual(svc.send_app('house')['sent'], 0, 'already there, here and online')
         (root / 'js/client-view.js').write_text('export const changed = 1', encoding='utf-8')
         self.assertNotEqual(svc.send_app('house')['app'], out['app'])
+
+    def test_code_unchanged_since_the_last_send_is_copied_online(self):
+        store = FakeStorage()
+        root = app_root(self.dir)
+        svc = LabPublishService(self.dir / 'state', credentials=credentials(self.dir), endpoint='https://r2.test', opener=store, root=root)
+        first = svc.send_app('house')['app']
+        svc.store('house', 'current.json', json.dumps({'version': 'v1', 'app': first}).encode())
+        (root / 'js/client-view.js').write_text('export const changed = 1', encoding='utf-8')
+        store.requests.clear()
+        out = svc.send_app('house')
+        files = app_files(root)
+        self.assertEqual((out['sent'], out['copied']), (1, len(files) - 1), 'only the changed file is sent from this Mac')
+        bodies = [(k, d) for m, k, h, d in store.requests if m == 'PUT' and 'x-amz-copy-source' not in h]
+        self.assertEqual([k for k, _ in bodies], [f"house/data/app/{out['app']}/js/client-view.js", f"house/data/app/{out['app']}/.complete"])
+        for rel in files:
+            got = store.objects[f"house/data/app/{out['app']}/{rel}"][0]
+            self.assertEqual(got, (root / rel).read_bytes(), rel)
+        self.assertEqual(store.objects[f"house/data/app/{out['app']}/css/client.css"][1], 'text/css', 'a copy keeps its content type')
+
+    def test_a_failed_copy_is_sent_instead(self):
+        store = FakeStorage()
+        root = app_root(self.dir)
+        svc = LabPublishService(self.dir / 'state', credentials=credentials(self.dir), endpoint='https://r2.test', opener=store, root=root)
+        first = svc.send_app('house')['app']
+        svc.store('house', 'current.json', json.dumps({'version': 'v1', 'app': first}).encode())
+        del store.objects[f'house/data/app/{first}/css/client.css']   # gone online, though the rest is there
+        (root / 'js/client-view.js').write_text('export const changed = 1', encoding='utf-8')
+        out = svc.send_app('house')
+        self.assertEqual((out['sent'], out['copied']), (2, len(app_files(root)) - 2))
+        self.assertEqual(store.objects[f"house/data/app/{out['app']}/css/client.css"][0], b'a{}')
+
+    def test_a_failed_upload_leaves_the_code_unmarked(self):
+        root = app_root(self.dir)
+        version = app_version(root)
+        store = FakeStorage(refuse={f'house/data/app/{version}/js/sub/x.js'})
+        svc = LabPublishService(self.dir / 'state', credentials=credentials(self.dir), endpoint='https://r2.test', opener=store, root=root)
+        with self.assertRaises(LabError): svc.send_app('house')
+        self.assertNotIn(f'house/data/app/{version}/.complete', store.objects, 'no marker: the next send tries the code again')
 
     def test_code_changing_during_a_send_goes_up_whole(self):
         # A merge into main lands while the code is read: a new file appears and an old one
@@ -192,12 +244,36 @@ class OverHttp(unittest.TestCase):
         self.assertEqual(self.ask('PUT', '/api/lab/files/house/../x', token, b'{}')[0], 400)
         status, data = self.ask('POST', '/api/lab/app/house', token, b'{}')
         self.assertEqual(status, 200)
+        self.assertEqual(json.loads(data)['sent'], 6)
+        status, data = self.ask('POST', '/api/lab/app/house', token, b'{"stream": true}')
+        self.assertEqual((status, [json.loads(x) for x in data.decode().splitlines()]), (200, [
+            {'done': 0, 'total': 0, 'bytes': 0, 'totalBytes': 0, 'copied': 0}, {'app': json.loads(self.ask('POST', '/api/lab/app/house', token, b'{}')[1])['app'], 'sent': 0, 'copied': 0}]),
+            'already sent: a progress line, then the result')
         # The preview: the page itself, then the copy kept on this Mac.
         status, page = self.ask('GET', '/lab-preview/house/')
         self.assertEqual((status, page), (200, b'<!doctype html>'))
         self.assertEqual(self.ask('GET', '/lab-preview/house/data/v/1/property.json'), (200, b'{"format":"tiksi-client"}'))
         self.assertEqual(self.ask('GET', '/lab-preview/house/data/%2e%2e/%2e%2e/r2')[0], 404)
         self.assertEqual(self.ask('GET', '/lab-preview/House/')[0], 404)
+
+
+    def test_the_code_streams_a_line_per_step(self):
+        cap = json.loads(self.ask('GET', '/api/lab/capabilities')[1])
+        status, data = self.ask('POST', '/api/lab/app/house', {'X-Tiksi-Token': cap['token']}, b'{"stream": true}')
+        lines = [json.loads(x) for x in data.decode().splitlines()]
+        self.assertEqual(status, 200)
+        self.assertEqual((lines[0]['done'], lines[0]['total']), (0, 6))
+        self.assertEqual((lines[-2]['done'], lines[-2]['total']), (6, 6), 'the last file is always reported')
+        self.assertEqual((lines[-1]['sent'], lines[-1]['copied']), (6, 0))
+
+    def test_a_failure_while_streaming_is_the_last_line(self):
+        root = self.server.lab_publish.root
+        self.store.refuse.add(f'house/data/app/{app_version(root)}/js/sub/x.js')
+        cap = json.loads(self.ask('GET', '/api/lab/capabilities')[1])
+        status, data = self.ask('POST', '/api/lab/app/house', {'X-Tiksi-Token': cap['token']}, b'{"stream": true}')
+        last = json.loads(data.decode().splitlines()[-1])
+        self.assertEqual(status, 200)
+        self.assertIn('refused', last['error'])
 
 
 if __name__ == '__main__':

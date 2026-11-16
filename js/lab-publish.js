@@ -168,6 +168,34 @@ async function lab(path, opts = {}) {
 }
 export async function labStatus() { return lab('', { fresh: true }); }
 
+// The code the page runs, sent by the Mac a few files at a time. `heard({ done, total, bytes,
+// totalBytes, copied })` hears each file finish. Resolves to { app, sent, copied }.
+async function sendApp(slug, heard) {
+  await lab('', {});
+  const r = await fetch('/api/lab/app/' + slug, { method: 'POST', headers: { 'X-Tiksi-Token': service.token, 'Content-Type': 'application/json' }, body: JSON.stringify({ stream: true }) });
+  if (!r.ok || !/ndjson/.test(r.headers.get('Content-Type') || '') || !r.body) {
+    const out = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(out.error || 'The lab sender refused (' + r.status + ')');
+    return out;
+  }
+  const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+  let rest = '', last = null;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (value) rest += value;
+    const lines = rest.split('\n'); rest = done ? '' : lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const v = JSON.parse(line);
+      if (v.error) throw new Error(v.error);
+      if (v.app) last = v; else heard(v);
+    }
+    if (done) break;
+  }
+  if (!last) throw new Error('The lab sender stopped before the code was all sent.');
+  return last;
+}
+
 const put = (slug, path, body, type) => lab('files/' + slug + '/' + path, { method: 'PUT', body, type });
 const versionName = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-') + '-' + Math.random().toString(36).slice(2, 6);
 
@@ -195,7 +223,20 @@ async function webRendering(photoId) {
   return out.full && out.thumb ? out : null;
 }
 
-// Send the property. `progress(text, fraction)` hears how far it is. `pictures({ copy, read,
+// The parts of a send, in order, as the send window lists them.
+export const SEND_STEPS = [
+  { id: 'code', name: 'The code the client page runs' },
+  { id: 'files', name: 'Models and texture pictures' },
+  { id: 'renderings', name: 'Renderings' },
+  { id: 'pictures', name: 'Pictures of the saved views' },
+  { id: 'property', name: 'The property, then the page switches to it' },
+  { id: 'tidy', name: 'Tidying older copies' },
+];
+const mb = n => (n / 1e6).toFixed(n < 1e7 ? 1 : 0) + ' MB';
+
+// Send the property. `progress(text, fraction, step)` hears how far it is; `step` says which part
+// of SEND_STEPS is under way and how far it has got: { id, state: 'running' | 'done' | 'none',
+// text, done, total or fraction (how far that part is), picture (a Blob: the rendering being sent) }. `pictures({ copy, read,
 // progress })` makes the saved views' own pictures (lab-pictures.js viewPictures; without it the
 // page shows the views by name). Returns { slug, version, uploaded, url, preview, notes }:
 // `notes` says what could not go.
@@ -205,28 +246,46 @@ export async function sendToLab(propId, choice, { progress = () => {}, pictures 
   const slug = choice.slug;
   if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(slug)) throw new Error('The page name may use only lowercase letters, digits and dashes.');
   const status = await lab('', { fresh: true });
-  progress('Sending the Tiksi code the page runs (only when it changed)…', 0.02);
-  const { app } = await lab('app/' + slug, { body: '{}', type: 'application/json' });
+  const step = (id, state, text, extra = {}) => ({ id, state, text, ...extra });
+  progress('Sending the code the client page runs…', 0.01, step('code', 'running', 'Checking whether it changed since the last send…'));
+  const app = await sendApp(slug, e => {
+    if (!e.total) return;
+    progress('Sending the code the client page runs (' + e.done + ' of ' + e.total + ' files)…', 0.01 + 0.24 * e.done / e.total,
+      step('code', 'running', e.done + ' of ' + e.total + ' files · ' + mb(e.bytes) + ' of ' + mb(e.totalBytes) + (e.copied ? ' · ' + e.copied + ' unchanged, copied online' : ''), { done: e.done, total: e.total }));
+  });
+  const codeFiles = (app.sent || 0) + (app.copied || 0);
+  progress('The code is there.', codeFiles ? 0.25 : 0.03, step('code', 'done', !codeFiles ? 'Unchanged since the last send' : app.copied ? app.sent + ' of ' + codeFiles + ' files changed and sent; ' + app.copied + ' copied online' : codeFiles + ' files sent'));
   const version = versionName();
   const { copy, send } = clientCopy(ws.data, propId, choice);
   const base = 'v/' + version + '/';
   let done = 0;
   const total = send.length + 2, notes = [];
   const viewCount = copy.property.savedViews.length;
-  // The files take the first part of the bar, the views' pictures the next, when there are views.
-  const filesEnd = pictures && viewCount ? 0.6 : 0.9;
+  // The code took the start of the bar when it went up; the files take the next part, the views'
+  // pictures the part after, when there are views.
+  const start = codeFiles ? 0.25 : 0.05;
+  const filesEnd = pictures && viewCount ? start + (0.9 - start) * 0.6 : 0.9;
+  const counts = { files: send.filter(f => f.kind !== 'rendering').length, renderings: send.filter(f => f.kind === 'rendering').length };
+  const doneOf = { files: 0, renderings: 0 };
+  const stepOf = f => f.kind === 'rendering' ? 'renderings' : 'files';
+  for (const id of ['files', 'renderings']) if (!counts[id]) progress('', start, step(id, 'none', 'None to send'));
   let unread = 0;
   for (const f of send) {
-    progress('Sending ' + (f.kind === 'model' ? 'a model' : f.kind === 'rendering' ? 'a rendering' : 'a texture picture') + ' (' + (done + 1) + ' of ' + total + ')…', 0.05 + (filesEnd - 0.05) * done / total);
+    const id = stepOf(f);
+    progress('Sending ' + (f.kind === 'model' ? 'a model' : f.kind === 'rendering' ? 'a rendering' : 'a texture picture') + ' (' + (done + 1) + ' of ' + total + ')…', start + (filesEnd - start) * done / total,
+      step(id, 'running', (doneOf[id] + 1) + ' of ' + counts[id] + (id === 'files' ? ' · ' + (f.kind === 'model' ? 'a model' : 'a texture picture') : ''), { done: doneOf[id], total: counts[id] }));
+    const finished = () => { done++; if (++doneOf[id] === counts[id]) progress('', start + (filesEnd - start) * done / total, step(id, 'done', counts[id] + ' sent')); };
     if (f.kind === 'rendering') {
       // A web-size copy and a small one for its card; one this Mac cannot read is left out.
       const made = await webRendering(f.id);
       const r = copy.renderings.find(x => x.id === f.rendering);
-      if (!made) { copy.renderings = copy.renderings.filter(x => x !== r); unread++; done++; continue; }
+      if (!made) { copy.renderings = copy.renderings.filter(x => x !== r); unread++; finished(); continue; }
       r.w = made.w; r.h = made.h;
+      progress('Sending a rendering (' + (done + 1) + ' of ' + total + ')…', start + (filesEnd - start) * done / total,
+        step(id, 'running', (doneOf[id] + 1) + ' of ' + counts[id] + (r.label ? ' · ' + r.label : ''), { done: doneOf[id], total: counts[id], picture: made.thumb }));
       await put(slug, base + f.path, made.full, 'image/jpeg');
       await put(slug, base + f.thumb, made.thumb, 'image/jpeg');
-      done++; continue;
+      finished(); continue;
     }
     // A texture picture may be a file in the project's folder (photos-store.js reads both).
     const buffer = f.kind === 'picture' ? await photoBytes(f.id).catch(() => null) : ((await getFile(f.id).catch(() => null)) || {}).buffer;
@@ -236,17 +295,18 @@ export async function sendToLab(propId, choice, { progress = () => {}, pictures 
         delete copy.files[f.id];
         copy.property.photos = copy.property.photos.filter(ph => ph.id !== f.id);
         for (const m of copy.materials) if (m.photoId === f.id) { m.photoId = null; if (m.pattern === 'photo') m.pattern = 'flat'; }
-        done++; continue;
+        finished(); continue;
       }
       throw new Error('A model of this property is missing on this Mac, so nothing was switched over: ' + f.id);
     }
     await put(slug, base + f.path, buffer, copy.files[f.id].mime);
-    done++;
+    finished();
   }
   if (unread) notes.push(unread + ' rendering' + (unread === 1 ? '' : 's') + ' could not be read on this Mac and ' + (unread === 1 ? 'was' : 'were') + ' left out.');
   // The saved views' own pictures: made by the client page's code from this very copy, so each
   // shows what a click on it gives. viewPictures = { view id: { state id: path } }; a project
   // that changes nothing in a view has no picture there, and is not offered under that view.
+  if (!(pictures && viewCount)) progress('', filesEnd, step('pictures', 'none', viewCount ? 'Not taken: the page shows the views by name' : 'No saved views'));
   if (pictures && viewCount) {
     try {
       const sent = new Set(send.filter(f => copy.files[f.id]).map(f => f.id));
@@ -256,7 +316,7 @@ export async function sendToLab(propId, choice, { progress = () => {}, pictures 
         const buffer = kind === 'picture' ? await photoBytes(id).catch(() => null) : ((await getFile(id).catch(() => null)) || {}).buffer;
         return buffer ? { buffer, format: copy.files[id].format, mime: copy.files[id].mime } : null;
       };
-      const made = await pictures({ copy, read, progress: (text, f) => progress(text, filesEnd + (0.9 - filesEnd) * Math.min(1, Math.max(0, f || 0))) });
+      const made = await pictures({ copy, read, progress: (text, f) => progress(text, filesEnd + (0.9 - filesEnd) * Math.min(1, Math.max(0, f || 0)), step('pictures', 'running', text.replace(/…$/, ''), { fraction: f })) });
       const index = {};
       const states = ['existing', ...copy.states.map(x => x.id)];
       let n = 0;
@@ -265,24 +325,30 @@ export async function sendToLab(propId, choice, { progress = () => {}, pictures 
           const body = made.views[v.id] && made.views[v.id][stateId];
           if (!body) continue;
           const path = 'views/' + vi + '-' + si + '.jpg';
-          progress('Sending the pictures of the views (' + (++n) + ' of ' + made.count + ')…', 0.9);
+          progress('Sending the pictures of the views (' + (++n) + ' of ' + made.count + ')…', 0.9, step('pictures', 'running', 'Sending them: ' + n + ' of ' + made.count, { done: n - 1, total: made.count }));
           await put(slug, base + path, new Blob([body], { type: 'image/jpeg' }), 'image/jpeg');
           (index[v.id] = index[v.id] || {})[stateId] = path;
         }
       }
       copy.viewPictures = index;
       copy.viewPictureSize = made.size;
+      progress('', 0.9, step('pictures', 'done', n + ' picture' + (n === 1 ? '' : 's') + ' of ' + viewCount + ' view' + (viewCount === 1 ? '' : 's')));
     } catch (e) {
+      progress('', 0.9, step('pictures', 'none', 'Not made: the page shows the views by name'));
       console.warn('The pictures of the saved views were not made:', e);
       notes.push('The pictures of the saved views could not be made (' + (e && e.message || e) + '), so the page shows the views by name.');
     }
   }
-  progress('Sending the property…', 0.92);
+  progress('Sending the property…', 0.92, step('property', 'running', 'Sending the property'));
   await put(slug, base + 'property.json', new Blob([JSON.stringify(copy)], { type: 'application/json' }), 'application/json');
   // Last: the page switches to the new copy in one step.
-  await put(slug, 'current.json', new Blob([JSON.stringify({ format: CLIENT_FORMAT, version, app, sentAt: copy.sentAt })], { type: 'application/json' }), 'application/json');
-  progress('Tidying older copies…', 0.97);
-  try { await lab('prune/' + slug, { body: JSON.stringify({ keep: [version, prop.lab && prop.lab.version].filter(Boolean) }), type: 'application/json' }); } catch (e) { console.warn('Older lab copies stay for now:', e); }
+  await put(slug, 'current.json', new Blob([JSON.stringify({ format: CLIENT_FORMAT, version, app: app.app, sentAt: copy.sentAt })], { type: 'application/json' }), 'application/json');
+  progress('Tidying older copies…', 0.97, step('property', 'done', 'The page shows this copy now'));
+  progress('Tidying older copies…', 0.97, step('tidy', 'running', 'Removing copies older than the last two'));
+  try {
+    await lab('prune/' + slug, { body: JSON.stringify({ keep: [version, prop.lab && prop.lab.version].filter(Boolean) }), type: 'application/json' });
+    progress('', 0.99, step('tidy', 'done', 'Done'));
+  } catch (e) { console.warn('Older lab copies stay for now:', e); progress('', 0.99, step('tidy', 'none', 'Older copies stay for now')); }
   const keep = choice.keep && typeof choice.keep === 'object' ? choice.keep : {};
   prop.lab = { slug, projects: choice.projects.map(p => ({ id: p.id, label: p.label })), furnitureTags: copy.furnitureTags,
     viewsOff: Array.isArray(keep.viewsOff) ? keep.viewsOff : [], renderingsOff: Array.isArray(keep.renderingsOff) ? keep.renderingsOff : [],

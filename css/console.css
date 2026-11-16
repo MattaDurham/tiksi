@@ -1382,6 +1382,29 @@ html.touch .file-dialog .file-units .seg-btn { min-height:44px; }
 .lab-dialog .lab-rendering-note { font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lab-dialog .lab-loose { margin-top: 4px; }
 .lab-dialog .lab-summary { color: var(--ink); font-weight: 600; margin: 16px 0 6px; }
+/* The send, a part at a time (js/lab-publish-dialog.js): a row per part with its count and time. */
+.lab-dialog .lab-steps { list-style: none; margin: 6px 0 12px; padding: 0; display: grid; gap: 2px; }
+.lab-dialog .lab-step { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 7px 10px; border-radius: 6px; color: var(--dim); }
+.lab-dialog .lab-step.running { background: var(--panel-2); color: var(--ink); }
+.lab-dialog .lab-step.done, .lab-dialog .lab-step.failed { color: var(--ink); }
+.lab-dialog .lab-step-mark { width: 14px; height: 14px; margin-top: 2px; border-radius: 50%; border: 2px solid var(--line-2); box-sizing: border-box; display: grid; place-items: center; }
+.lab-dialog .lab-step.running .lab-step-mark { border-color: var(--accent); background: var(--accent); animation: lab-step-pulse 1.1s ease-in-out infinite; }
+.lab-dialog .lab-step.done .lab-step-mark { border-color: var(--accent); background: var(--accent); }
+.lab-dialog .lab-step.done .lab-step-mark::after { content: '\2713'; font-size: 9px; font-weight: 700; line-height: 1; color: var(--accent-ink, #111); }
+.lab-dialog .lab-step.none .lab-step-mark { border: 0; height: 2px; margin-top: 8px; background: var(--line-2); border-radius: 1px; }
+.lab-dialog .lab-step.failed .lab-step-mark { border-color: #d0603f; background: #d0603f; }
+@keyframes lab-step-pulse { 50% { opacity: 0.35; transform: scale(0.8); } }
+@media (prefers-reduced-motion: reduce) { .lab-dialog .lab-step.running .lab-step-mark { animation: none; } }
+.lab-dialog .lab-step-body { display: grid; gap: 3px; min-width: 0; }
+.lab-dialog .lab-step-head { display: flex; justify-content: space-between; gap: 10px; }
+.lab-dialog .lab-step-head b { font-weight: 600; }
+.lab-dialog .lab-step:not(.running):not(.done):not(.failed) .lab-step-head b { font-weight: 400; }
+.lab-dialog .lab-step-head time { font-family: var(--mono, ui-monospace, monospace); font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.lab-dialog .lab-step-text { font-size: 12px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lab-dialog .lab-step progress { width: 100%; height: 4px; }
+.lab-dialog .lab-step-picture { width: 96px; aspect-ratio: 16 / 10; object-fit: cover; border-radius: 4px; border: 1px solid var(--line-2); }
+.lab-dialog .lab-step-extra:empty { display: none; }
+.lab-dialog .lab-step-extra .lab-pictures { margin: 4px 0 0; }
 /* The client page taking the pictures of the views (js/lab-pictures.js): a small live frame. */
 .lab-pictures { margin: 10px 0; }
 .lab-pictures p { margin: 0 0 8px; }
