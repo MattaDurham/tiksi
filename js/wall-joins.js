@@ -163,3 +163,22 @@ export function wallFaceSpan(s, L, ends, side) {
   return [s.s0 === 0 ? e0 : Math.max(s.s0, e0), s.s1 === L ? e1 : Math.min(s.s1, e1)];
 }
 
+// Clockwise wall footprint in local x/z. An opening slice takes the same outer
+// joint, clipped at its jambs, even when a jamb cuts through an angled end.
+export function wallFootprint(ends, h, s0 = -Infinity, s1 = Infinity) {
+  let points = [[ends.a.pos, h], [ends.b.pos, h]];
+  if (ends.b.tip) points.push([ends.b.tip.x, ends.b.tip.z]);
+  points.push([ends.b.neg, -h], [ends.a.neg, -h]);
+  if (ends.a.tip) points.push([ends.a.tip.x, ends.a.tip.z]);
+  const clip = (x, sign) => points.flatMap((a, i) => {
+    const b = points[(i + 1) % points.length];
+    const da = (a[0] - x) * sign, db = (b[0] - x) * sign;
+    const kept = da >= 0 ? [a] : [];
+    if (da * db < 0) kept.push([x, a[1] + (b[1] - a[1]) * da / (da - db)]);
+    return kept;
+  });
+  if (Number.isFinite(s0)) points = clip(s0, 1);
+  if (Number.isFinite(s1)) points = clip(s1, -1);
+  return points;
+}
+

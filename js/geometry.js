@@ -23,9 +23,9 @@ import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
 import { applyPlanTagVisibility } from './tags-scene.js';
 import { cutPrism } from './section-planes.js';
 import { thresholdFloors as derivedThresholdFloors } from './threshold-floors.js';
-import { wallFrame, wallEnds, wallFaceSpan } from './wall-joins.js';
+import { wallFrame, wallEnds, wallFaceSpan, wallFootprint } from './wall-joins.js';
 import { roomFaces } from './room-faces.js';
-import { faceRegions } from './wall-regions.js';
+import { faceRegions, wallPartFinish } from './wall-regions.js';
 import { trimMeshParts } from './trim-mesh.js';
 
 const FALLBACK_WALL = '#d8d4cc';
@@ -209,14 +209,23 @@ export function metricPrism(footprint, y0, y1, faces, edgeKinds) {
   return g;
 }
 
-// One long side of a wall piece, x0..x1 along the wall and y0..y1 up, in the plane z, facing
-// +z for side 1 and -z for side -1. UVs in metres as metricPrism's long faces (u = x, v = y).
-function faceQuad(x0, x1, y0, y1, z, side) {
-  const xs = side > 0 ? [x0, x1] : [x1, x0];
+// One patch of the continuous finish surface. The local line can follow a
+// long wall or an angled return. UVs use metres on either surface.
+function faceQuad({ s0, s1, v0, v1 }, part, h) {
+  const [ua, ub] = part.reverse ? [s0, s1] : [s1, s0];
+  const point = s => {
+    if (!part.edge) return [s, part.side * h];
+    const { start, end, s0, s1 } = part.edge, t = (s - s0) / (s1 - s0);
+    return [start[0] + t * (end[0] - start[0]), s];
+  };
+  const [ax, az] = point(ua), [bx, bz] = point(ub);
+  const length = Math.hypot(bx - ax, bz - az);
+  const nx = (az - bz) / length, nz = (bx - ax) / length;
+  const u0 = ua * part.scale, u1 = ub * part.scale;
   const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute([xs[0], y0, z, xs[1], y0, z, xs[1], y1, z, xs[0], y1, z], 3));
-  g.setAttribute('normal', new THREE.Float32BufferAttribute([0, 0, side, 0, 0, side, 0, 0, side, 0, 0, side], 3));
-  g.setAttribute('uv', new THREE.Float32BufferAttribute([xs[0], y0, xs[1], y0, xs[1], y1, xs[0], y1], 2));
+  g.setAttribute('position', new THREE.Float32BufferAttribute([ax, v0, az, bx, v0, bz, bx, v1, bz, ax, v1, az], 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute([nx, 0, nz, nx, 0, nz, nx, 0, nz, nx, 0, nz], 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute([u0, v0, u1, v0, u1, v1, u0, v1], 2));
   g.setIndex([0, 1, 2, 0, 2, 3]);
   return g;
 }
@@ -268,26 +277,6 @@ function segDist(px, py, ax, ay, bx, by) {
   const dx = bx - ax, dy = by - ay;
   const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy || 1)));
   return Math.hypot(px - ax - dx * t, py - ay - dy * t);
-}
-
-// ---------- wall joints ----------
-// Clip the joined footprint to the opening's jamb planes. Moving only the
-// long edges of a very narrow slice can leave a wedge on the wrong side of a jamb.
-function solidFootprint(s, L, h, ends) {
-  let fp = [[ends.a.pos, h], [ends.b.pos, h]];
-  if (ends.b.tip) fp.push([ends.b.tip.x, ends.b.tip.z]);
-  fp.push([ends.b.neg, -h], [ends.a.neg, -h]);
-  if (ends.a.tip) fp.push([ends.a.tip.x, ends.a.tip.z]);
-  const clip = (x, sign) => fp.flatMap((a, i) => {
-    const b = fp[(i + 1) % fp.length];
-    const da = (a[0] - x) * sign, db = (b[0] - x) * sign;
-    const kept = da >= 0 ? [a] : [];
-    if (da * db < 0) kept.push([x, a[1] + (b[1] - a[1]) * da / (da - db)]);
-    return kept;
-  });
-  if (s.s0 > 0) fp = clip(s.s0, 1);
-  if (s.s1 < L) fp = clip(s.s1, -1);
-  return fp;
 }
 
 // ---------- openings ----------
@@ -522,17 +511,16 @@ export function buildWallGroup(wall, openings, property, ctx) {
     if (!b) buckets.push(b = { mat, mask: 0, geos: [] });
     b.mask |= mask;
   };
-  // With room faces (ctx.faces, room-faces.js) the wall's two long sides are drawn by the faces
-  // it carries, and what is left (top, bottom, the reveals of its openings) wears a plain
-  // finish: no room sees it, so it carries no paint and is never counted.
+  // The occupied wall volume supplies the cut top, bottom and opening reveals.
+  // The room faces below supply the continuous vertical finish surface.
   const parts = ctx.faces ? ctx.faces.flatMap(fc => fc.parts.map((p, k) => ({ ...p, faceId: fc.id, k })).filter(p => p.wallId === wall.id)) : null;
   bucket(parts ? capMat(ctx.matOpts) : matOf(faceIds.other), FACE_OTHER);
   if (!parts) {
     bucket(matOf(faceIds.pos), FACE_POS);
     bucket(matOf(faceIds.neg), FACE_NEG);
   }
-  if (faceIds.endA) bucket(matOf(faceIds.endA), FACE_END_A);
-  if (faceIds.endB) bucket(matOf(faceIds.endB), FACE_END_B);
+  if (!parts && faceIds.endA) bucket(matOf(faceIds.endA), FACE_END_A);
+  if (!parts && faceIds.endB) bucket(matOf(faceIds.endB), FACE_END_B);
 
   const baseGeos = [];
   const baseEnds = new Map();
@@ -541,12 +529,13 @@ export function buildWallGroup(wall, openings, property, ctx) {
     return baseEnds.get(depth);
   };
   for (const s of solids) {
-    const fp = solidFootprint(s, L, h, ends);
+    const fp = wallFootprint(ends, h, s.s0 > 0 ? s.s0 : -Infinity, s.s1 < L ? s.s1 : Infinity);
     if (fp.length < 3) continue;
     const edgeKinds = fp.map(([x, z], i) => {
       const [nextX, nextZ] = fp[(i + 1) % fp.length];
       if (z === nextZ && Math.abs(z) === h) return z > 0 ? FACE_POS : FACE_NEG;
       if ((x === s.s0 && nextX === s.s0 && s.s0 > 0) || (x === s.s1 && nextX === s.s1 && s.s1 < L)) return FACE_OTHER;
+      if (parts) return 0;
       if ((x + nextX) / 2 < L / 2) return faceIds.endA ? FACE_END_A : FACE_OTHER;
       return faceIds.endB ? FACE_END_B : FACE_OTHER;
     });
@@ -591,39 +580,25 @@ export function buildWallGroup(wall, openings, property, ctx) {
     }
   }
   for (const b of buckets) {
-    // With room faces these are the wall's top, bottom, ends and reveals: a surface to measure
+    // The cut top, bottom and opening reveals are surfaces to measure
     // or pin a note on, but not something a click selects (`cap`).
     const m = mergedMesh(b.geos, b.mat, parts ? { kind: 'wall', id: wall.id, cap: true } : { kind: 'wall', id: wall.id });
     if (m) group.add(m);
   }
-  // The long sides, one mesh per face this wall carries, each clipped to the face's span. They
-  // sit in the wall's own frame; the caller hangs them under their face's group. Each mesh still
-  // names its wall, so tags, notes, pins and measuring treat it as that wall's surface.
+  // Drywall and finishes follow the exposed wall surface through its joins.
+  // Each patch still identifies its source wall for tags, pins and measuring.
   if (parts) {
     group.userData.faceParts = [];
     for (const p of parts) {
-      const own = p.side > 0 ? faceIds.pos : faceIds.neg;
-      const z = p.side * h;
+      const own = wallPartFinish(p, walls, rooms);
       const res = ctx.regions && ctx.regions.get(p.faceId);
-      // Without regions (wall-regions.js) the part is one mesh in its side's finish. With them,
-      // one mesh per region, each in its own finish (its paint mark's, else the side's).
       const pieces = [];
-      const whole = () => {
-        const geos = [];
-        for (const sp of solids) {
-          const [a, b] = wallFaceSpan(sp, L, ends, p.side);
-          const x0 = Math.max(a, p.s0), x1 = Math.min(b, p.s1);
-          if (x1 - x0 < 1e-6) continue;
-          geos.push(faceQuad(x0, x1, sp.v0, sp.v1, z, p.side));
-        }
-        pieces.push({ geos, finish: own, region: undefined });
-      };
-      if (!res || !res.regions.length) whole();
-      else {
-        const quads = cells => cells.filter(c => c.part === p.k)
-          .map(c => faceQuad(c.s0, c.s1, c.v0, c.v1, z, p.side));
+      if (!res || !res.regions.length) {
+        pieces.push({ geos: p.cells.map(c => faceQuad(c, p, h)), finish: own });
+      } else {
+        const quads = cells => cells.filter(c => c.part === p.k && c.s1 - c.s0 > 1e-8).map(c => faceQuad(c, p, h));
         for (const r of res.regions) pieces.push({ geos: quads([...r.cells, ...r.hidden]), finish: r.finish || own, region: r.key });
-        pieces.push({ geos: quads(res.rest), finish: own, region: undefined });
+        pieces.push({ geos: quads(res.rest), finish: own });
       }
       const holder = new THREE.Group();
       holder.position.copy(group.position); holder.rotation.copy(group.rotation);

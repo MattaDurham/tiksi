@@ -268,9 +268,9 @@ export function trimLayout(t, wall, openings, face = {}) {
   const style = trimStyle(t), p = trimProduct(t);
   if (!style || !p || L < .01) return out;
   const e0 = fin(face.x0, 0), e1 = fin(face.x1, L);
-  const x0 = Math.max(e0, t.f0 * L), x1 = Math.min(e1, t.f1 * L);
-  if (x1 - x0 < MIN_PIECE) return out;
   const atA = t.f0 <= 1e-3, atB = t.f1 >= 1 - 1e-3;
+  const x0 = atA ? e0 : Math.max(e0, t.f0 * L), x1 = atB ? e1 : Math.min(e1, t.f1 * L);
+  if (x1 - x0 < MIN_PIECE) return out;
   const blocks = [...openingBlocks(wall, openings, L, H), ...trimClearanceBlocks(wall, t.side === -1 ? -1 : 1, L, H)];
   const W = p.W, T = p.T;
   const push = part => { if (out.parts.length < MAX_PARTS) out.parts.push(part); };

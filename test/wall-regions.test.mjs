@@ -20,6 +20,7 @@ const { roomFaces } = await import('../js/room-faces.js');
 const { faceRegions, paintRegion, paintFace, regionLabel, wallPaint } = await import('../js/wall-regions.js');
 const { trimTemplate, trimProduct } = await import('../js/trims.js');
 const { buildPropertyGroup } = await import('../js/geometry.js');
+const { Raycaster, Vector3 } = await import('../vendor/three.module.min.js');
 
 const T = 0.15, H = 2.5;
 const wall = (id, ax, ay, bx, by, extra = {}) => ({ id, ax, ay, bx, by, thickness: T, height: H, level: 'l1', ...extra });
@@ -64,10 +65,47 @@ test('a short run at a room boundary draws every part of the finished wall once'
     bounds.push([mesh.geometry.boundingBox.min.x, mesh.geometry.boundingBox.max.x]);
   });
   bounds.sort((a, b) => a[0] - b[0]);
+  assert.equal(roomFaces(h).filter(f => f.roomId === 'k').length, 1, 'the narrow strip is part of the same room face');
   assert.equal(bounds.length, 2);
   near(bounds[0][0], 0, 'the short piece reaches the wall end');
   near(bounds[0][1], bounds[1][0], 'adjacent room faces meet without overlapping');
   near(bounds[1][1], 5, 'the main face reaches the opposite end');
+});
+
+test('the indented wall and its exposed return select and paint as one finished surface', () => {
+  const h = house();
+  const green = 'test-return-green', blue = 'test-return-blue';
+  store.ws.data.materials.push({ id: green, color: '#739874', pattern: 'flat' }, { id: blue, color: '#435679', pattern: 'flat' });
+  h.walls = [
+    wall('wing', -4, 0, 0, 0, { thickness: .2 }),
+    wall('main', -.06, .005, -.06, 2.7, { thickness: .09, materialNeg: green }),
+    wall('cross', 0, -.115, .8, -.115, { thickness: .115 }),
+  ];
+  h.rooms = [{ id: 'entry', name: 'Entry', level: 'l1', pts: [[-.075, -.0575], [1.3, -.0575], [1.3, 2.7], [-.075, 2.7]] }];
+  h.openings = [];
+  h.levels = [{ id: 'l1', elevation: 0, height: H }];
+  const entry = face(h, 'Entry, west wall');
+  assert.equal(entry.parts.length, 3, 'the main wall, the step and the exposed end form one face');
+  near(entry.a[1], -.0575, 'the finish reaches the inside corner');
+  const check = finish => {
+    const group = buildPropertyGroup(h);
+    group.updateMatrixWorld(true);
+    const hits = (x, z, dx, dz) => {
+      const ray = new Raycaster(new Vector3(x, 1.2, z), new Vector3(dx, 0, dz));
+      return ray.intersectObject(group, true).filter(hit => hit.object.userData.faceId === entry.id);
+    };
+    for (const [x, z, dx, dz] of [[.3, .35, -1, 0], [.3, .02, -1, 0], [-.007, .2, 0, -1]]) {
+      const picked = hits(x, z, dx, dz);
+      assert.ok(picked.length, 'the drywall is pickable on the main wall, end and step');
+      assert.equal(picked[0].object.material.userData.materialId, finish);
+      assert.ok(!picked.some(h => h.distance - picked[0].distance > 1e-7 && h.distance - picked[0].distance < .001), 'no overlapping finish layer');
+    }
+  };
+  check(green);
+  paintFace(entry, h.walls, blue);
+  check(blue);
+  assert.equal(h.walls[0].materialEndB, blue);
+  assert.equal(h.walls[0].materialPos, undefined, 'the little step follows the interior face without repainting the wing exterior');
 });
 
 test('a chair rail across a face makes the wall above it and the wall below it two regions', () => {
