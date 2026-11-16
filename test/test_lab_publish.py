@@ -109,6 +109,31 @@ class Units(unittest.TestCase):
         (root / 'js/client-view.js').write_text('export const changed = 1', encoding='utf-8')
         self.assertNotEqual(svc.send_app('house')['app'], out['app'])
 
+    def test_code_changing_during_a_send_goes_up_whole(self):
+        # A merge into main lands while the code is read: a new file appears and an old one
+        # changes to import it. What goes up must be one version, all of it.
+        import server.lab_publish as lp
+        store = FakeStorage()
+        root = app_root(self.dir)
+        real, calls = lp.app_files, []
+        def merging(r=lp.ROOT):
+            calls.append(1)
+            if len(calls) == 1:
+                (root / 'js/new-part.js').write_text('export const n = 1', encoding='utf-8')
+                (root / 'js/client-view.js').write_text("import './new-part.js'", encoding='utf-8')
+            return real(r)
+        lp.app_files = merging
+        try:
+            svc = LabPublishService(self.dir / 'state', credentials=credentials(self.dir), endpoint='https://r2.test', opener=store, root=root)
+            out = svc.send_app('house')
+        finally:
+            lp.app_files = real
+        self.assertEqual(out['app'], app_version(root), 'the version of the code as it ended up')
+        sent = {k.split('/', 4)[4]: body for k, (body, _) in store.objects.items() if k.startswith(f"house/data/app/{out['app']}/") and not k.endswith('.complete')}
+        self.assertEqual(sent['js/client-view.js'], b"import './new-part.js'")
+        self.assertEqual(sent['js/new-part.js'], b'export const n = 1')
+        self.assertEqual(sorted(sent), app_files(root))
+
     def test_without_a_key_sends_stay_on_this_mac(self):
         svc = LabPublishService(self.dir / 'state', credentials=self.dir / 'none')
         self.assertFalse(svc.capabilities()['upload'])

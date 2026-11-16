@@ -28,6 +28,7 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import time
 import threading
 import urllib.error
 import urllib.parse
@@ -162,10 +163,33 @@ def app_files(root=ROOT):
 
 def app_version(root=ROOT, files=None):
     """A short name for exactly this code: the same files give the same name."""
+    return snapshot_version({rel: (root / rel).read_bytes() for rel in (files if files is not None else app_files(root))})
+
+
+def snapshot_version(snapshot):
     h = hashlib.sha256()
-    for rel in files if files is not None else app_files(root):
-        h.update(rel.encode() + b'\0' + hashlib.sha256((root / rel).read_bytes()).digest())
+    for rel in sorted(snapshot):
+        h.update(rel.encode() + b'\0' + hashlib.sha256(snapshot[rel]).digest())
     return h.hexdigest()[:16]
+
+
+def app_snapshot(root=ROOT, tries=5):
+    """Every code file's bytes, read in one go, and the version they make. A merge into main can
+    change the code while it is read (a send once went up half old, half new and the page could not
+    start), so the files are read until two reads in a row agree; those bytes are what goes up."""
+    def read():
+        out = {}
+        for rel in app_files(root):
+            try: out[rel] = (root / rel).read_bytes()
+            except FileNotFoundError: pass
+        return out
+    last = read()
+    for _ in range(tries):
+        now = read()
+        if now == last: return now, snapshot_version(now)
+        last = now
+        time.sleep(0.5)
+    raise LabError('Tiksi\'s code kept changing while it was read for the send (a merge in progress?). Send again in a minute.', 503)
 
 
 class LabPublishService:
@@ -205,16 +229,15 @@ class LabPublishService:
     def send_app(self, slug):
         """The code the page runs, sent once per version of it; returns its version name."""
         if not SLUG.match(slug): raise LabError('Not a lab page name: ' + slug[:80])
-        files = app_files(self.root)
-        version = app_version(self.root, files)
+        snapshot, version = app_snapshot(self.root)
         marker = f'app/{version}/.complete'
         remote = self.remote()
         here = self.local_path(slug, marker).exists()
         there = remote.exists(f'{slug}/data/{marker}') if remote else True
         if here and there: return {'app': version, 'sent': 0}
         sent = 0
-        for rel in files:
-            body = (self.root / rel).read_bytes()
+        for rel in sorted(snapshot):
+            body = snapshot[rel]
             key = f'app/{version}/{rel}'
             self.store_raw(slug, key, body, remote if not there else None)
             sent += 1
