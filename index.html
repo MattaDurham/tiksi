@@ -56,6 +56,7 @@
       <a href="#/sheets" data-view="sheets">CUT SHEETS</a>
       <a href="#/documents" data-view="documents">DOCUMENTS</a>
     </nav>
+    <button type="button" id="btn-beside" class="tb-btn beside-toggle" aria-pressed="false" title="Show the model beside the other pages">MODEL BESIDE</button>
     <span id="save-status" class="save-status">SAVED</span>
     <div id="tk-hold" hidden>
       <div id="tk-top" class="tk-top">
@@ -72,7 +73,11 @@
     </div>
   </header>
   <aside id="side" aria-label="Tools and views" hidden></aside>
-  <main id="view"></main>
+  <div id="stage">
+    <main id="view"></main>
+    <div id="beside-bar" hidden></div>
+    <section id="beside" aria-label="The model beside the page" hidden></section>
+  </div>
 </div>
 <div id="print-root"></div>
 <script type="module" src="./js/icons.js"></script>

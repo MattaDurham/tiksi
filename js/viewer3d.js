@@ -180,6 +180,12 @@ let clientMode = false;        // the client page in the lab (client-view.js): l
 // setFurniture(on), hasFurniture }. The left pane and the phone panel offer these and the saved
 // views, orbit and walk; nothing can be selected, edited or saved.
 let clientControls = null;
+// MODEL BESIDE (model-beside.js): the model in a pane next to another page. It shows the
+// picture and its own buttons over it; the left pane and the inspector stay with the page, and
+// the keyboard reaches the model only after a click in it.
+let besideMode = false;
+let keysHere = true;           // the last press was in the model (always so on the MODEL page)
+function notePress(e) { keysHere = !!(el && el.contains(e.target)); }
 // For checks: the walk arrows as drawn ({ on, count, inScene }).
 export function walkArrowState() { return { on: !!(walkArrowRoot && walkArrowRoot.visible), count: walkArrowRoot ? walkArrowRoot.children.length : 0, inScene: !!(walkArrowRoot && scene && walkArrowRoot.parent === scene) }; }
 export function setClientMode(on, controls) { clientMode = !!on; clientControls = on ? controls || null : null; if (scene) { renderViews(); refreshPane(); } }
@@ -527,14 +533,18 @@ function setupComposer() {
     hidden.forEach(o => { o.visible = true; });
   };
 
+  // The selection: a thick orange edge with a soft halo, nearly as strong where the selected
+  // thing is behind something else, over a tint of its whole surface, so its full extent reads
+  // at a glance (addSelectionFill).
   passes.outline = new OutlinePass(new THREE.Vector2(w, h), scene, camera);
-  passes.outline.visibleEdgeColor.set('#e8973a');
-  passes.outline.hiddenEdgeColor.set('#7a4a12');
-  passes.outline.edgeStrength = 4.5; passes.outline.edgeThickness = 1.4; passes.outline.edgeGlow = 0.25;
+  passes.outline.visibleEdgeColor.set(SELECT_EDGE);
+  passes.outline.hiddenEdgeColor.set(SELECT_EDGE_HIDDEN);
+  passes.outline.edgeStrength = 6; passes.outline.edgeThickness = 2.4; passes.outline.edgeGlow = 0.6;
+  addSelectionFill(passes.outline);
   passes.hover = new OutlinePass(new THREE.Vector2(w, h), scene, camera);
   passes.hover.visibleEdgeColor.set('#f6d5a6');
-  passes.hover.hiddenEdgeColor.set('#3a2a14');
-  passes.hover.edgeStrength = 2.2; passes.hover.edgeThickness = 1; passes.hover.edgeGlow = 0;
+  passes.hover.hiddenEdgeColor.set('#5a4024');
+  passes.hover.edgeStrength = 3; passes.hover.edgeThickness = 1.6; passes.hover.edgeGlow = 0;
   passes.hover.enabled = false;
   for (const p of [passes.outline, passes.hover]) {
     const orig = p.render.bind(p);
@@ -554,6 +564,45 @@ function setupComposer() {
   for (const p of [passes.render, passes.gtao, passes.outline, passes.hover, passes.bloom, passes.smaa, passes.output]) composer.addPass(p);
 }
 
+const SELECT_EDGE = '#ff9d2e', SELECT_EDGE_HIDDEN = '#e07f22';
+// OutlinePass adds its edge to the picture, so over a white wall an orange edge comes out white.
+// The selection's overlay paints instead: the edge (blurred, so it fades out) and a tint over
+// everything the selected meshes cover, fainter where something else is in front of them.
+// Its mask is 0 in red where the selected meshes are drawn, and 1 in green where hidden.
+export const SELECT_FILL = { color: '#ff9d2e', visible: 0.24, hidden: 0.16 };
+function addSelectionFill(pass) {
+  const m = pass.overlayMaterial;
+  if (!m || !m.uniforms || !m.uniforms.maskTexture || !m.uniforms.edgeTexture1) { console.warn('the selection tint could not be added to the outline'); return; }
+  m.uniforms.fillColor = { value: new THREE.Color(SELECT_FILL.color) };
+  m.uniforms.fillVisible = { value: SELECT_FILL.visible };
+  m.uniforms.fillHidden = { value: SELECT_FILL.hidden };
+  m.fragmentShader = `varying vec2 vUv;
+    uniform sampler2D maskTexture;
+    uniform sampler2D edgeTexture1;
+    uniform sampler2D edgeTexture2;
+    uniform float edgeStrength;
+    uniform float edgeGlow;
+    uniform vec3 fillColor;
+    uniform float fillVisible;
+    uniform float fillHidden;
+    void main() {
+      vec4 e1 = texture2D(edgeTexture1, vUv);
+      vec4 e2 = texture2D(edgeTexture2, vUv);
+      vec4 mask = texture2D(maskTexture, vUv);
+      vec4 edge = e1 + e2 * edgeGlow;
+      float cover = clamp(edgeStrength * mask.r * edge.a, 0.0, 1.0);
+      vec3 colour = edge.a > 0.0001 ? clamp(edge.rgb / edge.a, 0.0, 1.0) : fillColor;
+      float fill = (1.0 - mask.r) * mix(fillVisible, fillHidden, step(0.5, mask.g));
+      float a = cover + fill * (1.0 - cover);
+      gl_FragColor = vec4(colour * cover + fillColor * fill * (1.0 - cover), a);
+    }`;
+  // Painted over the picture (premultiplied): the picture keeps 1 - a of itself.
+  m.blending = THREE.CustomBlending;
+  m.blendEquation = THREE.AddEquation;
+  m.blendSrc = THREE.OneFactor; m.blendDst = THREE.OneMinusSrcAlphaFactor;
+  m.blendSrcAlpha = THREE.ZeroFactor; m.blendDstAlpha = THREE.OneFactor;
+  m.needsUpdate = true;
+}
 function hideSplats() {
   const hidden = [];
   for (const o of splatDrawables()) if (o.visible) { o.visible = false; hidden.push(o); }
@@ -4976,7 +5025,7 @@ let listReveal = false;
 // where the next click lands.
 function placeObjectList() {
   if (!hud.objects) return;
-  hud.objects.hidden = !onScreen('model.objects', true) || !!match || tool === 'pin' || fieldLayout();
+  hud.objects.hidden = !onScreen('model.objects', true) || !!match || tool === 'pin' || fieldLayout() || besideMode;
   // The bars in the middle of the view move over to make room for the list (viewer.css).
   wrapEl && wrapEl.classList.toggle('v-list-on', !hud.objects.hidden);
 }
@@ -6059,6 +6108,8 @@ export function markupState() {
 function onKeyDown(e) {
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+  // Beside another page, the keys belong to that page until the model is clicked.
+  if (besideMode && !keysHere) return;
   if (ctxMenu && e.code === 'Escape') { closeContextMenu(); e.preventDefault(); return; }
   if (markup && markup.key(e)) return;
   if (mode === 'walk') {
@@ -6118,6 +6169,11 @@ function onContextMenu(e) { e.preventDefault(); }
 // ---------- mount / unmount ----------
 // A MODEL page that cannot open says so in its own place, with a way to try again, instead of
 // leaving the layout empty. The other pages keep working.
+export function mountBeside(root) {
+  besideMode = true; keysHere = false;
+  mount(root);
+  if (el) { el.querySelector('.v-layout')?.classList.add('v-beside'); document.addEventListener('pointerdown', notePress, true); }
+}
 export function mount(root) {
   try { openModel(root); }
   catch (e) {
@@ -6203,7 +6259,7 @@ function openModel(root) {
   renderViews();
   applyScreen();
   offScreen = onScreenChange(() => { applyScreen(); renderToolCol(); renderObjects(); });
-  offMenu = setMenuProvider(menuGroups);
+  offMenu = besideMode ? null : setMenuProvider(menuGroups);
   setHint('');
 
   const c = renderer.domElement;
@@ -6238,6 +6294,8 @@ function openModel(root) {
 
   const focus=pendingScanFocus || prop.modelSourceId,token=mountId,focusVersion=selectionVersion;pendingScanFocus=null;
   loadShownScans().then(()=>{if(token===mountId && selectionVersion===focusVersion && !match && !kept && focus && scanObjs[focus]){setSelection({kind:'scan',id:focus});frameObject(scanObjs[focus]);}});
+  // The address belongs to the page beside the model, not to the model.
+  if (besideMode) return;
   // Deep link from the PHOTOS view: #/model?pin=<photoId> enters PIN PHOTO for that photo.
   const m = /[?&]pin=([^&]+)/.exec(location.hash);
   if (m) {
@@ -6263,16 +6321,63 @@ function openModel(root) {
   }
 }
 function selectFromLink(id) {
-  const opening = (prop.openings || []).find(o => o.id === id);
-  const wall = prop.walls.find(w => w.id === (opening ? opening.wallId : id));
-  const room = !wall && prop.rooms.find(r => r.id === id);
-  if (!wall && !room) { toast('That element is no longer in the model.', 'warn'); return; }
-  const level = wall ? levelOfWall(prop, wall) : levelOfRoom(prop, room);
-  if (level && hiddenLevels().has(level.id)) toggleLevel(level.id);
-  const kind = opening ? 'opening' : wall ? 'wall' : 'room';
-  setSelection({ kind, id });
-  const g = findGroupFor(kind, id) || (wall && findGroupFor('wall', wall.id));
-  if (g) frameObject(g);
+  if (!showElements([id], { frame: 'always' })) toast('That element is no longer in the model.', 'warn');
+}
+// Select these rooms, walls, openings, fixtures and imported models together and bring them
+// into view (PROJECTS and the other pages beside the model, a #/model?select= link). A level
+// that was hidden is shown. `frame`: true moves the camera only when part of them is out of the
+// picture or they are too small in it to read, 'always' always, false never. Returns how many were found; none clears the selection.
+export function showElements(ids, { frame = true } = {}) {
+  if (!scene || !prop) return 0;
+  const things = [], objects = [];
+  for (const id of new Set(ids || [])) {
+    const opening = (prop.openings || []).find(o => o.id === id);
+    const wall = prop.walls.find(w => w.id === (opening ? opening.wallId : id));
+    const room = !wall && prop.rooms.find(r => r.id === id);
+    const fixture = !wall && !room && (prop.fixtures || []).find(f => f.id === id);
+    const scan = !wall && !room && !fixture && (prop.scans || []).find(x => x.id === id);
+    if (scan) {
+      things.push({ key: 'model:' + id, keys: [], scanId: id, name: scan.name || '', whole: true, sel: { kind: 'scan', id } });
+      if (scanObjs[id]) objects.push(scanObjs[id]);
+      continue;
+    }
+    if (!wall && !room && !fixture) continue;
+    const level = wall ? levelOfWall(prop, wall) : room ? levelOfRoom(prop, room) : null;
+    if (level && hiddenLevels().has(level.id)) toggleLevel(level.id);
+    const kind = opening ? 'opening' : wall ? 'wall' : room ? 'room' : 'fixture';
+    const key = planKey(kind, id);
+    things.push({ key, keys: [key], scanId: null, name: '', sel: { kind, id } });
+    const g = findGroupFor(kind, id) || (wall && findGroupFor('wall', wall.id));
+    if (g) objects.push(g);
+  }
+  if (!things.length) { if (selection) setSelection(null); return 0; }
+  // The plan elements lead, so a mix with an imported model still outlines them.
+  things.sort((a, b) => (b.whole ? 1 : 0) - (a.whole ? 1 : 0));
+  setSelection(things[things.length - 1].sel, [...new Set(things.flatMap(t => t.keys))], things);
+  if (frame && objects.length && (frame === 'always' || mode !== 'walk')) {
+    const box = new THREE.Box3();
+    for (const o of objects) {
+      const b = new THREE.Box3().setFromObject(o);
+      if (o.userData && o.userData.bounds) b.copy(o.userData.bounds).applyMatrix4(o.matrixWorld);
+      if (!b.isEmpty()) box.union(b);
+    }
+    if (frame === 'always' || !boxInView(box)) frameBox(box);
+  }
+  return things.length;
+}
+// Whether the whole box is inside the picture and big enough in it to read: at least a third
+// of the picture's width or height.
+function boxInView(box) {
+  if (box.isEmpty()) return true;
+  const cam = viewCamera();
+  cam.updateMatrixWorld();
+  const p = new THREE.Vector3(), lo = new THREE.Vector2(Infinity, Infinity), hi = new THREE.Vector2(-Infinity, -Infinity);
+  for (let i = 0; i < 8; i++) {
+    p.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).project(cam);
+    if (p.z < -1 || p.z > 1 || Math.abs(p.x) > 1 || Math.abs(p.y) > 1) return false;
+    lo.min(p); hi.max(p);
+  }
+  return Math.max(hi.x - lo.x, hi.y - lo.y) >= 2 / 3;
 }
 
 // three keys shader programs by light count, so the first time the room lights switch on
@@ -6414,6 +6519,7 @@ function rememberView() {
 
 export function unmount() {
   try { rememberView(); } catch (e) { console.error(e); }
+  if (besideMode) { document.removeEventListener('pointerdown', notePress, true); besideMode = false; keysHere = true; }
   if (offScreen) { offScreen(); offScreen = null; }
   if (offMenu) { offMenu(); offMenu = null; }
   if (exportDialog) exportDialog.close();
@@ -6601,6 +6707,13 @@ export function fieldAction(kind, id, value) {
   }
 }
 // Where the camera stands and looks, and whether the ground shows (BOTTOM puts it away).
+// For checks: what is selected and outlined, and whether the model is beside another page.
+export function selectionState() {
+  if (!scene) return null;
+  return { kind: selection ? selection.kind : null, id: selection ? selection.id : null, keys: tagPicks.slice(), things: picked.map(t => t.sel && t.sel.id),
+    outlined: passes.outline ? passes.outline.selectedObjects.length : 0, beside: besideMode,
+    edge: passes.outline ? { strength: passes.outline.edgeStrength, thickness: passes.outline.edgeThickness, fill: !!passes.outline.overlayMaterial.uniforms.fillColor } : null };
+}
 export function cameraState() {
   if (!camera || !controls) return null;
   return { position: camera.position.toArray(), target: controls.target.toArray(), mode, ground: !!(groundGroup && groundGroup.visible), lookingUp };
