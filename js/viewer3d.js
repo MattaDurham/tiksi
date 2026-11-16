@@ -50,7 +50,7 @@ import { pendingTextureJobs, setTextureQuality, setTextureLimits, beginTextureBu
 import { qualityProfile, stillDimensions, effectiveQuality, deviceQualityChoice, chooseDeviceQuality, deviceLimits, touchDevice, scanTooLarge, megabytes, QUALITY_NAMES } from './render-quality.js';
 import { icon } from './icons.js';
 import { buildPropertyGroup, buildFixtureGroup, buildTrimGroup, buildGround, modelBounds, roomCentres, wallCapPolygons, disposeBuilt, wallInteriorMaterialId } from './geometry.js';
-import { wallFaceLabels, wallFaceMaterialIds, wallSides, doorLeaves, doorShownOpen, setDoorShownOpen, doorGlass, plainOpening } from './wall-solids.js';
+import { wallFaceLabels, wallSides, doorLeaves, doorShownOpen, setDoorShownOpen, doorGlass, plainOpening } from './wall-solids.js';
 import { SECTION_KINDS, SECTION_LABELS, MAX_SECTIONS, TURN_SNAP_DEG, moveSnapStep, snapTo, quatRotate, planeNormal, planeOf, flipped, rangeAlong, movedTo, makeSection, normalizeSections, levelHeightOf } from './section-planes.js';
 import { addPhotoFromFile, photoUrl, photoById, revokePhotoUrls, photoBytes, ensureCameraFacts } from './photos-store.js';
 import { normalizeView, defaultHfov, hfovOf, viewFrame, viewForPin, FOV_MIN, FOV_MAX, FOUND_SOURCES } from './photo-match.js';
@@ -76,7 +76,7 @@ import { trimTemplate, swapTrimProduct, swapWainscot, setFrameLayout, setTrimY, 
 import { trimDesign, designValues, setDesignParam, stickySnap, SCOPE_LABELS } from './trim-design.js';
 import { trimPanelHtml, bindTrimPanel, addTrimHtml, bindAddTrim } from './trim-panel.js';
 import { createPaintTool } from './paint-tool.js';
-import { paintFace, regionLabel, trimDivides } from './wall-regions.js';
+import { paintFace, regionLabel, trimDivides, wallPartFinish } from './wall-regions.js';
 import { PIECE_KINDS, pieceRecord, clickGroupIds, assignProject } from './project-pieces.js';
 import { walkTarget, glideMs } from './walk-hops.js';
 import { walkStep, settle, isClear, findClear, glideEnd } from './walk-collide.js';
@@ -5658,12 +5658,8 @@ function selectFaces(ids) {
 // The finish a face wears, as drawn (wall-solids.js wallFaceMaterialIds: the side's own finish,
 // else the automatic one), or null when the walls it is made of differ.
 function faceFinish(f) {
-  const ids = new Set(f.parts.map(p => {
-    const w = prop.walls.find(x => x.id === p.wallId);
-    if (!w) return '';
-    const ids = wallFaceMaterialIds(w, roomsOn(prop, levelOfWall(prop, w).id));
-    return (p.side > 0 ? ids.pos : ids.neg) || '';
-  }));
+  const rooms = roomsOn(prop, f.levelId);
+  const ids = new Set(f.parts.map(p => wallPartFinish(p, prop.walls, rooms) || ''));
   return ids.size === 1 ? [...ids][0] : null;
 }
 // A face its trim divides (wall-regions.js): each piece with its area and the finish it wears.
@@ -5699,16 +5695,16 @@ function renderFacePanel() {
           ${small.length ? `<div class="stat-line" title="Wall ends showing past a wall that butts into them"><span>${small.length} small return${small.length === 1 ? '' : 's'} under ${escapeHtml(fmtLen(SMALL_FACE))}</span><b>${escapeHtml(fmtArea(small.reduce((n, f) => n + f.net, 0)))}</b></div>` : ''}</div>`;
       })()}
     <h3>${one ? 'TAKEOFF' : 'TOTAL'}</h3>
-    ${line('Area, gross', fmtArea(t.gross), 'Length × height, openings included')}
+    ${line('Area, gross', fmtArea(t.gross), 'Area of the visible wall run with its doors and windows filled in')}
     ${line('Openings subtracted', t.openings + (t.openings ? ' (' + fmtArea(t.gross - t.net) + ')' : ''), 'Doors and windows in these faces, each counted once per face')}
     ${line('Area, net', fmtArea(t.net), 'Gross area less the doors and windows')}
     ${line('Face length', fmtLen(t.length), 'Along the floor, inside corner to inside corner')}
-    ${line('Baseboard length', fmtLen(t.baseboard), 'Face length less the door widths')}
+    ${line('Baseboard length', fmtLen(t.baseboard), 'Finished wall length at the floor, between door openings')}
     ${one ? facePiecesHtml(one) : ''}
     <div class="field" style="margin-top:10px"><label>Finish, floor to ceiling${faces.length > 1 ? ' (all ' + faces.length + ')' : ''}</label>${materialSelectHtml('wall', finish || '', 'data-face-mat').replace('(none)', finishes.size > 1 ? '(several finishes)' : 'Automatic (the wall\'s own)')}</div>
     ${roomIds.length === 1 ? `<button class="btn" data-face-room title="Select every wall face of this room">SELECT ALL WALLS OF ${escapeHtml((prop.rooms.find(r => r.id === roomIds[0]) || {}).name || 'THIS ROOM').toUpperCase()}</button>` : ''}
     ${one ? walls.map(id => `<button class="btn" data-face-wall="${escapeHtml(id)}" title="The wall behind this face: its research, scope, products, photos and trim">THE WALL BEHIND${walls.length > 1 ? ' (' + (walls.indexOf(id) + 1) + ' of ' + walls.length + ')' : ''}</button>`).join('') : ''}
-    <p class="empty">Click a wall to select its face; Shift-click adds or removes faces. Each face is one flat run of one room, inside corner to inside corner. Walls change in SketchUp.</p>`;
+    <p class="empty">Click a wall to select its finished surface to the corners, including its returns. Shift-click adds or removes faces. Walls change in SketchUp.</p>`;
   inspEl.querySelector('[data-face-mat]').onchange = e => {
     const id = e.target.value;
     if (!id && finishes.size > 1) return;

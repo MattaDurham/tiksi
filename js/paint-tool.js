@@ -23,8 +23,8 @@ import { ws, touch, materialById, escapeHtml, fmtArea, polyArea, roomsOn, wallsO
 import { beginGeometryEdit } from './edit-history.js';
 import { addCustomMaterial, materialTitle } from './materials.js';
 import { swatchUrl } from './textures.js';
-import { paintRegion, paintFace, regionLabel, wallPaint, trimDivides } from './wall-regions.js';
-import { wallFaceMaterialIds, wallSides, pointInPoly } from './wall-solids.js';
+import { paintRegion, paintFace, regionLabel, wallPaint, trimDivides, wallPartFinish } from './wall-regions.js';
+import { wallSides, pointInPoly } from './wall-solids.js';
 import { trimLabel } from './trims.js';
 import { clickGroupIds } from './project-pieces.js';
 
@@ -53,18 +53,13 @@ export function createPaintTool(host) {
   const openingById = id => (prop().openings || []).find(o => o.id === id) || null;
   const levelTrims = levelId => { const ids = new Set(wallsOn(prop(), levelId).map(w => w.id)); return (prop().trims || []).filter(t => ids.has(t.wallId)); };
   // The finish a wall side wears where no region of it is painted.
-  const sideFinish = (wallId, side) => {
-    const w = wallById(wallId);
-    if (!w) return '';
-    const ids = wallFaceMaterialIds(w, roomsOn(prop(), levelOfWall(prop(), w).id));
-    return (side > 0 ? ids.pos : ids.neg) || '';
-  };
+  const sideFinish = (u, part) => part ? wallPartFinish(part, prop().walls, roomsOn(prop(), u.levelId)) || '' : '';
   const same = (a, b) => a.type === b.type && a.id === b.id && a.faceId === b.faceId && a.key === b.key;
 
   // The finish a piece wears now, as drawn.
   function finishOf(u) {
-    if (u.type === 'region') { const r = regionOf(u); return r ? r.finish || sideFinish(r.cells[0].wallId, r.cells[0].side) : ''; }
-    if (u.type === 'face') { const f = faceOf(u); return f ? sideFinish(f.parts[0].wallId, f.parts[0].side) : ''; }
+    if (u.type === 'region') { const r = regionOf(u); return r ? r.finish || sideFinish(u, faceOf(u)?.parts[r.cells[0].part]) : ''; }
+    if (u.type === 'face') return sideFinish(u, faceOf(u)?.parts[0]);
     if (u.type === 'trim') { const t = trimById(u.id); return t ? t.material || 'mat-trim' : ''; }
     if (u.type === 'opening') { const o = openingById(u.id); return o ? o.trimMaterial || 'mat-trim' : ''; }
     const room = roomById(u.id);
@@ -293,7 +288,7 @@ export function createPaintTool(host) {
   function usedIds() {
     const p = prop(), ids = new Set(['mat-trim']);
     for (const w of p.walls || []) {
-      for (const k of ['material', 'materialIn', 'materialPos', 'materialNeg']) if (w[k]) ids.add(w[k]);
+      for (const k of ['material', 'materialIn', 'materialPos', 'materialNeg', 'materialEndA', 'materialEndB']) if (w[k]) ids.add(w[k]);
       for (const m of wallPaint(w)) ids.add(m.material);
     }
     for (const r of p.rooms || []) { if (r.material) ids.add(r.material); if (r.ceilingMaterial) ids.add(r.ceilingMaterial); }

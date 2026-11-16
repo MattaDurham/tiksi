@@ -4,116 +4,102 @@
 // and baseboard length). Pure plan maths, no three.js and no workspace state: callers pass one
 // level's walls, rooms and openings.
 //
-// A wall's long side, as built (its ends trimmed at every joint by wall-joins.js), is cut where
-// another wall butts into it, and where the room in front of it changes. Each piece belongs to
-// the room in front of it; a piece with no room in front but one behind is the outside of the
-// house. Pieces of the same room that lie on one line and touch (one straight run drawn as two
-// walls) join into one face. A face never includes a wall's top, bottom or ends, or the reveals
-// of its openings: those are the wall's, and belong to no room.
-//
-// Plan coordinates are metres, x east and y south. Each face lists its `parts`: the wall, the
-// side (+1 is the side the normal (-uy, ux) of a -> b points to) and the span [s0, s1] along
-// the wall where the face lies on it. Faces carry stable ids made from their room and first
-// part, so a selection survives a rebuild that leaves the walls alone.
+// Use the exposed edges of the joined wall solids, including their ends. A face
+// combines adjacent surfaces of a room along a run, up to its inside corners.
+// Plan is x east, y south. In a part, s is local wall x on a long side, and
+// local cross-wall z on a return. Cells describe the wall that physically shows.
 
-import { wallFrame, wallEnds } from './wall-joins.js';
 import { openingSpans, pointInPoly } from './wall-solids.js';
+import { wallSurfaces } from './wall-surfaces.js';
 
-const JOIN_TOL = 0.012;     // m: as wall-joins.js, ends this close share a joint
-const MIN_PART = 0.01;      // m: a sliver shorter than this is no face
-const PROBE = 0.05;         // m past the face where the room in front is looked for
-const STEP = 0.05;          // m between probes along a face, to find where its room changes
-const LINE_TOL = 0.002;     // m: parts this close in line and gap are one straight run
-
-const BURY = 0.0005;        // m: wall-joins.js tucks an end this far into a wall it butts into mid-span
+const PROBE = 0.05;
+const TOUCH = 0.0015;
+const SMALL_STEP = 0.025;
+const PARALLEL = 0.99999;
 
 const roomAt = (rooms, x, y) => rooms.find(r => r.pts && r.pts.length > 2 && pointInPoly(x, y, r.pts)) || null;
 
-// Where the line through p with direction d meets the line through q with direction e, as a
-// parameter along d; null for parallel lines.
-function hitAlong(px, py, dx, dy, qx, qy, ex, ey) {
-  const den = dx * ey - dy * ex;
-  if (Math.abs(den) < 1e-9) return null;
-  return ((qx - px) * ey - (qy - py) * ex) / den;
+function pointOn(edge, s) {
+  const t = (s - edge.s0) / (edge.s1 - edge.s0);
+  const [a, b] = edge.reverse ? [edge.B, edge.A] : [edge.A, edge.B];
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
 }
 
-// The spans along wall w's side `side` that other walls butt into, in w's own coordinate.
-function abutted(w, f, side, walls) {
-  const out = [];
-  const fx = w.ax + f.nx * f.h * side, fy = w.ay + f.ny * f.h * side;   // a point on the face line
-  for (const o of walls) {
-    if (o === w || o.id === w.id) continue;
-    const g = wallFrame(o);
-    if (g.L < 0.01) continue;
-    for (const [px, py, qx, qy] of [[o.ax, o.ay, o.bx, o.by], [o.bx, o.by, o.ax, o.ay]]) {
-      // A joint at one of w's own ends is closed by the mitres already.
-      if (Math.hypot(px - w.ax, py - w.ay) < JOIN_TOL || Math.hypot(px - w.bx, py - w.by) < JOIN_TOL) continue;
-      const t = (px - w.ax) * f.ux + (py - w.ay) * f.uy, d = (px - w.ax) * f.nx + (py - w.ay) * f.ny;
-      if (Math.abs(d) > f.h + JOIN_TOL || t < -JOIN_TOL || t > f.L + JOIN_TOL) continue;
-      if (((qx - w.ax) * f.nx + (qy - w.ay) * f.ny) * side <= f.h) continue;    // runs off the other side
-      const ts = [-1, 1].map(k => hitAlong(fx, fy, f.ux, f.uy, px + g.nx * g.h * k, py + g.ny * g.h * k, g.ux, g.uy)).filter(v => v != null);
-      if (ts.length === 2) out.push([Math.min(...ts), Math.max(...ts)]);
+function frontAt({ wall, f, edge }, s, rooms) {
+  const [x, y] = pointOn(edge, s), [nx, ny] = edge.N;
+  const room = roomAt(rooms, x + nx * PROBE, y + ny * PROBE);
+  if (room) return { key: 'room:' + room.id, room };
+  let back;
+  if (typeof edge.side === 'number') {
+    const sb = Math.min(Math.max(s, Math.min(PROBE, f.L / 2)), f.L - Math.min(PROBE, f.L / 2));
+    back = roomAt(rooms, wall.ax + f.ux * sb - nx * (f.h + PROBE), wall.ay + f.uy * sb - ny * (f.h + PROBE));
+  } else {
+    back = roomAt(rooms, x - nx * PROBE, y - ny * PROBE);
+  }
+  return { key: back ? 'outside' : 'none', room: null };
+}
+
+function splitByRoom(surface, rooms) {
+  const { s0: a, s1: b, edge, f } = surface, runs = [], cuts = [a, b];
+  const [x, y] = pointOn(edge, a), [ex, ey] = pointOn(edge, b);
+  const dx = ex - x, dy = ey - y, [nx, ny] = edge.N;
+  for (const offset of [PROBE, -(typeof edge.side === 'number' ? f.h * 2 + PROBE : PROBE)]) {
+    const px = x + nx * offset, py = y + ny * offset;
+    for (const { pts = [] } of rooms) for (let i = 0; i < pts.length; i++) {
+      const [qx, qy] = pts[i], [rx, ry] = pts[(i + 1) % pts.length];
+      const ux = rx - qx, uy = ry - qy, den = dx * uy - dy * ux;
+      if (Math.abs(den) < 1e-10) continue;
+      const t = ((qx - px) * uy - (qy - py) * ux) / den;
+      const u = ((qx - px) * dy - (qy - py) * dx) / den;
+      if (t > 0 && t < 1 && u >= 0 && u <= 1) cuts.push(a + (b - a) * t);
     }
   }
-  return out.sort((a, b) => a[0] - b[0]);
-}
-
-// Whether wall w's end at (px, py) stops against another wall it meets mid-span.
-function butts(w, px, py, walls) {
-  for (const o of walls) {
-    if (o === w || o.id === w.id) continue;
-    if (Math.hypot(o.ax - px, o.ay - py) < JOIN_TOL || Math.hypot(o.bx - px, o.by - py) < JOIN_TOL) return false;
+  cuts.sort((a, b) => a - b);
+  for (let i = 1; i < cuts.length; i++) {
+    const s0 = cuts[i - 1], s1 = cuts[i];
+    if (s1 - s0 < 1e-8) continue;
+    const front = frontAt(surface, (s0 + s1) / 2, rooms), prev = runs.at(-1);
+    if (prev?.front.key === front.key) prev.s1 = s1;
+    else runs.push({ s0, s1, front });
   }
-  return walls.some(o => {
-    if (o === w || o.id === w.id) return false;
-    const g = wallFrame(o);
-    const t = (px - o.ax) * g.ux + (py - o.ay) * g.uy, d = Math.abs((px - o.ax) * g.nx + (py - o.ay) * g.ny);
-    return t > JOIN_TOL && t < g.L - JOIN_TOL && d < g.h + JOIN_TOL;
-  });
+  return runs;
 }
 
-// [x0, x1] minus the sorted spans.
-function subtract(x0, x1, spans) {
-  const out = [];
-  let cur = x0;
-  for (const [a, b] of spans) {
-    if (b <= cur) continue;
-    if (a >= x1) break;
-    if (a > cur) out.push([cur, Math.min(a, x1)]);
-    cur = Math.max(cur, b);
+const close = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < TOUCH;
+const parallel = (a, b) => a.N[0] * b.N[0] + a.N[1] * b.N[1] > PARALLEL;
+
+function groupsAlongWalls(parts) {
+  for (const p of parts) {
+    if (p.front.key !== 'none' || p.length > SMALL_STEP) continue;
+    const neighbours = parts.filter(q => q.front.room && parallel(p, q) && (close(p.p0, q.p1) || close(p.p1, q.p0)));
+    if (neighbours.length === 1) p.front = neighbours[0].front;
   }
-  if (cur < x1) out.push([cur, x1]);
-  return out.filter(([a, b]) => b - a >= MIN_PART);
-}
-
-// What lies in front of wall w's side at s: a room, the outside (a room behind it only), or nothing.
-function frontAt(w, f, side, s, rooms) {
-  const cx = w.ax + f.ux * s, cy = w.ay + f.uy * s, off = f.h + PROBE;
-  const front = roomAt(rooms, cx + f.nx * off * side, cy + f.ny * off * side);
-  if (front) return { key: 'room:' + front.id, room: front };
-  // Behind, looked for within the wall's own length: an outside corner runs past the room.
-  const sb = Math.min(Math.max(s, Math.min(PROBE, f.L / 2)), f.L - Math.min(PROBE, f.L / 2));
-  const bx = w.ax + f.ux * sb, by = w.ay + f.uy * sb;
-  const back = roomAt(rooms, bx - f.nx * off * side, by - f.ny * off * side);
-  return back ? { key: 'outside', room: null } : { key: 'none', room: null };
-}
-
-// Split [a, b] where the room in front changes, to the millimetre.
-function splitByRoom(w, f, side, a, b, rooms) {
-  const runs = [];
-  const n = Math.max(1, Math.ceil((b - a) / STEP));
-  let start = a, cur = frontAt(w, f, side, Math.min(b, a + 0.005), rooms);
-  for (let i = 1; i <= n; i++) {
-    const s = i === n ? b - 0.005 : a + (b - a) * i / n;
-    const here = frontAt(w, f, side, s, rooms);
-    if (here.key === cur.key) continue;
-    let lo = a + (b - a) * (i - 1) / n, hi = s;
-    for (let k = 0; k < 14; k++) { const m = (lo + hi) / 2; if (frontAt(w, f, side, m, rooms).key === cur.key) lo = m; else hi = m; }
-    runs.push({ s0: start, s1: hi, front: cur });
-    start = hi; cur = here;
+  const sameRoom = (a, b) => a.front.key === b.front.key && Math.abs(a.H - b.H) < TOUCH;
+  const joins = (a, b) => sameRoom(a, b) && parallel(a, b) && close(a.p1, b.p0);
+  // A shallow built step connects two parts facing the same way. Include the
+  // actual step in that face, along with both surfaces on either side of it.
+  const steps = new Map();
+  for (const step of parts) {
+    if (step.length > SMALL_STEP) continue;
+    const before = parts.find(p => p !== step && p.length > SMALL_STEP && sameRoom(p, step) && close(p.p1, step.p0));
+    if (!before) continue;
+    const after = parts.find(p => p !== step && p !== before && p.length > SMALL_STEP &&
+      sameRoom(p, step) && parallel(before, p) && close(step.p1, p.p0));
+    if (after) steps.set(step, { before, after });
   }
-  runs.push({ s0: start, s1: b, front: cur });
-  return runs.filter(r => r.s1 - r.s0 >= MIN_PART);
+  const groups = [], todo = new Set(parts);
+  const append = (a, b) => joins(a, b) || steps.get(a)?.after === b || steps.get(b)?.before === a;
+  for (const p of parts) {
+    if (!todo.delete(p)) continue;
+    const chain = [p];
+    for (let next; (next = [...todo].find(q => append(q, chain[0]) || append(chain.at(-1), q)));) {
+      todo.delete(next);
+      if (append(next, chain[0])) chain.unshift(next);
+      else chain.push(next);
+    }
+    groups.push(chain);
+  }
+  return groups;
 }
 
 // Compass word for a plan direction (x east, y south).
@@ -122,76 +108,64 @@ function compass(dx, dy) { return Math.abs(dx) >= Math.abs(dy) ? (dx > 0 ? 'east
 // One level's faces. `heightOf(wall)` is the wall's height (defaults to wall.height or 2.44 m).
 export function roomFaces({ walls = [], rooms = [], openings = [], heightOf } = {}) {
   const H = w => (heightOf ? heightOf(w) : w.height) || 2.44;
-  const parts = [];
-  for (const w of walls) {
-    const f = wallFrame(w);
-    if (f.L < 0.01) continue;
-    const ends = wallEnds(w, walls, 0);
-    // An end that butts into another wall mid-span is tucked a hair inside it, so the faces
-    // never share a plane; the face itself stops at that wall's face.
-    const tuckA = butts(w, w.ax, w.ay, walls) ? BURY : 0, tuckB = butts(w, w.bx, w.by, walls) ? BURY : 0;
-    for (const side of [1, -1]) {
-      const x0 = (side > 0 ? ends.a.pos : ends.a.neg) + tuckA, x1 = (side > 0 ? ends.b.pos : ends.b.neg) - tuckB;
-      if (x1 - x0 < MIN_PART) continue;
-      for (const [a, b] of subtract(x0, x1, abutted(w, f, side, walls))) {
-        for (const run of splitByRoom(w, f, side, a, b, rooms)) {
-          // The face's own direction: N points away from the wall into what is in front.
-          const Nx = f.nx * side, Ny = f.ny * side;
-          const px = w.ax + f.nx * f.h * side, py = w.ay + f.ny * f.h * side;
-          // Along the face, left to right as seen from in front of it: T = (-Ny, Nx).
-          const Tx = -Ny, Ty = Nx;
-          const pa = [px + f.ux * run.s0, py + f.uy * run.s0], pb = [px + f.ux * run.s1, py + f.uy * run.s1];
-          const ta = pa[0] * Tx + pa[1] * Ty, tb = pb[0] * Tx + pb[1] * Ty;
-          parts.push({ wall: w, wallId: w.id, side, s0: run.s0, s1: run.s1, front: run.front, H: H(w),
-            N: [Nx, Ny], T: [Tx, Ty], c: px * Nx + py * Ny, t0: Math.min(ta, tb), t1: Math.max(ta, tb),
-            p0: ta <= tb ? pa : pb, p1: ta <= tb ? pb : pa });
-        }
-      }
-    }
-  }
-  // Join parts of one room on one straight line that touch.
-  // Sorted so the parts of one straight run come together, left to right (angles and lines
-  // compared to a hair, so float noise cannot split a run).
-  const q = (v, k) => Math.round(v / k);
-  parts.sort((p, r) => p.front.key.localeCompare(r.front.key) || q(Math.atan2(p.N[1], p.N[0]), 1e-4) - q(Math.atan2(r.N[1], r.N[0]), 1e-4) || q(p.c, LINE_TOL) - q(r.c, LINE_TOL) || p.t0 - r.t0);
-  const groups = [];
-  for (const p of parts) {
-    const g = groups[groups.length - 1], last = g && g[g.length - 1];
-    const joins = last && last.front.key === p.front.key && last.N[0] * p.N[0] + last.N[1] * p.N[1] > 0.99999 &&
-      Math.abs(last.c - p.c) < LINE_TOL && Math.abs(last.H - p.H) < LINE_TOL && p.t0 - last.t1 < LINE_TOL && p.t0 > last.t0;
-    if (joins) g.push(p); else groups.push([p]);
-  }
   const byWall = new Map();
-  for (const o of openings) { if (!byWall.has(o.wallId)) byWall.set(o.wallId, []); byWall.get(o.wallId).push(o); }
-  return groups.map(g => {
-    const first = g[0], last = g[g.length - 1], height = first.H;
-    const length = g.reduce((n, p) => n + (p.s1 - p.s0), 0);
+  for (const o of openings) {
+    if (!byWall.has(o.wallId)) byWall.set(o.wallId, []);
+    byWall.get(o.wallId).push(o);
+  }
+  const parts = wallSurfaces(walls, byWall, H).flatMap(surface => {
+    const { wall, f, edge, H: height, open, cells } = surface;
+    const scale = edge.length / (edge.s1 - edge.s0);
+    return splitByRoom(surface, rooms).map(({ s0, s1, front }) => {
+      const distance = (s1 - s0) * scale;
+      const clip = rows => rows.flatMap(r => {
+        const a = Math.max(r.s0, s0), b = Math.min(r.s1, s1);
+        return b > a ? [{ ...r, s0: a, s1: b }] : [];
+      });
+      const [p0, p1] = edge.reverse ? [pointOn(edge, s0), pointOn(edge, s1)] : [pointOn(edge, s1), pointOn(edge, s0)];
+      return { wall, wallId: wall.id, L: f.L, side: edge.side, s0, s1, front, H: height,
+        N: edge.N, p0, p1, length: distance, scale, reverse: !edge.reverse,
+        ...(typeof edge.side === 'string' ? { edge: { start: edge.start, end: edge.end, s0: edge.s0, s1: edge.s1 } } : {}),
+        open: clip(open), cells: clip(cells) };
+    });
+  });
+  return groupsAlongWalls(parts).map(g => {
+    const first = g[0], last = g.at(-1), height = first.H;
+    // Keep the identity tied to the main run when a return extends it.
+    const anchor = g.find(p => typeof p.side === 'number' && p.length > SMALL_STEP) || first;
+    const length = g.reduce((n, p) => n + p.length, 0);
     const holes = [];
+    let gross = 0, baseboard = 0;
     for (const p of g) {
-      const L = wallFrame(p.wall).L;
-      for (const { s0, s1, o } of openingSpans(p.wall, byWall.get(p.wallId) || [], L)) {
-        const a = Math.max(s0, p.s0), b = Math.min(s1, p.s1);
-        if (b - a < 0.001) continue;
+      gross += p.open.reduce((n, r) => n + (r.s1 - r.s0) * p.scale * (r.v1 - r.v0), 0);
+      baseboard += p.cells.filter(r => r.v0 === 0).reduce((n, r) => n + (r.s1 - r.s0) * p.scale, 0);
+      if (typeof p.side !== 'number') continue;
+      for (const { s0, s1, o } of openingSpans(p.wall, byWall.get(p.wallId) || [], p.L)) {
         const bottom = o.type === 'window' ? Math.max(0, o.sill || 0) : 0, top = Math.min(height, bottom + (o.height || 0));
-        if (top <= bottom) continue;
-        holes.push({ id: o.id, type: o.type === 'window' ? 'window' : 'door', wallId: p.wallId, width: b - a, area: (b - a) * (top - bottom) });
+        const width = Math.min(s1, p.s1) - Math.max(s0, p.s0);
+        if (width < 0.001 || top <= bottom) continue;
+        const area = p.open.reduce((n, r) => n + Math.max(0, Math.min(s1, r.s1) - Math.max(s0, r.s0)) *
+          Math.max(0, Math.min(top, r.v1) - Math.max(bottom, r.v0)), 0);
+        if (area > 0) holes.push({ id: o.id, type: o.type === 'window' ? 'window' : 'door', wallId: p.wallId, width, area });
       }
     }
-    const gross = length * height, openingArea = holes.reduce((n, h) => n + h.area, 0);
-    const doorWidth = holes.filter(h => h.type === 'door').reduce((n, h) => n + h.width, 0);
+    const openingArea = holes.reduce((n, h) => n + h.area, 0);
     const room = first.front.room;
     const kind = room ? 'room' : first.front.key;     // 'room' | 'outside' | 'none'
     // A room's wall is named by where it stands in the room (the kitchen's north wall faces
     // south); an outside face by the way it looks.
-    const where = room ? compass(-first.N[0], -first.N[1]) : compass(first.N[0], first.N[1]);
+    const where = room ? compass(-anchor.N[0], -anchor.N[1]) : compass(anchor.N[0], anchor.N[1]);
     const label = room ? (room.name || 'Room') + ', ' + where + ' wall' : kind === 'outside' ? 'Outside, ' + where + ' face' : 'No room, ' + where + ' face';
     return {
-      id: 'face:' + (room ? room.id : kind) + ':' + first.wallId + ':' + (first.side > 0 ? 'p' : 'n') + ':' + Math.round(first.s0 * 1000),
+      id: 'face:' + (room ? room.id : kind) + ':' + anchor.wallId + ':' + (anchor.side === 1 ? 'p' : anchor.side === -1 ? 'n' : anchor.side) + ':' + Math.round(anchor.s0 * 1000),
       kind, roomId: room ? room.id : null, label, compass: where,
-      normal: first.N.slice(), a: first.p0.slice(), b: last.p1.slice(), height,
-      parts: g.map(p => ({ wallId: p.wallId, side: p.side, s0: p.s0, s1: p.s1 })),
+      normal: anchor.N.slice(), a: first.p0.slice(), b: last.p1.slice(), height,
+      parts: g.map(p => ({
+        wallId: p.wallId, side: p.side, s0: p.s0, s1: p.s1, reverse: p.reverse, scale: p.scale, edge: p.edge, cells: p.cells,
+        ...(p !== anchor && (p.edge || !parallel(p, anchor)) && { finishFrom: { wallId: anchor.wallId, side: anchor.side } }),
+      })),
       length, gross, net: gross - openingArea, openings: holes, openingArea,
-      baseboard: Math.max(0, length - doorWidth),
+      baseboard,
     };
   });
 }

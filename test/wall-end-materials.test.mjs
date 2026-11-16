@@ -80,6 +80,18 @@ test('generated end finishes select only actual A/B faces, preserving caps, reve
   }
 });
 
+test('a near-end opening obeys both the jamb plane and the mitred wall envelope', () => {
+  const { prop, wall } = fixture();
+  prop.walls.push({ ...wall, id: 'corner', ax: 4, ay: 0, bx: 4, by: 3 });
+  prop.openings = [{ wallId: wall.id, id: 'door', type: 'door', t: 0.75, width: 1.996, height: 2, plain: true }];
+  const sides = triangles(wall, prop).filter(row => row.vertices.every(v => v[5] > .99));
+  const lower = sides.filter(row => row.vertices.some(v => v[1] < 2));
+  assert.ok(lower.length > 0);
+  assert.ok(lower.every(row => row.vertices.every(v => v[0] <= 2.00201)), 'no fin from the slice beyond the door projects past the inside corner');
+  assert.ok(sides.some(row => row.vertices.every(v => v[1] >= 2) && row.vertices.some(v => Math.abs(v[0] - 3.9) < 1e-5)),
+    'the face above the door still reaches the mitre');
+});
+
 test('mitred joint ends take their own finish without changing geometry or long faces', () => {
   const { prop, wall } = fixture();
   prop.walls.push({ ...wall, id: 'join', ax: 4, ay: 0, bx: 4, by: 3 });

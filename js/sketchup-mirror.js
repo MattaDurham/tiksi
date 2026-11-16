@@ -63,7 +63,10 @@ function wallParams(prop, w) {
   for (const key of ['profile', 'baseboardPos', 'baseboardNeg']) if (w[key] && typeof w[key] === 'object') p[key] = JSON.parse(JSON.stringify(w[key]));
   for (const key of ['materialEndA', 'materialEndB']) if (w[key]) p[key] = w[key];
   const trims = (prop.trims || []).filter(t => t.wallId === w.id).sort((a, b) => String(a.id).localeCompare(String(b.id)));
-  if (trims.length) p.trimState = { version: 1, records: trims.map(t => ({ source: structuredClone(t), product: structuredClone(trimProduct(t)) })) };
+  if (trims.length) {
+    p.trimState = { version: 1, records: trims.map(t => ({ source: structuredClone(t), product: structuredClone(trimProduct(t)) })) };
+    if (Array.isArray(w.trimClearances) && w.trimClearances.length) p.trimState.clearances = structuredClone(w.trimClearances);
+  }
   return p;
 }
 
