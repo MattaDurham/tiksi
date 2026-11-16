@@ -2527,13 +2527,13 @@ function trimGrab(e, hit) {
     if (Math.abs(at.y - (t.y + t.h)) < tol) return { mode: 'top', t, at };
     if (Math.abs(at.y - t.y) < tol) return { mode: 'bottom', t, at };
     if (v.boxes || v.bays) {
-      // A stile or batten: the bay beside it is the width in hand.
+      // A stile or batten: the panel beside it is the width in hand (for battens, their spacing, so the count holds as the drag begins).
       const rects = lay.rects.map((r, k) => ({ r, row: lay.boxes.filter(b => b.rect === k && b.row === 0).sort((a, b) => a.x0 - b.x0) })).filter(x => x.r.full && x.row.length);
       for (const { r, row } of rects) {
         if (at.x < r.x0 - .01 || at.x > r.x1 + .01) continue;
         for (let i = 0; i <= row.length; i++) {
           const x0 = i === 0 ? r.x0 : row[i - 1].x1, x1 = i === row.length ? r.x1 : row[i].x0;
-          if (at.x > x0 - .012 && at.x < x1 + .012) { const b = row[Math.max(0, i - 1)]; return { mode: 'aim', t, at, dir: i === 0 ? -1 : 1, v0: b.x1 - b.x0 }; }
+          if (at.x > x0 - .012 && at.x < x1 + .012) { const b = row[Math.max(0, i - 1)]; return { mode: 'aim', t, at, dir: i === 0 ? -1 : 1, v0: v.bays ? (r.x1 - r.x0) / row.length : b.x1 - b.x0 }; }
         }
       }
     }

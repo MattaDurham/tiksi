@@ -11,6 +11,7 @@
 //   height       a drag on the chair rail raises every rail in the room; the fields under them
 //                stretch and the baseboards stay on the floor; one UNDO takes it back
 //   right-click  ADD A PANEL HERE adds one box to that wall alone
+//   battens      a drag on a batten closes the spacing, and the wall gains bays
 //   moulding     the dropdown swaps the room's rails to another moulding; with PROJECT chosen
 //                it swaps the next room's too
 //
@@ -68,8 +69,13 @@ try {
       box.gap = 3 * 0.0254; box.inset = 3 * 0.0254;
       add('rail', 'chair-rail', { y: 0.9 });
     }
+    // Board and batten over the rail on the study's east wall.
+    const east = p.walls.find(x => x.id === 'e');
+    const bb = T.trimTemplate('board-batten', null, east, sideOf('e', 'study'), { wallHeight: 2.5, y: 1.1, h: 1.0 });
+    bb.id = 'batten-study-e'; p.trims.push(bb);
     const { normalizeSavedView } = await import('/js/saved-views.js');
-    p.savedViews = [{ id: 'v-south', name: 'South', camera: { position: [2.5, 1.25, 0.5], target: [2.5, 0.55, 3.95], fov: 55 } }].map(v => normalizeSavedView(v, new Set()));
+    p.savedViews = [{ id: 'v-south', name: 'South', camera: { position: [2.5, 1.25, 0.5], target: [2.5, 0.55, 3.95], fov: 55 } },
+      { id: 'v-east', name: 'East', camera: { position: [5.4, 1.5, 2], target: [7.95, 1.5, 2], fov: 55 } }].map(v => normalizeSavedView(v, new Set()));
     s.ws.data.settings.sketchupMirror = false; s.ws.data.settings.units = 'imperial';
     s.ws.data.properties.push(p); s.ws.data.settings.activePropertyId = p.id; s.touch();
     await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
@@ -244,6 +250,25 @@ try {
   await each('rail-', async t => assert.equal(t.product, third, t.id + ' swapped with the project'));
   ok('the moulding dropdown swaps the room\'s rails; with PROJECT chosen it swaps both rooms\'');
   await shot('06-moulding');
+
+  // ---------- battens ----------
+  await page.keyboard.press('Escape');
+  await page.evaluate(() => document.querySelector('[data-view-go="v-east"]').click());
+  await page.waitForTimeout(900); await idle();
+  const BB = 'batten-study-e';
+  let bays = await boxesOf(BB);
+  const bay = bays[Math.floor(bays.length / 2)];
+  { const q = await at(BB, bay.x1 + 0.015, 1.6); await page.mouse.click(q.x, q.y); }
+  await waitUntil(async () => /Board and batten/.test(await page.locator('.inspector .stat-line').first().textContent()), 'a click on a batten selects the field');
+  await page.keyboard.press('e');
+  await waitUntil(async () => (await page.locator('.inspector [data-tp-edit]').textContent()).startsWith('DONE'), 'editing the battens');
+  await drag(await at(BB, bay.x1 + 0.015, 1.6), await at(BB, bay.x1 + 0.015 - 5 * IN, 1.6));
+  const spacing = (await trim(BB)).spacing;
+  assert.ok(spacing > 0.1 && spacing < 0.4, 'the battens aim for a closer spacing: ' + (spacing / IN).toFixed(2) + ' in');
+  const closer = await boxesOf(BB);
+  assert.ok(closer.length > bays.length, 'closer battens, more bays: ' + bays.length + ' -> ' + closer.length);
+  ok('a drag on a batten closes the spacing to ' + (spacing / IN).toFixed(2) + ' in; the wall goes from ' + bays.length + ' to ' + closer.length + ' bays');
+  await shot('07-battens');
 
   assert.deepEqual(errors, [], 'no page errors');
   console.log('trim design: all checks passed');
