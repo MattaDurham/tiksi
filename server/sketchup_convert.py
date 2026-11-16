@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import sys
 
@@ -355,11 +356,21 @@ def write_skp(source, output):
         # A part may name its Tiksi tag; it becomes a SketchUp tag of the same name and visibility.
         layers={};materials={};to_drawing=api.lib.SUGroupToDrawingElement;to_drawing.restype=Ref
         instance_drawing=api.lib.SUComponentInstanceToDrawingElement;instance_drawing.restype=Ref
+        # A Tiksi tag half ("Walls_e" / "Walls_p") goes in the tag folder Existing / Proposed.
+        folders={}
+        def folder_for(name):
+            if name not in folders:
+                folder=Ref();api.call('SULayerFolderCreate',C.byref(folder),name.encode('utf-8'))
+                api.call('SUModelAddLayerFolder',model,folder);folders[name]=folder
+            return folders[name]
         def layer_for(name, visible):
             if name not in layers:
                 layer=Ref();api.call('SULayerCreate',C.byref(layer));api.call('SULayerSetName',layer,name.encode('utf-8'))
                 api.call('SULayerSetVisibility',layer,C.c_bool(bool(visible)),optional=True)
                 api.call('SUModelAddLayers',model,C.c_size_t(1),(Ref*1)(layer));layers[name]=layer
+                half=re.search(r'\S_(e|p)$',name,re.I)
+                if half and hasattr(api.lib,'SULayerFolderCreate'):
+                    api.call('SULayerFolderAddLayer',folder_for('Existing' if half.group(1).lower()=='e' else 'Proposed'),layer,optional=True)
             return layers[name]
         def set_tag(element, part):
             tag=part.get('tag')

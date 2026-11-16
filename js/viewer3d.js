@@ -80,7 +80,7 @@ import { projectBlockHtml, bindProjectBlock, newProjectRecord } from './project-
 import { catalogItem } from './trim-catalog.js';
 import { objectPanelHtml, bindObjectPanel, multiPanelHtml, bindMultiPanel, planTagHtml, bindPlanTag } from './object-panel.js';
 import { ensureCanonTag } from './tags.js';
-import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown, setHidden, hiddenKeys, showAllHidden } from './tags.js';
+import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown, setHidden, hiddenKeys, showAllHidden, PHASES, PHASE_LABEL, phaseCounts, phaseShown, setPhaseShown, phaseOfKey, setPhase } from './tags.js';
 import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags, applySavedHidden, modelState } from './saved-views.js';
 import { onScreen, setOnScreen, onScreenChange, setMenuProvider, refreshPane } from './tiksi-menu.js';
 import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility, partKeyForObject, partByKey, partName, planKeyOf, modelParts, partKey } from './tags-scene.js';
@@ -4466,6 +4466,12 @@ function toggleTag(id) {
   setTagShown(prop, id, !tagShown(prop, id));
   tagsChanged();
 }
+// One half (existing 'e' or proposed 'p') of a tag, or of every tag (id '').
+function togglePhase(id, ph) {
+  if (id && !tagById(prop, id)) return;
+  setPhaseShown(prop, id, ph, !phaseShown(prop, id, ph));
+  tagsChanged();
+}
 // Hide or show objects one by one (the eye in the component list, HIDE in the panel, H): only
 // these objects change; their tags and everything else on those tags stay as they are.
 function hideThings(things, on) {
@@ -5147,11 +5153,26 @@ function tagPickHtml() {
   const what = tagPicks.length > 1 ? tagPicks.length + ' objects selected' : part ? 'Part: ' + partName(part) + (comp && comp !== partName(part) ? ' (component ' + comp + ')' : '') : '';
   return `${what ? `<div class="stat-line"><span>${escapeHtml(what)}</span><b></b></div>` : ''}
     ${tagPicks.length ? `<div class="field"><label>Tag${tagPicks.length > 1 ? ' (moves all ' + tagPicks.length + ')' : ''}</label><select data-tag-pick title="Shift-click more objects to move several at once">${tagOptions(ids[0], { mixed })}</select></div>` : ''}
+    ${tagPicks.length ? phasePickHtml() : ''}
     ${s && scanObjs[s.id] ? `<button class="btn" data-tag-detect title="Give every part of this model its automatic tag again: the file's own tags, then part names, then shape. Parts you moved to a tag yourself are moved back.">DETECT TAGS AGAIN</button>` : ''}
     ${s && scanObjs[s.id] ? `<div class="field"><label>Tag every part of this model</label><select data-tag-model>${tagOptions('', { extra: '<option value="__keep" selected>(choose a tag)</option>' }).replace(`<option value="" selected>`, '<option value="">')}</select></div>` : ''}
     <div class="empty" style="margin:0 0 8px">Shift-click adds objects to the selection.</div>`;
 }
+// Existing or proposed: the selected objects' own phase, or following their project.
+function phasePickHtml() {
+  const own = new Set(tagPicks.map(k => (prop.phaseOf && prop.phaseOf[k]) || ''));
+  const now = new Set(tagPicks.map(k => phaseOfKey(prop, k)));
+  const cur = own.size === 1 ? [...own][0] : '__mixed';
+  const follows = now.size === 1 && own.has('') && own.size === 1 ? ' (' + PHASE_LABEL[[...now][0]].toLowerCase() + ')' : '';
+  return `<div class="field"><label>Existing or proposed</label><select data-phase-pick title="Proposed objects are new work: their tag is written to SketchUp as name_p in the Proposed folder">
+    ${cur === '__mixed' ? '<option value="__mixed" selected>(several)</option>' : ''}
+    <option value="" ${cur === '' ? 'selected' : ''}>As its project says${follows}</option>
+    ${PHASES.map(ph => `<option value="${ph}" ${cur === ph ? 'selected' : ''}>${PHASE_LABEL[ph]}</option>`).join('')}
+  </select></div>`;
+}
 function bindTagPick(root) {
+  const phase = root.querySelector('[data-phase-pick]');
+  if (phase) phase.onchange = () => { if (phase.value === '__mixed') return; if (setPhase(prop, tagPicks.slice(), phase.value || null)) tagsChanged(); };
   const pick = root.querySelector('[data-tag-pick]');
   if (pick) pick.onchange = () => { if (pick.value !== '__mixed') moveToTag(tagPicks.slice(), pick.value); };
   const again = root.querySelector('[data-tag-detect]');
@@ -5171,12 +5192,14 @@ function bindTagPick(root) {
 }
 // TAGS, with nothing selected: rename, recolour, show or hide, add and delete tags.
 function tagManagerHtml() {
-  const counts = tagCounts(prop);
+  const counts = tagCounts(prop), halves = phaseCounts(prop);
   const row = t => `<div class="v-tag-row" data-tag-row="${escapeHtml(t.id)}">
       <button class="v-tag-eye ${t.visible !== false ? 'on' : ''}" data-tag-eye="${escapeHtml(t.id)}" aria-pressed="${t.visible !== false}" title="${t.visible !== false ? 'Hide' : 'Show'} ${escapeHtml(t.name)}">${icon(t.visible !== false ? 'eye' : 'eye-off')}</button>
       <input type="color" data-tag-color="${escapeHtml(t.id)}" value="${escapeHtml(t.color)}" title="Colour">
       <input type="text" data-tag-name="${escapeHtml(t.id)}" value="${escapeHtml(t.name)}" aria-label="Tag name" maxlength="80">
       <span class="v-tag-n" title="Objects on this tag">${counts.get(t.id) || 0}</span>
+      <span class="v-tag-phases">${PHASES.map(ph => { const on = phaseShown(prop, t.id, ph), n = (halves.get(t.id) || {})[ph] || 0;
+        return `<button class="v-tag-phase ${on ? 'on' : ''}" data-tag-phase="${escapeHtml(t.id)}" data-ph="${ph}" aria-pressed="${on}" title="${on ? 'Hide' : 'Show'} ${PHASE_LABEL[ph].toLowerCase()} ${escapeHtml(t.name)} (${n})">${ph.toUpperCase()}</button>`; }).join('')}</span>
       <button class="v-tag-del" data-tag-del="${escapeHtml(t.id)}" title="Delete ${escapeHtml(t.name)}; its objects move to Untagged">${icon('close')}</button>
     </div>`;
   const un = prop.tagUntaggedVisible !== false;
@@ -5185,14 +5208,17 @@ function tagManagerHtml() {
     <div class="v-tag-row" data-tag-row="">
       <button class="v-tag-eye ${un ? 'on' : ''}" data-tag-eye="" aria-pressed="${un}" title="${un ? 'Hide' : 'Show'} objects with no tag">${icon(un ? 'eye' : 'eye-off')}</button>
       <span class="v-tag-swatch"></span><span class="v-tag-label">${UNTAGGED_LABEL}</span>
-      <span class="v-tag-n">${counts.get(UNTAGGED) || 0}</span><span></span>
+      <span class="v-tag-n">${counts.get(UNTAGGED) || 0}</span><span></span><span></span>
     </div>
+    <div class="v-tag-row v-tag-all">${PHASES.map(ph => { const on = phaseShown(prop, '', ph);
+      return `<button class="v-tag-phase wide ${on ? 'on' : ''}" data-tag-phase="" data-ph="${ph}" aria-pressed="${on}" title="${on ? 'Hide' : 'Show'} everything ${PHASE_LABEL[ph].toLowerCase()}, on every tag">${on ? 'Showing' : 'Hiding'} all ${PHASE_LABEL[ph].toLowerCase()}</button>`; }).join('')}</div>
     <div class="v-tag-add"><input type="text" data-tag-new placeholder="New tag name" maxlength="80"><button class="btn" data-tag-add>ADD TAG</button></div>
-    <div class="empty" style="margin:0 0 10px">Every wall, floor, ceiling, opening, fixture and part of an imported model sits on a tag. Click an object to see or change its tag; Shift-click to move several at once.</div>
+    <div class="empty" style="margin:0 0 10px">Every wall, floor, ceiling, opening, fixture and part of an imported model sits on a tag, and is existing (E) or proposed (P): proposed when it belongs to a project, unless you set it yourself. E and P show or hide each half of a tag. Click an object to see or change its tag; Shift-click to move several at once. In SketchUp each tag is two: "Walls_e" in the Existing folder and "Walls_p" in Proposed.</div>
     <div class="tool-sep"></div>`;
 }
 function bindTagManager(root) {
   root.querySelectorAll('[data-tag-eye]').forEach(b => b.onclick = () => toggleTag(b.dataset.tagEye));
+  root.querySelectorAll('[data-tag-phase]').forEach(b => b.onclick = () => togglePhase(b.dataset.tagPhase, b.dataset.ph));
   root.querySelectorAll('[data-tag-color]').forEach(i => i.onchange = () => { if (setTagColor(prop, i.dataset.tagColor, i.value)) { renderToolCol(); touch(); } });
   root.querySelectorAll('[data-tag-name]').forEach(i => i.onchange = () => { renameTag(prop, i.dataset.tagName, i.value); renderToolCol(); renderInspector(); touch(); });
   root.querySelectorAll('[data-tag-del]').forEach(b => b.onclick = () => {
@@ -5792,7 +5818,14 @@ function menuGroups() {
   const counts = tagCounts(prop), hidden = hiddenLevels();
   const orbitTo = name => () => { if (mode !== 'orbit') setMode('orbit'); presetView(name); };
   const cut = section.on && section.planes.length;
-  const tagItem = (id, name, color, shown) => ({ label: name, icon: shown ? 'eye' : 'eye-off', dot: color, key: String(counts.get(id) || 0), active: shown, pressed: shown, data: { tag: id }, title: (shown ? 'Hide ' : 'Show ') + name, run: () => toggleTag(id) });
+  const halves = phaseCounts(prop);
+  const phaseChips = (id, name) => PHASES.map(ph => {
+    const on = phaseShown(prop, id, ph), n = (halves.get(id || UNTAGGED) || {})[ph] || 0;
+    return { label: ph.toUpperCase(), on, title: (on ? 'Hide ' : 'Show ') + PHASE_LABEL[ph].toLowerCase() + ' ' + (id ? name : 'objects') + ' (' + n + ')', run: () => togglePhase(id, ph) };
+  });
+  const tagItem = (id, name, color, shown) => ({ label: name, icon: shown ? 'eye' : 'eye-off', dot: color, key: String(counts.get(id) || 0), active: shown, pressed: shown, data: { tag: id }, title: (shown ? 'Hide ' : 'Show ') + name, run: () => toggleTag(id), chips: id ? phaseChips(id, name) : null });
+  const phaseItem = ph => { const on = phaseShown(prop, '', ph); return { label: 'All ' + PHASE_LABEL[ph].toLowerCase(), icon: on ? 'eye' : 'eye-off', active: on, pressed: on, data: { phase: ph },
+    title: (on ? 'Hide ' : 'Show ') + 'everything ' + PHASE_LABEL[ph].toLowerCase() + ', on every tag', run: () => togglePhase('', ph) }; };
   const scanBadge = sc => scanObjs[sc.id] ? (sc.kind || '').toUpperCase().slice(0, 5) : ({ missing: 'GONE', failed: 'ERR', hidden: 'OFF', 'too-large': 'BIG' }[scanState[sc.id]] || '...');
   const c = prop.designComparison;
   return [
@@ -5849,6 +5882,7 @@ function menuGroups() {
       { label: 'Show all hidden objects', key: 'Shift+H', icon: 'eye', act: 'show-hidden', disabled: !hiddenKeys(prop).length, run: showHidden },
     ] },
     { title: 'Tags', items: [
+      ...PHASES.map(phaseItem),
       ...prop.tags.map(t => tagItem(t.id, t.name, t.color, t.visible !== false)),
       ...((counts.get(UNTAGGED) || prop.tagUntaggedVisible === false) ? [tagItem(UNTAGGED, UNTAGGED_LABEL, 'transparent', prop.tagUntaggedVisible !== false)] : []),
     ] },

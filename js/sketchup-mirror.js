@@ -21,7 +21,7 @@
 
 import { wallHeightOf, levelOfWall, levelOfRoom, levelHeight, roomsOn, wallsOn, openingsOn, uid } from './store.js';
 import { openingSpans, wallSolids, baseboardDetail, wallFaceMaterialIds, wallSides, doorGlassBand, plainOpening, doorDetail, windowDetail, doorShownOpen, doorGlass, leafGlazing } from './wall-solids.js';
-import { tagIdOf, tagById } from './tags.js';
+import { tagIdOf, tagById, phaseOfKey, phasedTagName, phaseShown, PHASES, PHASE_FOLDER, splitPhaseName, setPhase } from './tags.js';
 import { thresholdFloors } from './threshold-floors.js';
 import { fixtureShape, fixtureMirrorParams, fixtureLocalFrame, fixtureParts, fixtureLabel, fixturesOn, normaliseFixture, FIXTURE_FALLBACK } from './fixtures.js';
 import { trimMeshParts } from './trim-mesh.js';
@@ -201,8 +201,9 @@ function materialResolver(materials, warnings) {
 export function mirrorSpec(prop, materials, legacy = false) {
   const state = elementState(prop, legacy), warnings = [];
   const finish = materialResolver(materials, warnings);
-  // Each group goes on its Tiksi tag as a SketchUp tag of the same name ('' = the level's tag).
-  const tag = key => { const t = tagById(prop, tagIdOf(prop, key)); return t ? t.name : ''; };
+  // Each group goes on its Tiksi tag as a SketchUp tag of the same name with the object's half:
+  // "Walls_e" (existing) or "Walls_p" (proposed); '' = the level's tag.
+  const tag = key => { const t = tagById(prop, tagIdOf(prop, key)); return t ? phasedTagName(t.name, phaseOfKey(prop, key)) : ''; };
   const walls = [];
   for (const w of prop.walls || []) {
     const st = state.get(w.id);
@@ -308,7 +309,7 @@ export function mirrorSpec(prop, materials, legacy = false) {
     format: MIRROR_FORMAT, version: 1,
     property: { id: prop.id, name: prop.name || '' },
     levels: (prop.levels || []).map(l => ({ id: l.id, name: l.name, elevation: l.elevation, height: l.height })),
-    tags: (prop.tags || []).map(t => ({ name: t.name, visible: t.visible !== false })),
+    tags: (prop.tags || []).flatMap(t => PHASES.map(ph => ({ name: phasedTagName(t.name, ph), visible: t.visible !== false && phaseShown(prop, t.id, ph), folder: PHASE_FOLDER[ph] }))),
     walls, rooms, fixtures, elements,
     views: (prop.savedViews || []).filter(v => mirrorsView(v) && state.has(v.id)).map(v => viewScene(prop, v)),
     underlays: (prop.levels || []).map(l => underlayOf(l)).filter(Boolean),
@@ -504,6 +505,7 @@ export function mergeMirror(prop, read, synced, seenBefore) {
     }
   }
 
+  readPhases(prop, read, report);
   mergeViews(prop, read, decide, seen, report);
 
   // Elements this .skp was written with and no longer holds: deleted in SketchUp. (An
@@ -523,6 +525,29 @@ export function mergeMirror(prop, read, synced, seenBefore) {
     report.deleted.push(id);
   }
   return report;
+}
+
+// Existing or proposed, from SketchUp: a group moved there onto another half of a tag
+// ("Walls_e" -> "Walls_p") gives its element that phase. Only a tag changed since Tiksi wrote the
+// group counts (the read carries the tag it was written on); one written before tags were
+// recorded, or on a tag without the suffix, changes nothing.
+function readPhases(prop, read, report) {
+  const has = { wall: new Set((prop.walls || []).map(x => x.id)), opening: new Set((prop.openings || []).map(x => x.id)),
+    room: new Set((prop.rooms || []).map(x => x.id)), fixture: new Set((prop.fixtures || []).map(x => x.id)) };
+  const done = new Set();
+  const one = (kind, item) => {
+    if (!item || !item.id || done.has(item.id) || !has[kind].has(item.id)) return;
+    if (typeof item.tag !== 'string' || typeof item.wroteTag !== 'string' || item.tag === item.wroteTag) return;
+    const { phase } = splitPhaseName(item.tag), key = kind + ':' + item.id;
+    if (!phase || phaseOfKey(prop, key) === phase) return;
+    done.add(item.id);
+    setPhase(prop, [key], null);                                  // its project's phase, if that is the one
+    if (phaseOfKey(prop, key) !== phase) setPhase(prop, [key], phase);
+    if (!report.applied.includes(item.id)) report.applied.push(item.id);
+  };
+  for (const rw of read.walls || []) { one('wall', rw); for (const ro of rw.openings || []) one('opening', ro); }
+  for (const rr of read.rooms || []) one('room', rr);
+  for (const rf of read.fixtures || []) one('fixture', rf);
 }
 
 // The scenes read back: each with Tiksi's id is decided like any element; a scene added in
