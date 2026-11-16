@@ -284,6 +284,39 @@ select option { background: var(--panel-2); color: var(--ink); }
 
 /* ---------- view chrome ---------- */
 #view { grid-area: view; overflow: hidden; position: relative; background: var(--bg); }
+
+/* ---------- MODEL BESIDE (js/model-beside.js): the model in a pane to the right of the page ---------- */
+#stage { grid-area: view; display: flex; min-width: 0; min-height: 0; overflow: hidden; position: relative; background: var(--bg); }
+#stage > #view { flex: 1 1 0; min-width: 0; min-height: 0; }
+#stage.beside > #view { flex: 0 1 var(--beside-page, 50%); }
+#beside { flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; overflow: hidden; background: var(--bg); }
+#beside[hidden], #beside-bar[hidden] { display: none; }
+#beside .bs-head { flex: none; display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 4px 0 10px; border-bottom: 1px solid var(--line); background: var(--panel); }
+#beside .bs-title { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.08em; color: var(--accent); }
+#beside .bs-close { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0; border: 0; border-radius: var(--radius); background: transparent; color: var(--dim); cursor: pointer; }
+#beside .bs-close:hover { color: var(--ink); background: rgba(255, 255, 255, 0.05); }
+#beside .bs-body { flex: 1 1 0; min-height: 0; position: relative; }
+#beside .bs-flash { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 30; padding: 7px 12px; border-radius: var(--radius); background: var(--panel-3); border: 1px solid var(--line-2); font-size: 12px; }
+#beside-bar { flex: none; width: 9px; position: relative; z-index: 4; cursor: col-resize; touch-action: none; background: var(--panel); border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+#beside-bar::after { content: ''; position: absolute; left: 2px; top: 50%; width: 3px; height: 44px; margin-top: -22px; border-radius: 2px; background: var(--line-2); transition: background 120ms, height 120ms, margin 120ms; }
+#beside-bar:hover::after, #beside-bar:focus-visible::after, body.beside-resizing #beside-bar::after { background: var(--accent); height: 100%; top: 0; margin-top: 0; }
+#beside-bar:focus-visible { outline: none; }
+body.beside-resizing { user-select: none; }
+body.beside-cols { cursor: col-resize; }
+body.beside-rows { cursor: row-resize; }
+body.beside-resizing iframe, body.beside-resizing canvas { pointer-events: none; }
+/* The model beside a page is the picture and its own buttons: its left pane and inspector stay on MODEL. */
+.editor-layout.v-layout.v-beside { grid-template: minmax(0, 1fr) / minmax(0, 1fr); height: 100%; overflow: hidden; }
+.editor-layout.v-layout.v-beside > .tool-col, .editor-layout.v-layout.v-beside > .inspector, .editor-layout.v-layout.v-beside > .side-handle { display: none; }
+.beside-toggle { flex: none; padding: 4px 9px; font-size: 10px; }
+.beside-toggle.on { color: var(--accent); border-color: rgba(232, 151, 58, 0.6); background: linear-gradient(0deg, rgba(232, 151, 58, 0.16), rgba(232, 151, 58, 0.04)); }
+html.phone .beside-toggle { display: none; }
+@media (max-width: 760px) {
+  #stage.beside { flex-direction: column; }
+  #beside-bar { width: auto; height: 9px; cursor: row-resize; border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  #beside-bar::after { left: 50%; top: 2px; width: 44px; height: 3px; margin: 0 0 0 -22px; }
+  #beside-bar:hover::after, #beside-bar:focus-visible::after, body.beside-resizing #beside-bar::after { left: 0; width: 100%; height: 3px; top: 2px; margin: 0; }
+}
 #view > * { animation: view-in 220ms var(--ease) both; }
 .view-scroll { overflow: auto; height: 100%; padding: 20px 24px 64px; }
 .view-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
