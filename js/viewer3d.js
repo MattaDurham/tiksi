@@ -72,7 +72,7 @@ import { ModelMirrors } from './model-mirrors.js';
 import { componentKeyOf } from './model-components.js';
 import { modelObjectTree, objectForClick, objectBelow, objectOffset, setObjectOffset, applyPartOffsets, objectBox } from './model-objects.js';
 import { renderObjectList, showListTab, revealInList, objectThing, hiddenState } from './object-list.js';
-import { trimTemplate, swapTrimProduct, setTrimY, trimExtent, trimStyle, trimProduct, trimLabel, isField, roomFaces } from './trims.js';
+import { trimTemplate, swapTrimProduct, swapWainscot, setFrameLayout, setTrimY, trimExtent, trimStyle, trimProduct, trimLabel, isField, roomFaces } from './trims.js';
 import { trimDesign, designValues, setDesignParam, stickySnap, SCOPE_LABELS } from './trim-design.js';
 import { trimPanelHtml, bindTrimPanel, addTrimHtml, bindAddTrim } from './trim-panel.js';
 import { createPaintTool } from './paint-tool.js';
@@ -2573,7 +2573,7 @@ function roomTrimCountHtml(r) {
   return n ? `<button class="btn" data-room-trims>SELECT THIS ROOM'S TRIM (${n})</button>` : '';
 }
 // New sections of one catalog entry on these faces, then selected so the catalog can swap them.
-function addTrims(productId, faces) {
+function addTrims(productId, faces, frameLayout) {
   const p = catalogItem(productId);
   if (!p || !faces.length) { if (!faces.length) toast('No wall faces look into this room.', 'warn'); return; }
   beginGeometryEdit(prop, 'add wall trim');
@@ -2585,9 +2585,11 @@ function addTrims(productId, faces) {
   const ids = [];
   for (const { wall, side } of faces) {
     const t = trimTemplate(p.style, p.id, wall, side, { wallHeight: wallHeightOf(prop, wall) });
+    setFrameLayout(t, frameLayout);
     t.id = uid('trim');
     // A field starts above the baseboard already on that face.
-    if (isField(t)) {
+    if (trimStyle(t).fullHeight) fitFullHeightPanel(t);
+    else if (isField(t)) {
       const base = prop.trims.filter(x => x.wallId === wall.id && x.side === side && trimStyle(x) && trimStyle(x).group === 'Base')
         .reduce((m, x) => Math.max(m, trimExtent(x, wallHeightOf(prop, wall)).y1), 0);
       if (base > t.y) { t.h = Math.max(.1, t.h - (base - t.y)); t.y = base; }
@@ -2597,6 +2599,18 @@ function addTrims(productId, faces) {
   touch(); rebuildModel(); renderToolCol();
   selectTrims(ids);
   toast('Added ' + p.short + ' to ' + ids.length + (ids.length === 1 ? ' wall face.' : ' wall faces.'), 'ok');
+}
+function fitFullHeightPanel(t) {
+  const H = trimWallHeight(t);
+  let bottom = 0, top = H;
+  for (const x of prop.trims) {
+    if (x.wallId !== t.wallId || x.side !== t.side || x.f0 > t.f0 + .001 || x.f1 < t.f1 - .001) continue;
+    const style = trimStyle(x);
+    if (style?.group === 'Base') bottom = Math.max(bottom, trimExtent(x, H).y1);
+    if (style?.kind === 'crown') top = Math.min(top, trimExtent(x, H).y0);
+  }
+  t.y = bottom;
+  t.h = Math.max(.08, top - bottom);
 }
 function deleteTrims(ids) {
   if (!ids.length) return;
@@ -2657,6 +2671,15 @@ function renderTrimPanel() {
     design: (key, value, label) => editTrims(t => setDesignParam(t, key, value), label || 'trim layout', true),
     line: (t, edge, dy, label) => moveTrimLine(t, edge, dy, label),
     swapStyle: (style, productId) => editTrims(t => swapTrimProduct(t, productId, trimWallHeight(t)), 'swap trim', true, style),
+    preset: (kind, id) => {
+      if (kind === 'frame') return editTrims(t => setFrameLayout(t, id), 'picture-frame layout', true, 'picture-frame');
+      if (kind === 'crown') return ctx.swapStyle('crown', id);
+      const target = catalogItem(id)?.style;
+      editTrims(t => {
+        if (!isField(t) || t.style === target) return;
+        if (swapWainscot(t, id, trimWallHeight(t)) && trimStyle(t).fullHeight) fitFullHeightPanel(t);
+      }, 'wainscoting style', true);
+    },
     stretches: t => { const lay = design.layout(t); return lay.rects.map((r, k) => r.full ? { x: (r.x0 + r.x1) / 2, w: r.x1 - r.x0, n: lay.boxes.filter(b => b.rect === k && b.row === 0).length } : null).filter(Boolean); },
     setStretch: (t, i, n) => editTrims(x => {
       if (x !== t) return;
@@ -2725,6 +2748,11 @@ function trimGrab(e, hit) {
   const p = trimProduct(t), W = p ? p.W : .03;
   const lay = designNow().layout(t);
   const line = Math.max(.012, Math.min(.03, t.h / 8));
+  if (v.preset) {
+    if (Math.abs(at.y - (t.y + t.h)) < line) return { mode: 'top', t, at };
+    if (Math.abs(at.y - t.y) < line) return { mode: 'bottom', t, at };
+    return { mode: 'move', t, at };
+  }
   if (!v.frame) {
     // Framed panels, battens and planks: the field's edges are its rails.
     const tol = Math.max(.02, Math.min(.06, t.h / 6));
@@ -2945,7 +2973,7 @@ function trimMenuItems(found) {
   const pick = () => { if (!trimIds().includes(t.id)) selectTrims([t.id]); };
   const info = design.info(t);
   items.push(['trim-info', trimLabel(t) + (info ? ', ' + info.roomName : ''), null]);
-  if (v && (v.boxes || v.bays)) {
+  if (v && !v.preset && (v.boxes || v.bays)) {
     const word = v.bays ? 'BAY' : 'PANEL';
     items.push(['trim-add', 'ADD A ' + word + ' HERE', () => { pick(); stepTrimCols(t, at.x, 1); }]);
     items.push(['trim-less', 'REMOVE A ' + word + ' HERE', () => { pick(); stepTrimCols(t, at.x, -1); }]);
@@ -2954,8 +2982,8 @@ function trimMenuItems(found) {
       items.push(['trim-row', 'ADD A ROW', () => { pick(); editTrims(x => setDesignParam(x, 'rows', (x.rows || 1) + 1), 'add trim row', true); }]);
       if ((t.rows || 1) > 1) items.push(['trim-row-less', 'REMOVE A ROW', () => { pick(); editTrims(x => setDesignParam(x, 'rows', (x.rows || 1) - 1), 'remove trim row', true); }]);
     }
-    if (v.frame) items.push(['trim-reveal', 'ONE REVEAL ALL ROUND (' + fmtLen(v.gap) + ')', () => { pick(); editTrims(x => setDesignParam(x, 'reveal', v.gap), 'even trim reveal', true); }]);
   }
+  if (v?.frame) items.push(['trim-reveal', 'ONE REVEAL ALL ROUND (' + fmtLen(v.gap) + ')', () => { pick(); editTrims(x => setDesignParam(x, 'reveal', v.gap), 'even trim reveal', true); }]);
   items.push(null);
   for (const s of design.scopes(ids)) {
     if (s.id === 'selected') continue;
@@ -5806,7 +5834,7 @@ function renderInspectorBody() {
       ${addTrimHtml(wallTrimFaces(w), { face: wallFaceClicked === -1 ? 1 : 0, button: 'ADD TRIM TO THIS FACE' })}
       ${trimCountHtml(w)}
       <button class="btn" data-walk>WALK HERE</button>`;
-    bindAddTrim(inspEl, wallTrimFaces(w), (productId, face) => addTrims(productId, [{ wall: w, side: face.side }]));
+    bindAddTrim(inspEl, wallTrimFaces(w), (productId, face, layout) => addTrims(productId, [{ wall: w, side: face.side }], layout));
     const wt = inspEl.querySelector('[data-wall-trims]');
     if (wt) wt.onclick = () => selectTrims((prop.trims || []).filter(t => t.wallId === w.id).map(t => t.id));
     inspEl.querySelector('[data-mat]').onchange = e => { beginGeometryEdit(prop, 'change wall material'); w.material = e.target.value || null; touch(); rebuildModel(); };
@@ -5865,7 +5893,7 @@ function renderInspectorBody() {
       <button class="btn" data-room-faces title="Select every wall face of this room, to read their square feet and lengths">SELECT THIS ROOM'S WALLS</button>
       <button class="btn" data-walk>WALK INTO ROOM</button>`;
     inspEl.querySelector('[data-room-faces]').onclick = () => selectFaces(allFaces().filter(f => f.roomId === r.id).map(f => f.id));
-    bindAddTrim(inspEl, [{}], productId => addTrims(productId, roomTrimFaces(r)));
+    bindAddTrim(inspEl, [{}], (productId, face, layout) => addTrims(productId, roomTrimFaces(r), layout));
     const rt = inspEl.querySelector('[data-room-trims]');
     if (rt) rt.onclick = () => selectTrims(roomTrimIds(r));
     inspEl.querySelector('[data-name]').onchange = e => { beginGeometryEdit(prop, 'rename room'); r.name = e.target.value; touch(); };

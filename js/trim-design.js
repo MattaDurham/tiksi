@@ -61,7 +61,7 @@ export function designValues(t) {
   const frame = t.style === 'picture-frame';
   const sides = frame ? (t.inset != null ? t.inset : .09) : null;
   return {
-    frame, boxes: !!s.boxes, bays: !!s.bays, planks: !!s.planks,
+    frame, preset: frame && !!t.frameLayout, boxes: !!s.boxes, bays: !!s.bays, planks: !!s.planks,
     aim: s.boxes ? (t.target != null ? t.target : .76) : s.bays ? (t.spacing || (t.style === 'grid' ? null : (p && p.spacing) || .45)) : null,
     aimSet: s.boxes ? t.target != null : s.bays ? t.spacing != null : false,
     gap: frame ? (t.gap != null ? t.gap : .1) : null,
@@ -293,7 +293,7 @@ export function trimDesign(env) {
   // section only. The stretch's count is then set, not fitted. Returns the new count, or null.
   function stepCols(t, x, delta) {
     const d = designValues(t);
-    if (!d || (!d.boxes && !d.bays)) return null;
+    if (!d || d.preset || (!d.boxes && !d.bays)) return null;
     const lay = layout(t);
     const full = lay.rects.filter(r => r.full);
     if (!full.length) return null;

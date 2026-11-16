@@ -270,6 +270,42 @@ try {
   ok('a drag on a batten closes the spacing to ' + (spacing / IN).toFixed(2) + ' in; the wall goes from ' + bays.length + ' to ' + closer.length + ' bays');
   await shot('07-battens');
 
+  // ---------- visual style pickers ----------
+  const picker = kind => page.locator(`.inspector [data-picker="${kind}"]`);
+  const pickStyle = async (kind, id) => {
+    await picker(kind).locator('summary').click();
+    await picker(kind).locator(`[data-choice="${id}"]`).click();
+    await idle();
+  };
+  await scope('selected').click();
+  const battenField = await trim(BB);
+  await pickStyle('wainscot', 'hd-pml00x00cl');
+  assert.equal((await trim(BB)).style, 'picture-frame');
+  near((await trim(BB)).y, battenField.y, 'swapped field starts on the same line');
+  near((await trim(BB)).h, battenField.h, 'swapped field fits the same height');
+  await picker('frame').locator('summary').click();
+  assert.equal(await picker('frame').locator('[data-choice]').count(), 11, 'ten reference schemes and custom');
+  await shot('08-picture-frame-layouts');
+  await picker('frame').locator('[data-choice="08"]').click();
+  await idle();
+  assert.equal((await trim(BB)).frameLayout, '08');
+  assert.equal((await boxesOf(BB)).length, 5, 'the scheme draws five boxes below the divider');
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+  await waitUntil(async () => !(await trim(BB)).frameLayout, 'one undo restores the custom layout');
+  ok('the wainscoting style and picture-frame layout each update the selected field');
+
+  await page.locator('.inspector [data-tp-wall]').click();
+  await pickStyle('crown', 'hd-mld04x04x06er');
+  await page.locator('.inspector [data-trim-add]').click();
+  await idle();
+  await pickStyle('crown', 'ekena-mld05x04x07ns');
+  assert.equal(await page.evaluate(() => window.testStore.activeProperty().trims.find(t => t.style === 'crown').product), 'ekena-mld05x04x07ns');
+  const cut = page.locator('.inspector .tp-product .tp-prof');
+  assert.match(await cut.getAttribute('aria-label'), /5 7\/8" drop × 4 3\/4" projection/);
+  assert.ok(await cut.locator('.tp-prof-sides polygon').count() > 1);
+  await shot('09-crown-cutaway');
+  ok('crown can be added and swapped by style, with the installed dimensions on the cutaway');
+
   assert.deepEqual(errors, [], 'no page errors');
   console.log('trim design: all checks passed');
 } finally {

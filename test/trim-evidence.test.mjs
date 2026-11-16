@@ -33,7 +33,7 @@ const state = p => evidenceState(elementEvidenceRecord(p, 'trim', p.trims[0]));
 
 test('trim configuration changes invalidate review while a descriptive note does not', () => {
   const changes = { style: 'picture-frame', product: catalogFor('baseboard')[1].id, f0: .1, f1: .9,
-    y: .1, h: .9, side: -1, cols: 4, rows: 3, widths: [2, 1, 1], heights: [2, 1], gap: .2, inset: .1, spacing: .3, material: 'different-finish' };
+    y: .1, h: .9, side: -1, cols: 4, rows: 3, widths: [2, 1, 1], heights: [2, 1], gap: .2, inset: .1, spacing: .3, material: 'different-finish', frameLayout: '07' };
   for (const [key, value] of Object.entries(changes)) {
     const p = fixture(); review(p); assert.equal(state(p), 'observed');
     p.trims[0][key] = value;
