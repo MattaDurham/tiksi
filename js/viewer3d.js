@@ -141,7 +141,7 @@ let mirrors = null;
 // edges); the full frame follows once it has been still this long.
 const SETTLE_MS = 150;
 let lastMotion = -Infinity, lastFrameFast = false, aoWanted = true;
-let cameraLight = null;
+let cameraLight = null, detailLight = null;
 // Candela of the camera light at CAMERA LIGHT 1 (about a 100 W bulb's worth, softened).
 const CAMERA_LIGHT_CD = 10;
 const frameCounts = { fastFrames: 0, fullFrames: 0, shadowRefreshes: 0, skyBakes: 0, modelBuilds: 0 };
@@ -427,6 +427,12 @@ function setupScene() {
   cameraLight.name = 'camera light';
   scene.add(cameraLight);
 
+  // An illustrative work light, angled across the view to pick out the faces of trim.
+  // It has no shadow map: the sun and real fixture settings remain independent.
+  detailLight = new THREE.DirectionalLight(0xfff9f0, 0);
+  detailLight.name = 'angled light';
+  scene.add(detailLight, detailLight.target);
+
   lightRoot = new THREE.Group(); lightRoot.name = 'nightlights'; scene.add(lightRoot);
   scanRoot = new THREE.Group(); scanRoot.name = 'scans'; scene.add(scanRoot);
   pinRoot = new THREE.Group(); pinRoot.name = 'pins'; scene.add(pinRoot);
@@ -564,6 +570,23 @@ function setupComposer() {
   passes.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.28, 0.4, 2.2);
   passes.smaa = new SMAAPass();
   passes.output = new OutputPass();
+  // Grade the displayed tones in the existing output pass, so the same control works on
+  // moving frames, low quality and image exports without another full-screen pass.
+  passes.output.uniforms.viewContrast = { value: 0 };
+  passes.output.material.fragmentShader = passes.output.material.fragmentShader
+    .replace('uniform sampler2D tDiffuse;', 'uniform sampler2D tDiffuse;\n uniform float viewContrast;')
+    .replace('gl_FragColor = sRGBTransferOETF( gl_FragColor );', `
+      gl_FragColor = sRGBTransferOETF( gl_FragColor );
+      if (viewContrast > 0.0) {
+        vec3 rgb = clamp(gl_FragColor.rgb, 0.0, 1.0);
+        float y = clamp(dot(rgb, vec3(0.2126, 0.7152, 0.0722)), 0.0, 1.0);
+        // An S curve with fixed black, white and midtone points. Bias the pivot high
+        // enough to separate the shades of light-painted surfaces.
+        const float pivot = 0.6;
+        float inv = 1.0 - y;
+        if (y < pivot) gl_FragColor.rgb = rgb * pow(y / pivot, viewContrast);
+        else gl_FragColor.rgb = 1.0 - (1.0 - rgb) * pow(inv / (1.0 - pivot), viewContrast);
+      }`);
   for (const p of [passes.render, passes.gtao, passes.outline, passes.hover, passes.bloom, passes.smaa, passes.output]) composer.addPass(p);
 }
 
@@ -1042,6 +1065,9 @@ function applyEnvironment() {
   // CORNER SHADING: how dark corners and contact lines get; 0 skips the pass altogether.
   passes.gtao.blendIntensity = lit.shading;
   cameraLight.intensity = CAMERA_LIGHT_CD * lit.cameraLight;
+  passes.output.uniforms.viewContrast.value = lit.contrast;
+  // A work light stays useful after dark, when the viewer reduces camera exposure.
+  detailLight.intensity = lit.detailLight * THREE.MathUtils.lerp(1, 2, nightMix);
   // A camera would open up at dusk; lift the exposure as the sun drops, then settle for night.
   renderer.toneMappingExposure = lit.exposure * 0.85 * THREE.MathUtils.lerp(1 + 0.45 * (1 - dusk), 0.6, nightMix);
 
@@ -1915,6 +1941,12 @@ function renderFrame(still = false) {
   // The camera light rides just above and behind the eye, so it lights what is in view without
   // a hot spot on the nearest wall.
   if (cameraLight.intensity > 0) cameraLight.position.copy(camera.position).add(_lampOffset.set(0, 0.35, 0.25).applyQuaternion(camera.quaternion));
+  if (detailLight.intensity > 0) {
+    // Only the direction matters. The shallow angle makes room-facing bevels and
+    // returns read differently from the front, even without ambient occlusion.
+    detailLight.position.set(-0.43, 0.85, 0.30).applyQuaternion(camera.quaternion);
+    detailLight.updateMatrixWorld();
+  }
   passes.smaa.enabled = !(fast && composer.renderTarget1.samples > 0);
   lastFrameFast = fast;
   frameCounts[fast ? 'fastFrames' : 'fullFrames']++;
@@ -4999,50 +5031,81 @@ function moveToTag(keys, tagId, count) {
 // ---------- environment panel ----------
 // The LIGHTING controls (lighting.js): ready-made presets, then each value on its own.
 const pct = v => Math.round(v * 100) + '%';
-const LIGHT_FORMAT = { exposure: v => v.toFixed(2), sunStrength: pct, fill: pct, shading: pct, cameraLight: pct, lampBrightness: pct, lampKelvin: v => Math.round(v) + 'K' };
-const LIGHT_STEPS = { exposure: 0.05, sunStrength: 0.05, fill: 0.05, shading: 0.05, cameraLight: 0.05, lampBrightness: 0.05, lampKelvin: 100 };
-function lightRow(label, key, value, title) {
-  const [min, max] = LIGHTING_RANGES[key];
-  return `<label class="v-row" title="${escapeHtml(title)}"><span>${label}</span><input type="range" min="${min}" max="${max}" step="${LIGHT_STEPS[key]}" value="${value}" data-env="${key}" aria-label="${escapeHtml(title)}"><em>${LIGHT_FORMAT[key](value)}</em></label>`;
+const LIGHT_FORMAT = { exposure: pct, contrast: pct, detailLight: pct, sunStrength: pct, fill: pct, shading: pct, cameraLight: pct, lampBrightness: pct, lampKelvin: v => Math.round(v) + ' K' };
+const LIGHT_STEPS = { exposure: 0.05, contrast: 0.05, detailLight: 0.05, sunStrength: 0.05, fill: 0.05, shading: 0.05, cameraLight: 0.05, lampBrightness: 0.05, lampKelvin: 100 };
+function lightRow(label, key, value, help, disabled = false) {
+  return `<label class="v-row v-light-row" title="${escapeHtml(help)}"><span>${label}</span><input type="range" min="${LIGHTING_RANGES[key][0]}" max="${LIGHTING_RANGES[key][1]}" step="${LIGHT_STEPS[key]}" value="${value}" data-env="${key}" aria-label="${label}" aria-valuetext="${LIGHT_FORMAT[key](value)}" ${disabled ? 'disabled' : ''}><em aria-hidden="true">${LIGHT_FORMAT[key](value)}</em></label>`;
 }
-function lightingHtml(env) {
+function lightSection(key, label, open, body) {
+  return `<details class="v-light-section" data-light-section="${key}" ${open.has(key) ? 'open' : ''}><summary>${label}</summary><div>${body}</div></details>`;
+}
+function lightingHtml(env, open, listOpen) {
   const lit = lightingSettings(env), chosen = matchingPreset(env);
   const sources = fixtureSummary(lampSources);
   const total = lampSources.reduce((n, s) => n + s.lumens, 0);
   const lights = sources.length
-    ? `<details class="v-light-list"><summary>${lampSources.length} light fixture${lampSources.length === 1 ? '' : 's'} &middot; ${total.toLocaleString()} lm estimated</summary><ul>${sources.map(e => `<li><span>${e.count} &times; ${escapeHtml(e.label)}</span><em>${e.lumens.toLocaleString()} lm${e.count > 1 ? ' each' : ''}</em></li>`).join('')}</ul><p>Output estimated from each fixture's kind (a name that states lumens or a colour keeps it). Traced rooms with no fixture drawn get one ceiling light at 150 lm per m&sup2;.</p></details>`
-    : '<p class="v-env-help">No light fixtures found: name fixtures in the model (downlight, pendant, sconce, ceiling light, lamp, LED strip) or trace rooms. Until then use CAMERA LIGHT or FILL LIGHT inside.</p>';
+    ? `<details class="v-light-list" ${listOpen ? 'open' : ''}><summary>${lampSources.length} light fixture${lampSources.length === 1 ? '' : 's'} &middot; ${total.toLocaleString()} lm estimated</summary><ul>${sources.map(e => `<li><span>${e.count} &times; ${escapeHtml(e.label)}</span><em>${e.lumens.toLocaleString()} lm${e.count > 1 ? ' each' : ''}</em></li>`).join('')}</ul><p>Output is estimated unless the fixture name gives lumens. Color in a fixture name overrides the lamp color control. A traced room without fixtures gets an estimated ceiling light based on its area.</p></details>`
+    : '<p class="v-env-help">No modeled fixtures found. Use Fill light or Angled light to see inside.</p>';
   return `
-      <p class="empty">Illustrative lighting. Estimated sources and exposure are for viewing, not a validated lighting simulation.</p><div class="v-light-presets" role="group" aria-label="Lighting presets">${Object.keys(LIGHTING_PRESETS).map(k => `<button type="button" class="v-pill ${chosen === k ? 'active' : ''}" data-light-preset="${k}" aria-pressed="${chosen === k}">${escapeHtml(PRESET_LABELS[k].toUpperCase())}</button>`).join('')}</div>
-      ${lightRow('BRIGHTNESS', 'exposure', lit.exposure, 'Brightness of the whole picture (camera exposure)')}
-      ${lightRow('SUN', 'sunStrength', lit.sunStrength, 'Strength of the sun, or the moon at night')}
-      ${lightRow('FILL LIGHT', 'fill', lit.fill, 'Soft light from the sky and ground: lifts shadows and the inside of closed models')}
-      ${lightRow('CORNERS', 'shading', lit.shading, 'How dark corners and contact lines get (0 turns corner shading off)')}
-      ${lightRow('CAMERA LIGHT', 'cameraLight', lit.cameraLight, 'A light that moves with the camera, for dark interiors')}
-      <div class="v-row v-row-sel"><span>ROOM LIGHTS</span>
-        <select data-env="lamps" aria-label="Room lights"><option value="auto" ${lit.lamps === 'auto' ? 'selected' : ''}>On after dark</option><option value="on" ${lit.lamps === 'on' ? 'selected' : ''}>Always on</option><option value="off" ${lit.lamps === 'off' ? 'selected' : ''}>Off</option></select>
+      <div class="v-light-heading"><span>Lighting presets</span><span data-light-choice aria-live="polite">${chosen ? PRESET_LABELS[chosen][0] : 'Custom'}</span></div>
+      <div class="v-light-presets" role="group" aria-label="Lighting presets">${Object.keys(LIGHTING_PRESETS).map(k => `<button type="button" class="v-light-preset ${chosen === k ? 'active' : ''}" data-light-preset="${k}" aria-pressed="${chosen === k}"><strong>${PRESET_LABELS[k][0]}</strong><small>${PRESET_LABELS[k][1]}</small></button>`).join('')}</div>
+      <div class="v-light-picture" role="group" aria-label="Picture adjustments">
+        ${lightRow('Brightness', 'exposure', lit.exposure, 'Raises or lowers the whole picture')}
+        ${lightRow('Contrast', 'contrast', lit.contrast, 'Separates light and dark tones')}
+        <p class="v-env-help">Brightness lifts the picture. Contrast separates light and dark tones.</p>
       </div>
-      ${lit.lamps !== 'off' ? lightRow('LAMP LEVEL', 'lampBrightness', lit.lampBrightness, 'Dimmer on every light fixture: 100% is each one\'s estimated output') + lightRow('LAMP COLOR', 'lampKelvin', lit.lampKelvin, 'Colour temperature of fixtures whose name gives none: low is warm, high is daylight') : ''}
-      ${lights}
-      <div class="v-env-rule" aria-hidden="true"></div>`;
+      ${lightSection('tune', 'Fine tune lights', open, `
+        <p class="v-env-help">Raise Fill light to open shadows, or Angled light to bring out profiles.</p>
+        ${lightRow('Fill light', 'fill', lit.fill, 'Lifts shadows. Higher fill can make trim and corners look flatter.')}
+        ${lightRow('Angled light', 'detailLight', lit.detailLight, 'Lights the model from above and to the left of the view to bring out profiles')}
+        ${lightRow('Contact shadows', 'shading', lit.shading, 'Darkens joins and corners on High and Ultra when the view is still')}
+        ${lightRow('Sun strength', 'sunStrength', lit.sunStrength, 'Strength of direct sun by day, moon at night')}
+        ${lightRow('Camera light', 'cameraLight', lit.cameraLight, 'A soft lamp that moves with you')}
+        <label class="v-row v-row-sel v-light-row"><span>Room lights</span>
+          <select data-env="lamps"><option value="auto" ${lit.lamps === 'auto' ? 'selected' : ''}>On after dark</option><option value="on" ${lit.lamps === 'on' ? 'selected' : ''}>Always on</option><option value="off" ${lit.lamps === 'off' ? 'selected' : ''}>Off</option></select>
+        </label>
+        ${lightRow('Lamp level', 'lampBrightness', lit.lampBrightness, '100% is the estimated output of each fixture', lit.lamps === 'off')}
+        ${lightRow('Lamp color', 'lampKelvin', lit.lampKelvin, 'Lower is warmer; higher is closer to daylight', lit.lamps === 'off')}
+        ${lights}
+        <p class="v-env-help">Lighting is illustrative. Use it to review the model.</p>`)}`;
 }
-// Light up the preset the values match now (none once a value is changed by hand).
-function markPreset(p) {
-  const chosen = matchingPreset(prop.env);
-  p.querySelectorAll('[data-light-preset]').forEach(b => { const on = b.dataset.lightPreset === chosen; b.classList.toggle('active', on); b.setAttribute('aria-pressed', String(on)); });
+// Keep the sliders, preset state and keyboard focus in place while trying different looks.
+function syncLightingControls(p, env) {
+  const lit = lightingSettings(env), chosen = matchingPreset(env);
+  p.querySelectorAll('[data-light-preset]').forEach(b => {
+    const on = b.dataset.lightPreset === chosen;
+    b.classList.toggle('active', on); b.setAttribute('aria-pressed', String(on));
+  });
+  const label = chosen ? PRESET_LABELS[chosen][0] : 'Custom';
+  const choice = p.querySelector('[data-light-choice]');
+  if (choice.textContent !== label) choice.textContent = label;
+  for (const r of p.querySelectorAll('.v-light-row [data-env]')) {
+    const key = r.dataset.env;
+    r.value = lit[key];
+    if (r.type !== 'range') continue;
+    const value = LIGHT_FORMAT[key](lit[key]);
+    r.setAttribute('aria-valuetext', value);
+    r.nextElementSibling.textContent = value;
+    if (key === 'lampBrightness' || key === 'lampKelvin') r.disabled = lit.lamps === 'off';
+  }
 }
 function sunLabel(el) { return el >= 0 ? 'SUN ' + Math.round(el) + '&deg;' : (el > -6 ? 'TWILIGHT' : 'NIGHT'); }
 function renderEnvPanel(p = hud.env) {
   if (!p) return;
   const env = prop.env;
+  const sections = new Set([...p.querySelectorAll('[data-light-section][open]')].map(d => d.dataset.lightSection));
+  const listOpen = !!p.querySelector('.v-light-list[open]');
+  const focused = p.contains(document.activeElement) ? document.activeElement.dataset.env : null;
   const { elevation: el } = currentSun();
   const panos = prop.photos.filter(ph => ph.kind === 'pano');
   const minutes = Math.round(env.time * 60);
   const timeLabel = String(Math.floor(minutes / 60)).padStart(2, '0') + ':' + String(minutes % 60).padStart(2, '0');
   const year = Number(env.date.slice(0, 4));
   p.innerHTML = `
-    <button class="v-env-head" data-toggle><span>LIGHTING</span><span class="v-env-sun">${sunLabel(el)} &middot; ${timeLabel}</span><span class="v-env-caret">${p.classList.contains('open') ? '&#9662;' : '&#9656;'}</span></button>
+    <button class="v-env-head" data-toggle aria-expanded="${p.classList.contains('open')}"><span>LIGHTING</span><span class="v-env-sun">${sunLabel(el)} &middot; ${timeLabel}</span><span class="v-env-caret">${p.classList.contains('open') ? '&#9662;' : '&#9656;'}</span></button>
     <div class="v-env-body">
+      ${lightingHtml(env, sections, listOpen)}
+      ${lightSection('sun', 'Sun and sky', sections, `
       <label class="v-row v-row-sel"><span>SUN PATH</span><select data-env="sunMode"><option value="manual" ${env.sunMode !== 'location' ? 'selected' : ''}>Manual lighting</option><option value="location" ${env.sunMode === 'location' ? 'selected' : ''}>Location + date</option></select></label>
       ${env.sunMode === 'location' ? `
         <label class="v-row v-row-sel"><span>LATITUDE</span><input type="number" min="-90" max="90" step="any" data-env="latitude" value="${env.latitude == null ? '' : finiteNum(env.latitude, 0)}" placeholder="Degrees, north +" required></label>
@@ -5056,11 +5119,12 @@ function renderEnvPanel(p = hud.env) {
       <label class="v-row"><span>TIME</span><input type="range" min="0" max="24" step="0.1" value="${finiteNum(env.time, 14.5)}" data-env="time"><em data-time-readout>${timeLabel}</em></label>
       ${env.sunMode !== 'location' ? `<label class="v-row"><span>SUN AZIMUTH</span><input type="range" min="0" max="360" step="1" value="${finiteNum(env.azimuth, 200)}" data-env="azimuth"><em>${Math.round(finiteNum(env.azimuth, 200))}&deg;</em></label>` : ''}
       <label class="v-row"><span>NORTH</span><input type="range" min="0" max="360" step="1" value="${finiteNum(env.north, 0)}" data-env="north"><em>${Math.round(finiteNum(env.north, 0))}&deg;</em></label>
-      ${lightingHtml(env)}
       <div class="v-row v-row-sel"><span>SKY</span>
         <select data-env="sky"><option value="dynamic" ${env.sky === 'dynamic' ? 'selected' : ''}>Dynamic sun</option><option value="studio" ${env.sky === 'studio' ? 'selected' : ''}>Studio</option><option value="pano" ${env.sky === 'pano' ? 'selected' : ''}>Panorama</option></select>
         ${env.sky === 'pano' ? `<select data-env="panoPhotoId"><option value="">(choose pano)</option>${panos.map(ph => `<option value="${escapeHtml(ph.id)}" ${ph.id === env.panoPhotoId ? 'selected' : ''}>${escapeHtml(ph.name)}</option>`).join('')}</select>` : ''}
       </div>
+      `)}
+      <div class="v-light-section v-light-view">
       <div class="v-row v-row-sel"><span>${ownQuality() ? 'QUALITY ON THIS DEVICE' : 'QUALITY'}</span>
         <select data-env="quality"><option value="ultra" ${quality() === 'ultra' ? 'selected' : ''}>Ultra (detail + 32-sample AO)</option><option value="high" ${quality() === 'high' ? 'selected' : ''}>High (AO + bloom)</option><option value="medium" ${quality() === 'medium' ? 'selected' : ''}>Medium</option><option value="low" ${quality() === 'low' ? 'selected' : ''}>Low</option></select>
       </div>
@@ -5070,8 +5134,15 @@ function renderEnvPanel(p = hud.env) {
         <label><input type="checkbox" data-env="showGround" ${env.showGround !== false ? 'checked' : ''}> GROUND</label>
         <label><input type="checkbox" data-env="showGrid" ${env.showGrid ? 'checked' : ''}> GRID</label>
       </div>
+      </div>
     </div>`;
-  p.querySelector('[data-toggle]').onclick = () => { p.classList.toggle('open'); renderEnvPanel(p); };
+  const toggle = p.querySelector('[data-toggle]');
+  toggle.onclick = () => {
+    const opened = p.classList.toggle('open');
+    toggle.setAttribute('aria-expanded', String(opened));
+    toggle.querySelector('.v-env-caret').textContent = opened ? '▾' : '▸';
+  };
+  if (focused) p.querySelector(`[data-env="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
   let touchTimer = 0;
   const commit = () => { clearTimeout(touchTimer); touchTimer = setTimeout(() => touch(), 400); };
   const updateSun = () => {
@@ -5093,10 +5164,13 @@ function renderEnvPanel(p = hud.env) {
         env.date = dateForDay(year, Number(r.value));
         p.querySelector('[data-env=date]').value = env.date;
       } else env[key] = Number(r.value);
-      const em = r.parentElement.querySelector('em');
-      if (em) em.textContent = LIGHT_FORMAT[key] ? LIGHT_FORMAT[key](Number(r.value)) : Math.round(r.value) + (key === 'dayOfYear' ? '' : '°');
-      markPreset(p);
-      updateSun(); applyEnvironment(); commit();
+      if (LIGHT_FORMAT[key]) syncLightingControls(p, env);
+      else {
+        const em = r.parentElement.querySelector('em');
+        if (key !== 'time' && em) em.textContent = Math.round(r.value) + (key === 'dayOfYear' ? '' : '°');
+        updateSun();
+      }
+      applyEnvironment(); commit();
     };
   });
   p.querySelectorAll('input:not([type=range]):not([type=checkbox])').forEach(input => {
@@ -5119,16 +5193,15 @@ function renderEnvPanel(p = hud.env) {
       if (s.dataset.env === 'panoPhotoId') panoMissing = null;   // a fresh choice gets a fresh try
       applyEnvironment();
       if (!onPhone) touch();
-      renderEnvPanel(p);
+      if (s.dataset.env === 'lamps') syncLightingControls(p, env); else renderEnvPanel(p);
     };
   });
   p.querySelectorAll('[data-light-preset]').forEach(b => {
-    b.onclick = () => { applyPreset(env, b.dataset.lightPreset); applyEnvironment(); touch(); renderEnvPanel(p); };
+    b.onclick = () => { applyPreset(env, b.dataset.lightPreset); syncLightingControls(p, env); applyEnvironment(); touch(); };
   });
   p.querySelectorAll('input[type=checkbox]').forEach(c => {
     c.onchange = () => {
       env[c.dataset.env] = c.checked;
-      markPreset(p);
       if (c.dataset.env === 'showGrid') rebuildGround();
       if (c.dataset.env === 'showGround') groundGroup.visible = c.checked;
       applyEnvironment();
@@ -6959,7 +7032,8 @@ export function mirrorStats() { return mirrors ? mirrors.stats() : null; }
 // drawn while the camera moves (`fast` true), and return its mean brightness, 0 to 1, read
 // straight off the canvas before the browser shows it.
 // `view` ({ position, target }, metres, x/y/z) first puts the orbiting camera there.
-export function frameBrightness({ fast = false, view = null } = {}) {
+// Optional regions are named rectangles [left, top, right, bottom] in 0..1 screen coordinates.
+export function frameBrightness({ fast = false, view = null, regions = null } = {}) {
   if (!scene || !composer || contextLost) return null;
   if (view) {
     if (mode === 'walk') setMode('orbit');
@@ -6973,10 +7047,18 @@ export function frameBrightness({ fast = false, view = null } = {}) {
   const gl = renderer.getContext(), w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
   const px = new Uint8Array(w * h * 4);
   gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
-  let sum = 0;
-  for (let i = 0; i < px.length; i += 4) sum += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
+  const mean = ([left, top, right, bottom]) => {
+    const x0 = Math.floor(left * w), x1 = Math.ceil(right * w);
+    const y0 = Math.floor((1 - bottom) * h), y1 = Math.ceil((1 - top) * h);
+    let sum = 0;
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+      const i = (y * w + x) * 4;
+      sum += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
+    }
+    return sum / ((x1 - x0) * (y1 - y0) * 255);
+  };
   requestRender(1);   // put the view back as it should be
-  return sum / (w * h * 255);
+  return regions ? Object.fromEntries(Object.entries(regions).map(([key, box]) => [key, mean(box)])) : mean([0, 0, 1, 1]);
 }
 // Whether the last frame was a fast one (camera moving), whether a shadow refresh is pending, and
 // how many fast frames, full frames and shadow refreshes this view has drawn.
@@ -7128,7 +7210,7 @@ export function unmount() {
     renderer.setRenderTarget(null);
     renderer.clear();
   }
-  scene = null; camera = null; skyScene = null; sun = null; hemi = null;
+  scene = null; camera = null; skyScene = null; sun = null; hemi = null; cameraLight = null; detailLight = null;
   walkGlide = null; walkClick = null; solidNear = null;
   scanRoot = null; pinRoot = null; noteRoot = null; measureRoot = null; markupRoot = null; cameraRoot = null; positionRoot = null;
   el = null; wrapEl = null; inspEl = null; hud = {};
