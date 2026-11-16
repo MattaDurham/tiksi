@@ -122,3 +122,42 @@ test('the new view fields are cleaned of hostile input', () => {
   assert.equal('uncertainty' in v, false);
   assert.equal('done' in v.section, false);
 });
+
+test('a saved view keeps the existing and proposed halves shown, and gives them back; older views leave them', async () => {
+  const MV = await import('../js/mirror-views.js');
+  const p = store.propertyTemplate('Halves');
+  const furn = T.CANON.furniture.id;
+  T.setPhaseShown(p, furn, 'e', false);
+  T.setPhaseShown(p, '', 'p', false);
+  const v = SV.addSavedView(p, 'Proposed furniture only', state());
+  assert.equal(v.tags[T.phaseOverrideKey(furn, 'e')], false);
+  assert.equal(v.tags[T.phaseOverrideKey(furn, 'p')], true);
+  assert.equal(v.tags[T.phaseOverrideKey('', 'p')], false);
+  T.setPhaseShown(p, furn, 'e', true); T.setPhaseShown(p, '', 'p', true);
+  assert.equal(SV.applySavedTags(p, v), 2);
+  assert.deepEqual(T.tagById(p, furn).phases, { e: false, p: true });
+  assert.deepEqual(p.phaseShown, { e: true, p: false });
+  const old = SV.normalizeSavedView({ name: 'Old', camera: state().camera, tags: { [furn]: true } }, new Set());
+  assert.equal(SV.applySavedTags(p, old), 0, 'a view saved before the halves changes neither');
+  // As a SketchUp scene: hidden halves by name, and back.
+  const form = MV.viewForm(p, v);
+  assert.ok(form.hidden.includes('Furniture and fixtures_e'));
+  assert.ok(form.hidden.includes('Walls_p'), 'every proposed half hides with the whole-model switch');
+  assert.ok(!form.hidden.includes('Walls_e'));
+  assert.ok(!form.hidden.includes('Furniture and fixtures'), 'no plain tag names');
+  const scene = { name: v.name, camera: { eye: [5, 6, -4], target: [0, 0, -1], perspective: true, fov: 45 }, hiddenTags: form.hidden.filter(n => n !== 'Furniture and fixtures_e'), origin: 'tiksi' };
+  const now = MV.sceneForm(p, scene);
+  const back = MV.applySceneToView(p, v, scene, now, form);
+  assert.equal(back.tags[T.phaseOverrideKey(furn, 'e')], true, 'the half shown in SketchUp shows again');
+  const fresh = MV.viewFromScene(p, { name: 'S', camera: scene.camera, hiddenTags: ['Walls_e'] }, null, new Set());
+  assert.equal(fresh.tags[T.phaseOverrideKey(T.CANON.walls.id, 'e')], false);
+  assert.equal(fresh.tags[T.phaseOverrideKey(T.CANON.walls.id, 'p')], true);
+  // Shown in SketchUp while the view hides the whole tag: the tag shows, its other half hides.
+  const whole = { ...v, tags: { ...v.tags, [T.CANON.walls.id]: false } };
+  const wform = MV.viewForm(p, whole);
+  const wscene = { ...scene, hiddenTags: wform.hidden.filter(n => n !== 'Walls_e') };
+  const wback = MV.applySceneToView(p, whole, wscene, MV.sceneForm(p, wscene), wform);
+  assert.equal(wback.tags[T.CANON.walls.id], true);
+  assert.equal(wback.tags[T.phaseOverrideKey(T.CANON.walls.id, 'e')], true);
+  assert.equal(wback.tags[T.phaseOverrideKey(T.CANON.walls.id, 'p')], false);
+});

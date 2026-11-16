@@ -23,6 +23,7 @@ import { initTiksiMenu, setRestartAction } from './tiksi-menu.js';
 import { restartTiksi } from './restart.js';
 import { initField, fieldRouted } from './field.js';
 import * as viewer3d from './viewer3d.js';
+import { initBeside, syncBeside, closeBeside, besideSharedChange } from './model-beside.js';
 const materialsview = lazyView(() => import('./materialsview.js'));
 const photos = lazyView(() => import('./photos.js'));
 const measure = lazyView(() => import('./measure.js'));
@@ -120,6 +121,7 @@ async function boot() {
   if (diskWorkspace && diskWorkspace.canRestart()) setRestartAction(() => restartTiksi(diskWorkspace));
   initField();
   initPaneResize(document.getElementById('view'));
+  initBeside();
   bindHistoryControls();
   refreshTopbar();
   onChange(refreshTopbar);
@@ -225,6 +227,8 @@ function route() {
 
 function remountView() {
   unmountCurrent();
+  // The model beside the page is rebuilt with it, keeping its camera.
+  closeBeside();
   openPage();
 }
 
@@ -242,8 +246,11 @@ function openPage() {
       <p><button class="btn primary" data-reload>RELOAD</button></p></div>`;
     root.querySelector('[data-reload]').onclick = () => location.reload();
   };
+  // The MODEL page takes the model out of the pane beside the other pages first: there is one.
+  if (currentName === 'model') closeBeside();
   try { currentView.mount(root, failed); }
   catch (error) { failed(error); }
+  syncBeside(currentName);
   refreshHistoryControls();
   fieldRouted(currentName);
 }
@@ -334,7 +341,7 @@ function showSharedChange() {
   if (!reaches) return;
   if (change.all || change.materials) disposeMaterials();
   const keys = active && change.keys.get(active.id);
-  if (!whole && keys && currentView.sharedChange && currentView.sharedChange(keys)) { refreshHistoryControls(); return; }
+  if (!whole && keys && currentView.sharedChange && currentView.sharedChange(keys)) { besideSharedChange(keys); refreshHistoryControls(); return; }
   revokePhotoUrls();
   if (currentName === 'model') viewer3d.keepViewOnNextMount();
   remountView();

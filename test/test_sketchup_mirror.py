@@ -131,6 +131,31 @@ class NativeMirrorTests(unittest.TestCase):
         # The read-back is unchanged by tags.
         self.assertEqual(sorted(w['id'] for w in self.read(skp)['walls']), ['w-e', 'w-n', 'w-s', 'w-w'])
 
+    def test_tag_halves_go_in_existing_and_proposed_folders_and_a_move_reads_back(self):
+        spec = copy.deepcopy(SPEC)
+        spec['tags'] = [{'name': n + '_' + ph, 'visible': not (n == 'Walls' and ph == 'e'), 'folder': 'Existing' if ph == 'e' else 'Proposed'}
+                        for n in ('Walls', 'Floor') for ph in 'ep']
+        for w in spec['walls']:
+            w['tag'] = 'Walls_p' if w['id'] == 'w-n' else 'Walls_e'
+        spec['rooms'][0]['tag'] = 'Floor_e'
+        skp = self.write(spec)
+        on, shown = group_tags(skp)
+        self.assertEqual((on['w-s'], on['w-n'], on['r-1']), ('Walls_e', 'Walls_p', 'Floor_e'))
+        self.assertEqual((shown['Walls_e'], shown['Walls_p']), (False, True))
+        self.assertEqual(tag_folders(skp), {'Walls_e': 'Existing', 'Floor_e': 'Existing', 'Walls_p': 'Proposed', 'Floor_p': 'Proposed'})
+        # A rewrite keeps one copy of each tag and folder.
+        skp = self.write(spec, skp)
+        self.assertEqual(tag_folders(skp), {'Walls_e': 'Existing', 'Floor_e': 'Existing', 'Walls_p': 'Proposed', 'Floor_p': 'Proposed'})
+        # Unedited, every group reads back on the tag it was written on.
+        got = self.read(skp)
+        self.assertEqual({w['id']: (w['tag'], w['wroteTag']) for w in got['walls']}['w-n'], ('Walls_p', 'Walls_p'))
+        # Moved onto the proposed half in SketchUp: the read carries both names.
+        moved = self.root / 'moved.skp'
+        move_group_to_tag(skp, moved, 'w-s', 'Walls_p')
+        got = self.read(moved)
+        self.assertEqual({w['id']: (w['tag'], w['wroteTag']) for w in got['walls']}['w-s'], ('Walls_p', 'Walls_e'))
+        self.assertEqual(got['rooms'][0]['tag'], 'Floor_e')
+
     def test_round_trip_reads_back_what_was_written(self):
         got = self.read(self.write(SPEC))
         self.assertEqual(got['model']['propertyId'], 'prop-synthetic')
@@ -700,6 +725,47 @@ def group_tags(source):
             v = C.c_bool(); api.call('SULayerGetVisibility', ref, C.byref(v)); names.append(api.text('SULayerGetName', ref)); shown[names[-1]] = v.value
         assert len(names) == len(set(names)), names
         return out, shown
+    finally:
+        if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
+
+
+def tag_folders(source):
+    """{tag name: name of the tag folder it is in} for every tag inside a folder."""
+    from server.sketchup_convert import API, Ref
+    api = API(); model = Ref(); out = {}
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
+        count = C.c_size_t(); api.call('SUModelGetNumLayers', model, C.byref(count))
+        refs = (Ref * max(1, count.value))()
+        if count.value: api.call('SUModelGetLayers', model, count, refs, C.byref(count))
+        for ref in refs[:count.value]:
+            parent = Ref()
+            if not api.call('SULayerGetParentLayerFolder', ref, C.byref(parent), optional=True) and parent.ptr:
+                out[api.text('SULayerGetName', ref)] = api.text('SULayerFolderGetName', parent)
+        folders = C.c_size_t(); api.call('SUModelGetNumLayerFolders', model, C.byref(folders))
+        assert folders.value == len(set(out.values())), 'one folder per name'
+        return out
+    finally:
+        if model.ptr: api.call('SUModelRelease', C.byref(model))
+        api.lib.SUTerminate()
+
+
+def move_group_to_tag(source, output, element_id, tag):
+    """Put one Tiksi group on another existing tag, as SketchUp's Entity Info does, and save."""
+    from server.sketchup_convert import API, Ref
+    from server.sketchup_mirror import get_data, to_ref
+    api = API(); model = Ref()
+    try:
+        api.call('SUModelCreateFromFile', C.byref(model), str(source).encode())
+        count = C.c_size_t(); api.call('SUModelGetNumLayers', model, C.byref(count))
+        refs = (Ref * count.value)(); api.call('SUModelGetLayers', model, count, refs, C.byref(count))
+        layer = next(r for r in refs[:count.value] if api.text('SULayerGetName', r) == tag)
+        for g in api.collection(api.ref('SUModelGetEntities', model), 'Groups'):
+            data = get_data(api, to_ref(api, 'SUGroupToEntity', g))
+            if data and data.get('id') == element_id:
+                api.call('SUDrawingElementSetLayer', to_ref(api, 'SUGroupToDrawingElement', g), layer)
+        api.call('SUModelSaveToFile', model, str(output).encode())
     finally:
         if model.ptr: api.call('SUModelRelease', C.byref(model))
         api.lib.SUTerminate()

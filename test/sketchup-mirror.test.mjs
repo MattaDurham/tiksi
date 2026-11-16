@@ -671,3 +671,46 @@ test('a native wall scale updates its profile dimensions with its wall geometry'
   assert.deepEqual(read.walls[0].base.profile, { baseboardHeight: .09, baseboardDepth: .012 }, 'the written source dimensions stay unchanged');
   assert.ok(mirrorSpec(p).walls[0].baseboards.every(part => part.height === .18));
 });
+
+test('each group goes on its tag\'s half, and every tag is sent as two halves in the Existing and Proposed folders', () => {
+  const p = room();
+  p.walls.find(w => w.id === 'w-n').projectId = 'proj-new';
+  p.phaseOf = { 'opening:o-win': 'p' };
+  p.tags.find(t => t.name === 'Walls').phases = { e: false, p: true };
+  const spec = mirrorSpec(p);
+  const wall = id => spec.walls.find(w => w.id === id);
+  assert.equal(wall('w-s').tag, 'Walls_e');
+  assert.equal(wall('w-n').tag, 'Walls_p', 'a wall in a project is proposed');
+  assert.equal(wall('w-s').holes.find(h => h.id === 'o-win').tag, 'Doors and windows_p');
+  assert.equal(wall('w-s').holes.find(h => h.id === 'o-door').tag, 'Doors and windows_e');
+  assert.equal(spec.rooms[0].tag, 'Floor_e');
+  const sent = Object.fromEntries(spec.tags.map(t => [t.name, t]));
+  assert.deepEqual(sent.Walls_e, { name: 'Walls_e', visible: false, folder: 'Existing' }, 'the hidden half is hidden in SketchUp too');
+  assert.deepEqual(sent.Walls_p, { name: 'Walls_p', visible: true, folder: 'Proposed' });
+  assert.equal(spec.tags.some(t => t.name === 'Walls'), false, 'no tag without its half');
+  const before = specSignature(spec);
+  p.phaseOf['wall:w-s'] = 'p';
+  assert.notEqual(specSignature(mirrorSpec(p)), before, 'a phase change rewrites the .skp');
+});
+
+test('a group moved onto the other half of its tag in SketchUp changes its phase in Tiksi; other tag moves do not', () => {
+  const p = room(), spec = mirrorSpec(p), read = readOf(spec);
+  const tagOf = (id, now, wrote) => Object.assign(read.walls.find(w => w.id === id) || read.walls.flatMap(w => w.openings).find(o => o.id === id), { tag: now, wroteTag: wrote });
+  tagOf('w-s', 'Walls_p', 'Walls_e');                      // moved to the proposed half
+  tagOf('w-e', 'Walls_e', 'Walls_e');                      // untouched
+  tagOf('w-n', 'Walls_p');                                 // written before tags were recorded: ignored
+  tagOf('w-w', 'Site', 'Walls_e');                         // another tag without a half: ignored
+  tagOf('o-door', 'Doors and windows_p', 'Doors and windows_e');
+  read.rooms[0].tag = 'Floor_p'; read.rooms[0].wroteTag = 'Floor_e';
+  const r = mergeMirror(p, read, syncedState(p));
+  assert.deepEqual(r.applied.sort(), ['o-door', 'r-1', 'w-s']);
+  assert.deepEqual(p.phaseOf, { 'wall:w-s': 'p', 'opening:o-door': 'p', 'room:r-1': 'p' });
+  assert.deepEqual([r.added, r.deleted, r.conflicts], [[], [], []]);
+  // Back to the half its project gives it: its own phase is cleared rather than stored.
+  p.walls.find(w => w.id === 'w-e').projectId = 'proj-new';
+  p.phaseOf['wall:w-e'] = 'e';
+  const again = readOf(mirrorSpec(p));
+  Object.assign(again.walls.find(w => w.id === 'w-e'), { tag: 'Walls_p', wroteTag: 'Walls_e' });
+  mergeMirror(p, again, syncedState(p));
+  assert.equal(p.phaseOf['wall:w-e'], undefined);
+});
