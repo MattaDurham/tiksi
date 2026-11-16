@@ -75,6 +75,8 @@ import { renderObjectList, showListTab, revealInList, objectThing, hiddenState }
 import { trimTemplate, swapTrimProduct, setTrimY, trimExtent, trimStyle, trimProduct, trimLabel, isField, roomFaces } from './trims.js';
 import { trimDesign, designValues, setDesignParam, stickySnap, SCOPE_LABELS } from './trim-design.js';
 import { trimPanelHtml, bindTrimPanel, addTrimHtml, bindAddTrim } from './trim-panel.js';
+import { createPaintTool } from './paint-tool.js';
+import { paintFace, regionLabel, trimDivides } from './wall-regions.js';
 import { PIECE_KINDS, pieceRecord, clickGroupIds, assignProject } from './project-pieces.js';
 import { arrowsNear, walkTarget, glideMs } from './walk-hops.js';
 import { projectBlockHtml, bindProjectBlock, newProjectRecord } from './project-pieces-ui.js';
@@ -109,7 +111,8 @@ let picked = [];
 let lastClick = null;          // the last click on the model, to tell a double-click
 let hoverTarget = null;
 let mode = 'orbit';            // orbit | walk | top
-let tool = 'select';           // select | move | measure | pin | note | fov
+let tool = 'select';           // select | measure | pin | note | fov | paint
+let paintHover = [];           // the meshes PAINT would paint under the pointer (paint-tool.js)
 let lensPick = null;           // the lens preset the view is set to (lens.js), fitted again when the window changes shape
 let fovDrag = null;            // { y, vfov } while the FIELD OF VIEW tool drags
 // PARALLEL: the stop past the narrow end of the field of view, where the sides no longer
@@ -679,9 +682,17 @@ function texturesOnScreen() {
 }
 
 let lastStructure = null, lastFixtureRecords = new Map(), lastTrimRecords = new Map();
+// What of the trim divides wall faces into regions (wall-regions.js): the walls are redrawn when
+// this changes. A drag in progress keeps the regions it started with and redraws once at its end.
+let lastRegionSig = '';
+function regionSig() {
+  if (trimDrag) return lastRegionSig;
+  return lastRegionSig = JSON.stringify((prop.trims || []).filter(trimDivides).map(t => [t.id, t.wallId, t.side, t.f0, t.f1, t.style, t.product, t.y, t.h]));
+}
 function rebuildModel() {
+  paintHover = [];
   trimDesignMemo = null;
-  const structure = JSON.stringify([prop.id, quality(), memoryLimits().textureQuality, prop.levels, prop.walls, prop.openings, prop.rooms, prop.tags, prop.tagOf, prop.hidden, prop.modelSourceId, xray, prop.env.xrayOpacity, [...hiddenLevels()], ws.data.materials]);
+  const structure = JSON.stringify([prop.id, quality(), memoryLimits().textureQuality, prop.levels, prop.walls, prop.openings, prop.rooms, prop.tags, prop.tagOf, prop.hidden, prop.modelSourceId, xray, prop.env.xrayOpacity, [...hiddenLevels()], ws.data.materials, regionSig()]);
   const records = new Map(prop.fixtures.map(f => [f.id, JSON.stringify(f)]));
   const trimRecords = new Map((prop.trims || []).map(t => [t.id, JSON.stringify(t)]));
   if (modelGroup && lastStructure === structure) {
@@ -2119,6 +2130,7 @@ function onPointerUp(e) {
   // A client looks; a click selects nothing.
   if (clientMode) return;
   if (tool === 'measure') return addMeasurePoint(e);
+  if (tool === 'paint') return paintTool.click(e);
   if (tool === 'pin') return placePin(e);
   if (tool === 'note') return placeNote(e);
   if (match && match.points && match.points.mode === 'model') return addMatchModelPoint(e);
@@ -2232,6 +2244,7 @@ function onPointerMove(e) {
   requestAnimationFrame(() => {
     hoverPending = false;
     if (!scene) return;
+    if (tool === 'paint') { renderer.domElement.style.cursor = paintTool.move(e) ? 'crosshair' : 'default'; return; }
     const hit = pick(e, { scans: false, ground: false });
     const next = hit && hit.faceId ? findGroupFor('face', hit.faceId) : hit && !hit.cap && ['wall', 'room', 'opening', 'ceiling', 'trim'].includes(hit.kind) ? hit.object : null;
     const under = trimEdit && hit ? trimUnder(e, hit) : null;
@@ -2304,8 +2317,8 @@ function updateOutlineTargets() {
   }
   passes.outline.selectedObjects = selMeshes;
   const hov = hoverTarget && hoverTarget !== sel ? hoverTarget : null;
-  const hovMeshes = [];
-  if (hov) hov.traverse(o => { if (o.isMesh && !(o.userData && o.userData.glass)) hovMeshes.push(o); });
+  const hovMeshes = tool === 'paint' ? paintHover.slice() : [];
+  if (hov && tool !== 'paint') hov.traverse(o => { if (o.isMesh && !(o.userData && o.userData.glass)) hovMeshes.push(o); });
   // While trim is edited by dragging, every section the drag under the pointer reaches is outlined.
   if (trimEdit && trimReach.length && modelGroup) {
     const reach = new Set(trimReach);
@@ -2339,6 +2352,40 @@ function setSelection(sel, picks, things) {
   renderToolCol();
   requestRender(2);
 }
+
+// ---------- paint ----------
+// PAINT (B): paint-tool.js decides what a click paints and draws the panel; this is what it
+// works with. A click through furniture or a scan paints the surface behind it, and the outline
+// under the pointer shows which.
+const paintTool = createPaintTool({
+  prop: () => prop,
+  root: () => modelGroup,
+  levels: () => (modelGroup && modelGroup.userData.levels) || [],
+  pick: e => pick(e, { pins: false, notes: false, scans: false }),
+  picked: () => picked,
+  panel: () => inspEl,
+  rebuild: () => rebuildModel(),
+  repaintPanel: () => renderInspector(),
+  toast: (msg, kind) => toast(msg, kind),
+  setHover(meshes) {
+    if (meshes.length === paintHover.length && meshes.every((m, i) => m === paintHover[i])) return;
+    paintHover = meshes; updateOutlineTargets(); requestRender(2);
+  },
+});
+// For the browser checks: the finish each drawn piece of each wall face wears.
+export function regionFinishes() {
+  const out = [];
+  if (modelGroup) modelGroup.traverse(o => { if (o.isMesh && o.userData.faceId) out.push({ faceId: o.userData.faceId, region: o.userData.region || null, material: (o.material.userData && o.material.userData.materialId) || '' }); });
+  return out;
+}
+// What a PAINT click at this point of the window would paint, without painting it.
+export function paintUnder(clientX, clientY, keys) {
+  if (!scene || !prop) return null;
+  const hit = pick({ clientX, clientY }, { pins: false, notes: false, scans: false });
+  const d = paintTool.describeHit(hit, keys || {});
+  return d ? { hit: hit.kind, ...d } : { hit: hit ? hit.kind : null, cap: !!(hit && hit.cap) };
+}
+export function paintState() { return { tool, material: paintTool.state.material, scope: paintTool.state.scope, under: paintTool.state.under, hover: paintHover.length }; }
 
 // ---------- wall trim ----------
 // Trim sections (trims.js) are picked like any plan element; Shift-click adds more. A change
@@ -2759,7 +2806,7 @@ function onTrimDragEnd(e) {
   }
   endGeometryHold(prop);
   touch();
-  updateOutlineTargets();
+  rebuildModel();      // the wall regions follow the trim once the drag is over (and the outline with them)
   renderInspector();
 }
 
@@ -4587,12 +4634,14 @@ function taskText() {
   if (tool === 'note') return 'Tap where the note belongs.';
   if (tool === 'pin') return pinPhotoId && photoById(prop, pinPhotoId) ? 'Tap where this photo was taken.' : 'Choose a photo on the PHOTOS page first.';
   if (tool === 'fov') return 'Drag up to narrow the view, down to widen it.';
+  if (tool === 'paint') return paintTool.task();
   return '';
 }
 function defaultHint() {
   if (clientMode) return mode === 'walk' ? 'WALK: click the floor or an arrow to go there; drag to look around. WASD and the arrow keys move too.' : 'Drag to orbit, hold Shift to pan, scroll or pinch to zoom. W walks through.';
   if (mode === 'walk') return walkLocked ? 'WALK: WASD / arrows move, Shift runs, mouse looks. Esc releases the mouse.' : 'WALK: WASD / arrows move, Shift runs. Drag to look or click to capture the mouse. Esc exits.';
   if (tool === 'measure') return 'MEASURE: click two points on any surface.';
+  if (tool === 'paint') return paintTool.hint();
   if (tool === 'fov') return 'FIELD OF VIEW: drag up to narrow the view, down to widen it. The panel has the iPhone 0.5×, 1× and 2× lenses. Esc ends.';
   if (tool === 'pin') return 'PIN: choose a photo or document, then click the surface to hang it on.';
   if (tool === 'note') return noteHint();
@@ -5202,7 +5251,7 @@ function renderInspector() {
   renderInspectorBody();
   renderEvidenceInspector();
   renderObjects();
-  if (!inspEl || tool === 'pin' || match) return;
+  if (!inspEl || tool === 'pin' || tool === 'paint' || match) return;
   addProjectBlock();
   // One object of a model, and several objects, draw their own tag line (object-panel.js).
   if (!selection || picked.length > 1 || selectedModelObject() || selection.kind === 'face') return;
@@ -5391,6 +5440,19 @@ function faceFinish(f) {
   }));
   return ids.size === 1 ? [...ids][0] : null;
 }
+// A face its trim divides (wall-regions.js): each piece with its area and the finish it wears.
+function facePiecesHtml(f) {
+  const lvl = ((modelGroup && modelGroup.userData.levels) || []).find(l => l.id === f.levelId);
+  const res = lvl && lvl.group.userData.regions && lvl.group.userData.regions.get(f.id);
+  if (!res || res.regions.length < 2) return '';
+  const trims = (prop.trims || []).filter(t => f.parts.some(p => p.wallId === t.wallId));
+  const own = faceFinish(f);
+  const rows = res.regions.map(r => {
+    const label = regionLabel(r, trims, res.regions.length), m = materialById(r.finish || own);
+    return `<div class="stat-line" data-face-piece="${escapeHtml(r.key)}"><span>${escapeHtml(label.charAt(0).toUpperCase() + label.slice(1))} &middot; ${escapeHtml(fmtArea(r.area))}</span><b>${escapeHtml(m ? m.name : 'Automatic')}</b></div>`;
+  }).join('');
+  return `<h3>PIECES</h3><div class="v-face-rows">${rows}</div><p class="empty">Trim and casings divide this wall. PAINT (B) paints one piece per click.</p>`;
+}
 function renderFacePanel() {
   const faces = picked.map(t => faceById(t.sel.id)).filter(Boolean);
   if (!faces.length) { setSelection(null); return; }
@@ -5416,7 +5478,8 @@ function renderFacePanel() {
     ${line('Area, net', fmtArea(t.net), 'Gross area less the doors and windows')}
     ${line('Face length', fmtLen(t.length), 'Along the floor, inside corner to inside corner')}
     ${line('Baseboard length', fmtLen(t.baseboard), 'Face length less the door widths')}
-    <div class="field" style="margin-top:10px"><label>Finish${faces.length > 1 ? ' (all ' + faces.length + ')' : ''}</label>${materialSelectHtml('wall', finish || '', 'data-face-mat').replace('(none)', finishes.size > 1 ? '(several finishes)' : 'Automatic (the wall\'s own)')}</div>
+    ${one ? facePiecesHtml(one) : ''}
+    <div class="field" style="margin-top:10px"><label>Finish, floor to ceiling${faces.length > 1 ? ' (all ' + faces.length + ')' : ''}</label>${materialSelectHtml('wall', finish || '', 'data-face-mat').replace('(none)', finishes.size > 1 ? '(several finishes)' : 'Automatic (the wall\'s own)')}</div>
     ${roomIds.length === 1 ? `<button class="btn" data-face-room title="Select every wall face of this room">SELECT ALL WALLS OF ${escapeHtml((prop.rooms.find(r => r.id === roomIds[0]) || {}).name || 'THIS ROOM').toUpperCase()}</button>` : ''}
     ${one ? walls.map(id => `<button class="btn" data-face-wall="${escapeHtml(id)}" title="The wall behind this face: its research, scope, products, photos and trim">THE WALL BEHIND${walls.length > 1 ? ' (' + (walls.indexOf(id) + 1) + ' of ' + walls.length + ')' : ''}</button>`).join('') : ''}
     <p class="empty">Click a wall to select its face; Shift-click adds or removes faces. Each face is one flat run of one room, inside corner to inside corner. Walls change in SketchUp.</p>`;
@@ -5424,12 +5487,8 @@ function renderFacePanel() {
     const id = e.target.value;
     if (!id && finishes.size > 1) return;
     beginGeometryEdit(prop, faces.length > 1 ? 'change wall finishes' : 'change wall finish');
-    for (const f of faces) for (const p of f.parts) {
-      const w = prop.walls.find(x => x.id === p.wallId);
-      if (!w) continue;
-      const k = p.side > 0 ? 'materialPos' : 'materialNeg';
-      if (id) w[k] = id; else delete w[k];
-    }
+    // The whole face, floor to ceiling: the paint on its regions goes too (wall-regions.js).
+    for (const f of faces) paintFace(f, wallsOn(prop, f.levelId), id);
     touch(); rebuildModel(); renderInspector();
   };
   const fr = inspEl.querySelector('[data-face-room]');
@@ -5540,6 +5599,7 @@ function bindTagManager(root) {
 function renderInspectorBody() {
   if (!inspEl) return;
   if (tool === 'pin') return renderPinPanel();
+  if (tool === 'paint' && !match) return paintTool.renderPanel();
   if (tool === 'fov' && !match) return renderFovPanel();
   if (match) return renderMatchPanel();
   if (trimIds().length) return renderTrimPanel();
@@ -6216,6 +6276,8 @@ function menuGroups() {
     { title: 'Tools', items: [
       { label: 'Select', key: 'V', icon: 'select', act: 'select', active: tool === 'select', run: () => setTool('select') },
       { label: 'Measure', key: 'D', icon: 'measure', act: 'measure', active: tool === 'measure', run: () => setTool(tool === 'measure' ? 'select' : 'measure') },
+      // PAINT's finishes are in the inspector, which the phone layout does not have.
+      ...(fieldLayout() ? [] : [{ label: 'Paint', key: 'B', icon: 'paint', act: 'paint', active: tool === 'paint', title: 'Paint: choose a finish, then click a wall, trim, a door, a window, a floor or a ceiling (B)', run: () => setTool(tool === 'paint' ? 'select' : 'paint') }]),
       { label: 'Field of view', key: 'Z', icon: 'zoom-in', act: 'fov', active: tool === 'fov', title: 'Field of view: drag up or down (Z)', run: () => setTool(tool === 'fov' ? 'select' : 'fov') },
       ...(measures.length ? [{ label: 'Clear measures', icon: 'close', act: 'clearm', run: () => { clearMeasures(); renderToolCol(); } }] : []),
       { label: 'Pin a photo', key: 'P', icon: 'pin', act: 'pin', active: tool === 'pin', run: () => { if (tool === 'pin') setTool('select'); else startPinMode(null); } },
@@ -6388,6 +6450,7 @@ function setTool(next) {
   if (next !== 'select' && markup && markup.isOn()) markup.setOn(false);
   if (tool === 'measure' && next !== 'measure') { measureDraft = null; measureRoot.children.filter(c => c.userData.draft).forEach(c => { measureRoot.remove(c); c.geometry.dispose(); c.material.dispose(); }); }
   tool = next;
+  paintHover = []; paintTool.state.sampling = false; paintTool.state.under = null;
   if (next !== 'pin') pinBatch = false;
   if (next !== 'note') movingNoteId = null;
   fovDrag = null;
@@ -6467,6 +6530,7 @@ function onKeyDown(e) {
     case 'KeyW': setMode('walk'); break;
     case 'KeyV': setTool('select'); break;
     case 'KeyD': setTool(tool === 'measure' ? 'select' : 'measure'); break;
+    case 'KeyB': if (e.metaKey || e.ctrlKey || e.altKey || fieldLayout()) return; setTool(tool === 'paint' ? 'select' : 'paint'); break;
     case 'KeyZ': if (e.metaKey || e.ctrlKey || e.altKey) return; setTool(tool === 'fov' ? 'select' : 'fov'); break;
     case 'KeyP': if (e.shiftKey) { setParallel(!parallel); break; } if (tool === 'pin') setTool('select'); else startPinMode(null); break;
     case 'KeyN': if (tool === 'note') setTool('select'); else startNoteMode(null); break;
@@ -6496,7 +6560,7 @@ function onKeyDown(e) {
   e.preventDefault();
 }
 function onKeyUp(e) { delete walkKeys[e.code]; if (markup) markup.keyUp(e); }
-function onPointerLeave() { if (hoverTarget) { hoverTarget = null; updateOutlineTargets(); requestRender(2); } }
+function onPointerLeave() { if (tool === 'paint') paintTool.leave(); if (hoverTarget) { hoverTarget = null; updateOutlineTargets(); requestRender(2); } }
 function onContextMenu(e) { e.preventDefault(); }
 
 // ---------- mount / unmount ----------
@@ -6623,6 +6687,9 @@ function openModel(root) {
     camera.position.fromArray(kept.position); controls.target.fromArray(kept.target);
     adoptFov(kept.fov); camera.updateProjectionMatrix(); controls.update();
     parallel = kept.parallel === true;
+    // PAINT stays in hand through such a rebuild (a save answered from the Mac, another device's
+    // change): the finish and the reach are paint-tool.js's own and were never lost.
+    if (kept.painting && !fieldLayout()) setTool('paint');
   }
 
   const focus=pendingScanFocus || prop.modelSourceId,token=mountId,focusVersion=selectionVersion;pendingScanFocus=null;
@@ -6847,7 +6914,7 @@ function rememberView() {
   const dir = camera.getWorldDirection(new THREE.Vector3());
   const t = controls && controls.target && controls.enabled !== false ? controls.target.clone() : camera.position.clone().addScaledVector(dir, 5);
   if (t.distanceTo(camera.position) < 1e-3) t.copy(camera.position).addScaledVector(dir, 5);
-  lastView = { propId: prop.id, position: camera.position.toArray(), target: t.toArray(), fov: camera.fov, parallel };
+  lastView = { propId: prop.id, position: camera.position.toArray(), target: t.toArray(), fov: camera.fov, parallel, painting: tool === 'paint' };
 }
 
 export function unmount() {

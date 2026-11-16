@@ -230,14 +230,14 @@ export function mirrorSpec(prop, materials, legacy = false) {
         hole.sides = { pos: !!observedSides.pos, neg: !!observedSides.neg };
         const interior = hole.sides.pos && hole.sides.neg;
         hole.resolved = role === 'door' ? doorDetail(o, p.width, p.height, interior, hole.sides) : windowDetail(o, p.width, p.height);
-        hole.trimMaterial = finish('mat-trim', 'door', 'opening ' + o.id);
+        hole.trimMaterial = finish(o.trimMaterial || 'mat-trim', 'door', 'opening ' + o.id);
         const glassFinish = finish('mat-glass', 'window', 'opening ' + o.id);
         // Keep a distinct native material from older opaque opening-marker panes.
         hole.glassMaterial = { ...glassFinish, name: glassFinish.name + ' (transparent)', opacity: 0.22 };
         const hardware = hole.resolved.hardwareFinish || 'chrome';
         hole.metalMaterial = { id: null, name: 'Door hardware, ' + (hardware === 'glass' ? 'chrome' : hardware), color: hardware === 'brass' ? '#b99b54' : hardware === 'dark' ? '#35332e' : '#b9bcc0' };
         hole.knobMaterial = hardware === 'glass' ? hole.glassMaterial : hole.metalMaterial;
-        hole.leafMaterial = finish(hole.resolved.leafMaterial || 'mat-trim', 'door', 'opening ' + o.id);
+        hole.leafMaterial = finish(hole.resolved.leafMaterial || o.trimMaterial || 'mat-trim', 'door', 'opening ' + o.id);
         if (role === 'door') {
           hole.leaves = open ? 0 : hole.resolved.leaves;
           hole.shownOpen = doorShownOpen(o, interior);
