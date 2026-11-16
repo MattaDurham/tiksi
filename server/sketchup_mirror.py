@@ -156,6 +156,14 @@ def set_layer(api, group, layer):
         api.call('SUDrawingElementSetLayer', to_ref(api, 'SUGroupToDrawingElement', group), layer)
 
 
+def group_tag(api, group):
+    """The name of the SketchUp tag a group sits on ('' when it has none)."""
+    layer = Ref()
+    if api.call('SUDrawingElementGetLayer', to_ref(api, 'SUGroupToDrawingElement', group), C.byref(layer), optional=True) or not layer.ptr:
+        return ''
+    return api.text('SULayerGetName', layer)
+
+
 # ---------- finishes ----------
 
 MATERIAL_PREFIX = 'Tiksi: '
@@ -365,8 +373,34 @@ def level_layers(api, model, levels):
     return out
 
 
+def layer_folder(api, model, name, cache):
+    """A top-level tag folder by name, made when the model has none. None when the SketchUp API
+    has no tag folders (before SketchUp 2021); the tag then stays outside any folder."""
+    if name in cache:
+        return cache[name]
+    if not hasattr(api.lib, 'SUModelGetNumLayerFolders'):
+        cache[name] = None
+        return None
+    count = C.c_size_t()
+    api.call('SUModelGetNumLayerFolders', model, C.byref(count))
+    if count.value:
+        refs = (Ref * count.value)()
+        api.call('SUModelGetLayerFolders', model, count, refs, C.byref(count))
+        for ref in refs[:count.value]:
+            if api.text('SULayerFolderGetName', ref) == name:
+                cache[name] = ref
+                return ref
+    folder = Ref()
+    api.call('SULayerFolderCreate', C.byref(folder), name.encode('utf-8'))   # (folder*, const char* name)
+    api.call('SUModelAddLayerFolder', model, folder)
+    cache[name] = folder
+    return folder
+
+
 def tag_layers(api, model, tags):
-    """A SketchUp tag per Tiksi tag, by name, reusing one already in the model; its visibility follows Tiksi."""
+    """A SketchUp tag per Tiksi tag, by name, reusing one already in the model; its visibility follows Tiksi.
+    Each Tiksi tag comes as two halves, "<name>_e" and "<name>_p", with `folder` naming the tag
+    folder it goes in (Existing / Proposed); a tag already in another folder stays where it is."""
     count = C.c_size_t()
     api.call('SUModelGetNumLayers', model, C.byref(count))
     existing = {}
@@ -375,7 +409,7 @@ def tag_layers(api, model, tags):
         api.call('SUModelGetLayers', model, count, refs, C.byref(count))
         for ref in refs[:count.value]:
             existing[api.text('SULayerGetName', ref)] = ref
-    out = {}
+    out, folders = {}, {}
     for tag in tags or []:
         name = str(tag.get('name') or '').strip()[:120] if isinstance(tag, dict) else ''
         if not name or name in out:
@@ -387,6 +421,12 @@ def tag_layers(api, model, tags):
             api.call('SUModelAddLayers', model, C.c_size_t(1), (Ref * 1)(layer))
             existing[name] = layer
         api.call('SULayerSetVisibility', existing[name], C.c_bool(tag.get('visible') is not False), optional=True)
+        folder_name = str(tag.get('folder') or '').strip()[:120]
+        if folder_name:
+            folder = layer_folder(api, model, folder_name, folders)
+            parent = Ref()
+            if folder is not None and (api.call('SULayerGetParentLayerFolder', existing[name], C.byref(parent), optional=True) or not parent.ptr):
+                api.call('SULayerFolderAddLayer', folder, existing[name], optional=True)
         out[name] = existing[name]
     return out
 
@@ -772,7 +812,7 @@ def write_wall(api, entities, wall, layer, materials, tags=None):
         base['trimGeometry'] = [{'id': t['id'], 'meshSig': t['meshSig']} for t in wall['trims']]
     write_baseboards(api, inner, wall, layer, materials)
     write_trim_details(api, inner, wall, layer, materials, tags)
-    data = {'kind': 'wall', 'id': wall['id'], 'level': wall['level'], 'base': base,
+    data = {'kind': 'wall', 'id': wall['id'], 'level': wall['level'], 'base': base, 'tag': wall.get('tag') or '',
             'local': {'x0': 0, 'x1': r6(L * IN), 'y0': r6(-th / 2 * IN), 'y1': r6(th / 2 * IN), 'z0': 0, 'z1': r6(H * IN)}}
     if wall.get('trims'):
         data['trimGuard'] = {'transform': group_transform(api, group), 'bounds': face_bounds(api, inner)}
@@ -816,7 +856,7 @@ def write_wall(api, entities, wall, layer, materials, tags=None):
         if 'floorContinuity' in h:
             obase['floorContinuity'] = h['floorContinuity']
         orientation = {'sides': h.get('sides') or {}, 'swingSide': (h.get('resolved') or {}).get('swingSide')}
-        set_data(api, to_ref(api, 'SUGroupToEntity', og), {'kind': 'opening', 'id': h['id'], 'type': h.get('type'), 'base': obase,
+        set_data(api, to_ref(api, 'SUGroupToEntity', og), {'kind': 'opening', 'id': h['id'], 'type': h.get('type'), 'base': obase, 'tag': h.get('tag') or '',
                                                            'orientation': orientation, 'local': {'x1': r6(w * IN), 'z1': r6(hh * IN)}})
     return group
 
@@ -866,7 +906,7 @@ def write_room(api, entities, room, layer, materials):
     base = {'pts': [[r6(x), r6(y)] for x, y in pts], 'name': room.get('name') or '', 'elevation': r6(elev)}
     if isinstance(height, (int, float)) and not isinstance(height, bool) and math.isfinite(height) and height > 0:
         base['ceilingHeight'] = r6(height)
-    set_data(api, to_ref(api, 'SUGroupToEntity', group), {'kind': 'room', 'id': room['id'], 'level': room['level'], 'base': base})
+    set_data(api, to_ref(api, 'SUGroupToEntity', group), {'kind': 'room', 'id': room['id'], 'level': room['level'], 'base': base, 'tag': room.get('tag') or ''})
     return group
 
 
@@ -905,7 +945,7 @@ def write_fixture(api, entities, fixture, layer, materials):
         for face in api.collection(body, 'Faces'):
             paint(api, face, mat)
     data = {'kind': 'fixture', 'id': fixture['id'], 'level': fixture['level'], 'fixtureKind': fixture.get('kind'), 'subtype': fixture.get('subtype'),
-            'shape': fixture.get('shape'), 'base': dict(fixture.get('base') or {}, elevation=r6(elev))}
+            'shape': fixture.get('shape'), 'base': dict(fixture.get('base') or {}, elevation=r6(elev)), 'tag': fixture.get('tag') or ''}
     if fixture.get('local'):
         data['local'] = fixture['local']
     set_data(api, to_ref(api, 'SUGroupToEntity', group), data)
@@ -1327,7 +1367,8 @@ def read_wall(api, group, data, warnings, material_cache=None):
             kind = 'window' if odata.get('type') == 'window' else 'door'
             onow['profile'] = scaled_opening_detail({kind: profile}, axis_scale(combined, 0), axis_scale(combined, 1), axis_scale(combined, 2),
                                                     om[0] < 0, across_reflected != (om[5] < 0), odata.get('orientation'))[kind]
-        openings.append({'id': odata.get('id'), 'type': odata.get('type'), 'base': odata.get('base') or {}, 'now': onow})
+        openings.append({'id': odata.get('id'), 'type': odata.get('type'), 'base': odata.get('base') or {}, 'now': onow,
+                         'tag': group_tag(api, og), 'wroteTag': odata.get('tag')})
     return {'id': data.get('id'), 'level': data.get('level'), 'name': api.text('SUGroupGetName', group), 'base': data.get('base') or {}, 'now': now, 'openings': openings}
 
 
@@ -1442,15 +1483,16 @@ def read_mirror(folder):
             kind = data.get('kind')
             if kind in ('trim-detail', 'trim-part'):
                 raise ValueError('Generated trim was detached from its wall; the native model is preserved for review')
+            # Each item carries the tag its group is on now and the one Tiksi wrote it on.
             if kind == 'wall':
                 item = read_wall(api, group, data, warnings, appearance_cache)
-                if item: walls.append(item)
+                if item: walls.append(dict(item, tag=group_tag(api, group), wroteTag=data.get('tag')))
             elif kind == 'room':
                 item = read_room(api, group, data, warnings)
-                if item: rooms.append(item)
+                if item: rooms.append(dict(item, tag=group_tag(api, group), wroteTag=data.get('tag')))
             elif kind == 'fixture':
                 item = read_fixture(api, group, data, warnings)
-                if item: fixtures.append(item)
+                if item: fixtures.append(dict(item, tag=group_tag(api, group), wroteTag=data.get('tag')))
             elif kind == 'opening':
                 stray += 1
         underlays = []

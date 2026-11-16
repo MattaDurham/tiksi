@@ -2,7 +2,7 @@
 // automatic tag of an imported model's meshes, and showing or hiding meshes by tag. Used by
 // MODEL (viewer3d.js), DOCUMENTS (sheet-render.js), the plan model (geometry.js) and exports.
 
-import { planKey, nodeKey, keyShown, tagIdOf, tagById, detectTag, tagForDetection, levelFor, PLAN_KINDS } from './tags.js';
+import { planKey, nodeKey, keyShown, tagIdOf, tagById, detectTag, tagForDetection, levelFor, PLAN_KINDS, phaseOfKey, phasedTagName, phaseShown } from './tags.js';
 import { scanLayer } from './view-layers.js';
 
 const PLAN = new Set(Object.keys(PLAN_KINDS).filter(k => k !== 'furniture'));
@@ -128,6 +128,7 @@ export function detectModelTags(prop, scan, wrapper, { again = false } = {}) {
     }
     const d = detectTag({ fileTag: fileTagOf(part.object), names, stats, level, record });
     prop.tagOf[key] = tagForDetection(prop, d);
+    if (d.phase) (prop.phaseOf = prop.phaseOf || {})[key] = d.phase;
     n++;
   }
   return n;
@@ -147,7 +148,8 @@ export function applyPlanTagVisibility(prop, root, overrides) {
   });
 }
 
-// Stamp each mesh with its tag's name, so exports carry tags (GLB extras, SketchUp tags).
+// Stamp each mesh with its tag's name and half ("Walls_e", "Walls_p"), so exports carry tags
+// (GLB extras, SketchUp tags) and an import of the export finds the same tag and half.
 export function stampTags(prop, root, scanOf) {
   root.traverse(o => {
     if (!o.isMesh) return;
@@ -155,6 +157,6 @@ export function stampTags(prop, root, scanOf) {
     if (!key && scanOf) key = scanOf(o);
     if (!key) return;
     const t = tagById(prop, tagIdOf(prop, key));
-    if (t) { o.userData.tiksiTag = t.name; o.userData.tiksiTagVisible = t.visible !== false; }
+    if (t) { const ph = phaseOfKey(prop, key); o.userData.tiksiTag = phasedTagName(t.name, ph); o.userData.tiksiTagVisible = t.visible !== false && phaseShown(prop, t.id, ph); }
   });
 }

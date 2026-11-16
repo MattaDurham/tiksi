@@ -252,3 +252,88 @@ test('a point cloud is one part on Scan capture; the plan model hides walls by t
   const walls = []; all.traverse(o => { if (o.isMesh && S.planKeyOf(o)?.startsWith('wall:')) walls.push(o.visible); });
   assert.ok(walls.every(Boolean), 'an export build keeps hidden tags');
 });
+
+test('existing and proposed: an object is proposed when it belongs to a project, unless it has its own phase', () => {
+  const p = store.propertyTemplate('Phases');
+  p.walls = [{ id: 'w-old' }, { id: 'w-new', projectId: 'proj-a' }];
+  p.rooms = [{ id: 'r1', pts: [], projectId: 'proj-a' }];
+  p.trims = [{ id: 't1', wallId: 'w-old' }];
+  p.scans = [{ id: 'scan-furn' }, { id: 'scan-design', projectId: 'proj-a' }];
+  assert.equal(T.phaseOfKey(p, 'wall:w-old'), 'e');
+  assert.equal(T.phaseOfKey(p, 'wall:w-new'), 'p');
+  assert.equal(T.phaseOfKey(p, 'ceiling:r1'), 'p', 'a ceiling follows its room');
+  assert.equal(T.phaseOfKey(p, 'trim:t1'), 'e');
+  assert.equal(T.phaseOfKey(p, 'node:scan-furn#0/3'), 'e', 'a model mesh follows its model');
+  assert.equal(T.phaseOfKey(p, 'node:scan-design#0/1'), 'p');
+  assert.equal(T.setPhase(p, ['trim:t1', 'node:scan-furn#0/3', 'junk'], 'p'), 2);
+  assert.equal(T.phaseOfKey(p, 'trim:t1'), 'p', 'its own phase wins over its project');
+  assert.equal(T.setPhase(p, ['wall:w-new'], 'e'), 1);
+  assert.equal(T.phaseOfKey(p, 'wall:w-new'), 'e');
+  assert.equal(T.setPhase(p, ['wall:w-new'], null), 1);
+  assert.equal(T.phaseOfKey(p, 'wall:w-new'), 'p', 'cleared, it follows its project again');
+  const halves = T.phaseCounts(p);
+  assert.deepEqual(halves.get(T.CANON.walls.id), { e: 1, p: 1 });
+  assert.deepEqual(halves.get(T.CANON.trim.id), { e: 0, p: 1 });
+});
+
+test('existing and proposed: each half of a tag, and each half of the whole model, shows on its own', () => {
+  const p = store.propertyTemplate('Halves');
+  p.fixtures = [{ id: 'f-old', kind: 'furniture' }, { id: 'f-new', kind: 'furniture', projectId: 'proj-a' }];
+  p.walls = [{ id: 'w1' }];
+  const furn = T.CANON.furniture.id;
+  assert.ok(T.setPhaseShown(p, furn, 'e', false));
+  assert.equal(T.keyShown(p, 'fixture:f-old'), false, 'existing furniture hidden');
+  assert.equal(T.keyShown(p, 'fixture:f-new'), true, 'proposed furniture still shows');
+  assert.equal(T.keyShown(p, 'wall:w1'), true, 'other tags untouched');
+  assert.deepEqual(T.tagById(p, furn).phases, { e: false, p: true });
+  assert.equal(T.keyShown(p, 'fixture:f-old', { [T.phaseOverrideKey(furn, 'e')]: true }), true, 'a view may show a hidden half');
+  T.setPhaseShown(p, furn, 'e', true);
+  assert.equal(T.tagById(p, furn).phases, undefined, 'both halves shown is the default and is not stored');
+  T.setPhaseShown(p, '', 'p', false);
+  assert.equal(T.keyShown(p, 'fixture:f-new'), false, 'hiding every proposed half');
+  assert.equal(T.keyShown(p, 'fixture:f-old'), true);
+  assert.equal(T.keyShown(p, 'fixture:f-new', { [T.phaseOverrideKey('', 'p')]: true }), true);
+  T.setTagShown(p, furn, false);
+  T.setPhaseShown(p, '', 'p', true);
+  assert.equal(T.keyShown(p, 'fixture:f-new'), false, 'the tag\'s own switch still hides both halves');
+});
+
+test('existing and proposed: SketchUp names, hostile records and a model file\'s tag halves', () => {
+  assert.equal(T.phasedTagName('Furniture and fixtures', 'p'), 'Furniture and fixtures_p');
+  assert.equal(T.phasedTagName('Walls', 'e'), 'Walls_e');
+  assert.deepEqual(T.splitPhaseName('Walls_P'), { name: 'Walls', phase: 'p' });
+  assert.deepEqual(T.splitPhaseName('Furniture and fixtures_e'), { name: 'Furniture and fixtures', phase: 'e' });
+  assert.deepEqual(T.splitPhaseName('Site_plan'), { name: 'Site_plan', phase: null });
+  assert.deepEqual(T.splitPhaseName('_e'), { name: '_e', phase: null });
+  assert.deepEqual(T.detectTag({ fileTag: 'Furniture and fixtures_p' }), { name: 'Furniture and fixtures', phase: 'p', from: 'file' });
+  const p = store.propertyTemplate('Hostile');
+  p.walls = [{ id: 'w1' }];
+  p.tags.push({ id: 'tag-x', name: 'X', color: '#123456', phases: { e: false, p: 'yes' } }, { id: 'tag-y', name: 'Y', color: '#123456', phases: 'no' });
+  p.phaseOf = { 'wall:w1': 'p', 'wall:gone': 'p', 'wall:w1x': 'e', 'bad key': 'p', 'room:r9': 'q' };
+  p.phaseShown = { e: 0, p: true };
+  T.normalizeTags(p);
+  assert.deepEqual(p.phaseOf, { 'wall:w1': 'p' }, 'only live objects with a real phase stay');
+  assert.deepEqual(T.tagById(p, 'tag-x').phases, { e: false, p: true });
+  assert.equal(T.tagById(p, 'tag-y').phases, undefined);
+  assert.equal(p.phaseShown, undefined, 'only false hides a half: 0 is not false, so both show and nothing is stored');
+  const id = T.tagForDetection(p, T.detectTag({ fileTag: 'Walls_p' }));
+  assert.equal(id, T.CANON.walls.id, 'a file tag with the suffix lands on the tag without it');
+  assert.equal(p.tags.filter(t => /_p$/.test(t.name)).length, 0, 'no "Walls_p" tag is made');
+});
+
+test('existing and proposed: a model\'s parts take their half from the file\'s tag', () => {
+  const p = store.propertyTemplate('Halves model');
+  const scan = { id: 'scan-h', name: 'h.glb', kind: 'mesh' };
+  p.scans = [scan];
+  const wrapper = new THREE.Group(), inner = new THREE.Group(), scene = new THREE.Group();
+  wrapper.userData = { kind: 'scan', id: 'scan-h', scanKind: 'mesh', inner };
+  wrapper.add(inner); inner.add(scene);
+  const mk = (name, tag) => { const m = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1)); m.name = name; m.userData = { sketchupTag: tag }; scene.add(m); return m; };
+  mk('Old chair', 'Furniture and fixtures_e'); mk('New chair', 'Furniture and fixtures_p'); mk('Lamp', 'Furniture and fixtures');
+  wrapper.updateMatrixWorld(true);
+  S.detectModelTags(p, scan, wrapper);
+  const keys = Object.keys(p.tagOf).filter(k => k.startsWith('node:scan-h#')).sort();
+  assert.equal(keys.length, 3);
+  assert.ok(keys.every(k => p.tagOf[k] === T.CANON.furniture.id), 'all on Furniture and fixtures');
+  assert.deepEqual(keys.map(k => T.phaseOfKey(p, k)).sort(), ['e', 'e', 'p'], 'the plain tag follows the model (existing)');
+});
