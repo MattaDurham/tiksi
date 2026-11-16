@@ -47,6 +47,18 @@ test('parallel wall segments share a cut when their drawn endpoints are slightly
   near(ea.neg, 4 + eb.neg, 'the negative faces meet on the same cut');
 });
 
+test('a header over an open passage leaves the finished wall behind it', () => {
+  const host = wall('host', 0, 0, 4, 0), header = wall('header', 2, 0, 2, 3);
+  const rooms = [{ id: 'room', name: 'Room', pts: [[0, 0], [4, 0], [4, 4], [0, 4]] }];
+  const spans = openings => roomFaces({ walls: [host, header], rooms, openings })
+    .flatMap(f => f.parts).filter(p => p.wallId === host.id && p.side === 1);
+  assert.equal(spans([]).length, 2, 'a solid abutting wall interrupts the face');
+  const [part, ...others] = spans([{ id: 'passage', wallId: header.id, type: 'door', plain: true, t: 0.3, width: 1.8, height: 2 }]);
+  assert.equal(others.length, 0);
+  near(part.s0, 0, 'the wall starts at its left end');
+  near(part.s1, 4, 'the wall continues behind the passage to its right end');
+});
+
 test('the outside of the house is one face per flat run, corner to outside corner', () => {
   const f = byLabel(roomFaces(house()));
   near(f['Outside, north face'].length, 8 + T, 'past both outside corners');

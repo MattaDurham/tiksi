@@ -38,7 +38,7 @@ function hitAlong(px, py, dx, dy, qx, qy, ex, ey) {
 }
 
 // The spans along wall w's side `side` that other walls butt into, in w's own coordinate.
-function abutted(w, f, side, walls) {
+function abutted(w, f, side, walls, byWall) {
   const out = [];
   const fx = w.ax + f.nx * f.h * side, fy = w.ay + f.ny * f.h * side;   // a point on the face line
   for (const o of walls) {
@@ -51,6 +51,15 @@ function abutted(w, f, side, walls) {
       const t = (px - w.ax) * f.ux + (py - w.ay) * f.uy, d = (px - w.ax) * f.nx + (py - w.ay) * f.ny;
       if (Math.abs(d) > f.h + JOIN_TOL || t < -JOIN_TOL || t > f.L + JOIN_TOL) continue;
       if (((qx - w.ax) * f.nx + (qy - w.ay) * f.ny) * side <= f.h) continue;    // runs off the other side
+      // A header can meet this wall at the ceiling while a passage below it
+      // exposes the wall. Keep the finished face through that joint.
+      const reach = hitAlong(o.ax, o.ay, g.ux, g.uy, fx, fy, f.ux, f.uy);
+      if (reach != null) {
+        const s = Math.max(0, Math.min(g.L, reach));
+        const passage = openingSpans(o, byWall.get(o.id) || [], g.L).some(({ s0, s1, o: opening }) =>
+          s >= s0 - 1e-6 && s <= s1 + 1e-6 && (opening.type !== 'window' || (opening.sill || 0) <= 0) && opening.height > 0);
+        if (passage) continue;
+      }
       const ts = [-1, 1].map(k => hitAlong(fx, fy, f.ux, f.uy, px + g.nx * g.h * k, py + g.ny * g.h * k, g.ux, g.uy)).filter(v => v != null);
       if (ts.length === 2) out.push([Math.min(...ts), Math.max(...ts)]);
     }
@@ -126,6 +135,11 @@ function compass(dx, dy) { return Math.abs(dx) >= Math.abs(dy) ? (dx > 0 ? 'east
 // One level's faces. `heightOf(wall)` is the wall's height (defaults to wall.height or 2.44 m).
 export function roomFaces({ walls = [], rooms = [], openings = [], heightOf } = {}) {
   const H = w => (heightOf ? heightOf(w) : w.height) || 2.44;
+  const byWall = new Map();
+  for (const o of openings) {
+    if (!byWall.has(o.wallId)) byWall.set(o.wallId, []);
+    byWall.get(o.wallId).push(o);
+  }
   const parts = [];
   for (const w of walls) {
     const f = wallFrame(w);
@@ -137,7 +151,7 @@ export function roomFaces({ walls = [], rooms = [], openings = [], heightOf } = 
     for (const side of [1, -1]) {
       const x0 = (side > 0 ? ends.a.pos : ends.a.neg) + tuckA, x1 = (side > 0 ? ends.b.pos : ends.b.neg) - tuckB;
       if (x1 - x0 < MIN_PART) continue;
-      for (const [a, b] of subtract(x0, x1, abutted(w, f, side, walls))) {
+      for (const [a, b] of subtract(x0, x1, abutted(w, f, side, walls, byWall))) {
         for (const run of splitByRoom(w, f, side, a, b, rooms)) {
           // The face's own direction: N points away from the wall into what is in front.
           const Nx = f.nx * side, Ny = f.ny * side;
@@ -165,8 +179,6 @@ export function roomFaces({ walls = [], rooms = [], openings = [], heightOf } = 
       Math.abs(last.c - p.c) < LINE_TOL && Math.abs(last.H - p.H) < LINE_TOL && p.t0 - last.t1 < LINE_TOL && p.t0 > last.t0;
     if (joins) g.push(p); else groups.push([p]);
   }
-  const byWall = new Map();
-  for (const o of openings) { if (!byWall.has(o.wallId)) byWall.set(o.wallId, []); byWall.get(o.wallId).push(o); }
   return groups.map(g => {
     const first = g[0], last = g[g.length - 1], height = first.H;
     const length = g.reduce((n, p) => n + (p.s1 - p.s0), 0);
