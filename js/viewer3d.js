@@ -75,15 +75,16 @@ import { renderObjectList, showListTab, revealInList, objectThing, hiddenState }
 import { trimTemplate, swapTrimProduct, setTrimY, setFieldEdge, trimExtent, trimLayout, trimStyle, isField, roomFaces } from './trims.js';
 import { trimPanelHtml, bindTrimPanel, addTrimHtml, bindAddTrim } from './trim-panel.js';
 import { PIECE_KINDS, pieceRecord, clickGroupIds, assignProject } from './project-pieces.js';
-import { arrowsNear, walkTarget, glideMs } from './walk-hops.js';
+import { walkTarget, glideMs } from './walk-hops.js';
+import { walkStep, settle, isClear, findClear, glideEnd } from './walk-collide.js';
 import { projectBlockHtml, bindProjectBlock, newProjectRecord } from './project-pieces-ui.js';
 import { catalogItem } from './trim-catalog.js';
 import { objectPanelHtml, bindObjectPanel, multiPanelHtml, bindMultiPanel, planTagHtml, bindPlanTag } from './object-panel.js';
-import { ensureCanonTag } from './tags.js';
+import { ensureCanonTag, nameTag } from './tags.js';
 import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown, setHidden, hiddenKeys, showAllHidden } from './tags.js';
 import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags, applySavedHidden, modelState } from './saved-views.js';
 import { onScreen, setOnScreen, onScreenChange, setMenuProvider, refreshPane } from './tiksi-menu.js';
-import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility, partKeyForObject, partByKey, partName, planKeyOf, modelParts, partKey } from './tags-scene.js';
+import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility, partKeyForObject, partByKey, partName, planKeyOf, modelParts, partKey, nodeName } from './tags-scene.js';
 
 // ---------- persistent GPU state (one context for the life of the page) ----------
 let renderer = null, pmrem = null;
@@ -169,19 +170,16 @@ let markup = null, markupLoading = null, markupUsed = false;
 const walkKeys = {};
 let walkLocked = false, dragLook = null;
 let walkFloor = 0;             // elevation of the level the walk started on (eye height sits 1.6 m above)
-// Walking by tap (walk-hops.js): a tap on the floor glides there; arrows on the floor at the
-// doorways near the person take them through. On a touch screen, in the phone layout and on the
-// client page; a mouse click elsewhere still captures the mouse for free-look.
+// Going to a spot (walk-hops.js): a double-click or a double tap on the floor, or on anything
+// else, glides toward it. A single mouse click captures the mouse for free-look where the page
+// has a keyboard to walk with.
 let walkGlide = null;          // { from, to, yaw0, yaw1, t0, ms } while gliding
-let walkArrowRoot = null;      // the arrows' group in the scene
-let walkArrowsAt = null;       // where the arrows were laid out for, { x, z, y }
+let walkClick = null;          // the last single click or tap while walking, { t, x, y, centre }
 let clientMode = false;        // the client page in the lab (client-view.js): looking only
 // What the client page plugs in: { states: [{ id, label }], show(), setShow(id), furniture(),
 // setFurniture(on), hasFurniture }. The left pane and the phone panel offer these and the saved
 // views, orbit and walk; nothing can be selected, edited or saved.
 let clientControls = null;
-// For checks: the walk arrows as drawn ({ on, count, inScene }).
-export function walkArrowState() { return { on: !!(walkArrowRoot && walkArrowRoot.visible), count: walkArrowRoot ? walkArrowRoot.children.length : 0, inScene: !!(walkArrowRoot && scene && walkArrowRoot.parent === scene) }; }
 export function setClientMode(on, controls) { clientMode = !!on; clientControls = on ? controls || null : null; if (scene) { renderViews(); refreshPane(); } }
 function clientMenuGroups() {
   const c = clientControls;
@@ -1457,7 +1455,7 @@ function setMode(next) {
     walk.disconnect();
     dragLook = null;
     for (const k of Object.keys(walkKeys)) delete walkKeys[k];
-    walkGlide = null;
+    walkGlide = null; walkClick = null; solidNear = null;
   }
   mode = next;
   if (lookingUp && next !== 'orbit') setLookingUp(false);
@@ -1497,9 +1495,9 @@ function startWalk() {
     if (_v.lengthSq() < 1e-6) _v.set(0, 0, -1);
     _v.normalize();
     camera.position.y = walkFloor + 1.6;
+    standClear(camera.position.x, camera.position.z);
     camera.lookAt(camera.position.x + _v.x * 5, walkFloor + 1.45, camera.position.z + _v.z * 5);
     walk.connect(renderer.domElement);
-    layoutWalkArrows(true);
     return;
   }
   const r = selRoom || rooms.filter(countsAsFloor).sort((a, b) => polyArea(b.pts) - polyArea(a.pts))[0];
@@ -1514,59 +1512,141 @@ function startWalk() {
     else { sx = mx; sz = minY + (maxY - minY) * 0.3; look.set(mx, walkFloor + 1.45, maxY); }
   }
   camera.position.set(sx, walkFloor + 1.6, sz);
-  if (look.distanceTo(camera.position) < 0.5) look.set(sx, walkFloor + 1.5, sz - 5);
+  standClear(sx, sz);
+  if (look.distanceTo(camera.position) < 0.5) look.set(camera.position.x, walkFloor + 1.5, camera.position.z - 5);
   camera.lookAt(look);
   walk.connect(renderer.domElement);
-  layoutWalkArrows(true);
-  if (!clientMode) toast(fieldLayout() ? 'WALK: drag to look around, tap the floor or an arrow to go there.' : 'WALK: WASD / arrows move, Shift runs. Drag to look, or click the view to capture the mouse. Esc exits.', 'info', 5000);
+  if (!clientMode) toast(fieldLayout() ? 'WALK: drag to look around, double-tap a spot to go there.' : 'WALK: WASD / arrows move, Shift runs. Drag to look, or click the view to capture the mouse. Double-click a spot to go there. Esc exits.', 'info', 5000);
 }
 
-// ---------- walking by tap ----------
-const ARROW_SHAPE = (() => {
-  const sh = new THREE.Shape();
-  sh.moveTo(0, 0.16); sh.lineTo(0.2, -0.06); sh.lineTo(0.11, -0.06); sh.lineTo(0, 0.06); sh.lineTo(-0.11, -0.06); sh.lineTo(-0.2, -0.06); sh.closePath();
-  return sh;
-})();
-let arrowGeometry = null, arrowMaterial = null;
-function tapWalking() { return clientMode || fieldLayout() || touchDevice(); }
-// Lay the arrows out around the person; again only once they have moved a little.
-function layoutWalkArrows(force) {
-  if (!scene) return;
-  const on = mode === 'walk' && tapWalking();
-  if (!walkArrowRoot) { walkArrowRoot = new THREE.Group(); walkArrowRoot.name = 'walk-arrows'; scene.add(walkArrowRoot); }
-  walkArrowRoot.visible = on;
-  if (!on) return;
-  const at = { x: camera.position.x, z: camera.position.z, y: walkFloor };
-  if (!force && walkArrowsAt && Math.hypot(at.x - walkArrowsAt.x, at.z - walkArrowsAt.z) < 0.3) return;
-  walkArrowsAt = at;
-  for (const c of [...walkArrowRoot.children]) walkArrowRoot.remove(c);
-  if (!arrowGeometry) {
-    arrowGeometry = new THREE.ShapeGeometry(ARROW_SHAPE);
-    arrowGeometry.rotateX(-Math.PI / 2);
-    arrowMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.82, depthWrite: false });
+// ---------- solid surfaces while walking (walk-collide.js) ----------
+// Everything drawn is solid to a person walking: the plan's walls, trim, windows and fixtures,
+// and every mesh of an imported model. What lets them through is what a person walks through:
+// a door (the plan's door leaves, and the parts of an imported model that are named as doors),
+// and what a section cut has cut away. Point clouds and splats have no surface to stop at.
+// A body is tested at knee, waist and eye height above the floor it walks on.
+const WALK_HEIGHTS = [0.45, 1.0, 1.6];
+const SOLID_REACH = 1.5;       // metres round the person within which meshes are kept to hand
+const WALK_INDEX_MIN = 1500;   // triangles from which a mesh beside the person is tested through a tree
+const walkCaster = new THREE.Raycaster();
+const _solidBox = new THREE.Box3(), _solidN = new THREE.Vector3(), _solidM = new THREE.Matrix3();
+let solidNear = null;          // { x, z, floor, at, list } : the meshes near the person, kept between steps
+const doorNamed = new WeakMap();
+const DOOR_WORD = /\bdoors?\b/i;
+// Whether a mesh of an imported model is a door by its name or the names it sits under (the
+// nearest name that says what the part is decides, as it does for tags).
+function namedAsDoor(mesh) {
+  let known = doorNamed.get(mesh);
+  if (known === undefined) {
+    known = false;
+    for (let o = mesh; o && !(o.userData && o.userData.kind === 'scan'); o = o.parent) {
+      const n = nodeName(o);
+      if (!n || !nameTag(n)) continue;
+      known = nameTag(n) === 'openings' && DOOR_WORD.test(n.replace(/_+/g, ' '));
+      break;
+    }
+    doorNamed.set(mesh, known);
   }
-  for (const a of arrowsNear(prop, at.x, at.z, walkFloor)) {
-    const m = new THREE.Mesh(arrowGeometry, arrowMaterial);
-    m.position.set(a.x, a.elevation + 0.02, a.z);
-    // The shape points along -z after rotateX; turn it to point along (dx, dz).
-    m.rotation.y = Math.atan2(-a.dx, -a.dz);
-    m.renderOrder = 5;
-    m.userData = { kind: 'walk-arrow', to: a.to, noCollide: true };
-    walkArrowRoot.add(m);
-  }
-  requestRender(2);
+  return known;
 }
-// The distance along the floor from the person toward (x, z) to the first wall, or Infinity.
-function wallAhead(x, z) {
-  if (!modelGroup) return Infinity;
-  const from = new THREE.Vector3(camera.position.x, walkFloor + 0.9, camera.position.z);
-  const dir = new THREE.Vector3(x - from.x, 0, z - from.z);
-  const dist = dir.length();
+// The solid meshes whose boxes come within `reach` metres of (x, z) between the heights tested.
+function solidsWithin(x, z, reach) {
+  const list = [], lo = walkFloor + WALK_HEIGHTS[0] - 0.05, hi = walkFloor + WALK_HEIGHTS[WALK_HEIGHTS.length - 1] + 0.05;
+  const visit = (o, scan) => {
+    if (o.visible === false) return;
+    const u = o.userData || {};
+    if (u.pickBox || u.helper || u.drawingProxy || u.splatDraw) return;
+    if (o.isMesh && o.geometry && !u.noCollide && !o.isInstancedMesh && !o.isBatchedMesh && !(scan && namedAsDoor(o))) {
+      const g = o.geometry;
+      if (g.boundingBox === null) g.computeBoundingBox();
+      _solidBox.copy(g.boundingBox).applyMatrix4(o.matrixWorld);
+      if (_solidBox.max.y >= lo && _solidBox.min.y <= hi && _solidBox.max.x >= x - reach && _solidBox.min.x <= x + reach && _solidBox.max.z >= z - reach && _solidBox.min.z <= z + reach) {
+        list.push({ mesh: o, box: _solidBox.clone(), indexed: (g.index ? g.index.count : g.attributes.position ? g.attributes.position.count : 0) / 3 >= WALK_INDEX_MIN });
+      }
+    }
+    for (const c of o.children) visit(c, scan);
+  };
+  scene.updateMatrixWorld();
+  if (modelGroup) visit(modelGroup, false);
+  if (scanRoot) for (const w of scanRoot.children) {
+    const kind = w.userData && w.userData.scanKind;
+    if (kind !== 'points' && kind !== 'splat') visit(w, true);
+  }
+  return list;
+}
+// The meshes near the person: gathered again once they have moved a little, or a second has
+// passed (a model finishing loading, a tag switched off).
+function solidsNear(x, z) {
+  const now = performance.now();
+  if (solidNear && solidNear.floor === walkFloor && now - solidNear.at < 1000 && Math.hypot(x - solidNear.x, z - solidNear.z) < 0.4) return solidNear.list;
+  solidNear = { x, z, floor: walkFloor, at: now, list: solidsWithin(x, z, SOLID_REACH) };
+  return solidNear.list;
+}
+// The nearest solid surface along a level ray, over `heights` above the walk's floor, among
+// `list`: { distance, nx, nz } or null.
+function solidHit(list, x, z, dx, dz, far, heights) {
+  const x1 = x + dx * far, z1 = z + dz * far;
+  const minX = Math.min(x, x1) - 0.01, maxX = Math.max(x, x1) + 0.01, minZ = Math.min(z, z1) - 0.01, maxZ = Math.max(z, z1) + 0.01;
+  let best = null;
+  walkCaster.near = 0; walkCaster.far = far;
+  for (const h of heights) {
+    const y = walkFloor + h;
+    walkCaster.ray.origin.set(x, y, z);
+    walkCaster.ray.direction.set(dx, 0, dz);
+    for (const s of list) {
+      const b = s.box;
+      if (b.max.x < minX || b.min.x > maxX || b.max.z < minZ || b.min.z > maxZ || b.max.y < y || b.min.y > y) continue;
+      const hits = [];
+      if (s.indexed && pickIndex && pickIndex.raycastIndexed) pickIndex.raycastIndexed(s.mesh, walkCaster, hits);
+      else s.mesh.raycast(walkCaster, hits);
+      for (const hit of hits) {
+        if (best && hit.distance >= best.distance) continue;
+        if (clippedAway(hit)) continue;
+        best = hit;
+      }
+    }
+  }
+  if (!best) return null;
+  if (!best.face) return { distance: best.distance, nx: 0, nz: 0 };
+  _solidN.copy(best.face.normal).applyNormalMatrix(_solidM.getNormalMatrix(best.object.matrixWorld));
+  return { distance: best.distance, nx: _solidN.x, nz: _solidN.z };
+}
+// What walk-collide.js asks: the surface a body at (x, z) meets along (dx, dz).
+function solidCast(x, z, dx, dz, far) {
+  return solidHit(solidsNear(x, z), x, z, dx, dz, far, WALK_HEIGHTS);
+}
+// Put the person at (x, z), or at the nearest place beside it where a body stands clear.
+function standClear(x, z) {
+  solidNear = null;
+  const list = solidsWithin(x, z, 4);
+  const at = findClear(x, z, (px, pz, dx, dz, far) => solidHit(list, px, pz, dx, dz, far, WALK_HEIGHTS));
+  if (at) { camera.position.x = at.x; camera.position.z = at.z; }
+  // The trees that keep walking beside a heavy mesh quick (pick-index.js) come when first wanted.
+  if (!pickIndex) import('./pick-index.js').then(m => { if (!pickIndex) pickIndex = m; }).catch(() => { /* three's own test is slower and no less right */ });
+}
+// For checks: whether a body may stand at (x, z) on the walk's floor, and where `steps` steps
+// of (mx, mz) from there end (walkProbe), against the surfaces as drawn.
+export function walkSolidState(x, z) {
+  if (!scene) return null;
+  solidNear = null;
+  return { clear: isClear(x, z, solidCast), solids: solidsNear(x, z).length, floor: walkFloor };
+}
+export function walkProbe(x, z, mx, mz, steps = 1) {
+  if (!scene) return null;
+  solidNear = null;
+  let at = { x, z }, blocked = false;
+  for (let i = 0; i < steps; i++) { at = walkStep(at, mx, mz, solidCast); blocked = blocked || at.blocked; }
+  return { x: at.x, z: at.z, blocked, clear: isClear(at.x, at.z, solidCast) };
+}
+
+// ---------- going to a spot ----------
+// The distance along the floor from the person toward (x, z) to the first solid surface, or Infinity.
+function solidAhead(x, z) {
+  const fx = camera.position.x, fz = camera.position.z;
+  const dx = x - fx, dz = z - fz, dist = Math.hypot(dx, dz);
   if (dist < 1e-3) return Infinity;
-  raycaster.set(from, dir.normalize());
-  raycaster.far = dist + 0.5;
-  const hit = raycaster.intersectObject(modelGroup, true).find(h => !(h.object.userData && h.object.userData.noCollide) && isVisibleChain(h.object) && h.object.userData.kind === 'wall');
-  raycaster.far = Infinity;
+  const list = solidsWithin((fx + x) / 2, (fz + z) / 2, dist / 2 + 1);
+  const hit = solidHit(list, fx, fz, dx / dist, dz / dist, dist + 0.5, WALK_HEIGHTS);
   return hit ? hit.distance : Infinity;
 }
 function glideTo(x, z) {
@@ -1589,24 +1669,39 @@ function stepGlide() {
   camera.position.lerpVectors(g.from, g.to, e);
   walkEuler.set(g.pitch0 + (g.pitch - g.pitch0) * Math.min(1, k * 2), g.yaw0 + (g.yaw1 - g.yaw0) * Math.min(1, k * 1.6), 0, 'YXZ');
   camera.quaternion.setFromEuler(walkEuler);
-  if (k >= 1) { walkGlide = null; layoutWalkArrows(true); }
+  if (k >= 1) walkGlide = null;
   return true;
 }
-// A tap while walking: an arrow takes the person through its doorway; the floor (or anything
-// else) glides toward the point tapped, stopping short of a wall.
-function walkTap(e) {
+// A double-click or double tap while walking: glide toward the spot under it, stopping short of
+// the first solid thing on the way and ending where a body stands clear.
+function walkJump(e) {
   if (!scene) return;
-  if (walkArrowRoot && walkArrowRoot.visible && walkArrowRoot.children.length) {
-    raycaster.setFromCamera(ndcFromEvent(e), viewCamera());
-    const a = raycaster.intersectObjects(walkArrowRoot.children, false)[0];
-    if (a) { const to = a.object.userData.to; glideTo(to.x, to.z); return; }
-  }
   const hit = pick(e, { pins: false, notes: false, ground: true });
   if (!hit || !hit.point) return;
   const from = { x: camera.position.x, z: camera.position.z };
-  const target = walkTarget(from, { x: hit.point.x, z: hit.point.z }, wallAhead(hit.point.x, hit.point.z));
-  if (target) glideTo(target.x, target.z);
+  const target = walkTarget(from, { x: hit.point.x, z: hit.point.z }, solidAhead(hit.point.x, hit.point.z));
+  if (!target) return;
+  const list = solidsWithin((from.x + target.x) / 2, (from.z + target.z) / 2, target.dist / 2 + 1);
+  const end = glideEnd(from, target, (px, pz, dx, dz, far) => solidHit(list, px, pz, dx, dz, far, WALK_HEIGHTS));
+  if (end) glideTo(end.x, end.z);
 }
+// A click or tap while walking. The second of two in quick succession goes to the spot (the
+// middle of the view while the mouse is captured, where the pointer has no place of its own);
+// a single mouse click captures the mouse for free-look where there is a keyboard to walk with.
+function walkClicked(e) {
+  const now = performance.now(), reach = e.pointerType === 'touch' ? 30 : 8;
+  const first = walkClick;
+  if (first && now - first.t < 450 && (first.centre || Math.hypot(e.clientX - first.x, e.clientY - first.y) < reach)) {
+    walkClick = null;
+    const rect = renderer.domElement.getBoundingClientRect();
+    walkJump(first.centre ? { clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 } : { clientX: first.x, clientY: first.y });
+    return;
+  }
+  walkClick = { t: now, x: e.clientX, y: e.clientY, centre: walkLocked };
+  if (e.pointerType === 'touch' || tapWalking() || walkLocked) return;
+  try { walk.lock(); } catch (err) { /* drag-look keeps working */ }
+}
+function tapWalking() { return clientMode || fieldLayout() || touchDevice(); }
 
 function stepWalk(dt) {
   if (walkGlide) {
@@ -1624,17 +1719,14 @@ function stepWalk(dt) {
   camera.getWorldDirection(_v); _v.y = 0; _v.normalize();
   _v2.crossVectors(_v, camera.up).normalize();
   const move = _v.multiplyScalar(fwd).add(_v2.multiplyScalar(side)).normalize().multiplyScalar(speed);
-  // Soft collision: do not walk into a wall closer than 35 cm.
-  if (modelGroup) {
-    raycaster.set(camera.position, move.clone().normalize());
-    raycaster.far = 0.35 + speed;
-    const hits = raycaster.intersectObject(modelGroup, true).filter(h => !(h.object.userData && h.object.userData.noCollide) && isVisibleChain(h.object) && h.object.userData.kind === 'wall');
-    raycaster.far = Infinity;
-    if (hits.length) return true;
-  }
-  camera.position.add(move);
+  // Surfaces are solid: the step stops a body short of them and slides along them.
+  const from = { x: camera.position.x, z: camera.position.z };
+  let to = walkStep(from, move.x, move.z, solidCast);
+  // Held fast somewhere no body could stand (the model changed round the person, or the walk
+  // began inside something): let them walk out of it.
+  if (to.x === from.x && to.z === from.z && !isClear(from.x, from.z, solidCast) && !settle(from.x, from.z, solidCast)) to = { x: from.x + move.x, z: from.z + move.z };
+  camera.position.x = to.x; camera.position.z = to.z;
   camera.position.y = walkFloor + 1.6;
-  layoutWalkArrows(false);
   return true;
 }
 
@@ -2058,10 +2150,7 @@ function onPointerUp(e) {
   // While marking up, a tap or click on the view is the markup's (or nobody's), never a selection.
   if (markup && markup.takesClicks()) return;
   if (mode === 'walk') {
-    // A tap walks (walk-hops.js). A plain mouse click on the desktop captures the mouse for
-    // free-look instead (a user gesture is required).
-    if (e.pointerType === 'touch' || tapWalking()) { walkTap(e); return; }
-    if (!walkLocked) { try { walk.lock(); } catch (err) { /* drag-look keeps working */ } }
+    walkClicked(e);
     return;
   }
   // A client looks; a click selects nothing.
@@ -4285,8 +4374,8 @@ function taskText() {
   return '';
 }
 function defaultHint() {
-  if (clientMode) return mode === 'walk' ? 'WALK: click the floor or an arrow to go there; drag to look around. WASD and the arrow keys move too.' : 'Drag to orbit, hold Shift to pan, scroll or pinch to zoom. W walks through.';
-  if (mode === 'walk') return walkLocked ? 'WALK: WASD / arrows move, Shift runs, mouse looks. Esc releases the mouse.' : 'WALK: WASD / arrows move, Shift runs. Drag to look or click to capture the mouse. Esc exits.';
+  if (clientMode) return mode === 'walk' ? 'WALK: double-click a spot to go there; drag to look around. WASD and the arrow keys move too.' : 'Drag to orbit, hold Shift to pan, scroll or pinch to zoom. W walks through.';
+  if (mode === 'walk') return walkLocked ? 'WALK: WASD / arrows move, Shift runs, mouse looks. Double-click goes to the middle of the view. Esc releases the mouse.' : 'WALK: WASD / arrows move, Shift runs. Drag to look or click to capture the mouse. Double-click a spot to go there. Esc exits.';
   if (tool === 'measure') return 'MEASURE: click two points on any surface.';
   if (tool === 'fov') return 'FIELD OF VIEW: drag up to narrow the view, down to widen it. The panel has the iPhone 0.5×, 1× and 2× lenses. Esc ends.';
   if (tool === 'pin') return 'PIN: choose a photo or document, then click the surface to hang it on.';
@@ -6487,7 +6576,7 @@ export function unmount() {
     renderer.clear();
   }
   scene = null; camera = null; skyScene = null; sun = null; hemi = null;
-  walkArrowRoot = null; walkArrowsAt = null; walkGlide = null;
+  walkGlide = null; walkClick = null; solidNear = null;
   scanRoot = null; pinRoot = null; noteRoot = null; measureRoot = null; markupRoot = null; cameraRoot = null; positionRoot = null;
   el = null; wrapEl = null; inspEl = null; hud = {};
   selection = null; hoverTarget = null; tween = null; pressed = null; dragLook = null; rightPress = null; movingNoteId = null;

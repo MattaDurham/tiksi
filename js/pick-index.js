@@ -160,6 +160,16 @@ function pointsRaycast(raycaster, intersects) {
   });
 }
 
+// One mesh's raycast through a tree whatever its size. A click tests a mesh once, so small
+// meshes are not worth a tree; a person walking tests the few meshes beside them dozens of
+// times a frame (walk-collide.js), and there a tree pays for itself from far fewer triangles.
+// A mesh the tree cannot serve (several materials, instanced, morphed) is tested three's way.
+export function raycastIndexed(mesh, raycaster, intersects) {
+  const g = mesh.geometry;
+  if (mesh.raycast === meshRaycast || mesh.isSkinnedMesh || mesh.isInstancedMesh || mesh.isBatchedMesh || Array.isArray(mesh.material) || (g.morphAttributes && g.morphAttributes.position)) return mesh.raycast(raycaster, intersects);
+  return meshRaycast.call(mesh, raycaster, intersects);
+}
+
 // Give every large mesh and point cloud under `root` the indexed raycast. Its tree is asked for
 // on the first ray that reaches it, or ahead of time by buildPickIndexes. Returns how many
 // objects were given one.

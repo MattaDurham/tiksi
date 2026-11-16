@@ -3,8 +3,8 @@
 // lab-publish.js and served the way the lab serves it (data/current.json, data/app/<code>/,
 // data/v/<version>/). Then: on a computer, Tiksi's frame with only the client's groups in the
 // left pane, Existing and the project, furniture, quality starting at Ultra, nothing selectable,
-// and a click on the floor walking there; on a phone, the three-line button and the client's
-// panel, and arrows at the doorway. Last, in MODEL: a wall's trim grouped as a subproject and
+// and a double-click on the floor going there; on a phone, the three-line button and the
+// client's panel, and a double tap going there. Last, in MODEL: a wall's trim grouped as a subproject and
 // RAISE BY moving every section of it.
 // Synthetic data only. Run: node tools/e2e-client-lab.mjs (Playwright + Chromium installed).
 import assert from 'node:assert/strict';
@@ -110,10 +110,14 @@ try {
   const before = await viewer(desk, (v) => v.cameraState().position);
   const box = await desk.locator('.canvas-wrap canvas').boundingBox();
   await desk.mouse.click(box.x + box.width / 2, box.y + box.height * 0.8);
-  await desk.waitForFunction(async () => true);
+  await desk.waitForTimeout(1200);
+  const stayed = await viewer(desk, (v) => v.cameraState().position);
+  check(Math.hypot(stayed[0] - before[0], stayed[2] - before[2]) < 1e-6, 'a single click on the floor goes nowhere');
+  await desk.mouse.dblclick(box.x + box.width / 2, box.y + box.height * 0.8);
   await desk.waitForTimeout(2800);
   const after = await viewer(desk, (v) => v.cameraState().position);
-  check(Math.hypot(after[0] - before[0], after[2] - before[2]) > 0.3 && Math.abs(after[1] - before[1]) < 1e-6, 'a click on the floor walks there at eye height');
+  check(Math.hypot(after[0] - before[0], after[2] - before[2]) > 0.3 && Math.abs(after[1] - before[1]) < 1e-6, 'a double-click on the floor goes there at eye height');
+  check((await viewer(desk, (v) => v.walkSolidState(v.cameraState().position[0], v.cameraState().position[2]))).clear, 'and ends where a body stands clear of the walls');
 
   console.log('\n[phone] the phone layout: the three-line button and the client\'s panel');
   const phone = await open(await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }));
@@ -127,8 +131,18 @@ try {
   await phone.tap('.fd-menu');
   await phone.tap('.fd-panel [data-act="mode"][data-id="walk"]');
   await phone.waitForTimeout(600);
-  const arrows = await viewer(phone, (v) => v.walkArrowState());
-  check(arrows.on && arrows.count === 1 && arrows.inScene, 'one arrow on the floor at the doorway in this room');
+  const pbox = await phone.locator('.canvas-wrap canvas').boundingBox();
+  const p0 = await viewer(phone, (v) => v.cameraState().position);
+  const tx = pbox.x + pbox.width / 2, ty = pbox.y + pbox.height * 0.8;
+  await phone.touchscreen.tap(tx, ty);
+  await phone.waitForTimeout(900);
+  const p1 = await viewer(phone, (v) => v.cameraState().position);
+  check(Math.hypot(p1[0] - p0[0], p1[2] - p0[2]) < 1e-6, 'a single tap on the floor goes nowhere');
+  await phone.touchscreen.tap(tx, ty);
+  await phone.touchscreen.tap(tx, ty);
+  await phone.waitForTimeout(2800);
+  const p2 = await viewer(phone, (v) => v.cameraState().position);
+  check(Math.hypot(p2[0] - p0[0], p2[2] - p0[2]) > 0.3, 'a double tap on the floor goes there');
 
   console.log('\n[MODEL] a wall\'s trim grouped as a subproject moves as one');
   const edit = await (await browser.newContext({ viewport: { width: 1400, height: 900 } })).newPage();
