@@ -3,13 +3,16 @@
 //
 // The copy holds the house as drawn (walls, openings, rooms, trim, fixtures), the models that
 // are not a scan capture, the materials they use with their texture pictures, the saved views
-// and the projects chosen to send, under the short names given for
-// their buttons. It leaves out products, prices, project scope and notes, photos and their
-// pins, notes, measurements, documents, the scan capture, a piece of any project not sent, and
+// switched on, and the projects chosen to send, under the short names given for
+// their buttons. Each saved view comes with a small picture of itself per project (made by the
+// client page's own code, lab-pictures.js) and with the renderings of it that are switched on
+// (view-renderings.js), as web-size copies under a name the client may see. It leaves out
+// products, prices, project scope and notes, every other photo, photo pins, notes,
+// measurements, documents, the scan capture, a piece of any project not sent, and
 // every large inline picture. The send settings are kept on the property (prop.lab).
 
 import { ws, getFile, touch } from './store.js';
-import { photoBytes } from './photos-store.js';
+import { photoBytes, photoUrl } from './photos-store.js';
 import { projectsWithPieces, pieceProjectId, topProjectId } from './project-pieces.js';
 import { scanLayer } from './view-layers.js';
 import { hints } from './texture-synth.js';
@@ -17,6 +20,9 @@ import { hints } from './texture-synth.js';
 export const CLIENT_FORMAT = 'tiksi-client';
 // Tags that are furniture on most properties: the built-in one, and any whose name says so.
 const FURNITURE_NAME = /furniture|decor|soft goods|furnishing/i;
+// The most renderings one send carries, and the sizes of a rendering's web copy and its thumbnail.
+export const MAX_RENDERINGS = 80;
+const RENDERING_EDGE = 2400, RENDERING_THUMB = 480;
 // Fields of a plan record that say what product or evidence it is: never in a client's copy.
 const PRIVATE_FIELDS = ['product', 'proposedProduct', 'evidence', 'evidenceText', 'evidenceState', 'notes', 'note', 'source', 'uncertainty',
   'identityStatus', 'componentProducts', 'materialIdentities', 'originalFileId', 'originalName', 'sourceRevision', 'createdAt', 'updatedAt', 'measured', 'sourceFile'];
@@ -38,9 +44,17 @@ export function labSettings(prop, projects) {
     projects: withPieces.map(p => ({ id: p.id, label: sent.has(p.id) ? sent.get(p.id).label : shortName(p.name), on: sent.has(p.id) || !last.slug, name: p.name })),
     furnitureTags: Array.isArray(last.furnitureTags) ? last.furnitureTags.filter(id => (prop.tags || []).some(t => t.id === id))
       : (prop.tags || []).filter(t => t.id === 'tag-furniture' || FURNITURE_NAME.test(t.name || '')).map(t => t.id),
+    // Every saved view goes unless it was switched off; so does every rendering on a view.
+    views: (prop.savedViews || []).map(v => ({ id: v.id, name: v.name, on: !(Array.isArray(last.viewsOff) && last.viewsOff.includes(v.id)) })),
+    renderingsOff: Array.isArray(last.renderingsOff) ? last.renderingsOff.filter(x => typeof x === 'string') : [],
+    renderingLabels: last.renderingLabels && typeof last.renderingLabels === 'object' ? { ...last.renderingLabels } : {},
+    // The renderings the last send carried: one not among them is new to the client.
+    renderingsSent: Array.isArray(last.renderingsSent) ? last.renderingsSent.filter(x => typeof x === 'string') : null,
     sentAt: last.sentAt || '', version: last.version || '',
   };
 }
+// The name a client sees on a rendering: plain words, at most 48 characters.
+export const renderingLabel = s => String(typeof s === 'string' ? s : '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 48);
 // A project's name cut to a button: before a colon or bracket, at most three words.
 export function shortName(name) {
   const s = String(name || '').split(/[:(\[]/)[0].trim();
@@ -62,8 +76,11 @@ function scrub(value) {
 const strip = (rec, fields) => { for (const f of fields) delete rec[f]; return rec; };
 
 // The copy itself: { format, schema, property, materials, projects, states, furnitureTags,
+// renderings: [{ id, view, label, day, w, h, path, thumb }],
 // files: { id: { path, format, mime } } } and the list of files to send.
-// `choice`: { projects: [{ id, label }], furnitureTags: [tagId] }.
+// `choice`: { projects: [{ id, label }], furnitureTags: [tagId], views: [view id] (every view
+// when left out), renderings: [{ id (the photo), viewId, label, day }] }.
+// A rendering goes under a plain number (r1, r2...), never its photo's id or file name.
 export function clientCopy(data, propId, choice) {
   const src = data.properties.find(p => p.id === propId);
   if (!src) throw new Error('No such property');
@@ -71,6 +88,7 @@ export function clientCopy(data, propId, choice) {
   const projects = data.projects.filter(p => p.propertyId === propId && (sentTop.has(p.id) || sentTop.has(p.parentId)));
   const keepPiece = rec => { const id = pieceProjectId(rec); return !id || sentTop.has(topProjectId(data.projects, id)); };
   const p = scrub(JSON.parse(JSON.stringify(src)));
+  const viewsOn = Array.isArray(choice.views) ? new Set(choice.views) : null;
   const prop = {
     id: p.id, name: '', wallHeight: p.wallHeight, levels: p.levels || [], activeLevelId: p.activeLevelId,
     walls: [], openings: [], rooms: [], fixtures: [], trims: [], scans: [],
@@ -78,7 +96,7 @@ export function clientCopy(data, propId, choice) {
     tagOf: p.tagOf || {}, tagDefaults: p.tagDefaults || {}, tagUntaggedVisible: p.tagUntaggedVisible,
     hidden: {}, photos: [], notePins: [], photoPositions: [], cameraSets: [], docSets: [], markups: [], videos: [], measurements: [],
     env: { ...(p.env || {}), showPins: false, showNotes: false, showDims: false, showRoomLabels: false, showOpeningNumbers: false, showGrid: false, sky: (p.env && p.env.sky === 'pano') ? 'dynamic' : (p.env || {}).sky, panoPhotoId: null },
-    savedViews: (p.savedViews || []).map(v => ({ id: v.id, name: v.name, camera: v.camera, mode: v.mode === 'top' ? 'top' : 'orbit', tags: {}, section: { on: false, height: 1.2 }, xray: false, hiddenLevels: [] })),
+    savedViews: (p.savedViews || []).filter(v => !viewsOn || viewsOn.has(v.id)).map(v => ({ id: v.id, name: v.name, camera: v.camera, mode: v.mode === 'top' ? 'top' : 'orbit', tags: {}, section: { on: false, height: 1.2 }, xray: false, hiddenLevels: [] })),
   };
   for (const key of ['walls', 'openings', 'rooms', 'fixtures', 'trims']) prop[key] = (p[key] || []).filter(keepPiece).map(r => strip(r, PRIVATE_FIELDS));
   // A hidden piece in MODEL is hidden for the client too; the client page shows the rest.
@@ -112,6 +130,13 @@ export function clientCopy(data, propId, choice) {
     files[m.photoId] = { path: 'files/' + m.photoId + '.' + ext, format: ext, mime };
     send.push({ id: m.photoId, path: files[m.photoId].path, kind: 'picture' });
   }
+  const renderings = [];
+  for (const r of Array.isArray(choice.renderings) ? choice.renderings : []) {
+    if (!r || typeof r.id !== 'string' || !prop.savedViews.some(v => v.id === r.viewId) || renderings.length >= MAX_RENDERINGS || send.some(f => f.kind === 'rendering' && f.id === r.id)) continue;
+    const id = 'r' + (renderings.length + 1);
+    renderings.push({ id, view: r.viewId, label: renderingLabel(r.label), day: /^\d{4}-\d{2}-\d{2}$/.test(r.day || '') ? r.day : '', w: 0, h: 0, path: 'renderings/' + id + '.jpg', thumb: 'renderings/' + id + '-thumb.jpg' });
+    send.push({ id: r.id, rendering: id, path: 'renderings/' + id + '.jpg', thumb: 'renderings/' + id + '-thumb.jpg', kind: 'rendering' });
+  }
   const labels = new Map(choice.projects.map(x => [x.id, String(x.label || '').trim().slice(0, 32) || 'Project']));
   return {
     copy: {
@@ -120,6 +145,7 @@ export function clientCopy(data, propId, choice) {
       projects: projects.map(x => ({ id: x.id, propertyId: x.propertyId, parentId: x.parentId || '', name: '', items: [] })),
       states: choice.projects.filter(x => projects.some(pr => pr.id === x.id)).map(x => ({ id: x.id, label: labels.get(x.id) })),
       furnitureTags: (choice.furnitureTags || []).filter(id => prop.tags.some(t => t.id === id)),
+      renderings,
       files,
     },
     send,
@@ -145,8 +171,35 @@ export async function labStatus() { return lab('', { fresh: true }); }
 const put = (slug, path, body, type) => lab('files/' + slug + '/' + path, { method: 'PUT', body, type });
 const versionName = () => new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').replace('T', '-') + '-' + Math.random().toString(36).slice(2, 6);
 
-// Send the property. `progress(text, fraction)` hears how far it is. Returns { slug, version, uploaded, url }.
-export async function sendToLab(propId, choice, { progress = () => {} } = {}) {
+// A rendering as the client gets it: a JPEG at most 2400 pixels on its long side and a small one
+// for its card. { full, thumb, w, h } (blobs), or null when the picture cannot be read here.
+async function webRendering(photoId) {
+  const url = await photoUrl(photoId).catch(() => null);
+  if (!url) return null;
+  let bmp;
+  try { bmp = await createImageBitmap(await (await fetch(url)).blob(), { imageOrientation: 'from-image' }); }
+  catch (e) { return null; }
+  const at = edge => {
+    const k = Math.min(1, edge / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+    const g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);   // a see-through PNG gets a white ground
+    g.drawImage(bmp, 0, 0, c.width, c.height);
+    return c;
+  };
+  const jpeg = (c, q) => new Promise(r => c.toBlob(r, 'image/jpeg', q));
+  const big = at(RENDERING_EDGE);
+  const out = { full: await jpeg(big, 0.88), thumb: await jpeg(at(RENDERING_THUMB), 0.8), w: big.width, h: big.height };
+  bmp.close && bmp.close();
+  return out.full && out.thumb ? out : null;
+}
+
+// Send the property. `progress(text, fraction)` hears how far it is. `pictures({ copy, read,
+// progress })` makes the saved views' own pictures (lab-pictures.js viewPictures; without it the
+// page shows the views by name). Returns { slug, version, uploaded, url, preview, notes }:
+// `notes` says what could not go.
+export async function sendToLab(propId, choice, { progress = () => {}, pictures = null } = {}) {
   const prop = ws.data.properties.find(p => p.id === propId);
   if (!prop) throw new Error('No such property');
   const slug = choice.slug;
@@ -158,9 +211,23 @@ export async function sendToLab(propId, choice, { progress = () => {} } = {}) {
   const { copy, send } = clientCopy(ws.data, propId, choice);
   const base = 'v/' + version + '/';
   let done = 0;
-  const total = send.length + 2;
+  const total = send.length + 2, notes = [];
+  const viewCount = copy.property.savedViews.length;
+  // The files take the first part of the bar, the views' pictures the next, when there are views.
+  const filesEnd = pictures && viewCount ? 0.6 : 0.9;
+  let unread = 0;
   for (const f of send) {
-    progress('Sending ' + (f.kind === 'model' ? 'a model' : 'a texture picture') + ' (' + (done + 1) + ' of ' + total + ')…', 0.05 + 0.85 * done / total);
+    progress('Sending ' + (f.kind === 'model' ? 'a model' : f.kind === 'rendering' ? 'a rendering' : 'a texture picture') + ' (' + (done + 1) + ' of ' + total + ')…', 0.05 + (filesEnd - 0.05) * done / total);
+    if (f.kind === 'rendering') {
+      // A web-size copy and a small one for its card; one this Mac cannot read is left out.
+      const made = await webRendering(f.id);
+      const r = copy.renderings.find(x => x.id === f.rendering);
+      if (!made) { copy.renderings = copy.renderings.filter(x => x !== r); unread++; done++; continue; }
+      r.w = made.w; r.h = made.h;
+      await put(slug, base + f.path, made.full, 'image/jpeg');
+      await put(slug, base + f.thumb, made.thumb, 'image/jpeg');
+      done++; continue;
+    }
     // A texture picture may be a file in the project's folder (photos-store.js reads both).
     const buffer = f.kind === 'picture' ? await photoBytes(f.id).catch(() => null) : ((await getFile(f.id).catch(() => null)) || {}).buffer;
     if (!buffer) {
@@ -176,14 +243,54 @@ export async function sendToLab(propId, choice, { progress = () => {} } = {}) {
     await put(slug, base + f.path, buffer, copy.files[f.id].mime);
     done++;
   }
+  if (unread) notes.push(unread + ' rendering' + (unread === 1 ? '' : 's') + ' could not be read on this Mac and ' + (unread === 1 ? 'was' : 'were') + ' left out.');
+  // The saved views' own pictures: made by the client page's code from this very copy, so each
+  // shows what a click on it gives. viewPictures = { view id: { state id: path } }; a project
+  // that changes nothing in a view has no picture there, and is not offered under that view.
+  if (pictures && viewCount) {
+    try {
+      const sent = new Set(send.filter(f => copy.files[f.id]).map(f => f.id));
+      const read = async id => {
+        if (!sent.has(id) || !copy.files[id]) return null;
+        const kind = send.find(f => f.id === id).kind;
+        const buffer = kind === 'picture' ? await photoBytes(id).catch(() => null) : ((await getFile(id).catch(() => null)) || {}).buffer;
+        return buffer ? { buffer, format: copy.files[id].format, mime: copy.files[id].mime } : null;
+      };
+      const made = await pictures({ copy, read, progress: (text, f) => progress(text, filesEnd + (0.9 - filesEnd) * Math.min(1, Math.max(0, f || 0))) });
+      const index = {};
+      const states = ['existing', ...copy.states.map(x => x.id)];
+      let n = 0;
+      for (const [vi, v] of copy.property.savedViews.entries()) {
+        for (const [si, stateId] of states.entries()) {
+          const body = made.views[v.id] && made.views[v.id][stateId];
+          if (!body) continue;
+          const path = 'views/' + vi + '-' + si + '.jpg';
+          progress('Sending the pictures of the views (' + (++n) + ' of ' + made.count + ')…', 0.9);
+          await put(slug, base + path, new Blob([body], { type: 'image/jpeg' }), 'image/jpeg');
+          (index[v.id] = index[v.id] || {})[stateId] = path;
+        }
+      }
+      copy.viewPictures = index;
+      copy.viewPictureSize = made.size;
+    } catch (e) {
+      console.warn('The pictures of the saved views were not made:', e);
+      notes.push('The pictures of the saved views could not be made (' + (e && e.message || e) + '), so the page shows the views by name.');
+    }
+  }
   progress('Sending the property…', 0.92);
   await put(slug, base + 'property.json', new Blob([JSON.stringify(copy)], { type: 'application/json' }), 'application/json');
   // Last: the page switches to the new copy in one step.
   await put(slug, 'current.json', new Blob([JSON.stringify({ format: CLIENT_FORMAT, version, app, sentAt: copy.sentAt })], { type: 'application/json' }), 'application/json');
   progress('Tidying older copies…', 0.97);
   try { await lab('prune/' + slug, { body: JSON.stringify({ keep: [version, prop.lab && prop.lab.version].filter(Boolean) }), type: 'application/json' }); } catch (e) { console.warn('Older lab copies stay for now:', e); }
-  prop.lab = { slug, projects: choice.projects.map(p => ({ id: p.id, label: p.label })), furnitureTags: copy.furnitureTags, sentAt: copy.sentAt, version };
+  const keep = choice.keep && typeof choice.keep === 'object' ? choice.keep : {};
+  prop.lab = { slug, projects: choice.projects.map(p => ({ id: p.id, label: p.label })), furnitureTags: copy.furnitureTags,
+    viewsOff: Array.isArray(keep.viewsOff) ? keep.viewsOff : [], renderingsOff: Array.isArray(keep.renderingsOff) ? keep.renderingsOff : [],
+    renderingLabels: keep.renderingLabels && typeof keep.renderingLabels === 'object' ? keep.renderingLabels : {},
+    renderingsSent: send.filter(f => f.kind === 'rendering' && copy.renderings.some(r => r.id === f.rendering)).map(f => f.id),
+    sentAt: copy.sentAt, version };
   touch();
   progress('Sent.', 1);
-  return { slug, version, uploaded: !!status.upload, url: status.site + slug + '/', preview: status.preview + slug + '/' };
+  return { slug, version, uploaded: !!status.upload, url: status.site + slug + '/', preview: status.preview + slug + '/', notes,
+    views: viewCount, renderings: copy.renderings.length, pictured: copy.viewPictures ? Object.keys(copy.viewPictures).length : 0 };
 }

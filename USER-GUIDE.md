@@ -26,6 +26,7 @@ Open **GUIDE** in the Tiksi menu (the logo at the top left) for chapter search, 
 - [Print a useful specification sheet](#sheets)
 - [Make a drawing set from the model](#documents)
 - [Send the client a one-pager](#one-pager)
+- [Send the client a page in the lab](#lab)
 - [Settings, backups and storage](#settings)
 - [Use Tiksi on a phone](#phone)
 - [Shortcuts and common questions](#shortcuts)
@@ -330,9 +331,15 @@ Select a material to open its preview and controls. The catalog can be searched 
 2. Adjust color, roughness and the controls offered by its pattern. For tile or plank patterns, set real repeat dimensions.
 3. Use DUPLICATE when you want a separate variation. Use NEW MATERIAL for a new custom finish.
 4. For a photographed finish, select its image in PHOTOS and choose MATERIAL, or select/upload a source image in the material editor.
-5. Assign the material from a selected wall or room in MODEL. Use SOURCE THIS MATERIAL to research a purchasable match.
+5. Put it on the model with PAINT in MODEL (Tools, or press B): choose the finish in the panel, then click a wall, a trim section, a door, a floor or a ceiling. Use SOURCE THIS MATERIAL to research a purchasable match.
 
 ### Other features here
+
+**Paint one piece at a time.** A PAINT click paints the one piece under the pointer, as in paint by numbers. Trim and casings divide a wall: the wall above a chair rail is one piece and the wall below it another, and the panel names the piece under the pointer with its square feet and the finish it wears now. Every click is one UNDO step.
+
+**Paint more with one click.** ONE CLICK PAINTS sets how far a click reaches. THE SAME AROUND THE ROOM (or Shift-click) paints the same band of every wall of the room, or all of the room's trim that wears the same finish. THE WHOLE WALL OR GROUP (or Cmd-click) paints a wall floor to ceiling, or a trim section with the rest of its group. PAINT THE SELECTED paints what SELECT has selected.
+
+**Pick up and take off.** Alt-click, or PICK UP A FINISH FROM THE MODEL, takes the finish under the pointer as the one to paint with. NO PAINT OF ITS OWN takes a piece's paint off again. NEW PAINT COLOUR adds a colour with its maker and code and paints with it at once.
 
 **Pattern controls.** Color, accent, repeat size, roughness, metalness and normal strength let you tune procedural patterns. Drag the live preview to orbit; scroll to zoom.
 
@@ -374,7 +381,7 @@ Open PHOTOS and select an unpinned reference card. Choose PIN IN 3D, then click 
 
 ### Other features here
 
-**Photos, scan frames and renderings.** Each picture is in a group with its own button above the gallery: PHOTOS, 360 PANORAMAS, SCAN FRAMES (the keyframe photos of a Polycam raw data export in the folder; its depth and confidence maps are not pictures and are not listed), RENDERINGS (pictures in a folder named for renders, or in the project's build folder) and DOCUMENTS. Press a button to hide that group; this device remembers it.
+**Photos, scan frames and renderings.** Each picture is in a group with its own button above the gallery: PHOTOS, 360 PANORAMAS, SCAN FRAMES (the keyframe photos of a Polycam raw data export in the folder; its depth and confidence maps are not pictures and are not listed), RENDERINGS (pictures in a folder named for renders, or in the project's build folder) and DOCUMENTS. Press a button to hide that group; this device remembers it. A picture can be put on a saved view (SAVED VIEW in its details): it then goes with that view to the client page when SEND TO THE LAB has it ticked. RENDER THIS VIEW in MODEL does that for the still it makes, and a rendering in the renders folder named for a view goes on that view by its name.
 
 **Select the good ones.** Tick the corner of a card, choose SELECT in the details, or press S in the viewer while stepping through with the arrow keys. The SELECTED filter then shows only those, so a few hundred scan frames are gone through once.
 
@@ -714,6 +721,39 @@ Every property has a one-page teaser for its client: a picture, the pitch, the s
 **When closing asks.** FILE → Settings → One-pager: ask when the project changed since the last version (the default), every time, or never.
 
 > **Good to know:** The page is laid out in the browser and printed at 200 dots per inch, so it looks the same everywhere. Browsers only let a page ask a generic Leave site? question before it closes, which is why Tiksi's own question comes after choosing to stay.
+
+<a id="lab"></a>
+
+## Send the client a page in the lab
+
+**Where:** FILE → Project → SEND TO THE LAB…
+
+A view-only copy of the property goes to its page in the lab on thedurham.nyc. The page is Tiksi's own MODEL, with little switched on: the saved views as small pictures under the model, orbit and walk, Existing or one of the projects you send, furniture on or off, and the drawing quality (it starts at Ultra; a client on a slow phone can lower it). On a phone it is Tiksi's phone layout: the model full screen, the three-line button and the same pictures along the bottom.
+
+### Try it
+
+1. Put the new work in projects: in MODEL, select pieces and choose their project in the PROJECT section. Save views in MODEL; the first one ticked is where the page opens.
+2. Open SEND TO THE LAB…, tick the projects to offer and give each a short name, and tick the tags the furniture switch hides.
+3. Look over VIEWS AND RENDERINGS: every saved view is listed with a tick, and under it the renderings of that view, each with its own tick and a box for the name the client sees. Untick what should not go. The line above SEND counts what is going.
+4. Press SEND. A small frame in the window shows the client page taking the picture of each view; keep the window in front until it says Sent.
+5. OPEN THE PREVIEW shows the copy as sent, on this Mac. OPEN THE LAB PAGE opens it online when the Mac has the lab's upload key.
+6. Give clients access on the lab's own page: the lab shows a section only to the emails granted it.
+
+### Other features here
+
+**The views on the client page.** Each saved view sent is a small picture in a strip under the model. A click goes to the view and opens what there is more of it, beside it: its iterations (Existing and each project that changes what that view shows) and its renderings. A click on an iteration changes the model. A click on a rendering opens the picture in a window floating over the model, which can be dragged by its bar, resized at its corner and closed, while the model stays in use behind it. A number on a view's picture says how many iterations and renderings it opens; a view with neither just goes there.
+
+**Where the pictures of the views come from.** During a send the client page's own code opens the copy on this Mac and takes a picture of every view under Existing and under each project, so a picture shows what a click on it gives. A project that looks the same as Existing from a view is not offered under that view. If the pictures cannot be made the send still goes, says so, and the page lists the views by name.
+
+**Renderings of a view.** A rendering goes to the client only with the saved view it is on, and only while its tick is on. RENDER THIS VIEW (right-click a view's tab in MODEL, or the pencil beside it) makes a still of the view and puts it on that view. A rendering made elsewhere and kept in the project's renders folder goes on the view its file is named for (the view's name first: "Kitchen.png", "Kitchen - walnut option.jpg"). SAVED VIEW in a picture's details in PHOTOS, and the list under each rendering in SEND TO THE LAB, put a picture on a view or take it off. The client gets a copy at most 2400 pixels on its long side, under the name typed for it (or "Rendering" and its date), never its file name. A rendering new since the last send is marked NEW. The ticks are kept with the property as they are flipped.
+
+**Sending again.** Sending again replaces the copy at the same link, in one step; a client's open page keeps the old copy until they reload.
+
+**What is left out.** Products, prices, project scope and notes, every photo that is not a ticked rendering of a ticked view, photo pins, notes, measurements, documents, the scan capture, the record of where measurements came from, and any project or saved view not ticked. Pieces hidden in MODEL stay hidden.
+
+**Walking on the client page.** A tap or click on the floor walks there; the arrows on the floor at each doorway step through it.
+
+> **Good to know:** The upload key is the website's own file-storage key, kept on this Mac in ~/.r2-credentials. Without it a send goes to this Mac's preview copy only, and SEND TO THE LAB says so.
 
 <a id="settings"></a>
 

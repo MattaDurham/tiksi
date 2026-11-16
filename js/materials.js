@@ -190,7 +190,9 @@ function remapMaterialId(from, to) {
   for (const p of ws.data.properties) {
     const swap = o => { for (const k of Object.keys(o)) if (/material/i.test(k) && o[k] === from) o[k] = to; };
     (p.walls || []).forEach(swap);
+    for (const w of p.walls || []) for (const mark of Array.isArray(w.paint) ? w.paint : []) if (mark && mark.material === from) mark.material = to;
     (p.rooms || []).forEach(swap);
+    (p.openings || []).forEach(o => { if (o.trimMaterial === from) o.trimMaterial = to; });
     swap(p);
   }
 }
@@ -276,6 +278,11 @@ export function materialUsage(id) {
         out.push({ propertyId: p.id, property: p.name, kind: 'wall', id: w.id, label: 'Wall ' + fmtLen(Math.hypot(w.bx - w.ax, w.by - w.ay), { short: true }) });
       }
     }
+    for (const w of p.walls || []) {
+      const n = (Array.isArray(w.paint) ? w.paint : []).filter(mark => mark && mark.material === id).length;
+      if (n) out.push({ propertyId: p.id, property: p.name, kind: 'wall', id: w.id, label: 'Paint on ' + n + ' piece' + (n === 1 ? '' : 's') + ' of a wall ' + fmtLen(Math.hypot(w.bx - w.ax, w.by - w.ay), { short: true }) });
+    }
+    for (const o of p.openings || []) if (o.trimMaterial === id) out.push({ propertyId: p.id, property: p.name, kind: 'opening', id: o.id, label: (o.type === 'window' ? 'Window' : 'Door') + ' frame and casing' });
     for (const r of p.rooms || []) {
       for (const k of Object.keys(r)) if (/material/i.test(k) && r[k] === id) {
         out.push({ propertyId: p.id, property: p.name, kind: 'room', id: r.id, label: (r.name || 'Room') + (k === 'material' ? ' floor' : ' ' + k.replace(/material/i, '').toLowerCase()) });

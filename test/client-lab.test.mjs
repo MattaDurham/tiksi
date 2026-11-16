@@ -124,3 +124,42 @@ test('send settings: the page name, short project names and furniture tags', () 
   assert.equal(L.slugify('Café & Bar, 2nd fl.'), 'cafe-and-bar-2nd-fl');
   assert.equal(L.shortName('Wall trim: wainscoting (v1)'), 'Wall trim');
 });
+
+test('the copy carries the views switched on and the renderings chosen for them, under plain numbers', () => {
+  const data = workspace();
+  const prop = data.properties[0];
+  prop.savedViews.push({ id: 'v2', name: 'Attic nook', camera: { position: [2, 1.6, 2], target: [0, 1.4, 2], fov: 50 }, mode: 'orbit', tags: {}, section: { on: false, height: 1.2 }, xray: false, hiddenLevels: [] });
+  prop.photos.push({ id: 'ph-render-secret', name: 'Entry walnut for Smith.png', kind: 'photo', source: 'rendering', savedViewId: 'v1' });
+  const { copy, send } = L.clientCopy(data, 'p1', { projects: [], furnitureTags: [], views: ['v1'], renderings: [
+    { id: 'ph-render-secret', viewId: 'v1', label: '  Walnut\n option ', day: '2026-11-03' },
+    { id: 'ph-render-secret', viewId: 'v1', label: 'twice', day: '2026-11-03' },
+    { id: 'ph-other', viewId: 'v2', label: 'On a view that is not sent', day: '' },
+    { id: 'ph-undated', viewId: 'v1', label: '', day: 'yesterday' },
+  ] });
+  assert.deepEqual(copy.property.savedViews.map(v => v.id), ['v1'], 'the view switched off is not in the copy');
+  assert.deepEqual(copy.renderings, [
+    { id: 'r1', view: 'v1', label: 'Walnut option', day: '2026-11-03', w: 0, h: 0, path: 'renderings/r1.jpg', thumb: 'renderings/r1-thumb.jpg' },
+    { id: 'r2', view: 'v1', label: '', day: '', w: 0, h: 0, path: 'renderings/r2.jpg', thumb: 'renderings/r2-thumb.jpg' },
+  ]);
+  assert.deepEqual(send.filter(f => f.kind === 'rendering').map(f => [f.id, f.rendering, f.path]), [['ph-render-secret', 'r1', 'renderings/r1.jpg'], ['ph-undated', 'r2', 'renderings/r2.jpg']]);
+  const text = JSON.stringify(copy);
+  for (const secret of ['ph-render-secret', 'Smith', 'Entry walnut', 'Attic nook']) assert.ok(!text.includes(secret), 'the copy must not carry ' + secret);
+  // Left alone, every view goes and no rendering does.
+  const all = L.clientCopy(data, 'p1', { projects: [], furnitureTags: [] }).copy;
+  assert.deepEqual(all.property.savedViews.map(v => v.id), ['v1', 'v2']);
+  assert.deepEqual(all.renderings, []);
+});
+
+test('send settings remember the views and renderings switched off and the names given', () => {
+  const data = workspace();
+  const prop = data.properties[0];
+  let s = L.labSettings(prop, data.projects);
+  assert.deepEqual(s.views, [{ id: 'v1', name: 'Entry', on: true }]);
+  assert.deepEqual([s.renderingsOff, s.renderingLabels, s.renderingsSent], [[], {}, null]);
+  prop.lab = { viewsOff: ['v1', 'v-gone'], renderingsOff: ['ph-a'], renderingLabels: { 'ph-b': 'Walnut' }, renderingsSent: ['ph-b'] };
+  s = L.labSettings(prop, data.projects);
+  assert.deepEqual(s.views, [{ id: 'v1', name: 'Entry', on: false }]);
+  assert.deepEqual([s.renderingsOff, s.renderingLabels, s.renderingsSent], [['ph-a'], { 'ph-b': 'Walnut' }, ['ph-b']]);
+  assert.equal(s.projects.every(p => p.on), true, 'switches kept before a first send do not untick the projects');
+  assert.equal(L.renderingLabel(' a\tb  ' + 'x'.repeat(80)).length, 48);
+});

@@ -90,7 +90,7 @@ async function addPhoto(prop, file, opts) {
     createdAt: new Date().toISOString(), notes: '', roomId: '', elementIds: [], itemIds: [], pin: null,
   };
   Object.assign(rec, cameraFacts(buffer, w, h));
-  for (const k of ['source', 'positionId', 'role', 'renderedAt', 'view']) if (opts[k] !== undefined) rec[k] = opts[k];
+  for (const k of ['source', 'positionId', 'role', 'renderedAt', 'view', 'savedViewId']) if (opts[k] !== undefined) rec[k] = opts[k];
   prop.photos = prop.photos || [];
   prop.photos.push(rec);
   touch();
@@ -260,6 +260,18 @@ async function relinkMoved(prop, listing) {
   }
 }
 
+// The folder's pictures Tiksi has no record of yet, as gallery items (the shape PHOTOS lists
+// them in): each becomes a record the first time something is kept about it (keepRecord).
+export function folderOnlyPictures(prop) {
+  const listing = folderListing(prop);
+  if (!listing || !keepsPhotosInFolder(prop)) return [];
+  const taken = new Set((prop.photos || []).filter(p => p.file).map(p => p.file.path));
+  return listing.files.filter(f => !taken.has(f.path) && !photoById(prop, f.key)).map(f => ({
+    id: f.key, name: f.name, kind: 'photo', w: 0, h: 0, mime: f.mime, thumb: '', createdAt: new Date(f.mtime || 0).toISOString(),
+    notes: '', roomId: '', elementIds: [], itemIds: [], pin: null, file: { path: f.path, size: f.size, mtime: f.mtime, group: f.group }, listed: true,
+  }));
+}
+
 // A small copy of a folder photo for the gallery, as an object URL the caller revokes once shown.
 export async function folderPreviewUrl(prop, path, size = 256) {
   return URL.createObjectURL(await folderApi().preview(prop, path, size));
@@ -322,7 +334,7 @@ async function addToFolder(prop, file, opts) {
   const folder = subfolderFor(opts.source);
   const info = await folderApi().add(prop, file, file.name || 'Photo', folder);
   const known = (prop.photos || []).find(p => p.file && p.file.path === info.path);
-  if (known) { for (const k of ['source', 'positionId', 'role', 'renderedAt', 'view']) if (opts[k] !== undefined) known[k] = opts[k]; touch(); return known; }
+  if (known) { for (const k of ['source', 'positionId', 'role', 'renderedAt', 'view', 'savedViewId']) if (opts[k] !== undefined) known[k] = opts[k]; touch(); return known; }
   let w = info.w || 0, h = info.h || 0, thumb = '';
   try {
     const img = await decode(file);
@@ -342,7 +354,7 @@ async function addToFolder(prop, file, opts) {
     file: { path: info.path, size: info.size, mtime: info.mtime, sha256: info.sha256, group: info.group || 'photo' },
   };
   try { Object.assign(rec, cameraFacts(await file.arrayBuffer(), w, h)); } catch (e) { /* no lens or time */ }
-  for (const k of ['source', 'positionId', 'role', 'renderedAt', 'view']) if (opts[k] !== undefined) rec[k] = opts[k];
+  for (const k of ['source', 'positionId', 'role', 'renderedAt', 'view', 'savedViewId']) if (opts[k] !== undefined) rec[k] = opts[k];
   listedRefs.set(info.key, { prop, path: info.path, mime: rec.mime });
   prop.photos = prop.photos || [];
   prop.photos.push(rec);
@@ -406,7 +418,7 @@ function extensionOf(mime) {
 // and is not any more) is let go of; the photo stays listed from the folder. Returns true then.
 export function releaseIfBare(prop, rec) {
   if (!rec || !rec.file || rec.selected || rec.pin || rec.notes || rec.roomId || (rec.elementIds || []).length || (rec.itemIds || []).length
-    || rec.view || rec.positionId || rec.role || rec.source || rec.kind !== 'photo' || rec.name !== baseOf(rec.file.path)) return false;
+    || rec.view || rec.positionId || rec.role || rec.source || typeof rec.savedViewId === 'string' || rec.kind !== 'photo' || rec.name !== baseOf(rec.file.path)) return false;
   if (prop.env && prop.env.panoPhotoId === rec.id) return false;
   if ((ws.data.materials || []).some(m => m.photoId === rec.id)) return false;
   if ((prop.levels || []).some(l => l.plan && l.plan.photoId === rec.id)) return false;
