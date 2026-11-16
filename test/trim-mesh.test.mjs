@@ -20,6 +20,27 @@ function section(style, side = 1, wall = WALL, options = {}) {
   return { ...trimTemplate(style, options.product || null, wall, side, { wallHeight: wall.height, ...options }), id: `trim-${style}-${side}` };
 }
 
+test('trim clears the heater on its wall side and can continue above it', () => {
+  const wall = { ...WALL, bx: 4, trimClearances: [{ side: 1, f0: 0.45, f1: 0.7, y0: 0, y1: 0.56 }] };
+  const view = { ...VIEW, walls: [wall] };
+  const mesh = (style, side, options) => trimMeshParts(section(style, side, wall, options), wall, view, []);
+  const clear = triangles => {
+    for (let i = 0; i < triangles.length; i += 3) {
+      const tri = triangles.slice(i, i + 3);
+      assert.ok(tri.every(([x]) => x <= 1.8 + 1e-10) || tri.every(([x]) => x >= 2.8 - 1e-10) ||
+        tri.every(([, y]) => y >= 0.56 - 1e-10), 'no trim triangle enters the heater clearance');
+    }
+  };
+  for (const [style, options] of [['baseboard', {}], ['board-batten', { h: 0.49 }], ['shaker', { h: 0.49 }]]) {
+    const pts = mesh(style, 1, options).parts.flatMap(points);
+    assert.ok(pts.length);
+    clear(pts);
+  }
+  const battens = mesh('board-batten', 1, { h: 1 }).parts.flatMap(points);
+  assert.ok(battens.some(([x, y]) => x > 1.8 && x < 2.8 && y > 0.56), 'the field can resume above the cover');
+  assert.deepEqual(mesh('baseboard', -1), trimMeshParts(section('baseboard', -1, wall), { ...wall, trimClearances: [] }, view, []));
+});
+
 test('the shared helper imports and runs without browser globals or workspace state', () => {
   assert.equal(typeof globalThis.window, 'undefined');
   assert.equal(typeof globalThis.document, 'undefined');

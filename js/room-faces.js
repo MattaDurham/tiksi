@@ -16,7 +16,7 @@
 // the wall where the face lies on it. Faces carry stable ids made from their room and first
 // part, so a selection survives a rebuild that leaves the walls alone.
 
-import { wallFrame, wallEnds } from './wall-joins.js';
+import { wallFrame, wallEnds, wallEndpointsMeet } from './wall-joins.js';
 import { openingSpans, pointInPoly } from './wall-solids.js';
 
 const JOIN_TOL = 0.012;     // m: as wall-joins.js, ends this close share a joint
@@ -47,7 +47,7 @@ function abutted(w, f, side, walls) {
     if (g.L < 0.01) continue;
     for (const [px, py, qx, qy] of [[o.ax, o.ay, o.bx, o.by], [o.bx, o.by, o.ax, o.ay]]) {
       // A joint at one of w's own ends is closed by the mitres already.
-      if (Math.hypot(px - w.ax, py - w.ay) < JOIN_TOL || Math.hypot(px - w.bx, py - w.by) < JOIN_TOL) continue;
+      if (wallEndpointsMeet(f, g, px - w.ax, py - w.ay) || wallEndpointsMeet(f, g, px - w.bx, py - w.by)) continue;
       const t = (px - w.ax) * f.ux + (py - w.ay) * f.uy, d = (px - w.ax) * f.nx + (py - w.ay) * f.ny;
       if (Math.abs(d) > f.h + JOIN_TOL || t < -JOIN_TOL || t > f.L + JOIN_TOL) continue;
       if (((qx - w.ax) * f.nx + (qy - w.ay) * f.ny) * side <= f.h) continue;    // runs off the other side
@@ -60,9 +60,11 @@ function abutted(w, f, side, walls) {
 
 // Whether wall w's end at (px, py) stops against another wall it meets mid-span.
 function butts(w, px, py, walls) {
+  const f = wallFrame(w);
   for (const o of walls) {
     if (o === w || o.id === w.id) continue;
-    if (Math.hypot(o.ax - px, o.ay - py) < JOIN_TOL || Math.hypot(o.bx - px, o.by - py) < JOIN_TOL) return false;
+    const g = wallFrame(o);
+    if (wallEndpointsMeet(f, g, o.ax - px, o.ay - py) || wallEndpointsMeet(f, g, o.bx - px, o.by - py)) return false;
   }
   return walls.some(o => {
     if (o === w || o.id === w.id) return false;
@@ -113,7 +115,9 @@ function splitByRoom(w, f, side, a, b, rooms) {
     start = hi; cur = here;
   }
   runs.push({ s0: start, s1: b, front: cur });
-  return runs.filter(r => r.s1 - r.s0 >= MIN_PART);
+  // Retain short runs at room boundaries so they don't leave a slit in the
+  // finished wall where a room polygon ends just shy of a corner.
+  return runs.filter(r => r.s1 - r.s0 > 1e-6);
 }
 
 // Compass word for a plan direction (x east, y south).

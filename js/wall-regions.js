@@ -24,7 +24,7 @@
 //
 // Pure plan maths, no three.js and no workspace state.
 
-import { wallFrame, wallEnds } from './wall-joins.js';
+import { wallFrame, wallEnds, wallFaceSpan } from './wall-joins.js';
 import { wallSolids } from './wall-solids.js';
 import { trimLayout, trimStyle, openingBlocks } from './trims.js';
 
@@ -97,12 +97,16 @@ export function faceRegions(face, { walls = [], openings = [], trims = [], heigh
   };
   for (const part of parts) {
     const { wall, p, L, H } = part;
-    for (const s of wallSolids(wall, openings, H).solids) { const r = clip(part, s); if (r) solid.push(r); }
+    const ends = wallEnds(wall, walls, 0);
+    for (const s of wallSolids(wall, openings, H).solids) {
+      const [s0, s1] = wallFaceSpan(s, L, ends, p.side);
+      const r = clip(part, { ...s, s0, s1 });
+      if (r) solid.push(r);
+    }
     for (const b of openingBlocks(wall, openings, L, H)) {
       const r = clip(part, { s0: b.x0, s1: b.x1, v0: b.y0, v1: b.y1 });
       if (r) { covers.push({ ...r, casing: true }); edges.push(r.x0, r.x1); }
     }
-    const ends = wallEnds(wall, walls, 0);
     const faceEnds = { L, H, x0: p.side > 0 ? ends.a.pos : ends.a.neg, x1: p.side > 0 ? ends.b.pos : ends.b.neg };
     for (const t of trims) {
       if (t.wallId !== wall.id || (t.side === -1 ? -1 : 1) !== p.side) continue;

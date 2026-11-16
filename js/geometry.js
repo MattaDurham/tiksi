@@ -23,7 +23,7 @@ import { fixturesOn, fixtureParts, FIXTURE_FALLBACK } from './fixtures.js';
 import { applyPlanTagVisibility } from './tags-scene.js';
 import { cutPrism } from './section-planes.js';
 import { thresholdFloors as derivedThresholdFloors } from './threshold-floors.js';
-import { wallFrame, wallEnds } from './wall-joins.js';
+import { wallFrame, wallEnds, wallFaceSpan } from './wall-joins.js';
 import { roomFaces } from './room-faces.js';
 import { faceRegions } from './wall-regions.js';
 import { trimMeshParts } from './trim-mesh.js';
@@ -271,20 +271,22 @@ function segDist(px, py, ax, ay, bx, by) {
 }
 
 // ---------- wall joints ----------
-// Where one face (side +1 / -1) of a solid piece starts and stops along the wall: pieces
-// touching a wall end take that end's cut, the others keep their own span.
-function faceSpan(s, L, ends, side) {
-  const atA = s.s0 < 0.001, atB = s.s1 > L - 0.001;
-  const e0 = side > 0 ? ends.a.pos : ends.a.neg, e1 = side > 0 ? ends.b.pos : ends.b.neg;
-  return [atA ? Math.min(e0, s.s1 - 0.001) : s.s0, atB ? Math.max(e1, s.s0 + 0.001) : s.s1];
-}
-// Plan footprint of one solid piece in wall-local coords, in metricPrism order.
+// Clip the joined footprint to the opening's jamb planes. Moving only the
+// long edges of a very narrow slice can leave a wedge on the wrong side of a jamb.
 function solidFootprint(s, L, h, ends) {
-  const [x0p, x1p] = faceSpan(s, L, ends, 1), [x0n, x1n] = faceSpan(s, L, ends, -1);
-  const fp = [[x0p, h], [x1p, h]];
-  if (s.s1 > L - 0.001 && ends.b.tip) fp.push([ends.b.tip.x, ends.b.tip.z]);
-  fp.push([x1n, -h], [x0n, -h]);
-  if (s.s0 < 0.001 && ends.a.tip) fp.push([ends.a.tip.x, ends.a.tip.z]);
+  let fp = [[ends.a.pos, h], [ends.b.pos, h]];
+  if (ends.b.tip) fp.push([ends.b.tip.x, ends.b.tip.z]);
+  fp.push([ends.b.neg, -h], [ends.a.neg, -h]);
+  if (ends.a.tip) fp.push([ends.a.tip.x, ends.a.tip.z]);
+  const clip = (x, sign) => fp.flatMap((a, i) => {
+    const b = fp[(i + 1) % fp.length];
+    const da = (a[0] - x) * sign, db = (b[0] - x) * sign;
+    const kept = da >= 0 ? [a] : [];
+    if (da * db < 0) kept.push([x, a[1] + (b[1] - a[1]) * da / (da - db)]);
+    return kept;
+  });
+  if (s.s0 > 0) fp = clip(s.s0, 1);
+  if (s.s1 < L) fp = clip(s.s1, -1);
   return fp;
 }
 
@@ -503,10 +505,6 @@ export function buildWallGroup(wall, openings, property, ctx) {
   const sides = wallSides(wall, rooms);
   const walls = property.walls || [];
   const ends = wallEnds(wall, walls, 0);
-  // Stagger wall tops by a fifth of a millimetre per wall, cycling every ten, so any two
-  // coplanar tops that still meet (walls drawn across each other) never fight; joined
-  // ends are mitred or cut, so on a clean plan nothing overlaps in the first place.
-  const lift = ((ctx.index || 0) % 10) * 0.0002;
 
   // Each face's finish (wall-solids.js wallFaceMaterialIds, shared with the SketchUp mirror):
   // its own if set, else the interior finish where it looks into a room, the exterior grey on an
@@ -544,15 +542,15 @@ export function buildWallGroup(wall, openings, property, ctx) {
   };
   for (const s of solids) {
     const fp = solidFootprint(s, L, h, ends);
-    // The footprint runs A+ -> B+ -> optional B tip -> B- -> A- -> optional A tip.
-    // Only pieces that reach a real wall endpoint get its override; the vertical
-    // edges at an opening remain ordinary reveals, even when their normal matches.
-    const atA = s.s0 < 0.001, atB = s.s1 > L - 0.001;
-    const negEdge = 2 + (atB && ends.b.tip ? 1 : 0);
-    const edgeKinds = fp.map((_, i) => i > 0 && i < negEdge && atB && faceIds.endB ? FACE_END_B
-      : i > negEdge && atA && faceIds.endA ? FACE_END_A : undefined);
-    const y1 = s.v1 >= H - 0.001 ? H + lift : s.v1;
-    for (const b of buckets) b.geos.push(metricPrism(fp, s.v0, y1, b.mask, edgeKinds));
+    if (fp.length < 3) continue;
+    const edgeKinds = fp.map(([x, z], i) => {
+      const [nextX, nextZ] = fp[(i + 1) % fp.length];
+      if (z === nextZ && Math.abs(z) === h) return z > 0 ? FACE_POS : FACE_NEG;
+      if ((x === s.s0 && nextX === s.s0 && s.s0 > 0) || (x === s.s1 && nextX === s.s1 && s.s1 < L)) return FACE_OTHER;
+      if ((x + nextX) / 2 < L / 2) return faceIds.endA ? FACE_END_A : FACE_OTHER;
+      return faceIds.endB ? FACE_END_B : FACE_OTHER;
+    });
+    for (const b of buckets) b.geos.push(metricPrism(fp, s.v0, s.v1, b.mask, edgeKinds));
     if (s.v0 < 0.001) {
       // Preserve recorded baseboards without inventing trim on unspecified faces.
       // This is the same explicit-record gate used by the native mirror. New editable
@@ -566,9 +564,10 @@ export function buildWallGroup(wall, openings, property, ctx) {
         detail.height = Math.min(detail.height, s.v1);
         detail.radius = Math.min(detail.radius, detail.height);
         if (!detail.height || !detail.depth) continue;
-        const [i0, i1] = faceSpan(s, L, ends, sgn), zi = sgn * h;
+        const [i0, i1] = wallFaceSpan(s, L, ends, sgn), zi = sgn * h;
+        if (i1 - i0 < 1e-6) continue;
         const footprint = depth => {
-          const [o0, o1] = faceSpan(s, L, endsAtDepth(depth), sgn), zo = sgn * (h + depth);
+          const [o0, o1] = wallFaceSpan(s, L, endsAtDepth(depth), sgn), zo = sgn * (h + depth);
           return sgn > 0 ? [[o0, zo], [o1, zo], [i1, zi], [i0, zi]] : [[i0, zi], [i1, zi], [o1, zo], [o0, zo]];
         };
         if (detail.profile === 'rectangular') baseGeos.push(metricPrism(footprint(detail.depth), 0, detail.height));
@@ -612,32 +611,17 @@ export function buildWallGroup(wall, openings, property, ctx) {
       const whole = () => {
         const geos = [];
         for (const sp of solids) {
-          const [a, b] = faceSpan(sp, L, ends, p.side);
-          const x0 = Math.max(a, p.s0 - 0.001), x1 = Math.min(b, p.s1 + 0.001);
-          if (x1 - x0 < 1e-4) continue;
-          geos.push(faceQuad(x0, x1, sp.v0, sp.v1 >= H - 0.001 ? H + lift : sp.v1, z, p.side));
+          const [a, b] = wallFaceSpan(sp, L, ends, p.side);
+          const x0 = Math.max(a, p.s0), x1 = Math.min(b, p.s1);
+          if (x1 - x0 < 1e-6) continue;
+          geos.push(faceQuad(x0, x1, sp.v0, sp.v1, z, p.side));
         }
         pieces.push({ geos, finish: own, region: undefined });
       };
       if (!res || !res.regions.length) whole();
       else {
-        // A region's rectangles keep to the wall's own cuts: where one reaches the end of a
-        // solid piece it takes that piece's mitred end, as the whole side does.
-        const quads = cells => {
-          const geos = [];
-          for (const c of cells) {
-            if (c.part !== p.k) continue;
-            const mid = (c.s0 + c.s1) / 2, up = (c.v0 + c.v1) / 2;
-            const sp = solids.find(x => mid > x.s0 && mid < x.s1 && up > x.v0 && up < x.v1);
-            if (!sp) continue;
-            const [a, b] = faceSpan(sp, L, ends, p.side);
-            const lo = Math.max(sp.s0, p.s0), hi = Math.min(sp.s1, p.s1);
-            const x0 = c.s0 <= lo + 1e-5 ? Math.max(a, p.s0 - 0.001) : c.s0, x1 = c.s1 >= hi - 1e-5 ? Math.min(b, p.s1 + 0.001) : c.s1;
-            if (x1 - x0 < 1e-4) continue;
-            geos.push(faceQuad(x0, x1, c.v0, c.v1 >= H - 0.001 ? H + lift : c.v1, z, p.side));
-          }
-          return geos;
-        };
+        const quads = cells => cells.filter(c => c.part === p.k)
+          .map(c => faceQuad(c.s0, c.s1, c.v0, c.v1, z, p.side));
         for (const r of res.regions) pieces.push({ geos: quads([...r.cells, ...r.hidden]), finish: r.finish || own, region: r.key });
         pieces.push({ geos: quads(res.rest), finish: own, region: undefined });
       }
@@ -840,8 +824,8 @@ export function buildPropertyGroup(property, opts) {
     const levelTrims = (property.trims || []).filter(t => view.walls.some(w => w.id === t.wallId));
     const regions = new Map(faces.map(fc => [fc.id, faceRegions(fc, { walls: view.walls, openings, trims: levelTrims, heightOf: w => w.height || H })]));
     lg.userData.regions = regions;
-    view.walls.forEach((wall, index) => {
-      const wg = buildWallGroup(wall, openings, view, Object.assign({ index, faces, regions }, ctx));
+    view.walls.forEach(wall => {
+      const wg = buildWallGroup(wall, openings, view, Object.assign({ faces, regions }, ctx));
       for (const { faceId, object } of wg.userData.faceParts || []) faceGroups.get(faceId)?.add(object);
       delete wg.userData.faceParts;
       lg.add(wg);

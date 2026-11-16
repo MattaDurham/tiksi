@@ -28,8 +28,8 @@
 //   material       the finish (a material id; null: the trim paint, mat-trim).
 //
 // trimLayout() turns a record into parts in the wall face's own frame: x along the wall from
-// end a, y up from the level's floor, d out from the face. Doors and windows (with their
-// casings) cut runs and fields; a run that reaches the end of the wall is mitred there to meet
+// end a, y up from the level's floor, d out from the face. Doors, windows and recorded
+// wall-fixture clearances cut runs and fields; a run that reaches the wall's end is mitred to meet
 // the next wall's trim (geometry.js does the mitre, as it does for the wall itself).
 
 import { sectionOf, isCrownProfile } from './trim-profiles.js';
@@ -170,6 +170,18 @@ export function openingBlocks(wall, openings, L, H) {
   return out;
 }
 
+// A surface-mounted or recessed fixture can reserve space on one wall face.
+// The horizontal limits follow the wall, and the heights are above its floor.
+export function trimClearanceBlocks(wall, side, L, H) {
+  if (!Array.isArray(wall.trimClearances)) return [];
+  return wall.trimClearances.flatMap(c => {
+    if (!c || c.side !== side || ![c.f0, c.f1, c.y0, c.y1].every(Number.isFinite)) return [];
+    const x0 = clamp(c.f0, 0, 1) * L, x1 = clamp(c.f1, 0, 1) * L;
+    const y0 = clamp(c.y0, 0, H), y1 = clamp(c.y1, 0, H);
+    return x0 < x1 && y0 < y1 ? [{ x0, x1, y0, y1 }] : [];
+  });
+}
+
 // [x0, x1] minus the intervals in `cuts`, pieces shorter than `min` dropped. Each piece says
 // whether it starts or ends at the interval's own ends (where a mitre may go).
 function subtract(x0, x1, cuts, min) {
@@ -259,7 +271,7 @@ export function trimLayout(t, wall, openings, face = {}) {
   const x0 = Math.max(e0, t.f0 * L), x1 = Math.min(e1, t.f1 * L);
   if (x1 - x0 < MIN_PIECE) return out;
   const atA = t.f0 <= 1e-3, atB = t.f1 >= 1 - 1e-3;
-  const blocks = openingBlocks(wall, openings, L, H);
+  const blocks = [...openingBlocks(wall, openings, L, H), ...trimClearanceBlocks(wall, t.side === -1 ? -1 : 1, L, H)];
   const W = p.W, T = p.T;
   const push = part => { if (out.parts.length < MAX_PARTS) out.parts.push(part); };
 
@@ -310,8 +322,10 @@ export function trimLayout(t, wall, openings, face = {}) {
     for (const r of rects) {
       // Shaker and raised panels: a top rail, a bottom rail and stiles of flat stock frame the panels.
       if (!frame) {
-        push({ kind: 'board', dir: 'h', x0: r.x0, x1: r.x1, y0: r.y1 - topRail, y1: r.y1, T, profile: 'eased' });
-        push({ kind: 'board', dir: 'h', x0: r.x0, x1: r.x1, y0: r.y0, y1: r.y0 + botRail, T, profile: 'eased' });
+        const lowerTop = Math.min(r.y0 + botRail, r.y1);
+        const upperBottom = Math.max(r.y1 - topRail, lowerTop);
+        if (upperBottom < r.y1) push({ kind: 'board', dir: 'h', x0: r.x0, x1: r.x1, y0: upperBottom, y1: r.y1, T, profile: 'eased' });
+        push({ kind: 'board', dir: 'h', x0: r.x0, x1: r.x1, y0: r.y0, y1: lowerTop, T, profile: 'eased' });
       }
       const ix0 = r.x0 + (frame ? inset : 0), ix1 = r.x1 - (frame ? inset : 0);
       const iy0 = r.y0 + (frame ? insetB : botRail), iy1 = r.y1 - (frame ? insetT : topRail);
@@ -355,17 +369,18 @@ export function trimLayout(t, wall, openings, face = {}) {
     const spacing = t.spacing || p.spacing || .45;
     const rail = Math.max(W, p.rail || W);
     for (const r of rects) {
-      push({ kind: 'board', dir: 'h', x0: r.x0, x1: r.x1, y0: r.y1 - rail, y1: r.y1, T, profile: 'eased' });
-      const by1 = r.y1 - rail;
+      const by1 = Math.max(r.y0, r.y1 - rail);
+      push({ kind: 'board', dir: 'h', x0: r.x0, x1: r.x1, y0: by1, y1: r.y1, T, profile: 'eased' });
       if (by1 - r.y0 < .03) continue;
       const rowsHere = t.style === 'grid' && r.full ? rows : 1;
       const spans = rowsHere > 1 ? splitSpan(r.y0, by1, rowsHere, t.heights, W) : [[r.y0, by1]];
       const set = setCols(r);
       const n = set || autoCount(t.style, r.x1 - r.x0, spans[0][1] - spans[0][0], t.style === 'grid' ? t.spacing : spacing);
       if (r.full) out.cols = Math.max(out.cols, n);
-      const bays = splitSpan(r.x0 + W, r.x1 - W, n, r.full ? t.widths : null, W);
-      const xs = [r.x0, ...bays.slice(0, -1).map(([, b]) => b), r.x1 - W];
-      for (const x of xs) push({ kind: 'board', dir: 'v', x0: x, x1: x + W, y0: r.y0, y1: by1, T, profile: 'eased' });
+      const batten = Math.min(W, r.x1 - r.x0);
+      const bays = splitSpan(r.x0 + batten, r.x1 - batten, n, r.full ? t.widths : null, batten);
+      const xs = r.x1 - r.x0 < W * 2 ? [(r.x0 + r.x1 - batten) / 2] : [r.x0, ...bays.slice(0, -1).map(([, b]) => b), r.x1 - batten];
+      for (const x of xs) push({ kind: 'board', dir: 'v', x0: x, x1: x + batten, y0: r.y0, y1: by1, T, profile: 'eased' });
       for (let j = 1; j < spans.length; j++) push({ kind: 'board', dir: 'h', x0: r.x0, x1: r.x1, y0: spans[j][0] - W, y1: spans[j][0], T, profile: 'eased' });
       bays.forEach(([a, b], i) => spans.forEach(([c, d], j) => out.boxes.push({ x0: a, x1: b, y0: c, y1: d, col: i, row: j, rect: rects.indexOf(r) })));
     }

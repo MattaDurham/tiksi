@@ -50,6 +50,26 @@ test('a face with no trim and no opening is one region, the whole wall', () => {
   assert.equal(res.regions[0].finish, null, 'no mark: the face\'s own finish');
 });
 
+test('a short run at a room boundary draws every part of the finished wall once', () => {
+  const h = house();
+  h.walls = [wall('north', 0, 0, 5, 0)];
+  h.rooms = [{ id: 'k', name: 'Kitchen', level: 'l1', pts: [[0.007, 0], [5, 0], [5, 4], [0.007, 4]] }];
+  h.openings = [];
+  h.levels = [{ id: 'l1', elevation: 0, height: H }];
+  const group = buildPropertyGroup(h);
+  const bounds = [];
+  group.traverse(mesh => {
+    if (mesh.userData.kind !== 'wall' || mesh.userData.side !== 1) return;
+    mesh.geometry.computeBoundingBox();
+    bounds.push([mesh.geometry.boundingBox.min.x, mesh.geometry.boundingBox.max.x]);
+  });
+  bounds.sort((a, b) => a[0] - b[0]);
+  assert.equal(bounds.length, 2);
+  near(bounds[0][0], 0, 'the short piece reaches the wall end');
+  near(bounds[0][1], bounds[1][0], 'adjacent room faces meet without overlapping');
+  near(bounds[1][1], 5, 'the main face reaches the opposite end');
+});
+
 test('a chair rail across a face makes the wall above it and the wall below it two regions', () => {
   const h = house();
   rail(h, 'n1', 1); rail(h, 'n2', 1);

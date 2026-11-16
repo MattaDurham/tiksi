@@ -12,6 +12,14 @@ export function wallFrame(wall) {
   return { L, ux, uy, nx: -uy, ny: ux, h: (wall.thickness || 0.114) / 2 };
 }
 
+// An offset endpoint can still meet a wall at its end, such as two thicknesses
+// of partition meeting a third wall. Test the end bands in either wall's frame.
+export function wallEndpointsMeet(f, g, dx, dy) {
+  const band = (a, b) => Math.abs(dx * a.ux + dy * a.uy) < JOIN_TOL &&
+    Math.abs(dx * a.nx + dy * a.ny) < Math.min(a.h, b.h);
+  return Math.hypot(dx, dy) < JOIN_TOL || band(f, g) || band(g, f);
+}
+
 // Parameter along (dx, dy) from (ax, ay) where that line meets the line through (bx, by)
 // with direction (qx, qy); null when the lines are parallel.
 function lineHit(ax, ay, dx, dy, bx, by, qx, qy) {
@@ -56,12 +64,12 @@ function wallEnd(wall, end, walls, inflate) {
     if (o === wall || o.id === wall.id) continue;
     const g = wallFrame(o);
     if (g.L < 0.01) continue;
-    const nearA = Math.hypot(o.ax - px, o.ay - py) < JOIN_TOL, nearB = Math.hypot(o.bx - px, o.by - py) < JOIN_TOL;
+    const nearA = wallEndpointsMeet(f, g, o.ax - px, o.ay - py), nearB = wallEndpointsMeet(f, g, o.bx - px, o.by - py);
     if (nearA || nearB) {
       const s = nearA ? 1 : -1;
       const ix = g.ux * s, iy = g.uy * s;                             // from the joint into the neighbour
       if (ix * ex + iy * ey > 0 && Math.abs(ix * ey - iy * ex) < COLLINEAR) continue; // folds back over us
-      joined.push({ o, g, ix, iy, cont: continues(ex, ey, ix, iy) });
+      joined.push({ o, g, ix, iy, x: nearA ? o.ax : o.bx, y: nearA ? o.ay : o.by, cont: continues(ex, ey, ix, iy) });
     } else {
       // A wall running past our endpoint within its own thickness: we abut it mid-span.
       const t = (px - o.ax) * g.ux + (py - o.ay) * g.uy;
@@ -120,7 +128,12 @@ function wallEnd(wall, end, walls, inflate) {
     if (posNb && negNb && posNb !== negNb && continues(posNb.ix, posNb.iy, negNb.ix, negNb.iy) && outranks([posNb.o, negNb.o], [wall, c.o])) {
       return result(hit(1, posNb, pair(1, posNb), true), hit(-1, negNb, pair(-1, negNb), true), null);
     }
-    // Straight on there is nothing to add; a slight jog mitres the faces by a few millimetres.
+    // Parallel continuations share the same cut plane, even if the drawn endpoints differ.
+    if (Math.abs(c.ix * ey - c.iy * ex) < 1e-6) {
+      const midpoint = ((c.x - px) * dx + (c.y - py) * dy) / 2;
+      return result(midpoint, midpoint, null);
+    }
+    // A slight turn mitres the two long faces.
     return result(hit(1, c, pair(1, c), false), hit(-1, c, pair(-1, c), false), null);
   }
   if (!posNb) return result(0, 0, null);
@@ -141,5 +154,12 @@ function wallEnd(wall, end, walls, inflate) {
 }
 export function wallEnds(wall, walls, inflate) {
   return { a: wallEnd(wall, 'a', walls, inflate), b: wallEnd(wall, 'b', walls, inflate) };
+}
+
+// The finished long side of a wall slice. A slice at a mitred end can disappear
+// entirely on one side when the joint runs into an opening.
+export function wallFaceSpan(s, L, ends, side) {
+  const e0 = side > 0 ? ends.a.pos : ends.a.neg, e1 = side > 0 ? ends.b.pos : ends.b.neg;
+  return [s.s0 === 0 ? e0 : Math.max(s.s0, e0), s.s1 === L ? e1 : Math.min(s.s1, e1)];
 }
 

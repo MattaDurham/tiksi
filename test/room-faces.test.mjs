@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { roomFaces, faceTotals } from '../js/room-faces.js';
+import { wallEnds } from '../js/wall-joins.js';
 
 const T = 0.15, H = 2.5;
 const wall = (id, ax, ay, bx, by, extra = {}) => ({ id, ax, ay, bx, by, thickness: T, ...extra });
@@ -36,6 +37,14 @@ test('a straight run drawn as two walls is one face', () => {
   const north = byLabel(roomFaces(house()))['Living, north wall'];
   assert.deepEqual(north.parts.map(p => p.wallId).sort(), ['n1', 'n2']);
   near(north.length, 5 - T, 'partition face to the east wall\'s face');
+});
+
+test('parallel wall segments share a cut when their drawn endpoints are slightly offset', () => {
+  const a = wall('a', 0, 0, 4.005, 0), b = wall('b', 4, 0, 7, 0);
+  const walls = [a, b];
+  const ea = wallEnds(a, walls, 0).b, eb = wallEnds(b, walls, 0).a;
+  near(ea.pos, 4 + eb.pos, 'the positive faces meet on one cut');
+  near(ea.neg, 4 + eb.neg, 'the negative faces meet on the same cut');
 });
 
 test('the outside of the house is one face per flat run, corner to outside corner', () => {
