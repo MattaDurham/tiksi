@@ -2,8 +2,9 @@
 // walls, island and door come from an imported model (written the way the SketchUp converter
 // writes one), with one partition drawn in the plan. A person stops a body short of the
 // model's walls, the island and the plan's partition, and slides along them; the part named
-// as a door lets them through; looking around turns the eye where
-// it stands; a double-click goes to the spot and a single click does not; no arrows are drawn.
+// as a door lets them through; looking around turns the eye where it stands, also after MODEL
+// rebuilds itself round a walking person; a double-click goes to the spot and a single click
+// does not.
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -152,6 +153,23 @@ try {
   const turned = await pos();
   assert.ok(Math.hypot(turned.x - at.x, turned.z - at.z) < 1e-9 && turned.y === at.y, 'a drag to look moves the eye nowhere: ' + JSON.stringify(turned));
 
+  // A rebuild of MODEL that keeps the picture (another device's change) keeps the walk: the
+  // person is still walking where they stood, and a drag still only turns them. (It used to
+  // leave them in orbit, and the drag swung them out through the wall beside them.)
+  await viewer(page, 'v.keepViewOnNextMount()');
+  await page.locator('#rail a[data-view="materials"]').click({ noWaitAfter: true });
+  await page.locator('canvas.v-canvas').waitFor({ state: 'detached' });
+  await page.locator('#rail a[data-view="model"]').click({ noWaitAfter: true });
+  await page.locator('canvas.v-canvas').waitFor();
+  await idle(page);
+  assert.equal(await viewer(page, 'return v.cameraState().mode'), 'walk', 'the rebuilt view is still walking');
+  const back = await pos();
+  assert.ok(Math.hypot(back.x - turned.x, back.z - turned.z) < 1e-6 && near(back.y, 1.6, 1e-6), 'where the person stood: ' + JSON.stringify(back));
+  await page.mouse.move(cx, cy); await page.mouse.down(); await page.mouse.move(cx - 380, cy + 40, { steps: 12 }); await page.mouse.up();
+  await page.waitForTimeout(200);
+  const after = await pos();
+  assert.ok(Math.hypot(after.x - back.x, after.z - back.z) < 1e-9 && after.x < 5.95 && after.z < 3.95, 'and a drag to look leaves them inside the room: ' + JSON.stringify(after));
+
   // A single click goes nowhere; a double-click goes to the spot.
   await page.keyboard.press('Escape');
   await page.keyboard.press('KeyW');
@@ -174,7 +192,7 @@ try {
   assert.ok((await viewer(page, 'return v.walkSolidState(...arg)', [went.x, went.z])).clear, 'where a body stands clear');
 
   assert.deepEqual(errors, [], 'no page errors: ' + errors.join(' | '));
-  console.log('walk solid: model walls, island, plan partition, door, sliding, looking, single and double click OK');
+  console.log('walk solid: model walls, island, plan partition, door, sliding, looking, a rebuild, single and double click OK');
 } finally {
   await browser.close();
   server.close();

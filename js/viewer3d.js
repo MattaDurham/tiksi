@@ -1447,7 +1447,8 @@ function stepTween() {
 }
 
 // ---------- modes ----------
-function setMode(next) {
+// `resume` (a view kept across a rebuild, rememberView) puts a walk back where it was.
+function setMode(next, resume) {
   if (match && next !== 'orbit') endMatch();
   if (next === 'walk' && markup && markup.isOn()) markup.setOn(false);
   if (mode === 'walk' && next !== 'walk') {
@@ -1466,13 +1467,27 @@ function setMode(next) {
   controls.maxPolarAngle = match || lookingUp ? MATCH_POLAR : ORBIT_POLAR;
   if (next === 'top') { if (!parallel) setParallel(true, true); }
   else if (parallelFromTop) setParallel(false);
-  if (next === 'walk') startWalk();
+  if (next === 'walk') { if (resume) resumeWalk(resume); else startWalk(); }
   else if (next === 'top') presetView('top');
   else if (next === 'orbit' && camera.position.y < 0.3 && !lookingUp) camera.position.y = 0.3;
   if (next !== 'walk') { controls.target.y = Math.max(controls.target.y, 0); controls.update(); }
   syncSectionHandles();
   renderHud();
   requestRender(3);
+}
+
+// A walk carried over a rebuild of MODEL (another device's change): the same floor, the same
+// place, looking the same way. Without this the rebuild left the person in orbit where they
+// stood, and their next drag to look round swung them out through the wall beside them.
+function resumeWalk(kept) {
+  walkFloor = kept.walk.floor;
+  camera.position.fromArray(kept.position);
+  camera.position.y = walkFloor + 1.6;
+  camera.up.set(0, 1, 0);
+  camera.lookAt(_v.fromArray(kept.target));
+  walk.connect(renderer.domElement);
+  solidNear = null;
+  wantWalkIndex();
 }
 
 function startWalk() {
@@ -1621,7 +1636,10 @@ function standClear(x, z) {
   const list = solidsWithin(x, z, 4);
   const at = findClear(x, z, (px, pz, dx, dz, far) => solidHit(list, px, pz, dx, dz, far, WALK_HEIGHTS));
   if (at) { camera.position.x = at.x; camera.position.z = at.z; }
-  // The trees that keep walking beside a heavy mesh quick (pick-index.js) come when first wanted.
+  wantWalkIndex();
+}
+// The trees that keep walking beside a heavy mesh quick (pick-index.js) come when first wanted.
+function wantWalkIndex() {
   if (!pickIndex) import('./pick-index.js').then(m => { if (!pickIndex) pickIndex = m; }).catch(() => { /* three's own test is slower and no less right */ });
 }
 // For checks: whether a body may stand at (x, z) on the walk's floor, and where `steps` steps
@@ -6323,6 +6341,7 @@ function openModel(root) {
     camera.position.fromArray(kept.position); controls.target.fromArray(kept.target);
     adoptFov(kept.fov); camera.updateProjectionMatrix(); controls.update();
     parallel = kept.parallel === true;
+    if (kept.walk) setMode('walk', kept);
   }
 
   const focus=pendingScanFocus || prop.modelSourceId,token=mountId,focusVersion=selectionVersion;pendingScanFocus=null;
@@ -6498,7 +6517,7 @@ function rememberView() {
   const dir = camera.getWorldDirection(new THREE.Vector3());
   const t = controls && controls.target && controls.enabled !== false ? controls.target.clone() : camera.position.clone().addScaledVector(dir, 5);
   if (t.distanceTo(camera.position) < 1e-3) t.copy(camera.position).addScaledVector(dir, 5);
-  lastView = { propId: prop.id, position: camera.position.toArray(), target: t.toArray(), fov: camera.fov, parallel };
+  lastView = { propId: prop.id, position: camera.position.toArray(), target: t.toArray(), fov: camera.fov, parallel, walk: mode === 'walk' ? { floor: walkFloor } : null };
 }
 
 export function unmount() {
