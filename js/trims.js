@@ -12,9 +12,18 @@
 //                  it: crown always sits at the top of the wall);
 //   h              a field's height (wainscoting, boxes, planks), metres;
 //   cols, rows     how many boxes, bays or panels across and up (cols null: chosen to fit);
+//   colsAt         a count for one stretch between doors, windows and the wall's ends, by the
+//                  stretch's place among the full-height ones (null or missing: chosen to fit;
+//                  0: that stretch is left empty);
+//   target         the box width to aim for when the count is chosen to fit, metres: each
+//                  stretch takes the whole number of boxes that brings them closest to it
+//                  (null: 30 in). Battened fields aim with `spacing` instead;
 //   widths         the boxes' widths as shares of the stretch (null: all the same);
 //   heights        the rows' heights as shares (null: all the same);
 //   gap, inset     space between boxes and from the box to the field's edge, metres;
+//   insetTop, insetBottom   the margin above and below the boxes when it differs from the
+//                  margin at the sides (null: inset);
+//   minBox         a stretch whose boxes would be narrower than this is left empty (null: no limit);
 //   spacing        board, batten or slat spacing for planked and battened fields (null: the product's);
 //   material       the finish (a material id; null: the trim paint, mat-trim).
 //
@@ -89,7 +98,10 @@ export function normaliseTrim(t, prop) {
   const shares = (a, n) => Array.isArray(a) && a.length && a.length <= n && a.every(v => Number.isFinite(v) && v > 0) ? a.map(v => +v) : null;
   t.widths = shares(t.widths, 60);
   t.heights = shares(t.heights, 12);
-  for (const k of ['gap', 'inset', 'spacing']) t[k] = t[k] != null && Number.isFinite(Number(t[k])) ? clamp(Number(t[k]), 0, 2) : null;
+  for (const k of ['gap', 'inset', 'spacing', 'insetTop', 'insetBottom', 'minBox']) t[k] = t[k] != null && Number.isFinite(Number(t[k])) ? clamp(Number(t[k]), 0, 2) : null;
+  t.target = t.target != null && Number.isFinite(Number(t.target)) ? clamp(Number(t.target), .05, 6) : null;
+  t.colsAt = Array.isArray(t.colsAt) && t.colsAt.length <= 40 && t.colsAt.some(v => v != null)
+    ? t.colsAt.map(v => Number.isInteger(v) && v >= 0 && v <= 60 ? v : null) : null;
   t.material = typeof t.material === 'string' && t.material ? t.material : null;
   if (typeof t.name !== 'string') t.name = '';
   return t;
@@ -127,6 +139,7 @@ export function swapTrimProduct(t, productId, wallHeight) {
     const fresh = trimTemplate(p.style, p.id, { id: t.wallId, level: t.level }, t.side, { wallHeight, f0: t.f0, f1: t.f1 });
     for (const k of ['y', 'h', 'rows']) if (fresh[k] !== undefined) t[k] = fresh[k]; else delete t[k];
     t.cols = null; t.widths = null; t.heights = null; t.gap = null; t.inset = null; t.spacing = null;
+    t.colsAt = null; t.target = null; t.insetTop = null; t.insetBottom = null; t.minBox = null;
   }
   t.style = p.style; t.product = p.id;
   if (to.kind === 'field' && t.h == null) t.h = to.h;
@@ -205,10 +218,13 @@ export function splitSpan(a, b, n, shares, gap) {
 }
 
 // How many boxes or bays across a stretch `w` wide when the owner has not said: boxes near
-// 30 in wide, bays near the product's spacing.
-export function autoCount(style, w, rowH, spacing) {
-  if (style === 'grid') return Math.max(1, Math.round(w / Math.max(.15, rowH)));
+// 30 in wide, bays near the product's spacing. With a `target` box width and the `gap` between
+// boxes, the count is the one whose equal boxes come closest to the target: the finish
+// carpenter's n = round((w + gap) / (target + gap)).
+export function autoCount(style, w, rowH, spacing, target, gap) {
+  if (style === 'grid' && !spacing) return Math.max(1, Math.round(w / Math.max(.15, rowH)));
   if (TRIM_STYLES[style] && TRIM_STYLES[style].bays) return Math.max(1, Math.round(w / Math.max(.1, spacing || .45)));
+  if (target) return Math.max(1, Math.round((w + (gap || 0)) / (target + (gap || 0))));
   return Math.max(1, Math.round(w / .76));
 }
 
@@ -281,11 +297,15 @@ export function trimLayout(t, wall, openings, face = {}) {
   }
 
   const userCols = colsPerRect(rects, t.cols);
+  // A count set for one stretch (colsAt) wins over the section's total and over fitting.
+  const fullRects = rects.filter(r => r.full);
+  const setCols = r => { const v = t.colsAt && r.full ? t.colsAt[fullRects.indexOf(r)] : null; return v == null ? userCols.get(r) : v; };
   const rowSplit = (a, b, gap) => splitSpan(a, b, rows, t.heights, gap);
   if (style.boxes) {
     const frame = t.style === 'picture-frame';
     const gap = t.gap != null ? t.gap : frame ? .1 : 0;
     const inset = t.inset != null ? t.inset : frame ? .09 : 0;
+    const insetT = frame && t.insetTop != null ? t.insetTop : inset, insetB = frame && t.insetBottom != null ? t.insetBottom : inset;
     const stile = frame ? 0 : W, topRail = frame ? 0 : Math.max(W, p.rail || W), botRail = frame ? 0 : W;
     for (const r of rects) {
       // Shaker and raised panels: a top rail, a bottom rail and stiles of flat stock frame the panels.
@@ -294,15 +314,21 @@ export function trimLayout(t, wall, openings, face = {}) {
         push({ kind: 'board', dir: 'h', x0: r.x0, x1: r.x1, y0: r.y0, y1: r.y0 + botRail, T, profile: 'eased' });
       }
       const ix0 = r.x0 + (frame ? inset : 0), ix1 = r.x1 - (frame ? inset : 0);
-      const iy0 = r.y0 + (frame ? inset : botRail), iy1 = r.y1 - (frame ? inset : topRail);
+      const iy0 = r.y0 + (frame ? insetB : botRail), iy1 = r.y1 - (frame ? insetT : topRail);
       if (ix1 - ix0 < MIN_FIELD || iy1 - iy0 < MIN_FIELD) continue;
       const rowGap = frame ? gap : stile;
       const rowsHere = r.full ? rows : 1;
       const spans = rowsHere > 1 ? rowSplit(iy0, iy1, rowGap) : [[iy0, iy1]];
-      const n = userCols.get(r) || autoCount(t.style, ix1 - ix0, spans[0][1] - spans[0][0], null);
+      const set = setCols(r);
+      // Framed panels count their clear widths between stiles once a target is set; without one they fit as before.
+      const n = frame && set != null ? set : set ? set : frame || !t.target ? autoCount(t.style, ix1 - ix0, spans[0][1] - spans[0][0], null, t.target, gap)
+        : autoCount(t.style, r.x1 - r.x0 - 2 * stile, spans[0][1] - spans[0][0], null, t.target, stile);
       if (r.full) out.cols = Math.max(out.cols, n);
       // Boxes: inside the inset, a gap between. Framed panels: stiles at both ends and between bays.
-      const across = frame ? splitSpan(ix0, ix1, n, r.full ? t.widths : null, gap) : splitSpan(r.x0 + stile, r.x1 - stile, n, r.full ? t.widths : null, stile);
+      // A stretch set to no boxes, or whose boxes would be too narrow to read as boxes, stays plain wall.
+      let across = !n ? [] : frame ? splitSpan(ix0, ix1, n, r.full ? t.widths : null, gap) : splitSpan(r.x0 + stile, r.x1 - stile, n, r.full ? t.widths : null, stile);
+      if (frame && t.minBox && across.some(([a, b]) => b - a < t.minBox - 1e-9)) across = [];
+      if (frame && !across.length) continue;
       if (!frame) {
         const xs = [r.x0, ...across.slice(0, -1).map(([, b]) => b), r.x1 - stile];
         for (const x of xs) push({ kind: 'board', dir: 'v', x0: x, x1: x + stile, y0: iy0, y1: iy1, T, profile: 'eased' });
@@ -334,7 +360,8 @@ export function trimLayout(t, wall, openings, face = {}) {
       if (by1 - r.y0 < .03) continue;
       const rowsHere = t.style === 'grid' && r.full ? rows : 1;
       const spans = rowsHere > 1 ? splitSpan(r.y0, by1, rowsHere, t.heights, W) : [[r.y0, by1]];
-      const n = userCols.get(r) || autoCount(t.style, r.x1 - r.x0, spans[0][1] - spans[0][0], spacing);
+      const set = setCols(r);
+      const n = set || autoCount(t.style, r.x1 - r.x0, spans[0][1] - spans[0][0], t.style === 'grid' ? t.spacing : spacing);
       if (r.full) out.cols = Math.max(out.cols, n);
       const bays = splitSpan(r.x0 + W, r.x1 - W, n, r.full ? t.widths : null, W);
       const xs = [r.x0, ...bays.slice(0, -1).map(([, b]) => b), r.x1 - W];
