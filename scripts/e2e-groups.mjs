@@ -1,8 +1,9 @@
 // Splits the browser suites into N groups of about equal running time, so CI can run the
-// groups side by side on separate machines instead of one 35-45 minute queue.
+// groups side by side on separate machines instead of one queue of about 105 minutes.
 //
-// Times come from scripts/e2e-durations.json: seconds per suite, the slower of Linux and macOS
-// on a passing CI run. They only balance the groups; a suite missing from the file counts as
+// Times come from scripts/e2e-durations.json: seconds per suite, the middle of the macOS times in
+// recent CI runs (each group's test-results/e2e-group-N-of-4.json). Refresh it when a group runs
+// well past the others. They only balance the groups; a suite missing from the file counts as
 // DEFAULT_SECONDS. FIRST_GROUP_EXTRA is work group 1 carries before its suites; the syntax and
 // unit checks moved to the Linux quick job, so today it is none.
 
