@@ -87,6 +87,7 @@ import { ensureCanonTag, nameTag } from './tags.js';
 import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown, setHidden, hiddenKeys, showAllHidden, PHASES, PHASE_LABEL, phaseCounts, phaseShown, setPhaseShown, phaseOfKey, setPhase } from './tags.js';
 import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags, applySavedHidden, modelState } from './saved-views.js';
 import { viewRenderingName } from './view-renderings.js';
+import { stampBytes, labelFor } from './rendering-stamp.js';
 import { onScreen, setOnScreen, onScreenChange, setMenuProvider, refreshPane } from './tiksi-menu.js';
 import { detectModelTags, applyModelTagVisibility, applyPlanTagVisibility, partKeyForObject, partByKey, partName, planKeyOf, modelParts, partKey, nodeName } from './tags-scene.js';
 
@@ -6328,7 +6329,11 @@ async function renderSavedView(id) {
     const blob = await stillOfView(v, stillDimensions(wrapEl.clientWidth, wrapEl.clientHeight, 2400, renderer.capabilities.maxTextureSize));
     if (token !== mountId) return;
     const now = new Date();
-    const file = new File([blob], viewRenderingName(v, now) + '.png', { type: 'image/png' });
+    // The rendering carries its view's label inside it, so it finds its view wherever it goes.
+    let bytes = blob;
+    try { bytes = await stampBytes(await blob.arrayBuffer(), labelFor(prop, v, { renderedAt: now.toISOString(), by: 'Tiksi RENDER THIS VIEW' })); }
+    catch (e) { console.warn('The rendering went without its view label:', e); }
+    const file = new File([bytes], viewRenderingName(v, now) + '.png', { type: 'image/png' });
     await addPhotoFromFile(prop, file, { source: 'rendering', savedViewId: v.id, renderedAt: now.toISOString() });
     touch();
     toast('Rendered "' + v.name + '". The rendering is in PHOTOS, on this view; SEND TO THE LAB lists it under the view.', 'ok', 7000);

@@ -63,6 +63,12 @@ Instructions live in these AGENTS files; do not add model-specific rule files.
   put it on the view in PHOTOS (SAVED VIEW). Tiksi's own RENDER THIS VIEW does this itself.
   The client page shows a rendering only under its view, and only while SEND TO THE LAB has it
   ticked; a rendering on no view is never sent.
+- Every rendering of a saved view made outside Tiksi (an image model, a render engine, SketchUp)
+  carries that view's label inside the file, so Tiksi files it under the right view by itself:
+  save it as PNG or JPEG, then run `python3 scripts/stamp-rendering.py <file> --view-name "<view>"
+  --room "<room>" --by "<what made it>"` (add `--property` and `--view` ids when known) before
+  filing it in the renders folder. SEND TO THE LAB > a view's COPY LABEL gives the exact command;
+  paste it into the request to whatever makes the rendering. `--read` shows a file's label.
 - Every SketchUp model a build script saves gets Tiksi's standard scenes (an
   overview, a plan per level, a cut-open elevation per wall of each room) by
   the rules MODEL uses: `python3 scripts/standard-scenes.py <in.skp> <out.skp>

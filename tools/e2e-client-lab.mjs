@@ -31,6 +31,7 @@ registerHooks({
 globalThis.indexedDB = { open() { throw new Error('no IndexedDB under Node'); } };
 const store = await import('../js/store.js');
 const { clientCopy } = await import('../js/lab-publish.js');
+const stamp = await import('../js/rendering-stamp.js');
 
 // The house: rooms A (x 0..4) and B (x 4..8), 4 m deep, a door in the wall between them.
 function workspace() {
@@ -290,6 +291,37 @@ try {
   check(got.renderings.length === 3 && got.renderings.every(r => jpeg(r.path) && jpeg(r.thumb) && r.w > 0 && r.h > 0) && got.renderings.map(r => r.view).join() === 'v-a,v-a,v-w' && got.renderings[1].label === 'Walnut option' && got.renderings[0].w === 2400, 'the three renderings went as web-size JPEGs with small copies, under their views: ' + JSON.stringify(got.renderings.map(r => [r.id, r.view, r.label, r.w, r.h])));
   const text = JSON.stringify(got);
   check(!['outside render', 'Loose idea', 'Room A · rendering', 'Spare', 'v-x', ...made.map(m => m.id)].some(x => text.includes(x)), 'no photo name, photo id or unticked view is in the copy');
+
+  console.log('\n[SEND TO THE LAB] renderings in: from Finder by their label, chosen from every picture, ticked all at once');
+  const plain = await readFile(root + '/test/fixtures/rendering-stamp/plain.png');
+  const labelled = Buffer.from(await stamp.stampBytes(plain, { viewName: 'Room B', by: 'image model' }));
+  const roomRow = name => edit.locator('.lab-dialog .lab-view').filter({ has: edit.locator('.lab-view-head span', { hasText: new RegExp('^\\s*' + name + '$') }) });
+  await edit.setInputFiles('.lab-dialog [data-lab-file]', [{ name: 'idea-17.png', mimeType: 'image/png', buffer: labelled }, { name: 'random.png', mimeType: 'image/png', buffer: plain }]);
+  await edit.waitForFunction(() => /^Added 2 renderings/.test(document.querySelector('[data-lab-added]').textContent), null, { timeout: 30000, polling: 200 });
+  const added = await edit.locator('[data-lab-added]').innerText();
+  check(added.includes('1 on the view its label names') && added.includes('1 on no view yet'), 'two pictures added from Finder: one by its label, one on no view yet: ' + added);
+  check(await roomRow('Room B').locator('.lab-rendering').count() === 1 && (await roomRow('Room B').locator('.lab-rendering-note').innerText()).includes('by its label'), 'the labelled one is under Room B, by its label');
+  await roomRow('Spare').locator('[data-lab-browse]').click();
+  await edit.waitForSelector('.picture-picker[open]');
+  await edit.click('.picture-picker [data-pp-tab="all"]');
+  await edit.fill('.picture-picker [data-pp-find]', 'random');
+  await edit.waitForFunction(() => document.querySelectorAll('.picture-picker .pp-card').length === 1, null, { timeout: 5000, polling: 100 });
+  check(await edit.locator('.picture-picker [data-pp-view]').inputValue() === 'v-x', 'the picker opened from Spare puts pictures on Spare');
+  await edit.click('.picture-picker .pp-card');
+  if (process.env.E2E_SHOTS) { await edit.fill('.picture-picker [data-pp-find]', ''); await edit.waitForTimeout(400); await edit.screenshot({ path: process.env.E2E_SHOTS + '/picture-picker.png' }); }
+  await edit.click('.picture-picker [data-pp-put]');
+  await edit.waitForFunction(() => !document.querySelector('.picture-picker'), null, { timeout: 5000, polling: 100 });
+  check(await roomRow('Spare').locator('.lab-rendering').count() === 1, 'the picture chosen in the picker is now under Spare');
+  if (process.env.E2E_SHOTS) await roomRow('Room B').screenshot({ path: process.env.E2E_SHOTS + '/send-view-tools.png' });
+  const allBtn = () => edit.locator('.lab-dialog [data-lab-all="renderings"]');
+  check((await allBtn().innerText()) === 'UNTICK EVERY RENDERING', 'with every rendering ticked, the button unticks them');
+  await allBtn().click();
+  check(await edit.$$eval('.lab-dialog .lab-views [data-lab-rendering]', els => els.every(e => !e.checked)) && (await allBtn().innerText()) === 'TICK EVERY RENDERING', 'UNTICK EVERY RENDERING unticks them all, and the button turns back');
+  await roomRow('Room B').locator('[data-lab-rendering]').check();
+  check(await edit.$$eval('.lab-dialog .lab-views [data-lab-rendering]', els => els.filter(e => e.checked).length) === 1, 'one rendering can still be ticked on its own');
+  await allBtn().click();
+  check(await edit.$$eval('.lab-dialog .lab-views [data-lab-rendering]', els => els.every(e => e.checked)), 'TICK EVERY RENDERING ticks them all');
+  check((await edit.locator('.lab-dialog [data-lab-all="views"]').innerText()) === 'TICK EVERY VIEW', 'with a view unticked, the views button ticks them');
 
   console.log('\n[client page] the views as small pictures; a click opens projects and renderings');
   const openSent = async context => {

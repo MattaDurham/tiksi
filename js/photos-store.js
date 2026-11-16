@@ -16,8 +16,9 @@
 //   lens?: the camera's lens read from the file (photo-exif.js), takenAt?: when it was taken,
 //   kind 'document' records are PDFs and sheets pinned in the model (documents.js),
 //   positionId? / role?: a picture of a numbered photo position (positions.js),
-//   file?: { path, size, mtime, sha256?, group }: the photo in the project folder (group is
-//     'photo', 'scan' for a Polycam export's keyframe or 'rendering'), selected?: true }
+//   file?: { path, size, mtime, sha256?, group, stamp? }: the photo in the project folder (group is
+//     'photo', 'scan' for a Polycam export's keyframe or 'rendering'; stamp is the view label the
+//     file carries, rendering-stamp.js), stamp?: the same for a photo Tiksi holds, selected?: true }
 
 import { ws, uid, touch, putFile, getFile, deleteFile, storeThumb, deleteThumb } from './store.js';
 import { diskWorkspace } from './disk-workspace.js';
@@ -90,7 +91,7 @@ async function addPhoto(prop, file, opts) {
     createdAt: new Date().toISOString(), notes: '', roomId: '', elementIds: [], itemIds: [], pin: null,
   };
   Object.assign(rec, cameraFacts(buffer, w, h));
-  for (const k of ['source', 'positionId', 'role', 'renderedAt', 'view', 'savedViewId']) if (opts[k] !== undefined) rec[k] = opts[k];
+  for (const k of ['source', 'positionId', 'role', 'renderedAt', 'view', 'savedViewId', 'stamp']) if (opts[k] !== undefined) rec[k] = opts[k];
   prop.photos = prop.photos || [];
   prop.photos.push(rec);
   touch();
@@ -243,7 +244,13 @@ export async function loadFolderPhotos(prop) {
 async function relinkMoved(prop, listing) {
   const claimed = new Set((prop.photos || []).filter(p => p.file).map(p => p.file.path));
   const lost = (prop.photos || []).filter(p => p.file && !listing.byPath.has(p.file.path));
-  for (const rec of (prop.photos || [])) if (rec.file && listing.byPath.has(rec.file.path)) missingFiles.delete(rec.id);
+  for (const rec of (prop.photos || [])) {
+    const found = rec.file && listing.byPath.get(rec.file.path);
+    if (!found) continue;
+    missingFiles.delete(rec.id);
+    // The file's view label follows the file: written into it, changed or taken out since.
+    if (found.stamp) rec.file.stamp = found.stamp; else delete rec.file.stamp;
+  }
   for (const rec of lost) {
     const candidates = listing.files.filter(f => f.size === rec.file.size && !claimed.has(f.path));
     let found = null;
@@ -268,7 +275,7 @@ export function folderOnlyPictures(prop) {
   const taken = new Set((prop.photos || []).filter(p => p.file).map(p => p.file.path));
   return listing.files.filter(f => !taken.has(f.path) && !photoById(prop, f.key)).map(f => ({
     id: f.key, name: f.name, kind: 'photo', w: 0, h: 0, mime: f.mime, thumb: '', createdAt: new Date(f.mtime || 0).toISOString(),
-    notes: '', roomId: '', elementIds: [], itemIds: [], pin: null, file: { path: f.path, size: f.size, mtime: f.mtime, group: f.group }, listed: true,
+    notes: '', roomId: '', elementIds: [], itemIds: [], pin: null, file: { path: f.path, size: f.size, mtime: f.mtime, group: f.group, ...(f.stamp ? { stamp: f.stamp } : {}) }, listed: true,
   }));
 }
 
@@ -289,7 +296,7 @@ export function keepRecord(prop, item) {
   const rec = {
     id, name: item.name || baseOf(f.path), kind: 'photo', w: item.w || 0, h: item.h || 0, mime: item.mime || 'image/jpeg', thumb: '',
     createdAt: new Date(f.mtime || Date.now()).toISOString(), notes: '', roomId: '', elementIds: [], itemIds: [], pin: null,
-    file: { path: f.path, size: f.size, mtime: f.mtime, group: f.group || 'photo' },
+    file: { path: f.path, size: f.size, mtime: f.mtime, group: f.group || 'photo', ...(f.stamp ? { stamp: f.stamp } : {}) },
   };
   prop.photos = prop.photos || [];
   prop.photos.push(rec);
@@ -334,7 +341,7 @@ async function addToFolder(prop, file, opts) {
   const folder = subfolderFor(opts.source);
   const info = await folderApi().add(prop, file, file.name || 'Photo', folder);
   const known = (prop.photos || []).find(p => p.file && p.file.path === info.path);
-  if (known) { for (const k of ['source', 'positionId', 'role', 'renderedAt', 'view', 'savedViewId']) if (opts[k] !== undefined) known[k] = opts[k]; touch(); return known; }
+  if (known) { for (const k of ['source', 'positionId', 'role', 'renderedAt', 'view', 'savedViewId', 'stamp']) if (opts[k] !== undefined) known[k] = opts[k]; touch(); return known; }
   let w = info.w || 0, h = info.h || 0, thumb = '';
   try {
     const img = await decode(file);
@@ -351,10 +358,10 @@ async function addToFolder(prop, file, opts) {
     id, name: file.name || info.name || 'Photo', kind: opts.kind || (isPanoramaAspect(w, h) ? 'pano' : 'photo'),
     w, h, mime: info.mime || file.type || 'image/jpeg', thumb,
     createdAt: new Date().toISOString(), notes: '', roomId: '', elementIds: [], itemIds: [], pin: null,
-    file: { path: info.path, size: info.size, mtime: info.mtime, sha256: info.sha256, group: info.group || 'photo' },
+    file: { path: info.path, size: info.size, mtime: info.mtime, sha256: info.sha256, group: info.group || 'photo', ...(info.stamp ? { stamp: info.stamp } : {}) },
   };
   try { Object.assign(rec, cameraFacts(await file.arrayBuffer(), w, h)); } catch (e) { /* no lens or time */ }
-  for (const k of ['source', 'positionId', 'role', 'renderedAt', 'view', 'savedViewId']) if (opts[k] !== undefined) rec[k] = opts[k];
+  for (const k of ['source', 'positionId', 'role', 'renderedAt', 'view', 'savedViewId', 'stamp']) if (opts[k] !== undefined) rec[k] = opts[k];
   listedRefs.set(info.key, { prop, path: info.path, mime: rec.mime });
   prop.photos = prop.photos || [];
   prop.photos.push(rec);

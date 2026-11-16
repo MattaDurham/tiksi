@@ -11,8 +11,12 @@ Each picture is in one of three groups, decided by where it sits:
              `images`); the export's depth and confidence maps are measurements, not pictures,
              and are not listed
   rendering  a picture whose name or folder says render, or in a build folder (`build`,
-             `sketchup-build`), where SketchUp build pictures are filed
+             `sketchup-build`), where SketchUp build pictures are filed, or a picture carrying
+             the view label a rendering is stamped with (rendering_stamp.py)
   photo      everything else
+A rendering's view label, when it has one, is listed with it (`stamp`). Labels are looked for in
+renderings and in PNG and JPEG files outside a scan export, by reading their metadata headers
+only, and kept per file until the file changes.
 Tiksi's own `Tiksi` folder, hidden files and links are never listed."""
 import hashlib
 import mimetypes
@@ -26,6 +30,7 @@ import threading
 import time
 
 from server.workspace import WorkspaceError, PREVIEW_SIZES, smaller_copy
+from server.rendering_stamp import read_label
 
 PICTURES = {'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png', 'webp': 'image/webp', 'avif': 'image/avif',
             'gif': 'image/gif', 'bmp': 'image/bmp', 'heic': 'image/heic', 'heif': 'image/heif', 'tif': 'image/tiff', 'tiff': 'image/tiff'}
@@ -43,6 +48,10 @@ WRITE_LOCK = threading.Lock()
 # The folder's pictures by size, read once for a run of added photos (a move of many at once).
 SIZES = {}
 SIZES_FOR = 30
+# View labels read, by (path, size, mtime): a folder is listed every time PHOTOS opens.
+LABELS = {}
+LABELS_MAX = 100000
+LABEL_TYPES = ('png', 'jpg', 'jpeg', 'webp')
 
 
 def hidden(name): return name.startswith('.') or name in ('Thumbs.db', 'desktop.ini', 'Icon\r')
@@ -62,6 +71,15 @@ def group_of(parts, scan):
     if scan or [part.lower() for part in parts[:2]] == ['photos', 'scan frames']: return 'scan'
     if any(BUILD_WORD.search(part) for part in parts[:-1]) or any(RENDER_WORD.search(part) for part in parts): return 'rendering'
     return 'photo'
+
+
+def label_of(path, size, mtime):
+    """The view label in a picture, read once per version of the file."""
+    key = (str(path), size, mtime)
+    if key not in LABELS:
+        if len(LABELS) >= LABELS_MAX: LABELS.clear()
+        LABELS[key] = read_label(path)
+    return LABELS[key]
 
 
 def list_photos(folder, limit=MAX_FILES):
@@ -94,8 +112,13 @@ def list_photos(folder, limit=MAX_FILES):
             if not os.path.isfile(target) or target.is_symlink(): continue
             if len(files) >= limit: truncated = True; break
             relative = (relative_dir / name).as_posix()
-            files.append({'key': key_of(relative), 'path': relative, 'name': name, 'size': info.st_size,
-                          'mtime': info.st_mtime_ns // 1_000_000, 'mime': PICTURES[ext], 'group': group_of(Path(relative).parts, scan)})
+            group = group_of(Path(relative).parts, scan)
+            entry = {'key': key_of(relative), 'path': relative, 'name': name, 'size': info.st_size,
+                     'mtime': info.st_mtime_ns // 1_000_000, 'mime': PICTURES[ext], 'group': group}
+            if not scan and ext in LABEL_TYPES and (group == 'rendering' or ext == 'png'):
+                label = label_of(target, info.st_size, info.st_mtime_ns)
+                if label: entry['stamp'] = label; entry['group'] = 'rendering'
+            files.append(entry)
         if truncated: break
     return {'files': files, 'truncated': truncated}
 
@@ -158,8 +181,9 @@ def describe(folder, path, run=subprocess.run):
     size = pixel_size(path, run)
     relative = path.relative_to(root).as_posix()
     scan = path.parent.name in CAPTURE_PICTURES and (path.parent.parent / 'cameras').is_dir()
-    return {'path': relative, 'key': key_of(relative), 'group': group_of(Path(relative).parts, scan), 'name': path.name, 'size': info.st_size, 'mtime': info.st_mtime_ns // 1_000_000,
-            'mime': PICTURES[extension(path.name)], 'sha256': sha256_of(path), **({'w': size[0], 'h': size[1]} if size else {})}
+    label = None if scan else label_of(path, info.st_size, info.st_mtime_ns)
+    return {'path': relative, 'key': key_of(relative), 'group': 'rendering' if label else group_of(Path(relative).parts, scan), 'name': path.name, 'size': info.st_size, 'mtime': info.st_mtime_ns // 1_000_000,
+            'mime': PICTURES[extension(path.name)], 'sha256': sha256_of(path), **({'w': size[0], 'h': size[1]} if size else {}), **({'stamp': label} if label else {})}
 
 
 def hashes(folder, paths):

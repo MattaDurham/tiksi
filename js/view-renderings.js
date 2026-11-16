@@ -1,16 +1,21 @@
 // Renderings of saved views: which pictures show with which saved view. Pure: no DOM, no three.js.
 //
 // A picture made from a saved view carries the view's id (photo.savedViewId): RENDER THIS VIEW in
-// MODEL sets it, and the SAVED VIEW choice in PHOTOS sets or clears it by hand. A rendering made
-// somewhere else (SketchUp, a render engine) and dropped in the project's renders folder goes
-// with the view its file is named for: the view's name first, then anything ("Kitchen.png",
-// "Kitchen - walnut option.jpg"). savedViewId '' says "on no view", so a name is not matched.
+// MODEL sets it, and the SAVED VIEW choice in PHOTOS or the send window sets or clears it by hand.
+// A rendering made somewhere else (SketchUp, a render engine, an image model) goes, in order:
+//   by its label: the view label written inside the file (rendering-stamp.js), read by the Mac
+//     when it lists the project folder (file.stamp) or by the page when it is added (stamp):
+//     the view's id, else the view's name, else the room (a view named for the room);
+//   by its name: the view's name first, then anything ("Kitchen.png", "Kitchen - walnut option.jpg").
+// savedViewId '' says "on no view", so neither is matched.
 //
 // The client page in the lab shows a view's renderings under its thumbnail (client-strip.js);
 // SEND TO THE LAB lists them per view, each with a switch (lab-publish-dialog.js).
 
 // A picture in the RENDERINGS group of PHOTOS: one Tiksi rendered, or one in a renders folder.
-export const isRendering = p => !!p && p.kind !== 'document' && p.kind !== 'pano' && (p.source === 'rendering' || !!(p.file && p.file.group === 'rendering'));
+export const isRendering = p => !!p && p.kind !== 'document' && p.kind !== 'pano' && (p.source === 'rendering' || !!(p.file && p.file.group === 'rendering') || !!labelOf(p));
+// The view label a picture's file carries, or null.
+export const labelOf = p => (p && (p.stamp || (p.file && p.file.stamp))) || null;
 
 // A name as its words: lowercase letters and digits joined by dashes.
 export function nameSlug(s) {
@@ -18,7 +23,24 @@ export function nameSlug(s) {
 }
 const baseName = p => String((p.file && p.file.path) || p.name || '').split('/').pop().replace(/\.[a-z0-9]{2,5}$/i, '');
 
-// The saved view a picture shows with: { view, by: 'tag' | 'name' }, or null.
+// The saved view a label names, or null: its id (on this property), else its name, else its room.
+export function viewOfLabel(prop, label) {
+  if (!label) return null;
+  const views = prop.savedViews || [];
+  if (label.view && (!label.property || label.property === prop.id)) { const v = views.find(x => x.id === label.view); if (v) return v; }
+  if (label.viewName) { const s = nameSlug(label.viewName), v = s && views.find(x => nameSlug(x.name) === s); if (v) return v; }
+  if (label.room) {
+    const s = nameSlug(label.room);
+    if (!s) return null;
+    const exact = views.find(x => nameSlug(x.name) === s);
+    if (exact) return exact;
+    // "Kitchen, north wall": the shortest name of the room's views.
+    return views.filter(x => nameSlug(x.name).startsWith(s + '-')).sort((a, b) => a.name.length - b.name.length)[0] || null;
+  }
+  return null;
+}
+
+// The saved view a picture shows with: { view, by: 'tag' | 'label' | 'name' }, or null.
 export function viewOfPicture(prop, p) {
   if (!p || p.kind === 'document' || p.kind === 'pano') return null;
   const views = prop.savedViews || [];
@@ -27,8 +49,11 @@ export function viewOfPicture(prop, p) {
     if (view) return { view, by: 'tag' };
     if (p.savedViewId === '') return null;   // taken off every view by hand
   }
+  if (p.positionId) return null;
+  const labelled = viewOfLabel(prop, labelOf(p));
+  if (labelled) return { view: labelled, by: 'label' };
   // By its file's name: only a rendering, and not one made at a numbered position.
-  if (!isRendering(p) || p.positionId) return null;
+  if (!isRendering(p)) return null;
   const slug = nameSlug(baseName(p));
   let best = null, bestLen = 0;
   for (const v of views) {
