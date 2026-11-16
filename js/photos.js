@@ -772,7 +772,7 @@ function savedViewField(p) {
   return `<div class="field"><label>Saved view</label>
         <select data-f="savedViewId" aria-label="Saved view this picture shows with"><option value="">(none)</option>${views.map(v =>
           `<option value="${escapeHtml(v.id)}" ${hit && hit.view.id === v.id ? 'selected' : ''}>${escapeHtml(v.name)}</option>`).join('')}</select>
-        <div class="ph-note">${hit && hit.by === 'name' ? 'On this view because its file is named for it. ' : ''}A picture on a saved view shows under that view on the client page, when SEND TO THE LAB has it ticked.</div></div>`;
+        <div class="ph-note">${hit && hit.by === 'name' ? 'On this view because its file is named for it. ' : hit && hit.by === 'label' ? 'On this view because the label inside its file names it. ' : ''}A picture on a saved view shows under that view on the client page, when SEND TO THE LAB has it ticked.</div></div>`;
 }
 
 function renderDetail() {

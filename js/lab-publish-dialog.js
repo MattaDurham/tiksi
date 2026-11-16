@@ -2,15 +2,21 @@
 // over before it goes. Which projects it offers beside Existing and the short name of each,
 // which tags the furniture switch turns off, the page's name in the lab, and the saved views:
 // each view with a switch, and under it the renderings of that view (view-renderings.js), each
-// with its own switch and the name the client sees. SEND makes the copy (lab-publish.js), has
+// with its own switch and the name the client sees. Renderings come in here too: from Finder
+// (ADD RENDERINGS FROM FINDER, a view's ADD FROM FINDER, or dropped on a view), each going on the
+// view its label or its name says (rendering-stamp.js, view-renderings.js) or the view it was
+// added to; or chosen from every photo and rendering of the property (picture-picker.js). COPY
+// LABEL gives what to tell whatever makes a rendering of a view. SEND makes the copy (lab-publish.js), has
 // the client page's own code take the pictures of the views (lab-pictures.js) and sends it all
 // through the Mac.
 
 import { ws, escapeHtml, touch } from './store.js';
 import { labSettings, labStatus, sendToLab, renderingLabel, MAX_RENDERINGS, SEND_STEPS } from './lab-publish.js';
 import { viewPictures } from './lab-pictures.js';
-import { picturesByView, looseRenderings, tagPicture, pictureDay } from './view-renderings.js';
-import { loadFolderPhotos, folderOnlyPictures, folderPreviewUrl, keepRecord, photoById } from './photos-store.js';
+import { picturesByView, looseRenderings, tagPicture, pictureDay, viewOfPicture } from './view-renderings.js';
+import { loadFolderPhotos, folderOnlyPictures, folderPreviewUrl, keepRecord, photoById, addPhotoFromFile } from './photos-store.js';
+import { readLabel, labelFor } from './rendering-stamp.js';
+import { openPicturePicker } from './picture-picker.js';
 
 export async function openLabDialog(prop) {
   if (!prop) return;
@@ -89,24 +95,30 @@ export async function openLabDialog(prop) {
     }
     const map = byView(), loose = looseRenderings(prop, pictures);
     const first = views.find(v => !viewsOff.has(v.id));
+    // TICK EVERY VIEW and TICK EVERY RENDERING: each says UNTICK once all it covers is ticked.
+    const onViews = [...map.values()].flat().map(x => x.picture.id);
+    const allViewsOn = views.every(v => !viewsOff.has(v.id)), allRenderingsOn = onViews.every(id => !renderingsOff.has(id));
     const card = (p, by, viewId) => {
       const on = !renderingsOff.has(p.id), isNew = on && s.renderingsSent && !s.renderingsSent.includes(p.id);
       return `<div class="lab-rendering${on ? '' : ' off'}" data-lab-card="${escapeHtml(p.id)}">
         <label class="lab-rendering-pic" title="${escapeHtml(p.name || '')}"><input type="checkbox" data-lab-rendering="${escapeHtml(p.id)}" ${on ? 'checked' : ''} aria-label="Send ${escapeHtml(p.name || 'this rendering')}">${thumbOf(p)}${isNew ? '<b class="lab-new">NEW</b>' : ''}</label>
         <input type="text" data-lab-rendering-label="${escapeHtml(p.id)}" value="${escapeHtml(labels[p.id] || '')}" maxlength="48" placeholder="Rendering" aria-label="The name the client sees for ${escapeHtml(p.name || 'this rendering')}">
-        <span class="lab-rendering-note">${escapeHtml(pictureDay(p) || '')}${by === 'name' ? ' · by its file name' : ''}</span>
+        <span class="lab-rendering-note">${escapeHtml(pictureDay(p) || '')}${by === 'name' ? ' · by its file name' : by === 'label' ? ' · by its label' : ''}</span>
         ${viewChoice(p, viewId)}</div>`;
     };
     host.innerHTML = `<p>Each saved view ticked shows on the client page as a small picture under the model${first ? '; the page opens at ' + escapeHtml(first.name) : ''}. A click on it opens its iterations (Existing and each project that changes that view) and the renderings ticked under it here: an iteration changes the model, a rendering opens as a picture floating over it. Type the name the client sees under a rendering, or leave it as "Rendering" with its date.</p>
-      <div class="file-actions lab-all"><button type="button" class="btn" data-lab-all="1">TICK EVERY VIEW</button><button type="button" class="btn" data-lab-all="0">UNTICK EVERY VIEW</button></div>
+      <div class="file-actions lab-all"><button type="button" class="btn" data-lab-add="">ADD RENDERINGS FROM FINDER…</button><button type="button" class="btn" data-lab-browse="">BROWSE ALL PHOTOS AND RENDERINGS</button>
+        <button type="button" class="btn" data-lab-all="views">${allViewsOn ? 'UNTICK' : 'TICK'} EVERY VIEW</button>${onViews.length ? `<button type="button" class="btn" data-lab-all="renderings">${allRenderingsOn ? 'UNTICK' : 'TICK'} EVERY RENDERING</button>` : ''}</div>
+      <p class="lab-added" role="status" data-lab-added>${escapeHtml(addedNote)}</p>
       <div class="lab-views">${views.map(v => {
         const list = map.get(v.id) || [], on = !viewsOff.has(v.id);
-        return `<section class="lab-view${on ? '' : ' off'}"><label class="lab-view-head"><span><input type="checkbox" data-lab-view="${escapeHtml(v.id)}" ${on ? 'checked' : ''}> ${escapeHtml(v.name)}</span>
+        return `<section class="lab-view${on ? '' : ' off'}" data-lab-drop="${escapeHtml(v.id)}"><label class="lab-view-head"><span><input type="checkbox" data-lab-view="${escapeHtml(v.id)}" ${on ? 'checked' : ''}> ${escapeHtml(v.name)}</span>
           <small>${list.length ? list.length + ' rendering' + (list.length === 1 ? '' : 's') : 'no renderings'}</small></label>
+          <div class="lab-view-tools"><button type="button" class="btn" data-lab-add="${escapeHtml(v.id)}">ADD FROM FINDER…</button><button type="button" class="btn" data-lab-browse="${escapeHtml(v.id)}">CHOOSE FROM PHOTOS…</button><button type="button" class="btn" data-lab-copy="${escapeHtml(v.id)}" title="What to tell a rendering model or agent, so its rendering finds this view">COPY LABEL</button><span class="lab-drop-note">or drop pictures here</span></div>
           ${list.length ? `<div class="lab-renderings">${list.map(({ picture, by }) => card(picture, by, v.id)).join('')}</div>` : ''}</section>`;
       }).join('')}</div>
       ${loose.length ? `<details class="lab-loose"><summary>${loose.length} rendering${loose.length === 1 ? '' : 's'} on no saved view: not sent</summary>
-        <p>A rendering goes to the client with the saved view it is on. RENDER THIS VIEW in MODEL puts a rendering on its view; a rendering made elsewhere goes on the view its file is named for, or choose its view here.</p>
+        <p>A rendering goes to the client with the saved view it is on. RENDER THIS VIEW in MODEL puts a rendering on its view. A rendering made elsewhere goes on the view its label names (COPY LABEL under a view gives what to tell whatever makes it), or the view its file is named for; or choose its view here.</p>
         <div class="lab-renderings">${loose.slice(0, 60).map(p => `<div class="lab-rendering" data-lab-card="${escapeHtml(p.id)}"><span class="lab-rendering-pic" title="${escapeHtml(p.name || '')}">${thumbOf(p)}</span>
           <span class="lab-rendering-note">${escapeHtml(p.name || '')}</span>${viewChoice(p, '')}</div>`).join('')}</div></details>` : ''}`;
     // Folder pictures with no thumbnail of their own get the Mac's small copy.
@@ -132,11 +144,106 @@ export async function openLabDialog(prop) {
       drawViews();
     }
   });
+  // ---------- renderings in: from Finder, dropped on a view, or chosen from the photos ----------
+  let addedNote = '';
+  const say = text => { addedNote = text; const el = q('[data-lab-added]'); if (el) el.textContent = text; };
+  const plural = (n, one) => n + ' ' + one + (n === 1 ? '' : 's');
+  const isPicture = f => /^image\//.test(f.type) || /\.(png|jpe?g|webp|heic|heif|avif|tiff?)$/i.test(f.name || '');
+  // Each file goes on `viewId` when it was added to a view, else on the view its label or its name
+  // says, else on no view (listed below the views, to choose one).
+  const addFiles = async (files, viewId) => {
+    const list = [...files].filter(isPicture);
+    if (!list.length) { say('None of those files is a picture.'); return; }
+    const out = { view: 0, label: 0, name: 0, none: 0 }, failed = [];
+    for (const [i, f] of list.entries()) {
+      say('Adding ' + (i + 1) + ' of ' + list.length + ': ' + f.name + '…');
+      try {
+        const label = await readLabel(await f.arrayBuffer());
+        // Added to a view: kept on that view. Otherwise its label (or its name) keeps saying where.
+        const hit = !viewId && viewOfPicture(prop, { name: f.name, source: 'rendering', stamp: label });
+        out[viewId ? 'view' : hit ? hit.by : 'none']++;
+        const rec = await addPhotoFromFile(prop, f, { source: 'rendering', renderedAt: new Date(f.lastModified || Date.now()).toISOString(),
+          ...(viewId ? { savedViewId: viewId } : {}), ...(label ? { stamp: label } : {}) });
+        renderingsOff.delete(rec.id);
+        pictures = pictures.some(p => p.id === rec.id) ? pictures.map(p => p.id === rec.id ? rec : p) : pictures.concat(rec);
+      } catch (e) { failed.push(f.name + ' (' + (e.message || e) + ')'); }
+    }
+    touch(); remember(); drawViews();
+    const added = list.length - failed.length, parts = [];
+    if (out.view) parts.push(out.view + ' on the view it was added to');
+    if (out.label) parts.push(out.label + ' on the view its label names');
+    if (out.name) parts.push(out.name + ' on the view its file is named for');
+    if (out.none) parts.push(out.none + ' on no view yet: choose its view in the list below the views');
+    say(added ? 'Added ' + plural(added, 'rendering') + ' (into the project folder\'s Photos/Renderings when the property has one): ' + parts.join('; ') + '.' : '');
+    if (failed.length) say(addedNote + (addedNote ? ' ' : '') + 'Not added: ' + failed.join(', ') + '.');
+  };
+  const finder = document.createElement('input');
+  finder.type = 'file'; finder.multiple = true; finder.accept = 'image/*'; finder.hidden = true; finder.dataset.labFile = '';
+  dialog.append(finder);
+  let finderView = '';
+  finder.onchange = () => { const files = [...finder.files]; finder.value = ''; if (files.length) addFiles(files, finderView); };
+  // What to tell a rendering model or agent: the view's label, and the command that writes it.
+  const labelText = v => {
+    const l = labelFor(prop, v);
+    const arg = s => '"' + String(s).replace(/(["\\$`])/g, '\\$1') + '"';
+    return 'This rendering is of the saved view "' + v.name + '"' + (l.room ? ' (room: ' + l.room + ')' : '') + ' of ' + (prop.name || 'the property') + ' in Tiksi. '
+      + 'Save it as PNG or JPEG in the project folder\'s renders folder, and write its view label into it before filing it:\n'
+      + 'python3 scripts/stamp-rendering.py <the rendering file> --property ' + arg(l.property) + ' --property-name ' + arg(l.propertyName)
+      + ' --view ' + arg(l.view) + ' --view-name ' + arg(l.viewName) + (l.room ? ' --room ' + arg(l.room) : '') + ' --by <who made it>';
+  };
+  q('[data-lab-views]').addEventListener('dragover', e => {
+    const sec = e.target.closest('[data-lab-drop]');
+    if (!sec || ![...(e.dataTransfer && e.dataTransfer.types || [])].includes('Files')) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+    for (const x of dialog.querySelectorAll('.lab-view.dropping')) if (x !== sec) x.classList.remove('dropping');
+    sec.classList.add('dropping');
+  });
+  q('[data-lab-views]').addEventListener('dragleave', e => { const sec = e.target.closest('[data-lab-drop]'); if (sec && !sec.contains(e.relatedTarget)) sec.classList.remove('dropping'); });
+  q('[data-lab-views]').addEventListener('drop', e => {
+    const sec = e.target.closest('[data-lab-drop]');
+    if (!sec || !e.dataTransfer || !e.dataTransfer.files.length) return;
+    e.preventDefault(); sec.classList.remove('dropping');
+    addFiles(e.dataTransfer.files, sec.dataset.labDrop);
+  });
   q('[data-lab-views]').addEventListener('click', e => {
+    const add = e.target.closest('[data-lab-add]');
+    if (add) { finderView = add.dataset.labAdd; finder.click(); return; }
+    const browse = e.target.closest('[data-lab-browse]');
+    if (browse) {
+      openPicturePicker({ host: dialog, prop, pictures, viewId: browse.dataset.labBrowse || (prop.savedViews || [])[0]?.id || '', onPick: (ids, viewId) => {
+        for (const id of ids) {
+          const item = pictures.find(p => p.id === id);
+          if (!item) continue;
+          const rec = photoById(prop, id) || keepRecord(prop, item);
+          tagPicture(rec, viewId);
+          if (viewId) renderingsOff.delete(rec.id);
+          pictures = pictures.map(p => p.id === id ? rec : p);
+        }
+        const v = (prop.savedViews || []).find(x => x.id === viewId);
+        touch(); remember(); drawViews();
+        say(v ? 'Put ' + plural(ids.length, 'picture') + ' on ' + v.name + '.' : 'Took ' + plural(ids.length, 'picture') + ' off their view.');
+      } });
+      return;
+    }
+    const copy = e.target.closest('[data-lab-copy]');
+    if (copy) {
+      const v = (prop.savedViews || []).find(x => x.id === copy.dataset.labCopy);
+      if (!v) return;
+      const text = labelText(v);
+      navigator.clipboard.writeText(text).then(() => say('Copied what to tell a rendering model or agent about ' + v.name + ': paste it with the request for the rendering.'))
+        .catch(() => { say(text); });
+      return;
+    }
     const b = e.target.closest('[data-lab-all]');
     if (!b) return;
-    viewsOff.clear();
-    if (b.dataset.labAll === '0') for (const v of prop.savedViews || []) viewsOff.add(v.id);
+    if (b.dataset.labAll === 'views') {
+      const all = (prop.savedViews || []).every(v => !viewsOff.has(v.id));
+      viewsOff.clear();
+      if (all) for (const v of prop.savedViews || []) viewsOff.add(v.id);
+    } else {
+      const ids = [...byView().values()].flat().map(x => x.picture.id), all = ids.every(id => !renderingsOff.has(id));
+      for (const id of ids) if (all) renderingsOff.add(id); else renderingsOff.delete(id);
+    }
     remember(); drawViews();
   });
   dialog.addEventListener('change', e => { if (e.target.dataset.labOn) summary(); });

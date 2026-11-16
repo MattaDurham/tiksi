@@ -1382,6 +1382,36 @@ html.touch .file-dialog .file-units .seg-btn { min-height:44px; }
 .lab-dialog .lab-rendering-note { font-size: 11px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lab-dialog .lab-loose { margin-top: 4px; }
 .lab-dialog .lab-summary { color: var(--ink); font-weight: 600; margin: 16px 0 6px; }
+/* Renderings in (js/lab-publish-dialog.js): Finder, a view's tools, dropping on a view. */
+.lab-dialog .lab-all { flex-wrap: wrap; }
+.lab-dialog .lab-added { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
+.lab-dialog .lab-added:empty { display: none; }
+.lab-dialog .lab-view-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -2px 0 10px; }
+.lab-dialog .lab-view-tools .btn { min-height: 0; height: auto; padding: 5px 9px; font-size: 10.5px; line-height: 1.2; }
+.lab-dialog .lab-drop-note { font-size: 11px; color: var(--dim); }
+.lab-dialog .lab-view.dropping { outline: 2px dashed var(--accent); outline-offset: 2px; }
+.lab-dialog .lab-view.off .lab-view-tools { opacity: 0.6; }
+/* Every photo and rendering, to put some on a saved view (js/picture-picker.js). */
+.picture-picker { width: min(1100px, calc(100vw - 24px)); height: min(860px, calc(100vh - 24px)); display: none; flex-direction: column; }
+.picture-picker[open] { display: flex; }
+.picture-picker .pp-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 10px; }
+.picture-picker .pp-tabs { display: flex; gap: 4px; }
+.picture-picker .pp-tabs small { opacity: 0.7; margin-left: 4px; }
+.picture-picker .pp-bar input[type=search] { flex: 1 1 220px; min-width: 0; padding: 6px 8px; }
+.picture-picker .pp-grid { flex: 1; min-height: 0; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; align-content: start; padding: 2px; }
+.picture-picker .pp-card { display: grid; gap: 4px; text-align: left; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; min-width: 0; font: inherit; }
+.picture-picker .pp-pic { position: relative; display: block; aspect-ratio: 16 / 10; border-radius: 6px; overflow: hidden; background: #05070a; border: 2px solid var(--line-2); }
+.picture-picker .pp-card.on .pp-pic { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+.picture-picker .pp-card.on .pp-pic::after { content: '\2713'; position: absolute; top: 6px; left: 6px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--accent-ink, #111); background: var(--accent); }
+.picture-picker .pp-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.picture-picker .pp-on { position: absolute; right: 6px; bottom: 6px; max-width: calc(100% - 12px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; color: #fff; background: rgba(0, 0, 0, 0.7); }
+.picture-picker .pp-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picture-picker .pp-note { font-size: 10.5px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picture-picker .pp-empty { grid-column: 1 / -1; color: var(--dim); }
+.picture-picker .pp-more { justify-content: center; margin: 8px 0 0; }
+.picture-picker .pp-foot { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: flex-end; padding-top: 10px; border-top: 1px solid var(--line-2); margin-top: 10px; }
+.picture-picker .pp-foot [data-pp-chosen] { margin-right: auto; color: var(--muted); }
+.picture-picker .pp-foot label { display: flex; gap: 6px; align-items: center; }
 /* The send, a part at a time (js/lab-publish-dialog.js): a row per part with its count and time. */
 .lab-dialog .lab-steps { list-style: none; margin: 6px 0 12px; padding: 0; display: grid; gap: 2px; }
 .lab-dialog .lab-step { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 10px; align-items: start; padding: 7px 10px; border-radius: 6px; color: var(--dim); }
