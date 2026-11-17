@@ -703,11 +703,13 @@ function workLine(p, it) {
   const works = worksForItem(it), cur = it.work && workById(it.work.id);
   const groups = new Map();
   for (const w of works) {
-    const g = (WORK_GROUPS.find(([k]) => k === w.applies[0]) || [0, 'Other'])[1];
+    const g = w.group || (WORK_GROUPS.find(([k]) => k === w.applies[0]) || [0, 'Other'])[1];
     if (!groups.has(g)) groups.set(g, []);
     groups.get(g).push(w);
   }
-  const workOpts = [...groups].map(([g, ws]) => `<optgroup label="${escapeHtml(g)}">${ws.map(w => `<option value="${escapeHtml(w.id)}" ${cur === w ? 'selected' : ''}>${escapeHtml(w.label + ' (per ' + w.unit + ')')}</option>`).join('')}</optgroup>`).join('');
+  const ORDER = ['Walls', 'Drywall', 'Ceilings', 'Floors', 'Trim', 'Doors', 'Windows', 'Cabinets', 'Counters', 'Lighting', 'Electrical', 'Plumbing', 'Permits', 'Other'];
+  const rank = g => (ORDER.indexOf(g) + 1) || ORDER.length;
+  const workOpts = [...groups].sort((a, b) => rank(a[0]) - rank(b[0])).map(([g, ws]) => `<optgroup label="${escapeHtml(g)}">${ws.map(w => `<option value="${escapeHtml(w.id)}" ${cur === w ? 'selected' : ''}>${escapeHtml(w.label + ' (per ' + w.unit + ')')}</option>`).join('')}</optgroup>`).join('');
   const ms = it.takeoff ? measureIds(it.takeoff) : [];
   if (!works.length && !ms.length) return '';
   return `<div class="it-work">

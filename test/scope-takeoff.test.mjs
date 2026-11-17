@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { roomFaces } from '../js/room-faces.js';
 import {
-  measureRoom, measureFace, measureObjects, combineMeasured, takeoffItem, setWork, useMeasure, priceEdited,
+  measureRoom, measureFace, measureObjects, measureFixture, combineMeasured, takeoffItem, setWork, useMeasure, priceEdited, levelPrices,
   repriceProject, worksForItem, workById, costAreaFor, areaFactor, SQFT, FT,
 } from '../js/scope-takeoff.js';
 import { PRICE_BOOK } from '../js/price-book.js';
@@ -153,4 +153,70 @@ test('a cabinet door is priced as a cabinet front, never as a room door', () => 
   const it = takeoffItem(om, { name: 'Paint the kitchen' }, ids);
   assert.equal(it.work.id, 'paint-cabinet-front');
   assert.ok(!worksForItem(it).some(w => w.applies.includes('door')), 'no room-door work is offered');
+});
+
+// A bath with a toilet, a vanity and a tub drawn as model fixtures, and a sofa outside it.
+const bathFixtures = [
+  { id: 'f1', kind: 'bath', subtype: 'toilet', x: 0.5, y: 0.5 },
+  { id: 'f2', kind: 'bath', subtype: 'vanity', x: 1.5, y: 0.4 },
+  { id: 'f3', kind: 'bath', subtype: 'tub', x: 3, y: 2 },
+  { id: 'f4', kind: 'furniture', subtype: 'sofa', x: 9, y: 9 },
+];
+
+test('a room counts its toilets, vanities and tubs, and the recessed lights its ceiling would take', () => {
+  const { rooms, faces } = plan();
+  const m = measureRoom(rooms[0], faces, bathFixtures);
+  assert.equal(m.measures.toilets, 1);
+  assert.equal(m.measures.vanities, 1);
+  assert.equal(m.measures.tubs, 1);
+  assert.equal(m.measures.dishwashers, 0, 'none drawn');
+  assert.equal(m.measures.lights, Math.round(12 / SQFT / 25), 'one light per 25 sf of ceiling');
+  const it = takeoffItem(m, { name: 'Recessed lighting' }, ids);
+  assert.equal(it.work.id, 'recessed-light-new');
+  assert.equal(it.qty, m.measures.lights);
+  assert.equal(it.unit, 'ea');
+  setWork(it, { work: 'replace-toilet' }, 'national');
+  assert.equal(it.qty, 1, 'replacing toilets counts the toilets, not every plumbing fixture');
+  setWork(it, { work: 'hang-drywall-ceiling' }, 'national');
+  assert.equal(it.qty, it.takeoff.measures.ceiling, 'ceiling drywall counts the ceiling');
+});
+
+test('a toilet clicked in the model offers its replacement first, whatever the project is called', () => {
+  const it = takeoffItem(measureFixture(bathFixtures[0], 'Bath toilet'), { name: 'Bathroom refresh' }, ids);
+  assert.equal(it.work.id, 'replace-toilet');
+  assert.equal(it.qty, 1);
+  assert.ok(worksForItem(it).every(w => w.applies.includes('plumbing')), 'only plumbing work is offered for it');
+});
+
+test('a base cabinet run brings its length and counter top', () => {
+  const run = { id: 'r', kind: 'base-run', pts: [[0, 0], [3.048, 0]], depth: 0.6096 };
+  const m = measureFixture(run, 'Kitchen base cabinets');
+  near(m.measures.length, 10, '10 ft of cabinets');
+  near(m.measures.top, 20, '10 ft by 2 ft of top');
+  const it = takeoffItem(m, { name: 'Quartz counters' }, ids);
+  assert.equal(it.work.id, 'counter-quartz');
+  assert.equal(it.qty, m.measures.top);
+});
+
+test('a permit is priced from the place\'s own fees where the book has them', () => {
+  const permits = PRICE_BOOK.works.filter(w => w.applies.includes('permit'));
+  assert.ok(permits.length >= 4, 'building, electrical and plumbing permits');
+  for (const w of permits) {
+    const nyc = levelPrices(w, 'mid', 'nyc');
+    if (w.areaLevels && w.areaLevels.nyc) assert.equal(nyc.own, true, w.id + ' uses its New York City fees');
+    const it = { id: 'x', name: 'Permit', qty: 1, unit: 'ea' };
+    setWork(it, { work: w.id }, 'nyc');
+    assert.equal(it.likely, Math.round(nyc.likely * 100) / 100);
+  }
+});
+
+test('a blank item priced from the book takes the work\'s name; a named one keeps its own', () => {
+  const blank = { id: 'b', name: 'New item', qty: 1, unit: 'ls' };
+  setWork(blank, { work: 'permit-plumbing' }, 'national');
+  assert.equal(blank.name, workById('permit-plumbing').label);
+  setWork(blank, { work: 'permit-electrical' }, 'national');
+  assert.equal(blank.name, workById('permit-electrical').label, 'still the book\'s name, so it follows');
+  const named = { id: 'n', name: 'Con Ed paperwork', qty: 1, unit: 'ls' };
+  setWork(named, { work: 'permit-electrical' }, 'national');
+  assert.equal(named.name, 'Con Ed paperwork');
 });

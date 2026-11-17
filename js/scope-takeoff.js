@@ -25,9 +25,16 @@ export const MEASURES = {
   perimeter: { label: 'Perimeter', unit: 'lf', fits: ['perimeter'] },
   doors: { label: 'Doors', unit: 'ea', fits: ['door'] },
   windows: { label: 'Windows', unit: 'ea', fits: ['window'] },
-  fixtures: { label: 'Fixtures', unit: 'ea', fits: ['fixture'] },
-  count: { label: 'Count', unit: 'ea', fits: ['object', 'cabinet', 'fixture', 'door', 'window'] },
+  lights: { label: 'Recessed lights, one per 25 sf (estimate)', unit: 'ea', fits: ['light'] },
+  toilets: { label: 'Toilets', unit: 'ea', fits: ['toilet'] },
+  vanities: { label: 'Vanities with sinks', unit: 'ea', fits: ['vanity', 'faucet'] },
+  tubs: { label: 'Tubs', unit: 'ea', fits: ['tub', 'shower'] },
+  dishwashers: { label: 'Dishwashers', unit: 'ea', fits: ['dishwasher'] },
+  plumbing: { label: 'Plumbing', unit: 'ea', fits: ['plumbing'] },
+  fixtures: { label: 'Count', unit: 'ea', fits: ['object'] },
+  count: { label: 'Count', unit: 'ea', fits: ['object', 'cabinet', 'fixture', 'light', 'plumbing', 'door', 'window'] },
   front: { label: 'Face area', unit: 'sf', fits: ['counter', 'wall'] },
+  top: { label: 'Counter top', unit: 'sf', fits: ['counter'] },
   length: { label: 'Length', unit: 'lf', fits: ['cabinet-run', 'perimeter', 'baseboard'] },
 };
 
@@ -60,12 +67,38 @@ function openingCounts(faces) {
   return { doors: types.filter(t => t === 'door').length, windows: types.filter(t => t === 'window').length, ids: [...seen.keys()] };
 }
 
-// A room: its own faces (room-faces.js, kind 'room' with this roomId) give the walls.
-export function measureRoom(room, faces) {
+function inPoly(x, y, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i], [xj, yj] = pts[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+// Where a model fixture stands in plan: a box's centre, a run's middle.
+function fixtureAt(f) {
+  if (Number.isFinite(f.x) && Number.isFinite(f.y)) return [f.x, f.y];
+  const pts = f.pts || [];
+  if (!pts.length) return null;
+  const a = pts[0], b = pts[pts.length - 1];
+  return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+}
+// Plumbing a model fixture is: toilets, vanities, tubs and dishwashers, with the work that
+// replaces each.
+const PLUMBING = { toilet: 'replace-toilet', vanity: 'replace-bath-vanity-sink-faucet', tub: 'replace-bathtub', dishwasher: 'replace-dishwasher' };
+const isPlumbing = f => !!PLUMBING[f.subtype] && (f.kind === 'bath' || f.kind === 'appliance');
+// Recessed lights a ceiling would take on a 5'-0" grid: one per 25 sf, at least one.
+const LIGHT_SF = 25;
+
+// A room: its own faces (room-faces.js, kind 'room' with this roomId) give the walls; the
+// model's fixtures standing in it give its plumbing count.
+export function measureRoom(room, faces, fixtures = []) {
   const own = faces.filter(f => f.roomId === room.id);
   const pts = room.pts || [];
   const floor = polyArea(pts);
   const o = openingCounts(own);
+  const inRoom = pts.length > 2 ? fixtures.filter(f => (!room.level || !f.level || f.level === room.level) && (p => p && inPoly(p[0], p[1], pts))(fixtureAt(f))) : [];
+  const ceilingSf = floor / SQFT;
   return {
     label: room.name || 'Room',
     elementIds: [room.id],
@@ -77,6 +110,11 @@ export function measureRoom(room, faces) {
       perimeter: polyPerimeter(pts) / FT,
       doors: o.doors,
       windows: o.windows,
+      lights: ceilingSf > 0 ? Math.max(1, Math.round(ceilingSf / LIGHT_SF)) : 0,
+      toilets: inRoom.filter(f => isPlumbing(f) && f.subtype === 'toilet').length,
+      vanities: inRoom.filter(f => isPlumbing(f) && f.subtype === 'vanity').length,
+      tubs: inRoom.filter(f => isPlumbing(f) && f.subtype === 'tub').length,
+      dishwashers: inRoom.filter(f => isPlumbing(f) && f.subtype === 'dishwasher').length,
     },
   };
 }
@@ -97,8 +135,21 @@ export function measureOpening(o, label) {
   return { label, elementIds: [o.id], measures: { [o.type === 'window' ? 'windows' : 'doors']: 1 } };
 }
 
+// A model fixture (fixtures.js): plumbing is counted as plumbing and offers its own
+// replacement first; a cabinet run brings its length and, on base cabinets, its counter top.
 export function measureFixture(f, label) {
-  return { label, elementIds: [f.id], measures: { fixtures: 1 } };
+  const out = { label, elementIds: [f.id], measures: { fixtures: 1 } };
+  if (isPlumbing(f)) {
+    out.measures = { plumbing: 1 };
+    out.prefer = PLUMBING[f.subtype];
+  } else if (f.kind === 'base-run' || f.kind === 'wall-run') {
+    const pts = f.pts || [];
+    let len = 0;
+    for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    out.measures = { length: len / FT, ...(f.kind === 'base-run' && f.depth > 0 && { top: len * f.depth / SQFT }) };
+    out.fits = { length: ['cabinet-run'] };
+  }
+  return out;
 }
 
 // Objects of an imported model, by their bounding boxes (metres): `sizes` is one [x, y, z]
@@ -111,18 +162,33 @@ export function measureObjects(scanId, objectKeys, sizes, label) {
     front += a * b; length += a;
   }
   const kinds = objectKinds(label);
+  const prefer = objectWork(label);
   return { label, elementIds: [scanId], objectKeys: [...objectKeys], measures: { count: sizes.length, front: front / SQFT, length: length / FT },
-    ...(kinds && { fits: { count: kinds } }) };
+    ...(kinds && { fits: { count: kinds } }), ...(prefer && { prefer }) };
 }
 // What an object's name says it is, for the works its count can price: a cabinet's door is
 // not a room's door. null when the name says nothing (any each-priced work then fits).
 const NAMED = [
-  [/cabinet|drawer|upper|lower|base\b|front|pantry|vanity|shaker|panel/i, ['cabinet', 'object']],
+  [/vanity/i, ['cabinet', 'plumbing', 'object']],
+  [/toilet|\bwc\b|sink|faucet|\btap\b|bath\s*tub|\btub\b|shower|bidet|dishwasher/i, ['plumbing', 'object']],
+  [/recessed|downlight|can\s*light|pot\s*light/i, ['light', 'fixture', 'object']],
+  [/cabinet|drawer|upper|lower|base\b|front|pantry|shaker|panel/i, ['cabinet', 'object']],
   [/door/i, ['door', 'object']],
   [/window|sash/i, ['window', 'object']],
-  [/light|lamp|pendant|sconce|chandelier|fixture|switch|outlet|receptacle/i, ['fixture', 'object']],
+  [/light|lamp|pendant|sconce|chandelier|fixture|switch|outlet|receptacle|dimmer/i, ['fixture', 'light', 'object']],
   [/pull|knob|handle|hinge/i, ['cabinet', 'object']],
 ];
+// The work a named plumbing or light object most likely needs.
+const NAMED_WORK = [
+  [/toilet|\bwc\b/i, 'replace-toilet'], [/vanity/i, 'replace-bath-vanity-sink-faucet'], [/kitchen\s*sink/i, 'replace-kitchen-sink'],
+  [/kitchen\s*faucet/i, 'replace-kitchen-faucet'], [/faucet|\btap\b/i, 'replace-bath-faucet'], [/sink/i, 'replace-kitchen-sink'],
+  [/shower/i, 'replace-shower-valve-trim'], [/tub/i, 'replace-bathtub'], [/dishwasher/i, 'replace-dishwasher'],
+  [/recessed|downlight|can\s*light|pot\s*light/i, 'recessed-light-replace'], [/dimmer/i, 'dimmer-switch'],
+];
+export function objectWork(name) {
+  for (const [re, id] of NAMED_WORK) if (re.test(name || '')) return id;
+  return null;
+}
 export function objectKinds(name) {
   for (const [re, kinds] of NAMED) if (re.test(name || '')) return kinds;
   return null;
@@ -139,6 +205,8 @@ export function combineMeasured(list, label) {
     for (const [k, v] of Object.entries(m.fits || {})) out.fits = { ...out.fits, [k]: [...new Set([...((out.fits || {})[k] || []), ...v])] };
   }
   for (const k of ['elementIds', 'faceIds', 'objectKeys']) out[k] = [...new Set(out[k])];
+  const prefers = [...new Set(list.map(m => m.prefer).filter(Boolean))];
+  if (prefers.length === 1) out.prefer = prefers[0];
   return out;
 }
 
@@ -193,8 +261,18 @@ const HINTS = [
   [/base\s*board|trim|molding|moulding/i, ['paint-trim', 'install-baseboard']],
   [/door/i, ['paint-door', 'replace-interior-door', 'replace-door-hardware']],
   [/window/i, ['paint-window', 'replace-window']],
-  [/light|fixture|electric|outlet|switch/i, ['replace-light-fixture', 'replace-device']],
-  [/demo|remove|tear/i, ['remove-flooring', 'remove-wallpaper', 'remove-object']],
+  [/drywall|sheetrock|gypsum|wallboard/i, ['hang-drywall-walls', 'hang-drywall-ceiling', 'drywall-repair']],
+  [/recessed|downlight|can\s*light|pot\s*light|lighting/i, ['recessed-light-new', 'recessed-light-replace', 'dimmer-switch']],
+  [/toilet/i, ['replace-toilet']],
+  [/vanity|bath(room)?\s*sink/i, ['replace-bath-vanity-sink-faucet', 'replace-bath-faucet']],
+  [/kitchen\s*sink/i, ['replace-kitchen-sink', 'replace-kitchen-faucet']],
+  [/faucet/i, ['replace-bath-faucet', 'replace-kitchen-faucet']],
+  [/shower/i, ['replace-shower-valve-trim']],
+  [/\btub\b|bathtub/i, ['replace-bathtub']],
+  [/dishwasher/i, ['replace-dishwasher']],
+  [/plumb/i, ['replace-toilet', 'replace-bath-vanity-sink-faucet', 'replace-bath-faucet', 'replace-kitchen-sink', 'replace-kitchen-faucet', 'replace-shower-valve-trim', 'replace-bathtub', 'replace-dishwasher']],
+  [/light|fixture|electric|outlet|switch/i, ['replace-light-fixture', 'replace-device', 'recessed-light-new', 'dimmer-switch']],
+  [/demo|remove|tear/i, ['remove-flooring', 'remove-wallpaper', 'demo-drywall', 'remove-object']],
 ];
 export function guessWork(project, item) {
   const words = [project && project.name, project && project.category, project && project.notes].filter(Boolean).join(' ');
@@ -207,6 +285,8 @@ export function guessWork(project, item) {
     const best = first && hit.find(w => worksForMeasure(first, item.takeoff).includes(w));
     if (best || hit[0]) return best || hit[0];
   }
+  const prefer = item.takeoff && item.takeoff.prefer && workById(item.takeoff.prefer);
+  if (prefer && can.includes(prefer)) return prefer;
   return (first && worksForMeasure(first, item.takeoff)[0]) || can[0] || null;
 }
 
@@ -232,6 +312,7 @@ export function takeoffItem(measured, project, ids) {
   if (measured.faceIds && measured.faceIds.length) item.takeoff.faceIds = measured.faceIds;
   if (measured.objectKeys && measured.objectKeys.length) item.takeoff.objectKeys = measured.objectKeys;
   if (measured.fits) item.takeoff.fits = measured.fits;
+  if (measured.prefer) item.takeoff.prefer = measured.prefer;
   const work = guessWork(project, item);
   if (work) setWork(item, { work: work.id, level: 'mid' }, ids.area || 'national');
   else useMeasure(item, item.takeoff.measure);
@@ -269,14 +350,27 @@ export function setWork(item, { work, level } = {}, area) {
     if (m) { item.takeoff.measure = m; item.qty = item.takeoff.measures[m]; }
   }
   item.unit = w.unit;
-  const f = areaFactor(item.work.area);
-  item.low = money(L.low * f); item.likely = money(L.likely * f); item.high = money(L.high * f);
+  // Permit fees follow each place's own fee schedule, not the building cost factor.
+  const local = levelPrices(w, lv, item.work.area);
+  item.low = money(local.low); item.likely = money(local.likely); item.high = money(local.high);
   // The name follows the work while nobody has renamed the item.
   const base = item.takeoff ? item.takeoff.label : null;
   if (base && (item.name === base || item.name === prevName)) item.name = namedFor(item, w);
+  // A blank item takes the work's name ("New item" becomes "Plumbing permit").
+  if (!item.takeoff && (!item.name || item.name === 'New item' || item.name === prevName)) item.name = w.label;
   return true;
 }
-function namedFor(item, w) { return w && item.takeoff ? w.label + ' · ' + item.takeoff.label : item.name; }
+function namedFor(item, w) { return w && item.takeoff ? w.label + ' · ' + item.takeoff.label : w ? w.label : item.name; }
+
+// A work's low / likely / high in a cost area: the place's own prices where the book has them
+// (permits), else the national level times the area's factor.
+export function levelPrices(w, level, area) {
+  const L = w.levels[level] || w.levels.mid;
+  const own = w.areaLevels && w.areaLevels[area] && w.areaLevels[area][level];
+  if (own) return { low: own.low, likely: own.likely, high: own.high, own: true };
+  const f = areaFactor(area);
+  return { low: L.low * f, likely: L.likely * f, high: L.high * f, own: false };
+}
 
 // The project's cost area changed: items still on the book's prices are priced again.
 export function repriceProject(project, area) {
@@ -300,7 +394,8 @@ export function priceNote(item) {
     what: L.note || '',
     material: mat ? [mat.brand, mat.line].filter(Boolean).join(' ') + (mat.price ? ' · $' + mat.price + (mat.per ? '/' + mat.per : '') : '') + (mat.coverage ? ' · ' + mat.coverage : '') : '',
     materialUrl: mat && mat.url || '',
-    basis: (item.work.book ? 'Price book ' : 'Typed by hand; the price book says ') + PRICE_BOOK.asOf + ': installed price per ' + w.unit + ', ' + a.label + (a.factor !== 1 ? ' (national × ' + a.factor + ')' : '') + '.',
+    basis: (item.work.book ? 'Price book ' : 'Typed by hand; the price book says ') + PRICE_BOOK.asOf + ': ' + (w.applies.includes('permit') ? 'typical total per permit' : 'installed price per ' + w.unit) + ', ' + a.label +
+      (levelPrices(w, item.work.level, a.id).own ? ' (its own fee schedule)' : a.factor !== 1 ? ' (national × ' + a.factor + ')' : '') + '.' + (w.areaNotes && w.areaNotes[a.id] ? ' ' + w.areaNotes[a.id] : ''),
     sources: w.sources || [],
   };
 }
