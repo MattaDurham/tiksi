@@ -87,7 +87,7 @@ import { catalogItem } from './trim-catalog.js';
 import { objectPanelHtml, bindObjectPanel, multiPanelHtml, bindMultiPanel, planTagHtml, bindPlanTag } from './object-panel.js';
 import { ensureCanonTag, nameTag } from './tags.js';
 import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown, setHidden, hiddenKeys, showAllHidden, PHASES, PHASE_LABEL, phaseCounts, phaseShown, setPhaseShown, phaseOfKey, setPhase } from './tags.js';
-import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags, applySavedHidden, modelState } from './saved-views.js';
+import { addSavedView, updateSavedView, renameSavedView, deleteSavedView, moveSavedView, applySavedTags, applySavedHidden, modelState, keepShowing } from './saved-views.js';
 import { viewRenderingName } from './view-renderings.js';
 import { stampBytes, labelFor } from './rendering-stamp.js';
 import { onScreen, setOnScreen, onScreenChange, setMenuProvider, refreshPane } from './tiksi-menu.js';
@@ -186,7 +186,8 @@ let walkGlide = null;          // { from, to, yaw0, yaw1, t0, ms } while gliding
 let walkClick = null;          // the last single click or tap while walking, { t, x, y, centre }
 let clientMode = false;        // the client page in the lab (client-view.js): looking only
 // What the client page plugs in: { states: [{ id, label }], show(), setShow(id), furniture(),
-// setFurniture(on), hasFurniture, viewsChanged(openViewId, shown) }. The left pane and the phone panel offer these and the saved
+// setFurniture(on), hasFurniture, viewsChanged(openViewId, shown), viewApplied(view),
+// renderings: [{ id, view, label, day }], openRendering(id) }. The left pane and the phone panel offer these and the saved
 // views, orbit and walk; nothing can be selected, edited or saved.
 let clientControls = null;
 // MODEL BESIDE (model-beside.js): the model in a pane next to another page. It shows the
@@ -196,6 +197,16 @@ let besideMode = false;
 let keysHere = true;           // the last press was in the model (always so on the MODEL page)
 function notePress(e) { keysHere = !!(el && el.contains(e.target)); }
 export function setClientMode(on, controls) { clientMode = !!on; clientControls = on ? controls || null : null; if (scene) { renderViews(); refreshPane(); } }
+// The client page's renderings as the left pane and the phone panel list them: "Living · Rendering 2".
+function clientRenderings() {
+  const rs = clientControls && Array.isArray(clientControls.renderings) ? clientControls.renderings : [];
+  const views = new Map((prop.savedViews || []).map(v => [v.id, v.name])), seen = new Map();
+  return rs.filter(r => views.has(r.view)).map(r => {
+    const n = (seen.get(r.view) || 0) + 1; seen.set(r.view, n);
+    const count = rs.filter(x => x.view === r.view).length;
+    return { id: r.id, label: views.get(r.view) + ' · ' + (r.label || 'Rendering' + (count > 1 ? ' ' + n : '')) };
+  });
+}
 function clientMenuGroups() {
   const c = clientControls;
   const groups = [
@@ -210,6 +221,9 @@ function clientMenuGroups() {
   if (c && c.hasFurniture) groups.push({ title: 'Display', items: [
     { label: 'Furniture', icon: c.furniture() ? 'eye' : 'eye-off', act: 'furniture', active: c.furniture(), pressed: c.furniture(), run: () => { c.setFurniture(!c.furniture()); refreshPane(); } },
   ] });
+  // The renderings, under the name of their view: a click opens the picture over the model.
+  const rs = clientRenderings();
+  if (rs.length) groups.push({ title: 'Renderings', items: rs.map(r => ({ label: r.label, icon: 'image', data: { clientRendering: r.id }, title: 'Open this rendering over the model', run: () => c.openRendering(r.id) })) });
   // Lower when the model moves slowly on this computer or phone.
   groups.push({ title: 'Quality', items: QUALITY_NAMES.map(id => ({ label: id[0].toUpperCase() + id.slice(1), icon: quality() === id ? 'check' : 'settings', active: quality() === id, data: { quality: id }, run: () => { fieldAction('quality', id); refreshPane(); } })) });
   return groups;
@@ -1391,6 +1405,7 @@ function applySection() {
   for (const m of passClipMaterials()) { m.clippingPlanes = planes; m.needsUpdate = true; }
   invalidateShadows();
   requestRender(2);
+  keepSoon();
 }
 // Anything on the cut-away side of a plane is not on screen and must not be picked, unless
 // its material is exempt from clipping (section caps, pin cards).
@@ -4621,6 +4636,7 @@ function toggleMarkers(kind, on) {
   touch();
   renderHud();
   renderInspector();
+  keepSoon();
 }
 // Placing, moving or locating a pin or note shows that kind first.
 function showMarkers(kind) { toggleMarkers(kind, true); }
@@ -4967,7 +4983,7 @@ function renderHud() {
   bar.querySelectorAll('[data-show]').forEach(b => b.onclick = () => toggleMarkers(b.dataset.show));
   bar.querySelectorAll('[data-annot]').forEach(b => b.onclick = () => toggleAnnot(b.dataset.annot));
   bar.querySelector('[data-parallel]').onclick = () => setParallel(!parallel);
-  bar.querySelector('[data-uncertainty]').onclick = () => { uncertaintyShown = !uncertaintyShown; renderHud(); requestRender(2); };
+  bar.querySelector('[data-uncertainty]').onclick = () => { uncertaintyShown = !uncertaintyShown; renderHud(); requestRender(2); keepSoon(); };
   bar.querySelector('[data-section]').onclick = toggleSection;
   bar.querySelector('[data-xray]').onclick = toggleXray;
   bar.querySelector('[data-environment]').onclick = () => { hud.env.hidden = !hud.env.hidden; hud.env.classList.add('open'); renderEnvPanel(); };
@@ -4978,7 +4994,7 @@ function renderHud() {
       bar.querySelector('.v-xray-control output').textContent = xr.value + '%';
       applyXray();
     };
-    xr.onchange = () => touch();
+    xr.onchange = () => { touch(); keepSoon(); };
   }
   renderSectionBar();
   setHint('');
@@ -5069,6 +5085,7 @@ function toggleLevel(id) {
   applySection();
   buildAnnotations();
   const sel = selectedObject();
+  keepSoon();
   if (sel && !isVisibleChain(sel)) { setSelection(null); return; }
   updateOutlineTargets();
   renderToolCol();
@@ -5082,7 +5099,7 @@ function applyXray() {
   applySection();
   requestRender(3);
 }
-function toggleXray() { xray = !xray; applyXray(); renderHud(); renderToolCol(); }
+function toggleXray() { xray = !xray; applyXray(); renderHud(); renderToolCol(); keepSoon(); }
 // TAGS: hiding a tag hides every object on it, in the plan model and in imported models.
 function applyTagVisibility() {
   if (modelGroup) applyPlanTagVisibility(prop, modelGroup);
@@ -5091,7 +5108,7 @@ function applyTagVisibility() {
   fitShadow(); applyEnvironment(); updateOutlineTargets();
   requestRender(3);
 }
-function tagsChanged() { applyTagVisibility(); renderToolCol(); renderInspector(); touch(); }
+function tagsChanged() { applyTagVisibility(); renderToolCol(); renderInspector(); touch(); keepSoon(); }
 function toggleTag(id) {
   if (id && !tagById(prop, id)) return;
   setTagShown(prop, id, !tagShown(prop, id));
@@ -5689,7 +5706,7 @@ function setModelVisible(id, on) {
   s.visible = !!on;
   applyScanTransform(s, scanObjs[id]);
   fitShadow(); applyEnvironment(); touch(); requestRender(3);
-  loadShownScans(); renderToolCol(); renderInspector();
+  loadShownScans(); renderToolCol(); renderInspector(); keepSoon();
 }
 function modelPanelCtx(s, obj) {
   return { prop, scan: s, obj, picks: tagPicks, models: prop.scans.map(x => ({ scan: x, root: scanObjs[x.id] && scanObjs[x.id].userData.inner })).filter(x => x.root),
@@ -6288,6 +6305,16 @@ function renderInspectorBody() {
 
 // ---------- saved views (tabs over the model, as SketchUp's scene tabs) ----------
 let activeViewId = null;       // the saved view last gone to, drawn as the current tab
+// What shows is kept in the current tab's view as it changes (saved-views.js keepShowing): a
+// moment after a change, and before going to another view. Not while a view is being put on the
+// screen, and never on the client page.
+let applyingView = false, keepTimer = 0;
+function keepInView() {
+  clearTimeout(keepTimer); keepTimer = 0;
+  if (clientMode || applyingView || !prop || !activeViewId || !camera) return;
+  if (keepShowing(prop, activeViewId, viewState())) touch();
+}
+function keepSoon() { if (clientMode || !activeViewId) return; clearTimeout(keepTimer); keepTimer = setTimeout(keepInView, 400); }
 let offScreen = null, offMenu = null;
 function viewState() {
   return {
@@ -6325,6 +6352,7 @@ function makeStandardViews() {
 function goToView(id) {
   const v = (prop.savedViews || []).find(x => x.id === id);
   if (!v) return;
+  keepInView();
   activeViewId = id;
   showView(v);
 }
@@ -6333,6 +6361,10 @@ function goToView(id) {
 // models, BEFORE or AFTER, photo pins and notes. What a view did not keep (one saved by an
 // earlier version) stays as it is. `ms` 0 goes there at once.
 function showView(v, ms = 650) {
+  applyingView = true;
+  try { putViewOnScreen(v, ms); } finally { applyingView = false; clearTimeout(keepTimer); keepTimer = 0; }
+}
+function putViewOnScreen(v, ms) {
   if (match) endMatch();
   if (v.mode === 'top' && mode !== 'top') setMode('top');
   else if (v.mode !== 'top' && mode !== 'orbit') setMode('orbit');
@@ -6381,6 +6413,9 @@ function showView(v, ms = 650) {
   // A view from below the model opens the way BOTTOM does: orbiting under the horizon, no ground.
   setLookingUp(v.camera.position[1] < v.camera.target[1] - 0.01);
   flyTo(new THREE.Vector3(...v.camera.position), new THREE.Vector3(...v.camera.target), ms);
+  // The client page lays its own choices over the view (client-view.js): the iteration shown and
+  // the furniture switch.
+  if (clientMode && clientControls && clientControls.viewApplied && (prop.savedViews || []).includes(v)) clientControls.viewApplied(v);
   const sel = selectedObject();
   if (sel && !isVisibleChain(sel)) setSelection(null);
   renderHud(); renderToolCol(); renderInspector(); renderViews();
@@ -6638,6 +6673,7 @@ function compareDesignView(view) {
   // Select the record immediately, including while its scene object is loading.
   // setScanState refreshes this inspector when the chosen object is ready.
   rebuildModel(); setSelection(chosen === 'design' ? null : { kind: 'scan', id: chosen }); renderToolCol(); touch();
+  keepSoon();
 }
 
 // ---------- tool column ----------
@@ -6791,7 +6827,7 @@ function markupParts() {
     rayAt: e => { camera.updateMatrixWorld(); raycaster.setFromCamera(ndcFromEvent(e), viewCamera()); return { o: raycaster.ray.origin.toArray(), d: raycaster.ray.direction.toArray() }; },
     pick, anchorOf, viewState, showView, renderStillBlob, quality, toast, setHint, requestRender, setMode, setTool, endMatch, setSelection, renderToolCol, syncSectionHandles,
     get mode() { return mode; }, get tool() { return tool; }, get match() { return match; }, get selection() { return selection; },
-    get tween() { return tween; }, set tween(v) { tween = v; }, set activeViewId(v) { activeViewId = v; },
+    get tween() { return tween; }, set tween(v) { tween = v; }, set activeViewId(v) { if (v !== activeViewId) keepInView(); activeViewId = v; },
   };
 }
 // The layer, fetched and put over the view if it is not there yet. Null when it could not load.
@@ -7258,6 +7294,7 @@ function rememberView() {
 }
 
 export function unmount() {
+  try { keepInView(); } catch (e) { console.warn('What shows was not kept in the view:', e); }
   try { rememberView(); } catch (e) { console.error(e); }
   if (besideMode) { document.removeEventListener('pointerdown', notePress, true); besideMode = false; keysHere = true; }
   if (offScreen) { offScreen(); offScreen = null; }
@@ -7352,7 +7389,7 @@ export function fieldState() {
     mode,
     // The client page (setClientMode): what it shows, for the phone panel.
     client: clientMode ? { states: clientControls ? clientControls.states.map(st => ({ id: st.id, label: st.label, on: st.id === clientControls.show() })) : [],
-      furniture: clientControls && clientControls.hasFurniture ? clientControls.furniture() : null } : null,
+      furniture: clientControls && clientControls.hasFurniture ? clientControls.furniture() : null, renderings: clientRenderings() } : null,
     cameras: [{ id: 'frame', label: 'Overview' }, { id: 'front', label: 'Front' }, { id: 'iso', label: 'Corner' }],
     // The iPhone 17 Pro lens the view is framed with (lens.js), or the default.
     lenses: [...LENSES.map(l => ({ id: l.id, label: l.label, on: !parallel && lensPick === l.id })), { id: 'default', label: 'Default', on: !parallel && !lensPick && !!camera && Math.abs(camera.fov - DEFAULT_VFOV) < 0.05 },
@@ -7427,6 +7464,7 @@ export function fieldAction(kind, id, value) {
   // The client page changed what is shown (prop.hidden, tags, scan.visible): show it.
   else if (kind === 'client-show') { if (clientControls) { clientControls.setShow(id); refreshPane(); } }
   else if (kind === 'client-furniture') { if (clientControls) { clientControls.setFurniture(!clientControls.furniture()); refreshPane(); } }
+  else if (kind === 'client-rendering') { if (clientControls && clientControls.openRendering) clientControls.openRendering(id); }
   else if (kind === 'refresh-shown') {
     for (const s of prop.scans) if (scanObjs[s.id]) applyScanTransform(s, scanObjs[s.id]);
     applyTagVisibility(); loadShownScans();

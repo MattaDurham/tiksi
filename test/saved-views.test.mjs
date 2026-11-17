@@ -94,12 +94,14 @@ test('a saved view keeps the objects hidden one by one, the models shown, pins a
   assert.equal(SV.applySavedHidden(p, v), 3, 'the wall back, the room and the model part shown');
   assert.deepEqual(SV.hiddenObjects(p).sort(), ['opening:o-2', 'wall:w-1']);
   assert.equal(SV.applySavedHidden(p, v), 0, 'nothing to change the second time');
-  // A view from before Tiksi kept these leaves them as they are.
+  // A view from before Tiksi kept the hidden list hides nothing one by one: what shows is its own,
+  // never what the last view hid.
   const old = SV.normalizeSavedView({ name: 'Old', camera: { position: [1, 2, 3], target: [0, 0, 0] } });
   for (const k of ['hidden', 'models', 'compare', 'markers', 'xrayOpacity', 'uncertainty']) assert.equal(k in old, false, k);
   assert.equal('done' in old.section, false);
-  assert.equal(SV.applySavedHidden(p, old), 0);
-  assert.deepEqual(SV.hiddenObjects(p).sort(), ['opening:o-2', 'wall:w-1']);
+  assert.equal(SV.applySavedHidden(p, old), 2);
+  assert.deepEqual(SV.hiddenObjects(p), []);
+  assert.equal(SV.applySavedHidden(p, v), 2);
   // Updating the view takes what is hidden now.
   T.showAllHidden(p);
   SV.updateSavedView(p, v.id, state());
@@ -160,4 +162,39 @@ test('a saved view keeps the existing and proposed halves shown, and gives them 
   assert.equal(wback.tags[T.CANON.walls.id], true);
   assert.equal(wback.tags[T.phaseOverrideKey(T.CANON.walls.id, 'e')], true);
   assert.equal(wback.tags[T.phaseOverrideKey(T.CANON.walls.id, 'p')], false);
+});
+
+test('what shows is kept in the open view as it changes, not its camera', () => {
+  const p = store.propertyTemplate('Kept');
+  p.scans = [{ id: 'scan-a', name: 'Furniture', visible: true }];
+  const living = SV.addSavedView(p, 'Living', { ...state(), models: SV.modelState(p) });
+  const hall = SV.addSavedView(p, 'Hall', { ...state(), models: SV.modelState(p) });
+  // On Living: a chair hidden, the walls' tag off, a cut, the model off, the camera moved.
+  T.setHidden(p, ['node:scan-a#0/7/0'], true);
+  const walls = p.tags.find(t => t.id === 'tag-walls');
+  walls.visible = false;
+  p.scans[0].visible = false;
+  const now = { ...state(), camera: { position: [9, 9, 9], target: [0, 0, 0], fov: 40 }, mode: 'top', xray: true,
+    section: { on: true, height: 1, planes: [], active: '' }, models: SV.modelState(p) };
+  assert.equal(SV.keepShowing(p, living.id, now), true);
+  const kept = p.savedViews.find(v => v.id === living.id);
+  assert.deepEqual(kept.hidden, ['node:scan-a#0/7/0']);
+  assert.equal(kept.tags['tag-walls'], false);
+  assert.deepEqual(kept.models, { 'scan-a': false });
+  assert.equal(kept.xray, true);
+  assert.deepEqual([kept.camera, kept.mode], [living.camera, living.mode], 'the camera waits for UPDATE');
+  assert.equal(SV.keepShowing(p, living.id, now), false, 'nothing new the second time');
+  // Hall is untouched, and going there gives back its own: nothing hidden.
+  const h = p.savedViews.find(v => v.id === hall.id);
+  assert.deepEqual(h.hidden, []);
+  assert.equal(h.tags['tag-walls'], true);
+  SV.applySavedHidden(p, h); SV.applySavedTags(p, h);
+  assert.deepEqual(SV.hiddenObjects(p), []);
+  assert.equal(walls.visible, true);
+  // A view of the standard set stays one: keeping what shows is not an UPDATE.
+  p.savedViews.find(v => v.id === hall.id).standard = { key: 'plan:l1', name: 'Hall' };
+  T.setHidden(p, ['wall:w-2'], true);
+  assert.equal(SV.keepShowing(p, hall.id, now), true);
+  assert.deepEqual(p.savedViews.find(v => v.id === hall.id).standard, { key: 'plan:l1', name: 'Hall' });
+  assert.equal(SV.keepShowing(p, 'no-such-view', now), false);
 });
