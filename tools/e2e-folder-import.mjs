@@ -152,6 +152,14 @@ try {
     await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
     const again = await activeProperty(page);
     check(again.id === prop.id && again.scans.length === 1 && again.walls.length === prop.walls.length, 'after a reload the property comes back from that file');
+    await page.click('#tiksi-menu').then(() => page.click('#btn-file'));
+    await page.locator('[data-agent-onboarding] summary').click();
+    const prompt = await page.locator('[data-agent-prompt]').inputValue();
+    check(prompt.includes('AGENTS.local.md') && prompt.includes(prop.id) && prompt.includes(saved),
+      'a fresh agent gets the shared instructions and the exact reopened property and bundle');
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url });
+    await page.click('[data-agent-copy]');
+    check(await page.evaluate(() => navigator.clipboard.readText()) === prompt, 'COPY PROMPT copies the visible handoff');
     assert.deepEqual(errors, [], 'no page errors on the server run');
     await page.close();
   }
@@ -183,6 +191,13 @@ try {
     const steps = await reviewAndCreate(page, { name: 'Elm Street kitchen', where: 'copied into this browser', held });
     await checkProperty(page, steps, 'Elm Street kitchen');
     check(JSON.stringify(await fingerprint(visit)) === JSON.stringify(before) && !existsSync(join(visit, 'Tiksi')), 'the picked folder is untouched');
+    await page.click('[data-np-cancel]', { noWaitAfter: true, timeout: 90000 });
+    await page.click('#tiksi-menu').then(() => page.click('#btn-file'));
+    await page.locator('[data-agent-onboarding] summary').click();
+    const prompt = await page.locator('[data-agent-prompt]').inputValue();
+    const prop = await activeProperty(page);
+    check(prompt.includes(prop.id) && prompt.includes('.tiksi file I provide') && !prompt.includes(visit),
+      'a browser-only property names its ID and asks for the saved bundle');
     assert.deepEqual(errors, [], 'no page errors on the static run');
     await page.close();
   }

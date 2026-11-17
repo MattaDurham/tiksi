@@ -449,6 +449,10 @@ function openFileMenu(initialTab = 'project', selected) {
     <section data-file-panel="project"><h3>Save your project</h3><p>A .tiksi file keeps your plan, models, original captures, pinned photos, materials and project work together.</p>
       <div class="file-actions"><button class="btn primary" data-project-save>SAVE PROJECT</button><button class="btn" data-project-as>SAVE AS…</button><button class="btn" data-project-open>OPEN / IMPORT…</button></div><p data-file-target></p>
       <div class="file-actions"><button class="btn" data-new-property>NEW PROPERTY</button><button class="btn" data-new-folder>NEW PROPERTY FROM A FOLDER…</button></div>
+      <details data-agent-onboarding><summary>Onboard with a coding agent</summary>
+        <p>Open Claude or Codex with the Tiksi checkout and your site-visit folder. Paste this prompt and add what you want to produce.</p>
+        <textarea readonly rows="5" aria-label="Property onboarding prompt" data-agent-prompt></textarea>
+        <button class="btn" data-agent-copy>COPY PROMPT</button></details>
       <h3>One-pager</h3><p>A one-page teaser of this property for its client: the picture, the pitch, the scope, the budget and the schedule. Every saved version is a PDF among the property's documents; the newest is the one to send.</p>
       <p class="op-file-status" data-op-file-status></p><div class="file-actions"><button class="btn primary" data-one-pager>OPEN ONE-PAGER</button></div>
       <h3>Client page in the lab</h3><p>A view-only copy of this property for its client on thedurham.nyc: the model to orbit or walk through, Existing and the projects you choose, and the saved views as pictures.</p>
@@ -468,6 +472,14 @@ function openFileMenu(initialTab = 'project', selected) {
   const refresh=()=>{
     const st=filesState(),target=prop && saveTarget(prop.id);
     dialog.querySelector('[data-file-target]').textContent=target?'Saving to '+target.name:'Choose a file on first save. Cmd+S saves again; Cmd+O opens a project.';
+    const savedPath = prop && diskWorkspace?.paths[prop.id];
+    const context = prop ? { name: prop.name, id: prop.id, ...(savedPath && { savedPath }) } : null;
+    dialog.querySelector('[data-agent-prompt]').value = [
+      "Read AGENTS.md and AGENTS.local.md in the Tiksi checkout. Follow the section “Onboarding a property with a coding agent” for the private site-visit folder I provide.",
+      context ? "Resume the property identified by this record: " + JSON.stringify(context) : "Locate any existing bundle before creating a new property.",
+      ...(prop && !savedPath ? ["Use the saved .tiksi file I provide to locate this property by ID."] : []),
+      "Review the source evidence and keep the onboarding record and unresolved questions in the private property folder.",
+    ].join('\n');
     const own=prop&&projectFolder(prop.id);
     dialog.querySelector('[data-own-folder-label]').textContent=!prop?'Open a property to choose where it is kept.'
       :own?(own.permitted?'Kept in '+own.label+'. Only this project is written there.':'Kept in '+own.label+', which needs permission again: RECONNECT FOLDER asks for it.')
@@ -519,6 +531,17 @@ function openFileMenu(initialTab = 'project', selected) {
       for(const f of files){if(entries[f.name])throw new Error('Two resources have the same name; import a ZIP retaining the folder structure.');entries[f.name]=new Uint8Array(await f.arrayBuffer());}
       type=await importAnyFile(new File([zipSync(entries)],models[0].name+'.zip'));
     } else for(const file of files)type=await importAnyFile(file);ensureBuiltinMaterials();refreshTopbar();if(type==='model'&&currentName!=='model')location.hash='#/model';else if(type==='photo'&&currentName!=='photos')location.hash='#/photos';else if(type==='measure'&&currentName!=='measure')location.hash='#/measure';else remountView();dialog.close();});
+  on('[data-agent-copy]', async () => {
+    const prompt = dialog.querySelector('[data-agent-prompt]');
+    try {
+      await navigator.clipboard.writeText(prompt.value);
+      status.textContent = 'Onboarding prompt copied.';
+    } catch {
+      prompt.focus();
+      prompt.select();
+      status.textContent = 'Prompt selected. Use Copy to copy it.';
+    }
+  });
   on('[data-new-property]',()=>{dialog.close();openNewPropertyDialog();});
   // The folder of a site visit: its scans, photos, videos and PDFs become a property in one go.
   on('[data-new-folder]',()=>{dialog.close();openNewPropertyDialog({folder:true});});

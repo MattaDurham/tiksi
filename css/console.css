@@ -1304,6 +1304,7 @@ html.touch #view .guide-view-map a:not([hidden]) { display: inline-flex; align-i
 html.touch .file-dialog .file-units .seg-btn { min-height:44px; }
 .file-dialog details { border-top:1px solid var(--line); margin-top:20px; padding-top:12px; }
 .file-dialog summary { cursor:pointer; min-height:44px; display:flex; align-items:center; color:var(--dim); font-size:13px; }
+.file-dialog [data-agent-prompt] { display:block; width:100%; box-sizing:border-box; resize:vertical; }
 .file-dialog [hidden] { display:none; }
 .file-dialog .v-export-check { justify-content:start; }
 .file-dialog hr { border:0; border-top:1px solid var(--line); margin:24px 0; }

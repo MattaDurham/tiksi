@@ -32,6 +32,103 @@ evidence, e.g. 2'-11 7/16" (900 mm). Code, stored data and file formats keep met
 In the app, lengths show in inches to 1/16" by default; FILE > Settings switches to
 millimetres and sets the precision.
 
+## Onboarding a property with a coding agent
+
+Claude, Codex and other coding agents follow the same process. Start here for a new
+property **and** when taking over a partially built one. Read `AGENTS.local.md`
+for this installation's project home and operating instructions (seed it as
+described below if absent). Read any private AGENTS.md governing that folder
+for local templates and source locations. If the session starts inside the private property
+folder, explicitly open these files in the Tiksi checkout. The folder importer
+collects supported files and can propose a plan. The agent owns the evidence
+review and the handoff. Work to the owner's brief. A floor estimate, an existing-condition model
+and a fabrication package require different evidence.
+
+1. **Find the property and the current revision.** Record the brief, property ID
+   when available, working folder, current bundle and any linked native model.
+   Check FILE → Settings for the saved path. Inspect the bundle's property ID,
+   plans and build notes before creating another property. Distinguish an owner's
+   edited model, an as-built or permit set, a Tiksi mirror, a backup and a
+   proposed design. Use revision history, embedded models or content hashes to
+   resolve competing copies. Preserve the owner's latest edits and keep a
+   restorable baseline before changing an existing build.
+2. **Account for the visit.** In the private project folder keep one onboarding
+   record, or extend its existing README/evidence ledger. Inventory originals by
+   relative path, type, revision and disposition (reviewed, pending, unreadable,
+   duplicate with evidence, or outside scope). Include files the app skipped,
+   archives and their companion files. Check import warnings and truncated lists.
+   Preserve original bytes and scope out unrelated records. For a name-only
+   property, record the brief and missing sources and do the work that the brief
+   already supports. For a folder or link, retain the capture ID and any raw
+   keyframes, poses, depth or confidence data available.
+3. **Read the evidence.** Review plans, revisions and room photos. Work through
+   walkthroughs for distinct tape readings in MEASURE. Record frame/time, room,
+   element, endpoints, units and legibility. Index relevant visit audio by
+   timestamp and speaker when known, using an available authorized transcription
+   method or marking it pending. Tie each reading or owner observation to its
+   source. Preserve conflicting readings and distinguish slab, rough opening,
+   finished opening and clear passage. Resolve what the evidence supports and
+   group the remaining questions with the specific photo or measurement needed.
+4. **Establish the shell before detailing.** Check scale, orientation, north
+   when relevant, origin and finished-floor datum against independent controls.
+   Check camera poses against the mesh before transferring keyframe coordinates.
+   If registration fails, use individual frames for visual evidence and record the limit.
+   Save alignment transforms and residuals. Use the scan floor review for mixed
+   indoor/outdoor surfaces, porches, slopes, stairs and landings. Check adjacency,
+   envelope, soffits, wall faces, ceilings and thresholds room by room. Walk the
+   numbered door/window schedule against photos for size, jamb, swing, handing,
+   glazing, casing and adjoining space. Include closed, obscured and visibly
+   missing elements in the ledger. A plan-only or photo-only intake can stop
+   at a calibrated underlay or a partial shell with its gaps recorded.
+5. **Reconcile the room and its products.** Use matched photo/scan views and
+   sections to check location, elevations, dimensions, collisions and omissions.
+   Keep measured, observed, inferred and unknown geometry distinct from installed
+   product identity or proposed substitutions. Record source references on the
+   model where supported and in the ledger otherwise. Inspect full-resolution
+   crops for labels. Record what each label actually establishes about brand,
+   model and suffix. Attach the matching spec, installation drawing or manual
+   with its page and revision to the product. Check visible service connections
+   and keep concealed routes unknown unless documented. Use the whole-space
+   product checklist above. Keep finishes per face and light-dependent photo
+   colour matches provisional. Use separate existing/proposed tags or iterations
+   when exploring design changes. Consult the [evidence and recovery guide](docs/accuracy-and-evidence.md).
+6. **Follow the requested work through its outputs.** For scope and pricing,
+   link rooms/elements/products to the property project and its subprojects.
+   Recheck quantities after a model edit, preserve manual scope, and identify
+   allowances, price dates/units, locality and labor assumptions. Use the
+   [price book sources](docs/price-book-sources.md). For buildable assemblies
+   derive parts from common datums, actual stock and installation interfaces.
+   Check dimensions, joins, clearances, waste and assembly sequence against the
+   drawings, cut list and order. Use a relevant private template if available
+   and refresh its inputs for this job. Label parts by wall, role and position
+   as well as mark. Record any required field or trade checks.
+7. **Prove the handoff on the saved revision.** File supported findings on the
+   property through the normal Tiksi workflow. With an external builder, compare
+   its baseline to the latest saved bundle before applying changes. Reconcile
+   concurrent edits and preserve IDs, original assets and existing scopes.
+   Reopen a copy of the deliverable.
+   Check the model against independent source views or tape controls, including
+   the largest discrepancy and an obstructed area when present. Record residuals
+   and the tolerance appropriate for the intended use. Verify the linked
+   photos, documents, products, scope and quantities open and belong to this
+   property. For native exchange, read back the actual file, check scenes, tags,
+   finishes and editable parts, and document losses using [MODEL-EXCHANGE.md](MODEL-EXCHANGE.md).
+   Archive builders and label renderings by view as specified below. Check the
+   one-pager, sheets, estimates and client selections against the same revision
+   before delivery. A preview can publish to the real client site too. Send only
+   when the owner requests publication.
+
+Leave enough in the private record for the next session to resume: source
+inventory, current revision and rebuild path, completed checks, open discrepancies,
+affected deliverables, and the next action. A useful evidence row is
+`room/element | claim | source + page/frame/time | measured/observed/inferred/unknown | model value and difference | decision or next check`.
+For example, a tape frame may establish a door leaf width while its rough
+opening and hidden framing still need a field check. Update the related
+schedule, takeoff and sheets when the measurement changes. Report which uses
+the evidence supports and which still depend on a missing source.
+
+## Working on Tiksi
+
 Before changing code, read `AGENTS.local.md`. If it is missing, seed a private
 copy from `AGENTS.local.example.md` with `python3 scripts/agents-local.py seed`.
 Instructions live in these AGENTS files; do not add model-specific rule files.

@@ -281,6 +281,22 @@ matching currency and unit. Claims are extracted by agents, so confirm final
 fit and purchasing details with the source. Saving retains the research history
 in project files; it does not purchase anything.
 
+## Onboard with a coding agent
+
+Start a Claude or Codex session with access to the Tiksi checkout and the private
+site-visit folder. For an existing property, FILE → Project → **Onboard with a
+coding agent** gives you a starter prompt with its property ID and its saved path
+when available. For a first visit before a property exists, use this prompt:
+
+> Read the Tiksi checkout's AGENTS.md and AGENTS.local.md. Follow “Onboarding a
+> property with a coding agent” for the private folder I selected. My intended
+> deliverable is [describe the work]. Locate any existing property, review the
+> original evidence, and leave the current revision and open questions in the
+> private property folder.
+
+The [agent instructions](AGENTS.md#onboarding-a-property-with-a-coding-agent)
+apply to folder, scan-link, name-only and resumed projects.
+
 ## From a folder
 
 Back from a site visit with a scan, photos, a video and a few PDFs in one folder:
