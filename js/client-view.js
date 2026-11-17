@@ -16,6 +16,10 @@
 // vendor/). The saved views show as a strip of small pictures under the model
 // (client-strip.js): a click goes to the view and opens its projects and renderings.
 //
+// The page opens on the first project sent (the renovation), not on Existing. The left pane
+// slides away over the model's left edge and comes back when the pointer reaches that edge or
+// the tab there is clicked (revealSide).
+//
 // SEND TO THE LAB also opens this page in a small frame on the Mac to take the saved views'
 // pictures (startPictures, lab-pictures.js): the same page, handed the copy instead of
 // fetching it, so a picture shows exactly what a client sees.
@@ -29,6 +33,7 @@ import { initField, fieldRouted } from './field.js';
 import * as viewer3d from './viewer3d.js';
 import { mountStrip } from './client-strip.js';
 import { picturesDiffer } from './view-renderings.js';
+import { createNotes, notesPage } from './client-notes.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -78,7 +83,8 @@ export async function startClient({ app, data, wait, copy: given = null, read = 
   // The view on screen: the pieces it hides one by one and the models it shows. `furniture` is
   // null while the furniture is as the view has it, else the switch's choice.
   const view = { hidden: new Set(), models: {} };
-  const state = { show: EXISTING, furniture: null };
+  // The renovation shows from the start: the first project sent, else Existing.
+  const state = { show: (copy.states || [])[0] ? copy.states[0].id : EXISTING, furniture: null };
   const furnitureTags = copy.furnitureTags || [];
   const apply = () => applyShown(prop, state, furnitureTags, view);
   // Whether furniture shows: the switch, or else whether the view shows every furniture tag. A
@@ -102,7 +108,7 @@ export async function startClient({ app, data, wait, copy: given = null, read = 
       state.furniture = null;
       apply();
     },
-    renderings: (copy.renderings || []).map(r => ({ id: r.id, view: r.view, label: r.label, day: r.day })),
+    renderings: (copy.renderings || []).map(r => ({ id: r.id, view: r.view, label: r.label, day: r.day, thumb: r.thumb ? data + r.thumb : '' })),
     openRendering: id => { if (pictures) pictures.openRendering(id); },
   });
 
@@ -112,7 +118,14 @@ export async function startClient({ app, data, wait, copy: given = null, read = 
   viewer3d.mount(document.getElementById('view'));
   fieldRouted('model');
   // A version picked in the strip goes through the viewer, so the left pane marks it too.
-  if (strip) pictures = mountStrip({ copy, data, states, show: () => state.show, setShow: id => viewer3d.fieldAction('client-show', id), goTo: id => viewer3d.fieldAction('view', id) });
+  if (strip) {
+    // The client's stars and comments: on the website when this is one of its lab pages.
+    const page = notesPage(location.pathname);
+    const notes = createNotes({ page: page || location.pathname.replace(/\/(index\.html)?$/, '') + '/renderings', remote: !!page });
+    pictures = mountStrip({ copy, data, states, show: () => state.show, setShow: id => viewer3d.fieldAction('client-show', id), goTo: id => viewer3d.fieldAction('view', id), notes });
+    notes.load();
+    revealSide();
+  }
   apply();
   const first = (prop.savedViews || [])[0];
   if (first) viewer3d.fieldAction('view', first.id);
@@ -125,6 +138,43 @@ export async function startClient({ app, data, wait, copy: given = null, read = 
   }
   if (wait) wait.remove();
   return { prop, state, setShow };
+}
+
+// ---------- the left pane, out of the way until it is wanted ----------
+// On a computer the pane slides over the model's left edge. It shows for a moment when the page
+// opens, then slides away; it comes back while the pointer is at the left edge or over the tab
+// there, or after a click on the tab (a touch screen), and slides away again a moment after the
+// pointer leaves it or a tap elsewhere. The phone layout keeps its own panel (field.js).
+function revealSide() {
+  const side = document.getElementById('side'), root = document.documentElement;
+  if (!side || root.classList.contains('cl-side-auto')) return;
+  root.classList.add('cl-side-auto', 'cl-side-open');
+  const tab = document.createElement('button');
+  tab.type = 'button'; tab.className = 'cl-side-tab';
+  tab.setAttribute('aria-label', 'Show the menu'); tab.title = 'Show the menu';
+  tab.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>';
+  document.body.append(tab);
+  let timer = 0;
+  const open = on => {
+    clearTimeout(timer); timer = 0;
+    root.classList.toggle('cl-side-open', on);
+    tab.setAttribute('aria-expanded', String(on));
+  };
+  const later = (ms = 450) => { clearTimeout(timer); timer = setTimeout(() => open(false), ms); };
+  later(2500);
+  document.addEventListener('pointermove', e => {
+    if (e.pointerType === 'touch' || root.classList.contains('phone')) return;
+    const r = side.getBoundingClientRect(), shown = root.classList.contains('cl-side-open');
+    if (e.clientX <= 10 && e.clientY > r.top) open(true);
+    else if (shown && e.clientX > r.right + 24 && !side.contains(document.activeElement)) { if (!timer) later(); }
+    else if (shown && e.clientX <= r.right) { clearTimeout(timer); timer = 0; }
+  }, { passive: true });
+  tab.addEventListener('pointerenter', e => { if (e.pointerType !== 'touch') open(true); });
+  tab.addEventListener('click', () => open(!root.classList.contains('cl-side-open')));
+  document.addEventListener('pointerdown', e => {
+    if (root.classList.contains('cl-side-open') && !side.contains(e.target) && !tab.contains(e.target)) open(false);
+  });
+  side.addEventListener('focusin', () => open(true));
 }
 
 // ---------- the saved views' pictures, taken on the Mac (lab-pictures.js) ----------

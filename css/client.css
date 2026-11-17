@@ -8,55 +8,76 @@ html.tiksi-client .v-layout > .inspector, html.tiksi-client .v-layout > .side-ha
 @media (min-width: 761px) { html.tiksi-client .editor-layout.v-no-tools { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 760px) { html.tiksi-client .editor-layout.v-no-tools { grid-template: minmax(0, 1fr) / minmax(0, 1fr); } }
 
-/* ---------- the saved views: a strip of small pictures under the model (js/client-strip.js) ---------- */
-/* The name tabs over the model give way to the pictures. */
-html.tiksi-client .v-views { display: none !important; }
-html.tiksi-client .v-wrap.v-views-on .v-modes { top: 12px; }
+/* ---------- the saved views: pills along the top of the model (viewer3d.js) ---------- */
+html.tiksi-client .v-view-tab { border-radius: 999px; padding: 0 14px; }
+html.phone.tiksi-client .v-views { display: flex !important; top: calc(10px + env(safe-area-inset-top)); left: calc(64px + env(safe-area-inset-left)); right: calc(10px + env(safe-area-inset-right)); }
+
+/* ---------- the left pane: slides over the model's left edge (client-view.js revealSide) ---------- */
+@media (min-width: 761px) {
+  html.cl-side-auto:not(.phone) #app, html.cl-side-auto:not(.phone) #app.no-side { grid-template-columns: 0 minmax(0, 1fr); }
+  html.cl-side-auto:not(.phone) #side {
+    position: fixed; z-index: 70; left: 0; top: var(--top-h); bottom: 0; width: var(--pane-w); box-sizing: border-box;
+    transform: translateX(-100%); transition: transform 0.22s ease, box-shadow 0.22s ease; box-shadow: none;
+  }
+  html.cl-side-auto.cl-side-open:not(.phone) #side { transform: none; box-shadow: var(--shadow-2); }
+}
+.cl-side-tab { display: none; }
+@media (min-width: 761px) {
+  html.cl-side-auto:not(.phone) .cl-side-tab {
+    display: grid; place-items: center; position: fixed; z-index: 69; left: 0; top: calc(var(--top-h) + 50%); transform: translateY(-50%);
+    width: 22px; height: 64px; padding: 0; cursor: pointer; border-radius: 0 9px 9px 0; border: 1px solid var(--glass-line); border-left: 0;
+    color: var(--ink); background: var(--glass-bg); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); box-shadow: var(--shadow-1);
+    transition: opacity 0.2s ease;
+  }
+  html.cl-side-auto.cl-side-open:not(.phone) .cl-side-tab { opacity: 0; pointer-events: none; }
+  .cl-side-tab svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+  .cl-side-tab:hover { color: var(--accent); }
+  .cl-side-tab:focus-visible { outline: none; box-shadow: var(--focus); }
+}
+
+/* ---------- the renderings: a strip of small pictures under the model (js/client-strip.js) ---------- */
 .cl-strip {
   position: absolute; left: 12px; bottom: 34px; z-index: 6; box-sizing: border-box; width: fit-content; max-width: calc(100% - 24px);
-  display: flex; gap: 6px; padding: 6px; overflow-x: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+  display: flex; align-items: center; gap: 6px; padding: 6px; overflow-x: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
   border-radius: 12px; background: var(--glass-bg); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
   border: 1px solid var(--glass-line); box-shadow: var(--shadow-1);
 }
 .cl-strip[hidden] { display: none; }
-.cl-view { flex: none; display: flex; gap: 6px; border-radius: 9px; }
-.cl-view.open { background: rgba(255, 255, 255, 0.07); box-shadow: 0 0 0 1px var(--line-2); padding-right: 6px; }
-.cl-thumb, .cl-card {
-  position: relative; flex: none; box-sizing: border-box; height: 78px; padding: 0; overflow: hidden; cursor: pointer;
-  border-radius: 8px; border: 2px solid transparent; background: #11161b; color: var(--ink); font: inherit;
+/* Existing and each project sent: a switch at the start of the strip. */
+.cl-iters { flex: none; display: flex; flex-direction: column; gap: 4px; padding-right: 6px; margin-right: 2px; border-right: 1px solid var(--line-2); }
+.cl-iter {
+  flex: none; height: 30px; padding: 0 12px; border-radius: 999px; cursor: pointer; white-space: nowrap;
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; color: var(--ink); background: rgba(255, 255, 255, 0.05); border: 1px solid var(--line-2);
 }
-.cl-thumb { width: 124px; }
-.cl-card { width: 104px; height: 66px; align-self: center; }
-.cl-thumb img, .cl-card img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
-.cl-thumb:hover, .cl-card:hover { border-color: rgba(255, 255, 255, 0.4); }
-.cl-thumb:focus-visible, .cl-card:focus-visible { outline: none; box-shadow: var(--focus); }
-.cl-view.on .cl-thumb, .cl-iter.on { border-color: var(--accent); }
+.cl-iter:hover { border-color: rgba(255, 255, 255, 0.4); }
+.cl-iter.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
+.cl-iter:focus-visible, .cl-card:focus-visible { outline: none; box-shadow: var(--focus); }
+.cl-card {
+  position: relative; flex: none; box-sizing: border-box; width: 112px; height: 74px; padding: 0; overflow: hidden; cursor: pointer;
+  border-radius: 8px; border: 2px solid transparent; background: #11161b; color: var(--ink); font: inherit; opacity: 0.72; transition: opacity 0.15s ease;
+}
+.cl-card img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.cl-card:hover { border-color: rgba(255, 255, 255, 0.4); opacity: 1; }
+/* The view on screen: its renderings stand out. */
+.cl-card.here { opacity: 1; border-color: rgba(232, 151, 58, 0.55); }
+.cl-card.open { opacity: 1; border-color: var(--accent); }
 .cl-name {
   position: absolute; left: 0; right: 0; bottom: 0; padding: 16px 7px 5px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; line-height: 1.2; color: #fff;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.04em; line-height: 1.2; color: #fff;
   background: linear-gradient(to top, rgba(5, 7, 10, 0.88), rgba(5, 7, 10, 0.55) 55%, rgba(5, 7, 10, 0));
 }
-.cl-card .cl-name { font-size: 9.5px; padding: 14px 6px 4px; }
-.cl-iter.on .cl-name { color: var(--accent); }
-/* How many iterations and renderings a view opens. */
-.cl-count {
-  position: absolute; top: 5px; right: 5px; min-width: 9px; padding: 2px 6px; border-radius: 999px; text-align: center;
-  font-family: var(--mono); font-size: 9.5px; font-weight: 700; line-height: 1.3; color: var(--accent-ink); background: var(--accent);
-}
-.cl-more { display: flex; gap: 6px; align-items: center; padding-left: 2px; }
-/* What a card is: an iteration of the model, or a picture. */
-.cl-kind {
-  position: absolute; top: 4px; left: 4px; padding: 2px 5px; border-radius: 4px; font-style: normal;
-  font-family: var(--mono); font-size: 8px; letter-spacing: 0.08em; line-height: 1.2; color: var(--ink); background: rgba(9, 12, 15, 0.78);
-}
-.cl-pic .cl-kind { color: var(--accent-ink); background: var(--cyan); }
-/* The strip stands on the line of help along the bottom of the model. */
+/* Starred, commented. */
+.cl-marks { position: absolute; top: 4px; right: 4px; display: flex; gap: 3px; }
+.cl-mark { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 999px; background: rgba(9, 12, 15, 0.8); }
+.cl-mark svg { width: 11px; height: 11px; }
+.cl-mark.star svg { fill: var(--accent); }
+.cl-mark.note svg { fill: var(--cyan); }
 /* The phone layout (css/field.css): no line of help; the strip stops short of the Overview
    button at the bottom right and stands above the walk pad while that shows. */
 html.phone .cl-strip { left: calc(8px + env(safe-area-inset-left)); bottom: calc(14px + env(safe-area-inset-bottom)); max-width: calc(100% - 86px - env(safe-area-inset-left) - env(safe-area-inset-right)); padding: 5px; gap: 5px; }
 html.phone:has(.fd-walk:not([hidden])) .cl-strip { bottom: calc(140px + env(safe-area-inset-bottom)); }
-html.phone .cl-thumb { width: 100px; height: 64px; }
-html.phone .cl-card { width: 88px; height: 56px; }
+html.phone .cl-card { width: 92px; height: 60px; }
+html.phone .cl-iter { height: 26px; padding: 0 9px; }
 
 /* A rendering, in a window floating over the model: dragged by its bar, resized at its corner. */
 .cl-pop {
@@ -72,6 +93,41 @@ html.phone .cl-card { width: 88px; height: 56px; }
 .cl-pop-bar button:hover { background: rgba(255, 255, 255, 0.1); }
 .cl-pop-bar button:focus-visible { outline: none; box-shadow: var(--focus); }
 .cl-pop-bar button[hidden] { display: none; }
-.cl-pop-body { flex: 1; min-height: 0; background: #05070a; }
+.cl-pop-body { flex: 1; min-height: 0; background: #05070a; position: relative; overflow: hidden; }
 .cl-pop-body img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.cl-pop-bar .cl-pop-see { width: auto; display: inline-flex; align-items: center; gap: 6px; padding: 0 9px; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.08em; border: 1px solid var(--line-2); }
+.cl-pop-see svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+.cl-pop-see[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.cl-pop-bar .cl-pop-see[aria-pressed="true"]:hover { background: var(--accent); }
+@media (max-width: 520px) { .cl-pop-see span { display: none; } }
+/* The client's star and comment. */
+.cl-pop-note { flex: none; display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px 10px; border-top: 1px solid var(--line); max-height: 40%; overflow-y: auto; }
+.cl-pop-note[hidden] { display: none; }
+.cl-pop-star { flex: none; display: grid; place-items: center; width: 40px; height: 40px; padding: 0; cursor: pointer; border-radius: 8px; border: 1px solid var(--line-2); background: transparent; }
+.cl-pop-star svg { width: 20px; height: 20px; fill: none; stroke: var(--dim); stroke-width: 1.7; stroke-linejoin: round; }
+.cl-pop-star:hover svg { stroke: var(--accent); }
+.cl-pop-star[aria-pressed="true"] { border-color: var(--accent); background: rgba(232, 151, 58, 0.12); }
+.cl-pop-star[aria-pressed="true"] svg { fill: var(--accent); stroke: var(--accent); }
+.cl-pop-star:focus-visible { outline: none; box-shadow: var(--focus); }
+.cl-pop-say { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.cl-pop-say textarea {
+  box-sizing: border-box; width: 100%; min-height: 40px; resize: vertical; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line-2);
+  background: rgba(255, 255, 255, 0.04); color: var(--ink); font: 13px/1.35 var(--sans, system-ui), sans-serif;
+}
+.cl-pop-say textarea:focus { outline: none; border-color: var(--accent); }
+@media (pointer: coarse) { .cl-pop-say textarea { font-size: 16px; } }
+.cl-pop-saved { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.04em; color: var(--dim); min-height: 1em; }
+.cl-pop-others p { margin: 4px 0 0; font-size: 12px; line-height: 1.35; color: var(--ink); display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.cl-pop-others b { font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--dim); }
+.cl-pop-others .cl-mark { width: 14px; height: 14px; background: none; }
+/* SEE THROUGH: the window covers the model, the picture half clear and as tall as the model so it
+   lines up with the view's camera; the model behind still turns and moves. */
+.cl-pop.see { position: absolute; inset: 0; z-index: 5; min-width: 0; min-height: 0; resize: none; background: transparent; border: 0; box-shadow: none; border-radius: 0; pointer-events: none; }
+.cl-pop.see .cl-pop-bar {
+  pointer-events: auto; position: absolute; z-index: 1; top: 52px; left: 50%; transform: translateX(-50%); width: min(560px, calc(100% - 24px));
+  border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); box-shadow: var(--shadow-1); cursor: default;
+}
+.cl-pop.see .cl-pop-body { position: absolute; inset: 0; background: transparent; }
+.cl-pop.see .cl-pop-body img { position: absolute; top: 0; left: 50%; width: auto; max-width: none; height: 100%; transform: translateX(-50%); opacity: 0.5; }
+.cl-pop.see .cl-pop-note { display: none; }
 @media (pointer: coarse) { .cl-pop-bar button { width: 40px; height: 40px; } }

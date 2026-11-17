@@ -25,6 +25,18 @@ const FURNITURE_NAME = /furniture|decor|soft goods|furnishing/i;
 // The most renderings one send carries, and the sizes of a rendering's web copy and its thumbnail.
 export const MAX_RENDERINGS = 80;
 const RENDERING_EDGE = 2400, RENDERING_THUMB = 480;
+// A rendering's name for the client's stars and comments (client-notes.js): the same from one send
+// to the next, made from the property and the picture's own id without showing either.
+export function renderingKey(propId, photoId) {
+  const text = String(propId) + '\u0000' + String(photoId);
+  let a = 0x811c9dc5, b = 0x01000193 ^ 0x5bd1e995;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193) >>> 0;
+    b = Math.imul(b ^ c, 0x5bd1e995) >>> 0; b ^= b >>> 15;
+  }
+  return 'k' + a.toString(16).padStart(8, '0') + (b >>> 0).toString(16).padStart(8, '0');
+}
 // Fields of a plan record that say what product or evidence it is: never in a client's copy.
 const PRIVATE_FIELDS = ['product', 'proposedProduct', 'evidence', 'evidenceText', 'evidenceState', 'notes', 'note', 'source', 'uncertainty',
   'identityStatus', 'componentProducts', 'materialIdentities', 'originalFileId', 'originalName', 'sourceRevision', 'createdAt', 'updatedAt', 'measured', 'sourceFile'];
@@ -97,7 +109,7 @@ export function clientView(v, sentScans, scanTags = new Set(['tag-scan'])) {
 }
 
 // The copy itself: { format, schema, property, materials, projects, states, furnitureTags,
-// renderings: [{ id, view, label, day, w, h, path, thumb }],
+// renderings: [{ id, key (renderingKey: the same from send to send), view, label, day, w, h, path, thumb }],
 // files: { id: { path, format, mime } } } and the list of files to send.
 // `choice`: { projects: [{ id, label }], furnitureTags: [tagId], views: [view id] (every view
 // when left out), renderings: [{ id (the photo), viewId, label, day }] }.
@@ -158,7 +170,7 @@ export function clientCopy(data, propId, choice) {
   for (const r of Array.isArray(choice.renderings) ? choice.renderings : []) {
     if (!r || typeof r.id !== 'string' || !prop.savedViews.some(v => v.id === r.viewId) || renderings.length >= MAX_RENDERINGS || send.some(f => f.kind === 'rendering' && f.id === r.id)) continue;
     const id = 'r' + (renderings.length + 1);
-    renderings.push({ id, view: r.viewId, label: renderingLabel(r.label), day: /^\d{4}-\d{2}-\d{2}$/.test(r.day || '') ? r.day : '', w: 0, h: 0, path: 'renderings/' + id + '.jpg', thumb: 'renderings/' + id + '-thumb.jpg' });
+    renderings.push({ id, key: renderingKey(prop.id, r.id), view: r.viewId, label: renderingLabel(r.label), day: /^\d{4}-\d{2}-\d{2}$/.test(r.day || '') ? r.day : '', w: 0, h: 0, path: 'renderings/' + id + '.jpg', thumb: 'renderings/' + id + '-thumb.jpg' });
     send.push({ id: r.id, rendering: id, path: 'renderings/' + id + '.jpg', thumb: 'renderings/' + id + '-thumb.jpg', kind: 'rendering' });
   }
   const labels = new Map(choice.projects.map(x => [x.id, String(x.label || '').trim().slice(0, 32) || 'Project']));
