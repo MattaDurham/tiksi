@@ -1375,6 +1375,38 @@ TRIM_CATALOG.push(
   { ...flatPanel, id: 'full-hd-10005558', style: 'full-height-paneling', short: 'Full-height panels with MDF rails and stiles' },
 );
 
-const byId = new Map(TRIM_CATALOG.map(p => [p.id, p]));
+// Stock boards that built-up entries are cut from. They carry their own store data (and so their own
+// buy-list line) but are not a style of trim, so they sit outside TRIM_CATALOG and its pickers.
+const fjBoard = (id, model, short, title, sku, url, price, W, length, notes) => ({
+  id, style: 'board', profile: 'flat', short, title, brand: '(unbranded HD listing)', model, store: 'Home Depot', sku, url,
+  price, priceUnit: 'each', length, material: 'Finger-jointed pine', finish: 'Primed', T: .719 * IN, W: W * IN,
+  size: `23/32 x ${W === 3.5 ? '3-1/2' : '5-1/2'} in`, profileText: 'Flat S4S board, square edges all round',
+  evidence: 'Seen on the store page 2026-11-17: title, model, Internet number, size, price.', notes,
+});
+export const TRIM_STOCK = [
+  fjBoard('hd-590599', '590599', '1x4 primed pine board',
+    'Trim Board Primed Finger-Joint (Common: 1 in. x 4 in. x 12 ft.; Actual: .719 in. x 3.5 in. x 144 in.)', 'Internet #202105909',
+    'https://www.homedepot.com/p/Trim-Board-Primed-Finger-Joint-Common-1-in-x-4-in-x-12-ft-Actual-719-in-x-3-5-in-x-144-in-590599/202105909',
+    16.98, 3.5, '144 in (12 ft) board', 'Nominal 1x4, actual 23/32 x 3-1/2 in.'),
+  fjBoard('hd-253192', '253192', '1x6 primed pine board',
+    '1x6x12 23/32 x 5-1/2 in. x 6 in. x 12 ft. Radiata Pine Finger Joint Primed Board', 'Internet #304798235',
+    'https://www.homedepot.com/p/1x6x12-23-32x5-1-2-in-x-6-in-x-12-ft-Radiata-Pine-Finger-Joint-Primed-Board-253192/304798235',
+    25.55, 5.5, '144 in (12 ft) board', 'Nominal 1x6, actual 23/32 x 5-1/2 in, the same thickness as the 1x4.'),
+];
+const stockById = Object.fromEntries(TRIM_STOCK.map(p => [p.id, p]));
+// Shaker panels built from stock boards: a 1x6 top rail, a 1x4 bottom rail and 1x4 stiles. parts names the
+// board each piece is cut from; W and rail are those boards' widths, T their thickness. First among the shaker
+// entries, so a new shaker section is built from boards unless a kit or panel is chosen.
+TRIM_CATALOG.unshift({
+  ...stockById['hd-590599'], id: 'shaker-pine-1x4-1x6', style: 'shaker', profile: 'eased', short: 'Shaker panels in 1x4 and 1x6 pine',
+  title: 'Shaker panels built from primed finger-jointed pine boards: 1x6 top rail, 1x4 bottom rail and stiles',
+  price: null, priceUnit: '', length: 'boards bought by length (see parts)', size: '23/32 x 3-1/2 and 5-1/2 in',
+  rail: stockById['hd-253192'].W, parts: { topRail: 'hd-253192', bottomRail: 'hd-590599', stile: 'hd-590599' },
+  profileText: 'Flat-panel Shaker wainscot: square-edge 1x boards (a wider top rail, a bottom rail and stiles) over the wall, which shows as the recessed panels',
+  evidence: 'Proposed assembly of two stock boards seen on the Home Depot pages 2026-11-17 (590599 and 253192). Joinery inferred: butt joints, boards nailed and glued to the wall.',
+  notes: 'Each piece is bought as its own board; see the parts. The panels are the painted wall.',
+});
+
+const byId = new Map([...TRIM_CATALOG, ...TRIM_STOCK].map(p => [p.id, p]));
 export function catalogItem(id) { return (typeof id === 'string' && byId.get(id)) || null; }
 export function catalogFor(style) { return TRIM_CATALOG.filter(p => p.style === style); }
