@@ -18,7 +18,7 @@ export const WAINSCOT_PRESETS = [
   ['Flat panel', 'flat-hd-10005558'],
   ['Board and batten', 'hd-424600'],
   ['Beadboard', 'hd-8203035'],
-  ['Shaker', 'hd-wpkp56x03ds'],
+  ['Shaker', 'shaker-pine-1x4-1x6'],
   ['Full-height paneling', 'full-hd-10005558'],
 ];
 

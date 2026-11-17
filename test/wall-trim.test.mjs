@@ -18,7 +18,7 @@ const store = await import('../js/store.js');
 store.ws.data = store.emptyWorkspace();
 const { buildWallGroup, buildTrimGroup } = await import('../js/geometry.js');
 const T = await import('../js/trims.js');
-const { TRIM_CATALOG, catalogItem, catalogFor } = await import('../js/trim-catalog.js');
+const { TRIM_CATALOG, TRIM_STOCK, catalogItem, catalogFor } = await import('../js/trim-catalog.js');
 const { sectionOf } = await import('../js/trim-profiles.js');
 const { trimMeshParts } = await import('../js/trim-mesh.js');
 const { CROWN_PRESETS, WAINSCOT_PRESETS, FRAME_PRESETS } = await import('../js/trim-presets.js');
@@ -40,6 +40,24 @@ test('every trim style has real store products with a size, a page and a known s
     assert.ok(p.W > 0.005 && p.W < 1.3 && p.T > 0.002 && p.T < 0.2, p.id + ' size in metres');
     assert.ok(sectionOf(p.profile, p.W, p.T).length >= 4, p.id + ' section');
   }
+});
+
+test('shaker panels default to stock boards: a 1x6 top rail over 1x4 stiles and bottom rail', () => {
+  const p = catalogFor('shaker')[0];
+  assert.equal(p.id, 'shaker-pine-1x4-1x6');
+  for (const id of Object.values(p.parts)) {
+    const b = catalogItem(id);
+    assert.ok(TRIM_STOCK.includes(b) && !TRIM_CATALOG.includes(b), id + ' is a stock board, not a trim style');
+    assert.match(b.url, /^https:\/\/www\.(homedepot|lowes)\.com\//);
+    near(b.T, p.T, id + ' is as thick as the panel boards');
+  }
+  near(p.W, catalogItem(p.parts.stile).W, 'stile width'); near(p.rail, catalogItem(p.parts.topRail).W, 'top rail width');
+  const t = T.trimTemplate('shaker', null, WALL, 1, { y: .14, h: .8, f0: .1, f1: .9 });
+  assert.equal(t.product, p.id);
+  const boards = T.trimLayout(t, WALL, []).parts.filter(q => q.kind === 'board');
+  const h = boards.filter(q => q.dir === 'h').map(q => q.y1 - q.y0).sort();
+  near(h[0], 3.5 * .0254, 'bottom rail'); near(h[h.length - 1], 5.5 * .0254, 'top rail');
+  assert.ok(boards.some(q => q.dir === 'v' && Math.abs(q.x1 - q.x0 - 3.5 * .0254) < 1e-6), 'stiles are 1x4');
 });
 
 test('the style picker entries resolve to sourced profiles and assemblies', () => {
