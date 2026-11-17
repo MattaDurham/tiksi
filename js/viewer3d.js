@@ -4,6 +4,7 @@ import { openingProfileValue, openingGridFields } from './opening-profile-edit.j
 import { modelAnnotations } from './model-annotations.js';
 import { faceTotals } from './room-faces.js';
 import { currentScopeTarget } from './model-focus.js';
+import { fixtureLabel } from './fixtures.js';
 import { measureRoom, measureFace, measureOpening, measureFixture, measureObjects, combineMeasured } from './scope-takeoff.js';
 import { floorReviewText } from './scan-surfaces.js';
 import { EVIDENCE_STATES, EVIDENCE_COLORS, evidenceState, setEvidence, elementEvidenceRecord } from './evidence.js';
@@ -4485,16 +4486,16 @@ function scopeMenuItems(hit, thing, target) {
     if (f) {
       add('scope-face', 'ADD ' + short(f.label), () => measureFace(f));
       const r = f.roomId && prop.rooms.find(x => x.id === f.roomId);
-      if (r) add('scope-room', 'ADD ALL OF ' + short(r.name || 'the room'), () => measureRoom(r, allFaces()));
+      if (r) add('scope-room', 'ADD ALL OF ' + short(r.name || 'the room'), () => measureRoom(r, allFaces(), prop.fixtures || []));
     }
   } else if (room) {
-    add('scope-room', 'ADD ' + short(room.name || 'this room'), () => measureRoom(room, allFaces()));
+    add('scope-room', 'ADD ' + short(room.name || 'this room'), () => measureRoom(room, allFaces(), prop.fixtures || []));
   } else if (hit.kind === 'opening') {
     const o = prop.openings.find(x => x.id === hit.id);
     if (o) add('scope-opening', 'ADD THIS ' + (o.type === 'window' ? 'WINDOW' : 'DOOR'), () => measureOpening(o, openingScopeLabel(o)));
   } else if (hit.kind === 'fixture') {
     const fx = (prop.fixtures || []).find(x => x.id === hit.id);
-    if (fx) add('scope-fixture', 'ADD THIS FIXTURE', () => measureFixture(fx, fx.name || fx.category || 'Fixture'));
+    if (fx) add('scope-fixture', 'ADD THIS ' + short(fixtureLabel(fx)), () => measureFixture(fx, fixtureRoomLabel(fx)));
   } else if (hit.kind === 'scan' && thing) {
     const tree = scanObjs[hit.id] ? modelObjectTree(scanObjs[hit.id]) : null;
     const o = tree && thing.sel.objectKey ? tree.byKey.get(thing.sel.objectKey) : null;
@@ -4508,6 +4509,20 @@ function scopeMenuItems(hit, thing, target) {
     }
   }
   return out;
+}
+// A model fixture named with its room where it stands in one: "Bath toilet".
+function fixtureRoomLabel(fx) {
+  const at = Number.isFinite(fx.x) ? [fx.x, fx.y] : (fx.pts && fx.pts[0]) || null;
+  const room = at && prop.rooms.find(r => r.pts && r.pts.length > 2 && (!fx.level || !r.level || r.level === fx.level) && pointInRoom(at, r.pts));
+  return (room ? (room.name || 'Room') + ' ' : '') + fixtureLabel(fx).toLowerCase();
+}
+function pointInRoom([x, y], pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i], [xj, yj] = pts[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
 }
 function openingScopeLabel(o) {
   const f = allFaces().find(x => x.kind === 'room' && x.openings.some(h => h.id === o.id));
@@ -4535,9 +4550,9 @@ function measureThingsForScope(things) {
   for (const t of things) {
     const sel = t.sel || {};
     if (sel.kind === 'face') { const f = faceById(sel.id); if (f) list.push(measureFace(f)); }
-    else if (sel.kind === 'room') { const r = prop.rooms.find(x => x.id === sel.id); if (r) list.push(measureRoom(r, allFaces())); }
+    else if (sel.kind === 'room') { const r = prop.rooms.find(x => x.id === sel.id); if (r) list.push(measureRoom(r, allFaces(), prop.fixtures || [])); }
     else if (sel.kind === 'opening') { const o = prop.openings.find(x => x.id === sel.id); if (o) list.push(measureOpening(o, openingScopeLabel(o))); }
-    else if (sel.kind === 'fixture') { const fx = (prop.fixtures || []).find(x => x.id === sel.id); if (fx) list.push(measureFixture(fx, fx.name || 'Fixture')); }
+    else if (sel.kind === 'fixture') { const fx = (prop.fixtures || []).find(x => x.id === sel.id); if (fx) list.push(measureFixture(fx, fixtureRoomLabel(fx))); }
     else if (sel.kind === 'scan' && sel.objectKey && scanObjs[sel.id]) {
       const o = modelObjectTree(scanObjs[sel.id]).byKey.get(sel.objectKey);
       const m = o && measureModelObjects(sel.id, [o], o.name);

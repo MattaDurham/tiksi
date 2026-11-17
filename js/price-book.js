@@ -1,10 +1,12 @@
 // tiksi price book: installed unit prices (materials and labour, contractor-installed, US
-// dollars) for common renovation work at three finish levels, each with a real product line as
-// its placeholder material. Researched 2026-11 from current cost guides and maker / retailer
-// pages; docs/price-book-sources.md lists the sources per work and how firm each figure is.
-// National averages: a cost area's factor scales them (scope-takeoff.js). A material with
-// priceChecked false has a price from a dealer or an estimate, not a published list price.
-// Estimates to start a budget, never a quote.
+// dollars) for common renovation work (finishes, drywall, lighting, plumbing, permits) at three
+// finish levels, each with a real product line as its placeholder material. Researched 2026-11
+// from current cost guides, maker / retailer pages and official fee schedules;
+// docs/price-book-sources.md lists the sources per work and how firm each figure is.
+// National averages: a cost area's factor scales them (scope-takeoff.js). A permit instead
+// carries each place's own typical totals (areaLevels), since fees follow fee schedules, not
+// building costs. A material with priceChecked false has a price from a dealer or an
+// estimate, not a published list price. Estimates to start a budget, never a quote.
 
 export const PRICE_BOOK = {
  "asOf": "2026-11",
@@ -1746,7 +1748,8 @@ export const PRICE_BOOK = {
    "id": "replace-light-fixture",
    "label": "Replace light fixture",
    "applies": [
-    "fixture"
+    "fixture",
+    "light"
    ],
    "unit": "ea",
    "levels": {
@@ -1800,7 +1803,8 @@ export const PRICE_BOOK = {
     "https://match.angi.com/cost/electrical/install-a-lighting-fixture",
     "https://www.homeadvisor.com/cost/electrical/repair-a-lighting-fixture",
     "https://homeguide.com/costs/cost-to-replace-or-repair-a-light-fixture"
-   ]
+   ],
+   "group": "Lighting"
   },
   {
    "id": "replace-device",
@@ -1861,7 +1865,8 @@ export const PRICE_BOOK = {
     "https://www.homeadvisor.com/cost/electrical/install-a-switch/",
     "https://www.hometips.com/repair-fix/electrical-outlet-repair-cost.html",
     "https://www.fixr.com/costs/install-light-switch"
-   ]
+   ],
+   "group": "Lighting"
   },
   {
    "id": "remove-object",
@@ -1938,6 +1943,1317 @@ export const PRICE_BOOK = {
     "https://fixr.com/costs/handyman",
     "https://www.housecallpro.com/resources/how-to-price-handyman-jobs/"
    ]
+  },
+  {
+   "id": "hang-drywall-walls",
+   "label": "Hang and finish drywall on walls",
+   "applies": [
+    "wall"
+   ],
+   "unit": "sf",
+   "levels": {
+    "budget": {
+     "low": 1.75,
+     "likely": 2.4,
+     "high": 3.25,
+     "material": {
+      "brand": "USG Sheetrock",
+      "line": "UltraLight Panels 1/2 in. x 4 ft. x 8 ft. (model 14113411708)",
+      "price": 15.58,
+      "per": "sheet",
+      "coverage": "32 sf/sheet",
+      "url": "https://www.homedepot.com/b/USG-Sheetrock-Brand/N-5yc1vZomd",
+      "priceChecked": false
+     },
+     "laborShare": 0.75,
+     "note": "new 1/2 in. lightweight board on existing framing, screwed, taped, 3 coats to Level 4, sanded, one coat drywall primer; not painted"
+    },
+    "mid": {
+     "low": 2.4,
+     "likely": 3.1,
+     "high": 4.0,
+     "material": {
+      "brand": "Gold Bond (National Gypsum)",
+      "line": "PURPLE XP 1/2 in. x 4 ft. x 8 ft. mold- and moisture-resistant (model 50001464)",
+      "price": 16.97,
+      "per": "sheet",
+      "coverage": "32 sf/sheet",
+      "url": "https://www.lowes.com/pd/Gold-Bond-Common-1-2-in-x-4-ft-x-8-ft-Actual-0-5-in-x-4-ft-x-8-ft-PURPLE-XP-Drywall-Panel/1002062128",
+      "priceChecked": false
+     },
+     "laborShare": 0.75,
+     "note": "Level 4 with better board: mold/moisture-resistant board in baths, kitchens and laundry, 5/8 in. Type X where code needs a fire separation, paper-faced metal corner bead, high-build primer; not painted"
+    },
+    "high": {
+     "low": 3.5,
+     "likely": 4.5,
+     "high": 6.0,
+     "material": {
+      "brand": "CertainTeed",
+      "line": "M2Tech 1/2 in. x 4 ft. x 8 ft. moisture- and mold-resistant, Level 5 skim",
+      "price": 27.99,
+      "per": "sheet",
+      "coverage": "32 sf/sheet",
+      "url": "https://www.lowes.com/pd/CertainTeed-Common-1-2-in-x-4-ft-x-8-ft-Actual-0-5-in-x-4-ft-x-8-ft-Drywall-Panel/1002992798",
+      "priceChecked": false
+     },
+     "laborShare": 0.8,
+     "note": "Level 5: Level 4 plus a full skim coat (or spray primer-surfacer) over the whole face, checked under raking light, primed; for flat paint, glossy finishes and long sight lines; not painted"
+    }
+   },
+   "sources": [
+    "https://www.homeguide.com/costs/drywall-installation-cost",
+    "https://www.homewyse.com/services/cost_to_install_drywall.html",
+    "https://www.fixr.com/costs/drywall-ceiling-installation",
+    "https://inchcalculator.com/drywall-cost-guide"
+   ],
+   "group": "Drywall"
+  },
+  {
+   "id": "hang-drywall-ceiling",
+   "label": "Hang and finish drywall on ceilings",
+   "applies": [
+    "ceiling"
+   ],
+   "unit": "sf",
+   "levels": {
+    "budget": {
+     "low": 2.1,
+     "likely": 2.9,
+     "high": 3.9,
+     "material": {
+      "brand": "USG Sheetrock",
+      "line": "UltraLight Panels 1/2 in. x 4 ft. x 8 ft. (rated sag-resistant for ceilings)",
+      "price": 15.58,
+      "per": "sheet",
+      "coverage": "32 sf/sheet",
+      "url": "https://www.homedepot.com/b/USG-Sheetrock-Brand/N-5yc1vZomd",
+      "priceChecked": false
+     },
+     "laborShare": 0.8,
+     "note": "new 1/2 in. sag-resistant board overhead with a lift, screwed, taped, Level 4, primed; not painted; ceilings up to about 9 ft"
+    },
+    "mid": {
+     "low": 2.8,
+     "likely": 3.7,
+     "high": 4.8,
+     "material": {
+      "brand": "Gold Bond (National Gypsum)",
+      "line": "PURPLE XP 1/2 in. x 4 ft. x 8 ft. mold- and moisture-resistant (model 50001464)",
+      "price": 16.97,
+      "per": "sheet",
+      "coverage": "32 sf/sheet",
+      "url": "https://www.lowes.com/pd/Gold-Bond-Common-1-2-in-x-4-ft-x-8-ft-Actual-0-5-in-x-4-ft-x-8-ft-PURPLE-XP-Drywall-Panel/1002062128",
+      "priceChecked": false
+     },
+     "laborShare": 0.8,
+     "note": "Level 4 with better board: mold/moisture-resistant board in wet rooms, 5/8 in. Type X under occupied floors or where code requires, primed; not painted"
+    },
+    "high": {
+     "low": 4.0,
+     "likely": 5.4,
+     "high": 7.25,
+     "material": {
+      "brand": "CertainTeed",
+      "line": "M2Tech 1/2 in. x 4 ft. x 8 ft. moisture- and mold-resistant, Level 5 skim",
+      "price": 27.99,
+      "per": "sheet",
+      "coverage": "32 sf/sheet",
+      "url": "https://www.lowes.com/pd/CertainTeed-Common-1-2-in-x-4-ft-x-8-ft-Actual-0-5-in-x-4-ft-x-8-ft-Drywall-Panel/1002992798",
+      "priceChecked": false
+     },
+     "laborShare": 0.85,
+     "note": "Level 5 ceiling: full skim coat for downlight and window glare, raking-light check, primed; not painted"
+    }
+   },
+   "sources": [
+    "https://homeguide.com/costs/drywall-ceiling-cost",
+    "https://www.fixr.com/costs/drywall-ceiling-installation",
+    "https://www.homewyse.com/services/cost_to_install_drywall.html"
+   ],
+   "group": "Drywall"
+  },
+  {
+   "id": "drywall-repair",
+   "label": "Repair drywall or plaster",
+   "applies": [
+    "wall",
+    "ceiling"
+   ],
+   "unit": "sf",
+   "levels": {
+    "budget": {
+     "low": 8.0,
+     "likely": 12.0,
+     "high": 18.0,
+     "material": {
+      "brand": "USG Sheetrock",
+      "line": "Easy Sand 45 setting-type joint compound, 18 lb bag",
+      "price": 20.0,
+      "per": "bag",
+      "coverage": "about 50-80 sf of patching per bag",
+      "url": "https://www.usg.com/content/usgcom/en/products/walls/joint-compounds-and-textures.html",
+      "priceChecked": false
+     },
+     "laborShare": 0.9,
+     "note": "cut out and replace damaged board in sections of about 5-30 sf, tape, Level 4 feather to match, spot prime; small patches under about 4 sf carry a $150-250 visit minimum"
+    },
+    "mid": {
+     "low": 12.0,
+     "likely": 18.0,
+     "high": 28.0,
+     "material": {
+      "brand": "USG Sheetrock",
+      "line": "Easy Sand 45 setting compound plus Sheetrock UltraLight board",
+      "price": 20.0,
+      "per": "bag",
+      "coverage": "about 50-80 sf of patching per bag",
+      "url": "https://www.usg.com/content/usgcom/en/products/walls/joint-compounds-and-textures.html",
+      "priceChecked": false
+     },
+     "laborShare": 0.9,
+     "note": "patch, feather wide to hide the repair, match existing texture or plaster skim, prime the whole repaired bay"
+    },
+    "high": {
+     "low": 20.0,
+     "likely": 30.0,
+     "high": 50.0,
+     "material": {
+      "brand": "USG Sheetrock",
+      "line": "Sheetrock Brand Durabond / Easy Sand with Level 5 skim of the repaired bay",
+      "price": 22.0,
+      "per": "bag",
+      "coverage": "about 40-60 sf per bag",
+      "url": "https://www.usg.com/content/usgcom/en/products/walls/joint-compounds-and-textures.html",
+      "priceChecked": false
+     },
+     "laborShare": 0.92,
+     "note": "repair old plaster or high-visibility surfaces: re-secure or replace lath, base and finish coats or Level 5 skim of the bay so the patch disappears under raking light"
+    }
+   },
+   "sources": [
+    "https://www.fixr.com/costs/repair-drywall",
+    "https://homeguide.com/costs/drywall-repair-cost",
+    "https://www.homeadvisor.com/cost/walls-and-ceilings/repair-drywall"
+   ],
+   "group": "Drywall"
+  },
+  {
+   "id": "demo-drywall",
+   "label": "Remove drywall or plaster and haul away",
+   "applies": [
+    "wall",
+    "ceiling"
+   ],
+   "unit": "sf",
+   "levels": {
+    "budget": {
+     "low": 1.0,
+     "likely": 1.5,
+     "high": 2.25,
+     "material": null,
+     "laborShare": 0.8,
+     "note": "remove drywall from walls or ceilings, pull fasteners, bag debris, dumpster or haul-away; asbestos and lead testing excluded"
+    },
+    "mid": {
+     "low": 2.25,
+     "likely": 3.0,
+     "high": 4.25,
+     "material": null,
+     "laborShare": 0.8,
+     "note": "remove plaster and lath (wood or metal), heavier debris and more haul loads, floor protection, broom clean; testing excluded"
+    },
+    "high": {
+     "low": 4.25,
+     "likely": 5.75,
+     "high": 8.0,
+     "material": null,
+     "laborShare": 0.85,
+     "note": "plaster or drywall removal with plastic dust containment and negative air, bagged carry-out through common halls and service elevator under building rules, daily clean-up; abatement excluded"
+    }
+   },
+   "sources": [
+    "https://www.fixr.com/costs/interior-demolition",
+    "https://www.homewyse.com/services/cost_to_remove_lath_and_plaster.html",
+    "https://homeguide.com/costs/cost-of-plastering-walls",
+    "https://www.countbricks.com/post/how-much-does-it-cost-to-remove-sheetrock"
+   ],
+   "group": "Drywall"
+  },
+  {
+   "id": "recessed-light-new",
+   "label": "Add a recessed light",
+   "applies": [
+    "ceiling",
+    "light"
+   ],
+   "unit": "ea",
+   "levels": {
+    "budget": {
+     "low": 200,
+     "likely": 275,
+     "high": 375,
+     "material": {
+      "brand": "Juno (Acuity)",
+      "line": "Contractor Select WF6 6 in. canless wafer, selectable CCT (WF6 SWW5 90CRI)",
+      "price": 22.53,
+      "per": "ea",
+      "url": "https://www.homedepot.com/p/Juno-Contractor-Select-WF6-ADJ-SWW5-6-in-Selectable-CCT-Ultra-Slim-Canless-Integrated-LED-White-Recessed-Light-Trim-WF6-ADJ-SWW5-90CRI-MW-M6/325999848",
+      "priceChecked": true
+     },
+     "laborShare": 0.85,
+     "note": "can-less LED wafer cut into an existing ceiling, new cable fished from a nearby light or switch box, switch leg, ceiling patch around the cut; existing circuit has capacity"
+    },
+    "mid": {
+     "low": 325,
+     "likely": 450,
+     "high": 600,
+     "material": {
+      "brand": "WAC Lighting",
+      "line": "Aether 3.5 in. round adjustable trim with remodel housing (R3ARAT)",
+      "price": 218.65,
+      "per": "ea",
+      "url": "https://lightingnewyork.com/product/lighting/ceiling-lights/recessed/wac-lighting-aether-recessed-r3arat-f827-bn/1761643.html",
+      "priceChecked": true
+     },
+     "laborShare": 0.6,
+     "note": "small-aperture adjustable downlight (WAC Aether, or Juno/Halo housing with a trim), remodel housing, new wiring and switch leg, ceiling patch; 90+ CRI, dims to low levels"
+    },
+    "high": {
+     "low": 600,
+     "likely": 850,
+     "high": 1200,
+     "material": {
+      "brand": "Visual Comfort Architectural (Element by Tech Lighting)",
+      "line": "Entra 3 in. LED remodel housing with flangeless trim",
+      "price": 262.0,
+      "per": "ea",
+      "url": "https://build.com/visual-comfort-en3s-lo930aai/s1919517",
+      "priceChecked": true
+     },
+     "laborShare": 0.55,
+     "note": "architectural downlight (Element/Entra, DMF M Series, Lucifer or Kelvix), flangeless mud-in trim set into a skim-coated ceiling, new wiring, careful patch; Lucifer and Kelvix are priced by quote"
+    }
+   },
+   "sources": [
+    "https://www.homeadvisor.com/cost/electrical/recessed-lighting-installation",
+    "https://fixr.com/costs/recessed-lighting-installation",
+    "https://www.inchcalculator.com/recessed-lighting-cost-guide/",
+    "https://homeguide.com/costs/cost-to-install-recessed-lighting"
+   ],
+   "group": "Lighting"
+  },
+  {
+   "id": "recessed-light-replace",
+   "label": "Replace a recessed light",
+   "applies": [
+    "light"
+   ],
+   "unit": "ea",
+   "levels": {
+    "budget": {
+     "low": 90,
+     "likely": 125,
+     "high": 175,
+     "material": {
+      "brand": "Halo (Cooper Lighting)",
+      "line": "LT560 5/6 in. LED retrofit baffle trim (LT560WH6930)",
+      "price": 14.78,
+      "per": "ea",
+      "url": "https://elliottelectric.com/P/Item/ETL/LT560WH6930",
+      "priceChecked": true
+     },
+     "laborShare": 0.85,
+     "note": "LED retrofit trim screwed into the existing can's socket, no ceiling work; per light when several are done in one visit"
+    },
+    "mid": {
+     "low": 175,
+     "likely": 250,
+     "high": 350,
+     "material": {
+      "brand": "Juno (Acuity)",
+      "line": "Contractor Select WF6 6 in. canless wafer (replaces the old housing)",
+      "price": 22.53,
+      "per": "ea",
+      "url": "https://www.homedepot.com/p/Juno-Contractor-Select-WF6-ADJ-SWW5-6-in-Selectable-CCT-Ultra-Slim-Canless-Integrated-LED-White-Recessed-Light-Trim-WF6-ADJ-SWW5-90CRI-MW-M6/325999848",
+      "priceChecked": true
+     },
+     "laborShare": 0.8,
+     "note": "remove the old can, fit a new can-less wafer or new housing and trim in the same hole, small patch where the hole size changes"
+    },
+    "high": {
+     "low": 450,
+     "likely": 650,
+     "high": 950,
+     "material": {
+      "brand": "Visual Comfort Architectural (Element by Tech Lighting)",
+      "line": "Entra 3 in. LED remodel housing with trim",
+      "price": 262.0,
+      "per": "ea",
+      "url": "https://build.com/visual-comfort-en3s-lo930aai/s1919517",
+      "priceChecked": true
+     },
+     "laborShare": 0.55,
+     "note": "remove the old can, fit a small-aperture architectural remodel housing, patch the oversized hole and refinish that area of ceiling"
+    }
+   },
+   "sources": [
+    "https://fixr.com/costs/recessed-lighting-installation",
+    "https://homeguide.com/costs/cost-to-install-recessed-lighting",
+    "https://www.homeyou.com/recessed-lighting-installation-cost"
+   ],
+   "group": "Lighting"
+  },
+  {
+   "id": "dimmer-switch",
+   "label": "Install a dimmer switch",
+   "applies": [
+    "light",
+    "fixture"
+   ],
+   "unit": "ea",
+   "levels": {
+    "budget": {
+     "low": 85,
+     "likely": 120,
+     "high": 175,
+     "material": {
+      "brand": "Lutron",
+      "line": "Diva C.L LED+ dimmer, single-pole/3-way (DVCL-153P)",
+      "price": 25.69,
+      "per": "ea",
+      "url": "https://electricbargainstores.com/collections/dvcl-153p",
+      "priceChecked": true
+     },
+     "laborShare": 0.8,
+     "note": "replace a switch with an LED-rated dimmer in the existing box, new wall plate; per device when several are done in one visit"
+    },
+    "mid": {
+     "low": 140,
+     "likely": 190,
+     "high": 275,
+     "material": {
+      "brand": "Lutron",
+      "line": "Caseta smart dimmer (PD-6WCL)",
+      "price": 64.95,
+      "per": "ea",
+      "url": "https://www.abt.com/Lutron-Caseta-White-Wireless-In-Wall-Dimmer-PD6WCLWH/p/107531.html",
+      "priceChecked": true
+     },
+     "laborShare": 0.6,
+     "note": "Caseta smart dimmer, no neutral needed, Claro plate, share of the Smart Bridge ($80-130 once per home) and app set-up; 3-way adds a Pico or companion"
+    },
+    "high": {
+     "low": 300,
+     "likely": 450,
+     "high": 800,
+     "material": {
+      "brand": "Lutron",
+      "line": "RadioRA 3 Sunnata PRO LED+ dimmer (RRST-PRO-N)",
+      "price": 178.07,
+      "per": "ea",
+      "url": "https://electricbargainstores.com/products/lutron-rrst-pro-n-wh",
+      "priceChecked": true
+     },
+     "laborShare": 0.55,
+     "note": "RadioRA 3 Sunnata dimmer by a Lutron dealer, share of the processor and dealer programming; a Palladiom keypad position runs $800-1,500"
+    }
+   },
+   "sources": [
+    "https://www.fixr.com/costs/install-light-switch",
+    "https://ajlongelectric.com/services/dimmer-switches/alexandria",
+    "https://latestcost.com/lutron-lighting-system-cost-product-tier-installation-scope/",
+    "https://www.myidealav.com/lutron-radiora-3"
+   ],
+   "group": "Lighting"
+  },
+  {
+   "id": "replace-toilet",
+   "label": "Replace a toilet",
+   "applies": [
+    "plumbing",
+    "toilet"
+   ],
+   "unit": "ea",
+   "levels": {
+    "budget": {
+     "low": 400,
+     "likely": 550,
+     "high": 750,
+     "material": {
+      "brand": "American Standard",
+      "line": "Champion 4 two-piece elongated 1.28 gpf",
+      "price": 279.0,
+      "per": "ea",
+      "url": "https://www.lowes.com/pd/American-Standard-Champion-4-White-Round-Standard-Height-2-piece-Toilet-12-in-Rough-In-Size/3006748",
+      "priceChecked": false
+     },
+     "laborShare": 0.45,
+     "note": "remove and haul old toilet, new wax ring or foam seal, closet bolts and braided supply on the existing flange and shut-off; Glacier Bay is about $150 less"
+    },
+    "mid": {
+     "low": 650,
+     "likely": 850,
+     "high": 1100,
+     "material": {
+      "brand": "TOTO",
+      "line": "Drake two-piece elongated 1.28 gpf, CeFiONtect, universal height (CST776CEFG#01)",
+      "price": 409.64,
+      "per": "ea",
+      "url": "https://www.walmart.com/ip/282706601",
+      "priceChecked": true
+     },
+     "laborShare": 0.4,
+     "note": "TOTO Drake plus a soft-close seat, new shut-off valve, flange repair ring if needed"
+    },
+    "high": {
+     "low": 1300,
+     "likely": 1800,
+     "high": 6000,
+     "material": {
+      "brand": "Duravit",
+      "line": "ME by Starck one-piece rimless toilet with seat",
+      "price": 955.0,
+      "per": "ea",
+      "url": "https://catalog.ultradesigncenter.com/Denver-Colorado/Duravit-2173012085-White-Floor-Mount-One-Piece-Toilet.HTM",
+      "priceChecked": true
+     },
+     "laborShare": 0.3,
+     "note": "designer one-piece toilet (Duravit ME by Starck) with careful scribe to the floor; a TOTO Neorest integrated-bidet toilet ($4,000+) sits at the top of the range and needs a GFCI outlet behind it"
+    }
+   },
+   "sources": [
+    "https://www.homeadvisor.com/cost/plumbing/install-a-toilet",
+    "https://angi.com/articles/how-much-does-toilet-installation-cost.htm",
+    "https://www.hometips.com/buying-guides/toilet-replacement-cost.html"
+   ],
+   "group": "Plumbing"
+  },
+  {
+   "id": "replace-bath-vanity-sink-faucet",
+   "label": "Replace a bathroom vanity, top, sink and faucet",
+   "applies": [
+    "plumbing",
+    "vanity"
+   ],
+   "unit": "ea",
+   "levels": {
+    "budget": {
+     "low": 750,
+     "likely": 1050,
+     "high": 1450,
+     "material": {
+      "brand": "Glacier Bay",
+      "line": "Spa 30 in. vanity with cultured-marble top and integral sink",
+      "price": 299.0,
+      "per": "ea",
+      "url": "https://www.homedepot.com/b/Bath-Bathroom-Vanities/N-5yc1vZcfv3",
+      "priceChecked": false
+     },
+     "laborShare": 0.5,
+     "note": "30 in. stock vanity with integral top and sink, basic single-handle faucet, new P-trap and supplies to existing rough-in, haul old vanity"
+    },
+    "mid": {
+     "low": 1500,
+     "likely": 2100,
+     "high": 2900,
+     "material": {
+      "brand": "Kohler",
+      "line": "Winnow 30 in. vanity with sink and quartz top (33578-ASB)",
+      "price": 719.39,
+      "per": "ea",
+      "url": "https://www.kohler.com/en/products/vanities/shop-vanities/winnow-30-bathroom-vanity-cabinet-w-sink-and-quartz-top-33578-asb",
+      "priceChecked": true
+     },
+     "laborShare": 0.45,
+     "note": "30-36 in. quality vanity with quartz top and undermount sink, Kohler or Moen faucet ($250-450), new shut-offs, scribe to wall"
+    },
+    "high": {
+     "low": 4500,
+     "likely": 6500,
+     "high": 9500,
+     "material": {
+      "brand": "Waterworks",
+      "line": "Henry one-hole lavatory faucet with cross handle (HLS401), with a stone-topped vanity",
+      "price": 1795.0,
+      "per": "ea",
+      "url": "https://www.waterworks.com/us_en/henry-one-hole-lavatory-faucet-with-cross-handle-hls401",
+      "priceChecked": true
+     },
+     "laborShare": 0.3,
+     "note": "designer or semi-custom vanity with stone top, fireclay or stone sink, Waterworks or Kallista faucet, exposed or polished-nickel trap; layout unchanged"
+    }
+   },
+   "sources": [
+    "https://thisoldhouse.com/bathrooms/reviews/bathroom-vanity-replacement-cost",
+    "https://angi.com/articles/how-much-should-bathroom-vanity-install-labor-cost.htm",
+    "https://www.countbricks.com/post/cost-to-replace-vanity"
+   ],
+   "group": "Plumbing"
+  },
+  {
+   "id": "replace-bath-faucet",
+   "label": "Replace a bathroom faucet",
+   "applies": [
+    "plumbing",
+    "faucet"
+   ],
+   "unit": "ea",
+   "levels": {
+    "budget": {
+     "low": 175,
+     "likely": 250,
+     "high": 350,
+     "material": {
+      "brand": "Moen",
+      "line": "Adler single-handle bathroom faucet",
+      "price": 90.0,
+      "per": "ea",
+      "url": "https://www.moen.com/products/bathroom-faucets",
+      "priceChecked": false
+     },
+     "laborShare": 0.6,
+     "note": "swap faucet and pop-up drain on the existing sink, new supply lines"
+    },
+    "mid": {
+     "low": 450,
+     "likely": 600,
+     "high": 800,
+     "material": {
+      "brand": "Kohler",
+      "line": "Purist single-handle bathroom sink faucet",
+      "price": 450.0,
+      "per": "ea",
+      "url": "https://www.kohler.com/en/products/bathroom-sink-faucets",
+      "priceChecked": false
+     },
+     "laborShare": 0.35,
+     "note": "Kohler Purist or Moen premium line, matching drain, new shut-offs if old ones seize"
+    },
+    "high": {
+     "low": 1800,
+     "likely": 2200,
+     "high": 2900,
+     "material": {
+      "brand": "Waterworks",
+      "line": "Henry one-hole lavatory faucet with cross handle (HLS401)",
+      "price": 1795.0,
+      "per": "ea",
+      "url": "https://www.waterworks.com/us_en/henry-one-hole-lavatory-faucet-with-cross-handle-hls401",
+      "priceChecked": true
+     },
+     "laborShare": 0.15,
+     "note": "Waterworks Henry or Kallista One (about $720-1,200) with matching drain; widespread sets cost more to fit"
+    }
+   },
+   "sources": [
+    "https://www.homeadvisor.com/cost/plumbing/cost-to-replace-a-bathroom-faucet",
+    "https://www.homeadvisor.com/cost/plumbing/install-a-faucet",
+    "https://anytimeplumbing.net/how-much-do-plumbers-charge-to-replace-a-faucet/"
+   ],
+   "group": "Plumbing"
+  },
+  {
+   "id": "replace-kitchen-sink",
+   "label": "Replace a kitchen sink",
+   "applies": [
+    "plumbing"
+   ],
+   "unit": "ea",
+   "levels": {
+    "budget": {
+     "low": 450,
+     "likely": 650,
+     "high": 900,
+     "material": {
+      "brand": "Glacier Bay",
+      "line": "33 in. stainless steel drop-in double-bowl sink",
+      "price": 180.0,
+      "per": "ea",
+      "url": "https://www.homedepot.com/b/Kitchen-Kitchen-Sinks/N-5yc1vZarsa",
+      "priceChecked": false
+     },
+     "laborShare": 0.6,
+     "note": "same-size stainless drop-in in the existing counter cut-out, new strainers, trap and disposal reconnect"
+    },
+    "mid": {
+     "low": 900,
+     "likely": 1250,
+     "high": 1700,
+     "material": {
+      "brand": "Kraus",
+      "line": "Standart PRO 32 in. undermount 16-gauge stainless sink",
+      "price": 386.0,
+      "per": "ea",
+      "url": "https://www.houzz.com/products/modern--coastal/kitchen-sinks/manufacturer--kraus",
+      "priceChecked": true
+     },
+     "laborShare": 0.55,
+     "note": "undermount stainless (Kraus or Kohler) under the existing stone counter: cut old sink free, new clips and epoxy, sealant, new drain kit; minor cut-out trimming"
+    },
+    "high": {
+     "low": 2400,
+     "likely": 3200,
+     "high": 4500,
+     "material": {
+      "brand": "Shaws (Rohl)",
+      "line": "Shaker 30 in. fireclay apron-front sink (MS3018)",
+      "price": 1374.75,
+      "per": "ea",
+      "url": "https://Dwell.Com/product/shaws-shaker-30-farmhouse-single-basin-fireclay-kitchen-sink-7526cd56",
+      "priceChecked": true
+     },
+     "laborShare": 0.45,
+     "note": "fireclay apron sink (Shaws or Julien): base cabinet front cut down and sink support built, counter cut-out remade by the fabricator, new drain; may not fit every existing counter"
+    }
+   },
+   "sources": [
+    "https://www.fixr.com/costs/sink-installation",
+    "https://www.countbricks.com/post/cost-to-replace-kitchen-sink",
+    "https://www.homeserve.com/blog/cost-guide/undermount-sink-installation/"
+   ],
+   "group": "Plumbing"
+  },
+  {
+   "id": "replace-kitchen-faucet",
+   "label": "Replace a kitchen faucet",
+   "applies": [
+    "plumbing"
+   ],
+   "unit": "ea",
+   "levels": {
+    "budget": {
+     "low": 275,
+     "likely": 375,
+     "high": 500,
+     "material": {
+      "brand": "Moen",
+      "line": "Adler single-handle pull-down kitchen faucet",
+      "price": 150.0,
+      "per": "ea",
+      "url": "https://www.moen.com/products/kitchen-faucets",
+      "priceChecked": false
+     },
+     "laborShare": 0.55,
+     "note": "swap a single-hole or deck-plate faucet, new supplies"
+    },
+    "mid": {
+     "low": 550,
+     "likely": 750,
+     "high": 1000,
+     "material": {
+      "brand": "Delta",
+      "line": "Trinsic single-handle pull-out kitchen faucet (4159)",
+      "price": 509.0,
+      "per": "ea",
+      "url": "https://studio41.com/product/delta-faucet-trinsic-single-handle-pull-out-kitchen-faucet/",
+      "priceChecked": true
+     },
+     "laborShare": 0.35,
+     "note": "Delta Trinsic or Kohler Purist/Artifacts pull-down, new shut-offs; touch models need a battery or outlet"
+    },
+    "high": {
+     "low": 1900,
+     "likely": 2400,
+     "high": 3200,
+     "material": {
+      "brand": "Waterstone",
+      "line": "Parche kitchen faucet (3800)",
+      "price": 1839.75,
+      "per": "ea",
+      "url": "https://studio41.com/product/waterstone-waterstone-parche-kitchen-faucet/",
+      "priceChecked": true
+     },
+     "laborShare": 0.2,
+     "note": "Waterstone or Perrin & Rowe (lead time 16-20 weeks) bridge or single faucet; extra holes in stone drilled by the fabricator"
+    }
+   },
+   "sources": [
+    "https://www.homeadvisor.com/cost/plumbing/install-a-faucet",
+    "https://www.homewyse.com/services/cost_to_replace_kitchen_faucet.html",
+    "https://www.fixr.com/costs/sink-installation"
+   ],
+   "group": "Plumbing"
+  },
+  {
+   "id": "replace-shower-valve-trim",
+   "label": "Replace a shower valve and trim",
+   "applies": [
+    "plumbing",
+    "shower"
+   ],
+   "unit": "ea",
+   "levels": {
+    "budget": {
+     "low": 450,
+     "likely": 700,
+     "high": 1000,
+     "material": {
+      "brand": "Moen",
+      "line": "Posi-Temp pressure-balancing valve with trim kit",
+      "price": 150.0,
+      "per": "ea",
+      "url": "https://www.moen.com/products/shower-valves",
+      "priceChecked": false
+     },
+     "laborShare": 0.75,
+     "note": "new pressure-balance valve body and trim, opened from the back wall or an access panel, drywall patch; tile untouched"
+    },
+    "mid": {
+     "low": 1300,
+     "likely": 1800,
+     "high": 2500,
+     "material": {
+      "brand": "Grohe",
+      "line": "Grohtherm single-function 2-handle thermostatic valve trim (24110000) with Rapido SmartBox rough-in",
+      "price": 573.0,
+      "per": "ea",
+      "url": "https://grohe.us/thermostatic-valves-trims/single-function-2-handle-thermostatic-valve-trim/GROHE-BRUSHED-NICKEL-24110EN0",
+      "priceChecked": true
+     },
+     "laborShare": 0.55,
+     "note": "thermostatic rough-in and trim, opening through the tile with a small tile patch or trim plate, or from behind with a drywall patch"
+    },
+    "high": {
+     "low": 3500,
+     "likely": 5000,
+     "high": 7500,
+     "material": {
+      "brand": "Waterworks",
+      "line": "thermostatic valve with volume control and trim (e.g. Henry or Dornbracht equivalent)",
+      "price": 3000.0,
+      "per": "ea",
+      "url": "https://www.waterworks.com/us_en/",
+      "priceChecked": false
+     },
+     "laborShare": 0.35,
+     "note": "high-end thermostatic valve with separate volume controls (Waterworks, Dornbracht), wall opened through tile, tile repair by a setter; matching spare tile assumed"
+    }
+   },
+   "sources": [
+    "https://www.homeserve.com/blog/cost-guide/shower-valve-replacement",
+    "https://www.amenify.com/blog/shower-valve-replacement-cost",
+    "https://www.thepricer.org/shower-valve-replacement-cost/"
+   ],
+   "group": "Plumbing"
+  },
+  {
+   "id": "replace-bathtub",
+   "label": "Replace a bathtub",
+   "applies": [
+    "plumbing",
+    "tub"
+   ],
+   "unit": "ea",
+   "levels": {
+    "budget": {
+     "low": 1800,
+     "likely": 2600,
+     "high": 3600,
+     "material": {
+      "brand": "American Standard",
+      "line": "Princeton enameled steel 60 x 30 in. alcove tub",
+      "price": 450.0,
+      "per": "ea",
+      "url": "https://americanstandardbathing.com/products/american-standard-princeton-pro-steel-60-x-30-inch-above-floor-rough-integral-apron-bathtub-with-left-hand-outlet-1392202",
+      "priceChecked": false
+     },
+     "laborShare": 0.65,
+     "note": "remove and haul old alcove tub, set new steel or acrylic tub on mortar, new drain and overflow, patch the bottom course of surround; same size and drain side"
+    },
+    "mid": {
+     "low": 3200,
+     "likely": 4300,
+     "high": 5800,
+     "material": {
+      "brand": "Kohler",
+      "line": "Villager 60 x 30-1/4 in. cast iron alcove bath (K-716)",
+      "price": 808.0,
+      "per": "ea",
+      "url": "https://studio41.com/product/kohler-villager-60-x-30-1-4-alcove-bath-left-drain/",
+      "priceChecked": true
+     },
+     "laborShare": 0.6,
+     "note": "cast iron alcove tub (three-person carry, about 300 lb), old tub broken out, new drain, tile surround repair at the flange"
+    },
+    "high": {
+     "low": 7000,
+     "likely": 9500,
+     "high": 14000,
+     "material": {
+      "brand": "Victoria + Albert",
+      "line": "freestanding volcanic limestone soaking tub (e.g. Amiata) with floor-mount filler",
+      "price": 4500.0,
+      "per": "ea",
+      "url": "https://www.vandabaths.com/us",
+      "priceChecked": false
+     },
+     "laborShare": 0.35,
+     "note": "freestanding soaking tub with floor-mount filler ($800-3,400), drain moved in the floor, supplies through the floor, floor patch; alcove-to-freestanding build-back of the wall is extra"
+    }
+   },
+   "sources": [
+    "https://www.fixr.com/costs/install-or-replace-bathtub",
+    "https://www.homeadvisor.com/cost/plumbing/install-a-bathtub",
+    "https://www.homeyou.com/bathtub-replacement-cost",
+    "https://www.blockrenovation.com/guides/the-real-cost-of-installing-a-freestanding-tub"
+   ],
+   "group": "Plumbing"
+  },
+  {
+   "id": "replace-dishwasher",
+   "label": "Replace a dishwasher",
+   "applies": [
+    "plumbing",
+    "appliance",
+    "dishwasher"
+   ],
+   "unit": "ea",
+   "levels": {
+    "budget": {
+     "low": 900,
+     "likely": 1100,
+     "high": 1350,
+     "material": {
+      "brand": "GE",
+      "line": "24 in. top-control dishwasher (GDT650SYVFS)",
+      "price": 848.0,
+      "per": "ea",
+      "url": "https://www.plessers.com/ge/gdt650syvfs",
+      "priceChecked": true
+     },
+     "laborShare": 0.22,
+     "note": "unit plus swap on existing water, drain and power, new supply line and air gap or high loop, haul old unit"
+    },
+    "mid": {
+     "low": 1350,
+     "likely": 1600,
+     "high": 1900,
+     "material": {
+      "brand": "Bosch",
+      "line": "500 Series 24 in. dishwasher (SHP65DM5N)",
+      "price": 1249.0,
+      "per": "ea",
+      "url": "https://www.bosch-home.com/us/productslist/dishwashers",
+      "priceChecked": false
+     },
+     "laborShare": 0.18,
+     "note": "Bosch 500 with new supply line and haul-away; anti-tip brackets to stone counters"
+    },
+    "high": {
+     "low": 2400,
+     "likely": 2900,
+     "high": 3800,
+     "material": {
+      "brand": "Bosch",
+      "line": "Benchmark panel-ready 24 in. dishwasher (SHV9PCM3N)",
+      "price": 1999.0,
+      "per": "ea",
+      "url": "https://www.bosch-home.com/us/en/product/SHV9PCM3N",
+      "priceChecked": true
+     },
+     "laborShare": 0.25,
+     "note": "panel-ready Bosch Benchmark or Miele G 7000 ($2,150-3,700), custom panel fitted by the cabinetmaker (panel itself extra), toe-kick scribe"
+    }
+   },
+   "sources": [
+    "https://www.fixr.com/costs/dishwasher-installation",
+    "https://homeadvisor.com/cost/kitchens/install-dishwasher",
+    "https://angi.com/articles/how-much-does-dishwasher-installation-cost.htm"
+   ],
+   "group": "Plumbing"
+  },
+  {
+   "id": "permit-building-minor",
+   "label": "Building permit, minor alteration",
+   "applies": [
+    "permit"
+   ],
+   "unit": "ea",
+   "levels": {
+    "budget": {
+     "low": 350,
+     "likely": 600,
+     "high": 1000,
+     "material": null,
+     "laborShare": 0.2,
+     "note": "permit and plan-review fees for a kitchen or bath with no layout change, filed by the contractor; laborShare is the filing-service share. Area factor does not fit: use areaNotes. NYC: Alt-2 by RA/PE plus co-op/condo review, typically $6,000-18,000."
+    },
+    "mid": {
+     "low": 600,
+     "likely": 1000,
+     "high": 1600,
+     "material": null,
+     "laborShare": 0.4,
+     "note": "fees on a higher job valuation plus simple permit drawings and filing; area factor does not fit, use areaNotes"
+    },
+    "high": {
+     "low": 1000,
+     "likely": 1700,
+     "high": 3000,
+     "material": null,
+     "laborShare": 0.55,
+     "note": "fees on a high valuation plus stamped drawings and a filing or expediting service; area factor does not fit, use areaNotes"
+    }
+   },
+   "areaNotes": {
+    "nyc": "$6,000-18,000. DOB alteration filing (Alt-2) by a registered architect or PE: DOB fee $290 for the first $3,000 plus $17.75 per $1,000 in buildings of 7+ floors ($280 + $10.30 below 7 floors), so about $1,300 for a $60,000 bath and $2,400 for a $120,000 kitchen; expediter $750-2,500; RA/PE filing drawings $3,000-8,000; asbestos survey (ACP5) $450-1,200; co-op/condo alteration agreement review by the building's architect and managing agent $1,000-5,000 (refundable damage deposit of $2,500-10,000 not counted). In-place fixture swaps that DOB treats as minor work skip the filing but still need the building's alteration approval ($1,000-3,000).",
+    "westchester": "$1,200-5,000. A Westchester village FY 2026-27: $200 application plus $19 per $1,000 of construction cost, certificate of completion $75, so about $1,400 for a $60,000 bath; most villages want RA/PE-stamped drawings for alterations above about $20,000 ($1,500-4,000). Neighbouring towns (Mamaroneck, Scarsdale, Rye) charge similar per-$1,000 rates.",
+    "napa": "$1,200-3,500. Napa County (unincorporated) PBES schedule effective July 7, 2025: building inspection fee from job valuation (minimum $410), plan review about 70% of the inspection fee, issuance $54 ($58.05 with surcharge), plus state SMIP and CBSC surcharges; Title 24 energy forms if lighting or ventilation change. The City of Napa uses its own schedule (plan review 33% of the permit fee, $244 minimum)."
+   },
+   "sources": [
+    "https://angi.com/articles/how-much-does-building-permit-cost.htm",
+    "https://www.homeadvisor.com/article.show.Building-Permits.8600.html",
+    "https://www.nyc.gov/assets/buildings/pdf/dn-cost.pdf"
+   ],
+   "group": "Permits",
+   "areaLevels": {
+    "nyc": {
+     "budget": {
+      "low": 6000,
+      "likely": 8000,
+      "high": 10000
+     },
+     "mid": {
+      "low": 10000,
+      "likely": 12000,
+      "high": 14000
+     },
+     "high": {
+      "low": 14000,
+      "likely": 16000,
+      "high": 18000
+     }
+    },
+    "westchester": {
+     "budget": {
+      "low": 1200,
+      "likely": 1850,
+      "high": 2450
+     },
+     "mid": {
+      "low": 2450,
+      "likely": 3100,
+      "high": 3750
+     },
+     "high": {
+      "low": 3750,
+      "likely": 4350,
+      "high": 5000
+     }
+    },
+    "napa": {
+     "budget": {
+      "low": 1200,
+      "likely": 1600,
+      "high": 1950
+     },
+     "mid": {
+      "low": 1950,
+      "likely": 2350,
+      "high": 2750
+     },
+     "high": {
+      "low": 2750,
+      "likely": 3100,
+      "high": 3500
+     }
+    }
+   }
+  },
+  {
+   "id": "permit-building-major",
+   "label": "Building permit, major alteration",
+   "applies": [
+    "permit"
+   ],
+   "unit": "ea",
+   "levels": {
+    "budget": {
+     "low": 1500,
+     "likely": 2500,
+     "high": 4000,
+     "material": null,
+     "laborShare": 0.4,
+     "note": "permit and plan review for a layout change or structural work (walls moved or removed, plumbing relocated), with permit drawings and an engineer's letter; design fees beyond the permit set excluded; area factor does not fit, use areaNotes"
+    },
+    "mid": {
+     "low": 2500,
+     "likely": 4000,
+     "high": 6500,
+     "material": null,
+     "laborShare": 0.5,
+     "note": "as budget on a larger valuation, plus structural calculations and more inspections"
+    },
+    "high": {
+     "low": 4500,
+     "likely": 7500,
+     "high": 12000,
+     "material": null,
+     "laborShare": 0.6,
+     "note": "large valuation, full stamped permit set, engineer, filing or expediting service, special inspections"
+    }
+   },
+   "areaNotes": {
+    "nyc": "$15,000-45,000. Alt-2 (Alt-CO if egress or occupancy changes) by RA/PE: DOB fee at $290 + $17.75 per $1,000 over $3,000 in 7+ floor buildings (about $3,800 for a $200,000 job, plus plumbing and other work-type filings); architect/PE drawings and filing $8,000-25,000; structural engineer $2,000-6,000; expediter $1,500-4,000; co-op/condo alteration agreement with building architect and engineer review, board approval and legal $2,500-10,000; wet-over-dry rules can block relocating kitchens and baths. Board review alone can take one month to a year.",
+    "westchester": "$5,000-15,000. A Westchester village: $200 application plus $19 per $1,000 (about $3,050 for $150,000 of work), certificate of occupancy $200, Board of Architectural Review $150 if the exterior changes; stamped architect and structural drawings $4,000-12,000.",
+    "napa": "$4,000-12,000. Napa County: valuation-based inspection fee plus about 70% plan review, engineering review for structural changes, SMIP/CBSC surcharges, Title 24 energy compliance, possible fire and environmental-health referrals billed hourly; stamped drawings and structural calculations extra in the higher part of the range."
+   },
+   "sources": [
+    "https://angi.com/articles/how-much-does-building-permit-cost.htm",
+    "https://homeadvisor.com/cost/architects-and-engineers/get-a-building-permit",
+    "https://www.nyc.gov/assets/buildings/pdf/dn-cost.pdf"
+   ],
+   "group": "Permits",
+   "areaLevels": {
+    "nyc": {
+     "budget": {
+      "low": 15000,
+      "likely": 20000,
+      "high": 25000
+     },
+     "mid": {
+      "low": 25000,
+      "likely": 30000,
+      "high": 35000
+     },
+     "high": {
+      "low": 35000,
+      "likely": 40000,
+      "high": 45000
+     }
+    },
+    "westchester": {
+     "budget": {
+      "low": 5000,
+      "likely": 6650,
+      "high": 8350
+     },
+     "mid": {
+      "low": 8350,
+      "likely": 10000,
+      "high": 11650
+     },
+     "high": {
+      "low": 11650,
+      "likely": 13350,
+      "high": 15000
+     }
+    },
+    "napa": {
+     "budget": {
+      "low": 4000,
+      "likely": 5350,
+      "high": 6650
+     },
+     "mid": {
+      "low": 6650,
+      "likely": 8000,
+      "high": 9350
+     },
+     "high": {
+      "low": 9350,
+      "likely": 10650,
+      "high": 12000
+     }
+    }
+   }
+  },
+  {
+   "id": "permit-electrical",
+   "label": "Electrical permit",
+   "applies": [
+    "permit"
+   ],
+   "unit": "ea",
+   "levels": {
+    "budget": {
+     "low": 75,
+     "likely": 150,
+     "high": 300,
+     "material": null,
+     "laborShare": 0.2,
+     "note": "stand-alone electrical permit for a few circuits or fixtures, pulled by the electrician; area factor does not fit, use areaNotes"
+    },
+    "mid": {
+     "low": 150,
+     "likely": 250,
+     "high": 450,
+     "material": null,
+     "laborShare": 0.35,
+     "note": "permit for a kitchen or bath rewire, several inspections"
+    },
+    "high": {
+     "low": 250,
+     "likely": 450,
+     "high": 750,
+     "material": null,
+     "laborShare": 0.45,
+     "note": "larger scope or new circuits and panel work, rough and final inspections, electrician's filing time"
+    }
+   },
+   "areaNotes": {
+    "nyc": "$300-1,200. Filed by a licensed master electrician in DOB NOW: Electrical; fee by formula ($40 permit fee plus per-part fees under the rule effective November 21, 2026), at least $130 due at filing; electrician's filing and inspection attendance $200-600; the building's alteration agreement usually requires the permit even for small rewiring.",
+    "westchester": "$300-600. a Westchester village electrical permit $150; the inspection itself is done by an approved third-party electrical inspection agency ($150-350 per job) that issues the certificate.",
+    "napa": "$450-900. Napa County stand-alone trade permit: issuance $54 ($58.05 with surcharge) plus inspection fee (building inspection minimum $410), more for panel upgrades or many circuits; City of Napa minimum $244."
+   },
+   "sources": [
+    "https://angi.com/articles/how-much-does-building-permit-cost.htm",
+    "https://www.inchcalculator.com/recessed-lighting-cost-guide/",
+    "https://rules.cityofnewyork.us/rule/amendment-of-rules-regarding-fees-for-electrical-permits-and-licensing-and-compensation-of-registered-design-professionals/"
+   ],
+   "group": "Permits",
+   "areaLevels": {
+    "nyc": {
+     "budget": {
+      "low": 300,
+      "likely": 450,
+      "high": 600
+     },
+     "mid": {
+      "low": 600,
+      "likely": 750,
+      "high": 900
+     },
+     "high": {
+      "low": 900,
+      "likely": 1050,
+      "high": 1200
+     }
+    },
+    "westchester": {
+     "budget": {
+      "low": 300,
+      "likely": 350,
+      "high": 400
+     },
+     "mid": {
+      "low": 400,
+      "likely": 450,
+      "high": 500
+     },
+     "high": {
+      "low": 500,
+      "likely": 550,
+      "high": 600
+     }
+    },
+    "napa": {
+     "budget": {
+      "low": 450,
+      "likely": 500,
+      "high": 600
+     },
+     "mid": {
+      "low": 600,
+      "likely": 700,
+      "high": 750
+     },
+     "high": {
+      "low": 750,
+      "likely": 800,
+      "high": 900
+     }
+    }
+   }
+  },
+  {
+   "id": "permit-plumbing",
+   "label": "Plumbing permit",
+   "applies": [
+    "permit"
+   ],
+   "unit": "ea",
+   "levels": {
+    "budget": {
+     "low": 75,
+     "likely": 175,
+     "high": 350,
+     "material": null,
+     "laborShare": 0.2,
+     "note": "plumbing permit for fixture replacement on existing rough-in, pulled by the plumber; area factor does not fit, use areaNotes"
+    },
+    "mid": {
+     "low": 175,
+     "likely": 300,
+     "high": 500,
+     "material": null,
+     "laborShare": 0.35,
+     "note": "kitchen or bath with several fixtures, rough and final inspections"
+    },
+    "high": {
+     "low": 300,
+     "likely": 500,
+     "high": 850,
+     "material": null,
+     "laborShare": 0.45,
+     "note": "relocated drains or gas, pressure tests, more fixtures and inspections"
+    }
+   },
+   "areaNotes": {
+    "nyc": "$600-2,500. Plumbing is a work type on the DOB alteration job, filed by a licensed master plumber (fee from the plumbing cost at the alteration rates above, minimum $130 per subsequent filing); plumber's filing, sign-off and inspection attendance $500-1,500; gas work adds a gas authorization and pressure test.",
+    "westchester": "$200-500. A Westchester village: $200 for the first four fixtures plus $25 per additional fixture (a full bath with toilet, sink, tub and shower valve is $200; bath plus kitchen about $300).",
+    "napa": "$450-900. Napa County stand-alone plumbing permit: issuance $54 plus the inspection fee (minimum $410), more for water heaters, gas lines or many fixtures; City of Napa minimum $244."
+   },
+   "sources": [
+    "https://angi.com/articles/how-much-does-building-permit-cost.htm",
+    "https://www.homeadvisor.com/article.show.Building-Permits.8600.html",
+    "https://www.nyc.gov/assets/buildings/pdf/dn-cost.pdf"
+   ],
+   "group": "Permits",
+   "areaLevels": {
+    "nyc": {
+     "budget": {
+      "low": 600,
+      "likely": 900,
+      "high": 1250
+     },
+     "mid": {
+      "low": 1250,
+      "likely": 1550,
+      "high": 1850
+     },
+     "high": {
+      "low": 1850,
+      "likely": 2200,
+      "high": 2500
+     }
+    },
+    "westchester": {
+     "budget": {
+      "low": 200,
+      "likely": 250,
+      "high": 300
+     },
+     "mid": {
+      "low": 300,
+      "likely": 350,
+      "high": 400
+     },
+     "high": {
+      "low": 400,
+      "likely": 450,
+      "high": 500
+     }
+    },
+    "napa": {
+     "budget": {
+      "low": 450,
+      "likely": 500,
+      "high": 600
+     },
+     "mid": {
+      "low": 600,
+      "likely": 700,
+      "high": 750
+     },
+     "high": {
+      "low": 750,
+      "likely": 800,
+      "high": 900
+     }
+    }
+   }
   }
  ]
 };
