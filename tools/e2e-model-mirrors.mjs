@@ -210,7 +210,14 @@ try {
       return v.viewerIdle() && Object.keys(s.activeProperty().tagOf || {}).some(k => k.startsWith('node:scan-reflection'));
     }, null, { timeout: 90_000 });
   };
-  const viewerRed = () => page.evaluate(async () => {
+  // Pixels of the red target seen in the mirror. The viewer's tone mapping (AgX) draws the pure
+  // red target as roughly (215, 88, 72), so red is counted at twice green and blue, not at an
+  // exact colour. With the mirror selected (`selected`), the viewer paints its documented
+  // selection tint over the whole mirror, SELECT_FILL.visible of SELECT_FILL.color; that tint is
+  // taken back out first, so the count asks whether the reflection is still drawn underneath it.
+  // Nothing else in this synthetic scene comes near the threshold, and the orange selection edge
+  // (#ff9d2e, red 1.6 times green) stays below it with or without the tint taken out.
+  const viewerRed = ({ selected = false } = {}) => page.evaluate(async selected => {
     const v = await import('/js/viewer3d.js');
     v.frameBrightness({ view: { position: [0, 2, 5], target: [0, 2, 0] } });
     v.drawStats();
@@ -218,10 +225,15 @@ try {
     c.width = source.width; c.height = source.height;
     const ctx = c.getContext('2d'); ctx.drawImage(source, 0, 0);
     const bytes = ctx.getImageData(0, 0, c.width, c.height).data;
+    const tint = Number.parseInt(v.SELECT_FILL.color.slice(1), 16), a = selected ? v.SELECT_FILL.visible : 0;
+    const under = (value, shift) => (value - a * ((tint >> shift) & 255)) / (1 - a);
     let red = 0;
-    for (let i = 0; i < bytes.length; i += 4) if (bytes[i] > 100 && bytes[i] > bytes[i + 1] * 2.5 && bytes[i] > bytes[i + 2] * 2.5) red++;
+    for (let i = 0; i < bytes.length; i += 4) {
+      const r = under(bytes[i], 16), g = under(bytes[i + 1], 8), b = under(bytes[i + 2], 0);
+      if (r > 100 && r > g * 2 && r > b * 2) red++;
+    }
     return red;
-  });
+  }, selected);
   await ready();
   const actualRed = await viewerRed();
   const actualMirrors = await page.evaluate(async () => (await import('/js/viewer3d.js')).mirrorStats());
@@ -230,7 +242,8 @@ try {
   await page.mouse.click(canvasBox.x + canvasBox.width / 2, canvasBox.y + canvasBox.height / 2);
   await page.locator('.inspector .op-name').waitFor();
   assert.equal(await page.locator('.inspector .op-name').innerText(), 'Planar mirror', 'picking the reflected surface selects the original model part');
-  assert.ok(await viewerRed() > 40, 'selection outlines and high-quality shading retain the reflected target');
+  const selectedRed = await viewerRed({ selected: true });
+  assert.ok(selectedRed > actualRed * 0.9, 'selection outlines, the selection tint and high-quality shading retain the reflected target: ' + JSON.stringify({ red: selectedRed, before: actualRed }));
   await page.keyboard.press('Escape');
   const mirrorTag = await page.evaluate(async () => (await import('/js/store.js')).activeProperty().tags.find(t => t.name === 'Reflectors').id);
   await page.locator('#side [data-act=tag-list]').click();
