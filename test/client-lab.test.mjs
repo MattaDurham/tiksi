@@ -165,10 +165,13 @@ test('the copy carries the views switched on and the renderings chosen for them,
   ] });
   assert.deepEqual(copy.property.savedViews.map(v => v.id), ['v1'], 'the view switched off is not in the copy');
   assert.deepEqual(copy.renderings, [
-    { id: 'r1', view: 'v1', label: 'Walnut option', day: '2026-11-03', w: 0, h: 0, path: 'renderings/r1.jpg', thumb: 'renderings/r1-thumb.jpg' },
-    { id: 'r2', view: 'v1', label: '', day: '', w: 0, h: 0, path: 'renderings/r2.jpg', thumb: 'renderings/r2-thumb.jpg' },
+    { id: 'r1', key: L.renderingKey('p1', 'ph-render-secret'), view: 'v1', label: 'Walnut option', day: '2026-11-03', w: 0, h: 0, path: 'renderings/r1.jpg', thumb: 'renderings/r1-thumb.jpg' },
+    { id: 'r2', key: L.renderingKey('p1', 'ph-undated'), view: 'v1', label: '', day: '', w: 0, h: 0, path: 'renderings/r2.jpg', thumb: 'renderings/r2-thumb.jpg' },
   ]);
   assert.deepEqual(send.filter(f => f.kind === 'rendering').map(f => [f.id, f.rendering, f.path]), [['ph-render-secret', 'r1', 'renderings/r1.jpg'], ['ph-undated', 'r2', 'renderings/r2.jpg']]);
+  assert.match(copy.renderings[0].key, /^k[0-9a-f]{16}$/);
+  assert.notEqual(copy.renderings[0].key, copy.renderings[1].key);
+  assert.equal(L.renderingKey('p1', 'ph-render-secret'), copy.renderings[0].key, 'the same from one send to the next');
   const text = JSON.stringify(copy);
   for (const secret of ['ph-render-secret', 'Smith', 'Entry walnut', 'Attic nook']) assert.ok(!text.includes(secret), 'the copy must not carry ' + secret);
   // Left alone, every view goes and no rendering does.

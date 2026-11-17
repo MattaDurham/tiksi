@@ -8,8 +8,10 @@
 // and RAISE BY moving every section of it. Last, the saved views as the client gets them: RENDER
 // THIS VIEW files a rendering on its view, SEND TO THE LAB lists it under the view with a
 // switch, the send (to a stand-in for the Mac's lab sender) has the client page's own code take
-// a picture of every view per project, and the page it sent shows the views as small pictures
-// that open their projects and renderings, a rendering in a window floating over the model.
+// a picture of every view per project, and the page it sent shows the views as pills along the
+// top, the renderings as small pictures, a rendering in a window floating over the model that
+// steps through all of them (the model following), lays itself over the model half clear, and
+// keeps the client's star and comment in the website's note store (a stand-in here).
 // Synthetic data only. Run: node tools/e2e-client-lab.mjs (Playwright + Chromium installed).
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -69,6 +71,12 @@ const types = { '.js': 'text/javascript', '.html': 'text/html', '.css': 'text/cs
 // A stand-in for the Mac's lab sender (server/lab_publish.py): it keeps what SEND TO THE LAB
 // puts, and /lab-preview/<slug>/ shows it, as the Mac's preview copy does.
 const sent = new Map();   // '<slug>/<path>' -> { body, type }
+// A stand-in for the website's note store (/lab/api/annotations, functions/lab/api/annotations.js
+// on the website): one row per (page, id), whoever wrote it; a PUT replaces the caller's own rows.
+// The caller is the owner, who reads everyone's.
+const OWNER = 'owner@example.invalid';
+const noteRows = new Map();   // page -> Map(id -> { by, payload })
+const notePuts = [];
 const server = createServer(async (req, res) => {
   const path = decodeURIComponent(req.url.split('?')[0]);
   const send = (body, type) => { res.setHeader('Content-Type', type); res.end(body); };
@@ -87,6 +95,35 @@ const server = createServer(async (req, res) => {
     return res.end(JSON.stringify({ app: CODE, sent: 1, copied: 3 }) + '\n');
   }
   if (path.startsWith('/api/lab/prune/')) return json({ removed: 0 });
+  if (path === '/lab/api/annotations') {
+    const page = new URL(req.url, 'http://x').searchParams.get('page') || '';
+    const rows = noteRows.get(page) || noteRows.set(page, new Map()).get(page);
+    if (req.method === 'GET') return json({ page, viewer: { email: OWNER, admin: true }, annotations: [...rows.values()].map(r => ({ ...r.payload, created_by: r.by, status: 'open' })) });
+    if (req.method === 'PUT') {
+      const chunks = [];
+      for await (const c of req) chunks.push(c);
+      const body = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+      for (const [id, r] of rows) if (r.by === OWNER) rows.delete(id);
+      for (const a of body.annotations || []) rows.set(String(a.id), { by: OWNER, payload: a });
+      notePuts.push(page);
+      return json({ ok: true });
+    }
+    res.writeHead(405).end(); return;
+  }
+  // The copy sent to the stand-in, as the website serves it (/lab/<page>/), with its note store.
+  if (path.startsWith('/lab/sent/')) {
+    const rel = path.slice('/lab/sent/'.length);
+    if (rel === '') return send(await readFile(root + '/client.html'), 'text/html');
+    const code = `data/app/${CODE}/`;
+    if (rel.startsWith(code)) {
+      const file = resolve(root, rel.slice(code.length));
+      if (!file.startsWith(root + sep)) { res.writeHead(403).end(); return; }
+      try { return send(await readFile(file), types[extname(file)] || 'application/octet-stream'); } catch { res.writeHead(404).end(); return; }
+    }
+    const got = rel.startsWith('data/') && sent.get('synthetic-house/' + rel.slice(5));
+    if (!got) { res.writeHead(404).end(); return; }
+    return send(got.body, got.type);
+  }
   if (path.startsWith('/api/lab/files/') && req.method === 'PUT') {
     const chunks = [];
     for await (const c of req) chunks.push(c);
@@ -127,6 +164,19 @@ const viewer = (page, fn) => page.evaluate(async src => {
   const s = await import(new URL(`./data/app/${'e2e0c0de'}/js/store.js`, location.href).href);
   return (0, eval)(src)(v, s);
 }, fn.toString());
+// The left pane slides away on the client page; it comes back with the pointer at the left edge.
+const side = async (page, sel) => {
+  await page.mouse.move(2, 450);
+  await page.waitForFunction(() => document.documentElement.classList.contains('cl-side-open'), null, { timeout: 5000, polling: 50 });
+  await page.waitForTimeout(280);
+  await page.click('#side ' + sel);
+};
+// The pointer leaves the pane, and it slides away.
+const away = async page => {
+  await page.mouse.move(900, 300);
+  await page.waitForFunction(() => !document.documentElement.classList.contains('cl-side-open'), null, { timeout: 5000, polling: 50 });
+  await page.waitForTimeout(300);
+};
 async function open(context) {
   const page = await context.newPage();
   page.on('pageerror', e => errors.push(e.message));
@@ -143,21 +193,40 @@ try {
   check(await desk.$$eval('#rail a', a => a.map(x => x.textContent.trim()).join()) === 'MODEL', 'one page tab: MODEL');
   check(await desk.$eval('.v-layout > .inspector', e => getComputedStyle(e).display) === 'none', 'no inspector');
   check(await desk.$$eval('.v-views [data-view-add], .v-views [data-view-edit]', e => e.length) === 0, 'saved-view tabs with no add or edit');
-  // A copy sent without pictures of its views (this one was not sent through the lab sender)
-  // shows them by name in the strip, and offers every project under each.
-  check(await desk.$eval('.v-views', e => getComputedStyle(e).display) === 'none', 'the name tabs give way to the strip of views');
-  check(await desk.$$eval('.cl-strip .cl-thumb', b => b.map(x => x.querySelector('.cl-name').textContent).join()) === 'Room A,Room B,West wall,Spare' && await desk.$$eval('.cl-strip img', i => i.length) === 0, 'a copy without pictures lists its views by name in the strip');
-  check(await desk.$eval('.cl-strip .cl-view.on .cl-name', e => e.textContent) === 'Room A', 'the view the page opened at is marked');
-  await desk.click('.cl-strip [data-go="v-b"]');
-  check(await desk.$$eval('.cl-strip .cl-view.open .cl-iter .cl-name', e => e.map(x => x.textContent).join()) === 'Existing,Wall trim', 'and a click opens Existing and the project under it');
-  await desk.click('.cl-strip [data-go="v-b"]');
-  check(await desk.$$eval('.cl-strip .cl-more', e => e.length) === 0, 'a second click closes them');
+  // The saved views are pills along the top of the model; the strip under it has the iterations
+  // (this copy has no renderings).
+  check(await desk.$eval('.v-views', e => getComputedStyle(e).display) === 'flex' && await desk.$eval('.v-views .v-view-tab', e => getComputedStyle(e).borderRadius) === '999px', 'the saved views are pills along the top');
+  check(await desk.$$eval('.v-views .v-view-tab', b => b.map(x => x.textContent).join()) === 'Room A,Room B,West wall,Spare', 'one pill per view');
+  check(await desk.$eval('.v-views .v-view-tab.active', e => e.textContent) === 'Room A', 'the view the page opened at is marked');
+  check(await desk.$$eval('.cl-strip .cl-iter', e => e.map(x => x.textContent + (x.classList.contains('on') ? '*' : '')).join()) === 'Existing,Wall trim*' && await desk.$$eval('.cl-strip .cl-card', e => e.length) === 0, 'the strip has Existing and the project, the project on');
+  // The left pane shows when the page opens, then slides away; it comes back at the left edge.
+  await desk.mouse.move(800, 450);
+  await desk.waitForFunction(() => !document.documentElement.classList.contains('cl-side-open'), null, { timeout: 6000, polling: 100 });
+  await desk.waitForTimeout(300);
+  const paneBox = await desk.locator('#side').boundingBox();
+  check(paneBox.x + paneBox.width <= 1 && (await desk.locator('.v-wrap').boundingBox()).x < 5, 'the left pane slides away, and the model takes the width');
+  await desk.mouse.move(2, 450);
+  await desk.waitForFunction(() => document.documentElement.classList.contains('cl-side-open'), null, { timeout: 3000, polling: 50 });
+  await desk.waitForTimeout(300);
+  check((await desk.locator('#side').boundingBox()).x >= -1, 'the pointer at the left edge brings it back');
+  await desk.mouse.move(900, 450);
+  await desk.waitForFunction(() => !document.documentElement.classList.contains('cl-side-open'), null, { timeout: 3000, polling: 50 });
+  check(true, 'and it slides away again when the pointer leaves it');
+  await desk.waitForTimeout(350);
+  const tabBox = await desk.locator('.cl-side-tab').boundingBox();
+  await desk.mouse.move(tabBox.x + tabBox.width - 3, tabBox.y + tabBox.height / 2);
+  await desk.waitForFunction(() => document.documentElement.classList.contains('cl-side-open'), null, { timeout: 3000, polling: 50 });
+  check(true, 'the pointer on the tab at the edge opens it too');
+  await desk.mouse.click(900, 300);
+  check(await desk.evaluate(() => !document.documentElement.classList.contains('cl-side-open')), 'and a click on the model puts it away');
   check(await viewer(desk, (v) => v.qualityState().quality) === 'ultra', 'quality starts at Ultra');
   const hiddenRails = () => viewer(desk, (v, s) => ['t-rail-w', 't-rail-s'].map(id => !!(s.ws.data.properties[0].hidden || {})['trim:' + id]));
+  check(JSON.stringify(await hiddenRails()) === '[false,false]', 'the page opens on the renovation: Wall trim shows the project\'s trim');
+  check(await desk.$eval('#side [data-client-show="pj-trim"]', b => b.classList.contains('active')), 'and the pane marks it');
+  await side(desk, '[data-client-show="existing"]');
   check(JSON.stringify(await hiddenRails()) === '[true,true]', 'Existing hides the project\'s trim');
-  await desk.click('#side [data-client-show="pj-trim"]');
-  check(JSON.stringify(await hiddenRails()) === '[false,false]', 'Wall trim shows it');
-  check(await desk.$eval('#side [data-client-show="pj-trim"]', b => b.classList.contains('active')), 'and is marked in the pane');
+  await side(desk, '[data-client-show="pj-trim"]');
+  check(JSON.stringify(await hiddenRails()) === '[false,false]', 'Wall trim shows it again');
   console.log('\n[computer] each view as it was saved, the furniture switch over it');
   const furn = () => viewer(desk, (v, s) => { const p = s.ws.data.properties[0], t = p.tags.find(x => x.id === 'tag-furniture');
     return JSON.stringify([t.visible !== false, !!(p.hidden || {})['trim:t-base-s'], !!document.querySelector('#side [data-act="furniture"].active')]); });
@@ -167,22 +236,22 @@ try {
   };
   await goView('v-b');
   check(await furn() === '[false,true,false]', 'Room B as saved: furniture off, its own piece hidden, the switch off: ' + await furn());
-  await desk.click('#side [data-act="furniture"]');
+  await side(desk, '[data-act="furniture"]');
   check(await furn() === '[true,false,true]', 'turned on, the switch shows all the furniture, the piece the view hides too: ' + await furn());
   await goView('v-a');
   check(await furn() === '[true,false,true]', 'Room A as saved: furniture on, nothing hidden: ' + await furn());
-  await desk.click('#side [data-act="furniture"]');
+  await side(desk, '[data-act="furniture"]');
   check(await furn() === '[false,false,false]', 'turned off, the switch hides the furniture: ' + await furn());
   await goView('v-b');
   check(await furn() === '[false,true,false]', 'back to Room B: as it was saved again, not as the last view left it');
   await goView('v-a');
-  await desk.click('#side [data-quality="medium"]');
+  await side(desk, '[data-quality="medium"]');
   check(await viewer(desk, (v) => v.qualityState().quality) === 'medium', 'the quality switch lowers it');
   // A click selects nothing.
   await desk.mouse.click(800, 450);
   check(await viewer(desk, (v, s) => document.querySelector('.inspector').offsetParent === null), 'a click on the model opens nothing');
   // Walk, then click the floor ahead.
-  await desk.click('#side [data-act="walk"]');
+  await side(desk, '[data-act="walk"]');
   await desk.waitForTimeout(400);
   const before = await viewer(desk, (v) => v.cameraState().position);
   const box = await desk.locator('.canvas-wrap canvas').boundingBox();
@@ -344,93 +413,148 @@ try {
   check(await edit.$$eval('.lab-dialog .lab-views [data-lab-rendering]', els => els.every(e => e.checked)), 'TICK EVERY RENDERING ticks them all');
   check((await edit.locator('.lab-dialog [data-lab-all="views"]').innerText()) === 'TICK EVERY VIEW', 'with a view unticked, the views button ticks them');
 
-  console.log('\n[client page] the views as small pictures; a click opens projects and renderings');
-  const openSent = async context => {
+  console.log('\n[client page] the views as pills, the renderings as small pictures, a window that steps through them all');
+  const openSent = async (context, at = '/lab/sent/') => {
     const page = await context.newPage();
     page.on('pageerror', e => errors.push(e.message));
-    await page.goto(url + '/lab-preview/synthetic-house/');
+    await page.goto(url + at);
     await page.waitForFunction(() => !document.getElementById('client-wait'), null, { timeout: 60000 });
     return page;
   };
-  const view = await openSent(await browser.newContext({ viewport: { width: 1400, height: 900 } }));
+  const viewCtx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+  // Someone else's note on the first rendering, already in the website's store.
+  const firstKey = got.renderings[0].key;
+  noteRows.set('/lab/sent/renderings', new Map([['rendering:' + firstKey + ':client@example.invalid', { by: 'client@example.invalid', payload: { id: 'rendering:' + firstKey + ':client@example.invalid', kind: 'tiksi-rendering', rendering: firstKey, view: 'v-a', star: true, comment: 'Our favourite', at: 1 } }]]));
+  const view = await openSent(viewCtx);
   const sentViewer = fn => view.evaluate(async src => {
     const v = await import(new URL(`./data/app/${'e2e0c0de'}/js/viewer3d.js`, location.href).href);
     const s = await import(new URL(`./data/app/${'e2e0c0de'}/js/store.js`, location.href).href);
     return (0, eval)(src)(v, s);
   }, fn.toString());
-  await view.waitForFunction(() => [...document.querySelectorAll('.cl-strip .cl-thumb img')].length === 3 && [...document.querySelectorAll('.cl-strip .cl-thumb img')].every(i => i.complete && i.naturalWidth === 480), null, { timeout: 30000, polling: 200 });
-  check(true, 'each of the three views is a small picture, 480 pixels wide as sent');
-  const listed = await view.$$eval('#side [data-client-rendering]', els => els.map(e => e.textContent.trim()));
-  check(JSON.stringify(listed) === JSON.stringify(['Room A · Rendering 1', 'Room A · Walnut option', 'West wall · Rendering']), 'the left pane lists the renderings under their views: ' + JSON.stringify(listed));
-  await view.click('#side [data-client-rendering="r2"]');
-  await view.waitForSelector('.cl-pop');
-  check((await view.locator('.cl-pop-title').innerText()).startsWith('Room A · Walnut option'), 'a click on one opens it over the model');
-  check(await view.$$eval('.cl-strip .cl-view.open', e => e.map(x => x.dataset.view).join()) === 'v-a', 'and opens its view in the strip');
-  await view.keyboard.press('Escape');
-  await view.waitForFunction(() => !document.querySelector('.cl-pop'), null, { timeout: 5000, polling: 100 });
-  check(await view.$$eval('.cl-strip .cl-count', e => e.map(x => x.closest('[data-view]').dataset.view + ':' + x.textContent).join()) === 'v-a:4,v-w:3', 'a view says how much it opens: Room A two iterations and two renderings, West wall two iterations and a rendering; Room B nothing');
+  const pill = () => view.$eval('.v-views .v-view-tab.active', e => e.textContent);
+  await view.waitForFunction(() => { const i = [...document.querySelectorAll('.cl-strip .cl-card img')]; return i.length === 3 && i.every(x => x.complete && x.naturalWidth > 0); }, null, { timeout: 30000, polling: 200 });
+  check(await view.$$eval('.cl-strip .cl-card .cl-name', e => e.map(x => x.textContent).join()) === 'Room A,Room A,West wall', 'every rendering is a small picture in the strip, in the order of the views');
+  check(await view.$$eval('.cl-strip .cl-card.here', e => e.map(x => x.dataset.rendering).join()) === '0,1', 'the ones of the view on screen (Room A) are marked');
+  check(await view.$$eval('.cl-strip .cl-iter', e => e.map(x => x.textContent + (x.classList.contains('on') ? '*' : '')).join()) === 'Existing,Wall trim*', 'the strip starts with the iterations, the renovation on');
+  const railsShown = () => sentViewer((v, s) => !(s.ws.data.properties[0].hidden || {})['trim:t-rail-w']);
+  check(await railsShown() === true, 'and the model shows it');
   const stripBox = await view.locator('.cl-strip').boundingBox(), wrapBox = await view.locator('.v-wrap').boundingBox();
   check(stripBox.y + stripBox.height <= wrapBox.y + wrapBox.height && stripBox.y > wrapBox.y + wrapBox.height / 2 && stripBox.x >= wrapBox.x, 'the strip sits at the bottom of the model');
-  await view.click('.cl-strip [data-go="v-b"]');
+  check(await view.$$eval('.cl-strip .cl-card .cl-marks', e => e.length) === 0, 'the owner\'s own marks: none yet');
+  // The left pane's renderings are small pictures too.
+  await view.mouse.move(2, 450);
+  await view.waitForFunction(() => document.documentElement.classList.contains('cl-side-open'), null, { timeout: 3000, polling: 50 });
+  const listed = await view.$$eval('#side .sd-grid [data-client-rendering]', els => els.map(e => [e.textContent.trim(), !!e.querySelector('img')]));
+  check(JSON.stringify(listed) === JSON.stringify([['Room A · Rendering 1', true], ['Room A · Walnut option', true], ['West wall · Rendering', true]]), 'the left pane shows the renderings as small pictures under their views: ' + JSON.stringify(listed));
+  await side(view, '[data-client-rendering="r2"]');
+  await view.waitForSelector('.cl-pop');
+  check((await view.locator('.cl-pop-title').innerText()).startsWith('Room A · Walnut option') && await view.locator('.cl-pop-count').innerText() === '2 of 3', 'a click on one opens it over the model, counted among all three');
+  await view.keyboard.press('Escape');
+  await view.waitForFunction(() => !document.querySelector('.cl-pop'), null, { timeout: 5000, polling: 100 });
+  await away(view);
+
+  // The pills go to their views; the strip marks the renderings of the view on screen.
+  await view.click('.v-views [data-view-tab="v-b"]');
   await view.waitForTimeout(900);
-  check(await view.$$eval('.cl-strip .cl-more', e => e.length) === 0 && (await sentViewer(v => v.cameraState().position))[0] > 6.5, 'a click on Room B goes there and opens nothing, as it has nothing more');
-  await view.click('.cl-strip [data-go="v-w"]');
+  check((await sentViewer(v => v.cameraState().position))[0] > 6.5 && await view.$$eval('.cl-strip .cl-card.here', e => e.length) === 0, 'a click on the Room B pill goes there; it has no renderings to mark');
+  await view.click('.v-views [data-view-tab="v-w"]');
   await view.waitForTimeout(900);
   const camW = await sentViewer(v => v.cameraState().position);
-  check(Math.hypot(camW[0] - 3, camW[2] - 2) < 0.05, 'a click on West wall goes to that view');
-  check(await view.$$eval('.cl-strip .cl-view.open .cl-card', e => e.map(x => x.querySelector('.cl-kind').textContent + ' ' + x.querySelector('.cl-name').textContent).join(' | ')).then(t => /^MODEL Existing \| MODEL Wall trim \| RENDERING Rendering · \S.*\d{4}$/.test(t)), 'and opens its two iterations and its rendering beside it: ' + await view.$$eval('.cl-strip .cl-view.open .cl-card', e => e.map(x => x.querySelector('.cl-name').textContent).join(' | ')));
-  const railsShown = () => sentViewer((v, s) => !(s.ws.data.properties[0].hidden || {})['trim:t-rail-w']);
-  check(await railsShown() === false, 'the model shows Existing');
-  const thumbBefore = await view.$eval('.cl-strip [data-go="v-w"] img', i => i.src);
-  await view.click('.cl-strip .cl-view.open [data-state="pj-trim"]');
-  check(await railsShown() === true && (await sentViewer(v => v.cameraState().position)).every((x, i) => Math.abs(x - camW[i]) < 1e-6), 'a click on the Wall trim iteration changes the model, the camera staying put');
-  check(await view.$eval('#side [data-client-show="pj-trim"]', b => b.classList.contains('active')) && await view.$eval('.cl-strip [data-state="pj-trim"]', b => b.classList.contains('on')), 'the left pane and the card both mark it');
-  check(await view.$eval('.cl-strip [data-go="v-w"] img', i => i.src) !== thumbBefore, 'the view\'s own picture follows the iteration shown');
-  await view.click('#side [data-client-show="existing"]');
-  check(await view.$eval('.cl-strip [data-state="existing"]', b => b.classList.contains('on')), 'changing it in the left pane marks the card too');
+  check(Math.hypot(camW[0] - 3, camW[2] - 2) < 0.05 && await view.$$eval('.cl-strip .cl-card.here', e => e.map(x => x.dataset.rendering).join()) === '2', 'West wall goes there and marks its rendering');
+  await view.click('.cl-strip [data-state="existing"]');
+  check(await railsShown() === false && (await sentViewer(v => v.cameraState().position)).every((x, i) => Math.abs(x - camW[i]) < 1e-6), 'Existing in the strip changes the model, the camera staying put');
+  check(await view.$eval('#side [data-client-show="existing"]', b => b.classList.contains('active')), 'the left pane marks it too');
+  await view.click('.cl-strip [data-state="pj-trim"]');
+  check(await railsShown() === true, 'and Wall trim brings the trim back');
 
-  await view.click('.cl-strip [data-go="v-a"]');
+  // A rendering opens over the model, and the model goes to its view.
+  await view.click('.cl-strip [data-rendering="1"]');
+  await view.waitForFunction(() => { const i = document.querySelector('.cl-pop-body img'); return i && i.complete && i.naturalWidth === 900; }, null, { timeout: 20000, polling: 200 });
   await view.waitForTimeout(900);
-  check(await view.$$eval('.cl-strip .cl-view.open .cl-card .cl-name', e => e.map(x => x.textContent).join(' | ')).then(t => /^Existing \| Wall trim \| Rendering · .+ \| Walnut option · /.test(t)), 'Room A opens its two iterations and its two renderings, the second rendering under the name typed for the client');
+  check((await view.locator('.cl-pop .cl-pop-title').innerText()).startsWith('Room A · Walnut option') && await view.locator('.cl-pop .cl-pop-count').innerText() === '2 of 3', 'a click on a rendering opens the picture, named for the view and the rendering');
+  check(await pill() === 'Room A', 'the model goes to the rendering\'s view (Room A)');
   const camA = await sentViewer(v => v.cameraState().position);
-  await view.click('.cl-strip .cl-view.open [data-rendering="1"]');
-  await view.waitForFunction(() => { const i = document.querySelector('.cl-pop img'); return i && i.complete && i.naturalWidth === 900; }, null, { timeout: 20000, polling: 200 });
-  check((await view.locator('.cl-pop .cl-pop-title').innerText()).startsWith('Room A · Walnut option') && await view.locator('.cl-pop .cl-pop-count').innerText() === '2 of 2', 'a click on a rendering opens the picture in a window named for the view and the rendering');
   const pop0 = await view.locator('.cl-pop').boundingBox();
-  check(pop0.x >= wrapBox.x && pop0.x + pop0.width <= wrapBox.x + wrapBox.width, 'the window opens over the model, clear of the left pane');
+  check(pop0.x >= wrapBox.x && pop0.x + pop0.width <= wrapBox.x + wrapBox.width, 'the window opens over the model');
   check(pop0.width < 1400 * 0.7 && pop0.height < 900 * 0.8 && await view.evaluate(() => document.querySelector('.cl-pop').tagName === 'DIV' && !document.querySelector('dialog[open]')), 'the window floats: it does not cover the page or stop it');
-  // The model stays in use behind it: a drag on the model beside the window orbits.
   const beside = pop0.x + pop0.width + 40;
   await view.mouse.move(beside, pop0.y + 200); await view.mouse.down(); await view.mouse.move(beside + 100, pop0.y + 230, { steps: 6 }); await view.mouse.up();
   await view.waitForTimeout(300);
   check((await sentViewer(v => v.cameraState().position)).some((x, i) => Math.abs(x - camA[i]) > 0.01), 'the model still orbits beside the open window');
-  // Dragged by its bar.
   await view.mouse.move(pop0.x + 120, pop0.y + 20); await view.mouse.down(); await view.mouse.move(pop0.x + 40, pop0.y + 90, { steps: 5 }); await view.mouse.up();
   const pop1 = await view.locator('.cl-pop').boundingBox();
   check(Math.abs(pop1.x - (pop0.x - 80)) < 2 && Math.abs(pop1.y - (pop0.y + 70)) < 2, 'the window moves with its bar');
+  // The arrows step through every rendering, of every view, and the model follows.
+  await view.click('.cl-pop [data-pop="next"]');
+  await view.waitForTimeout(700);
+  check(await view.locator('.cl-pop .cl-pop-count').innerText() === '3 of 3' && (await view.locator('.cl-pop .cl-pop-title').innerText()).startsWith('West wall') && await pill() === 'West wall', 'the next one is West wall\'s, and the model goes there');
+  await view.locator('.cl-pop').focus();
+  await view.keyboard.press('ArrowRight');
+  await view.waitForTimeout(700);
+  check(await view.locator('.cl-pop .cl-pop-count').innerText() === '1 of 3' && await pill() === 'Room A', 'the right arrow key goes round to the first, and the model back to Room A');
+  await view.click('.v-views [data-view-tab="v-w"]');
+  await view.waitForTimeout(500);
+  check(await view.locator('.cl-pop .cl-pop-count').innerText() === '3 of 3', 'going to West wall with the window open shows West wall\'s rendering');
   await view.click('.cl-pop [data-pop="prev"]');
-  await view.waitForFunction(() => { const i = document.querySelector('.cl-pop img'); return i.complete && i.naturalWidth === 2400; }, null, { timeout: 20000, polling: 200 });
-  check(await view.locator('.cl-pop .cl-pop-count').innerText() === '1 of 2', 'the arrows step through the view\'s renderings');
+  await view.click('.cl-pop [data-pop="prev"]');
+  await view.waitForFunction(() => { const i = document.querySelector('.cl-pop-body img'); return i.complete && i.naturalWidth === 2400; }, null, { timeout: 20000, polling: 200 });
+  check(await view.locator('.cl-pop .cl-pop-count').innerText() === '1 of 3', 'and the arrows step back across views');
+
+  // The star and the comment, kept in the website's note store; someone else's shows to the owner.
+  check((await view.locator('.cl-pop-others').innerText()).includes('client@example.invalid') && (await view.locator('.cl-pop-others').innerText()).includes('Our favourite'), 'the owner sees what someone else said about this rendering');
+  await view.click('.cl-pop [data-pop="star"]');
+  await view.waitForFunction(() => document.querySelector('.cl-pop [data-pop="star"]').getAttribute('aria-pressed') === 'true', null, { timeout: 3000, polling: 50 });
+  await view.locator('.cl-pop textarea').fill('Warmer light here');
+  await view.waitForFunction(() => document.querySelector('.cl-pop-saved').textContent.includes('on the website'), null, { timeout: 5000, polling: 100 });
+  await view.waitForTimeout(1200);
+  const stored = [...noteRows.get('/lab/sent/renderings').values()];
+  const mine = stored.filter(r => r.by === OWNER);
+  check(mine.length === 1 && mine[0].payload.rendering === firstKey && mine[0].payload.star === true && mine[0].payload.comment === 'Warmer light here' && mine[0].payload.view === 'v-a', 'the star and the comment went to the website\'s store: ' + JSON.stringify(mine.map(r => r.payload)));
+  check(stored.some(r => r.by === 'client@example.invalid' && r.payload.comment === 'Our favourite'), 'and the other person\'s note on the same rendering is still there');
+  check(await view.$$eval('.cl-strip [data-rendering="0"] .cl-mark', e => e.map(x => x.classList[1]).join()) === 'star,note', 'the strip marks the rendering starred and commented');
+  // SEE THROUGH: the picture lies over the whole model, half clear, under the pills and the strip.
+  await view.click('.cl-pop [data-pop="see"]');
+  await view.waitForTimeout(900);
+  const see = await view.evaluate(() => {
+    const pop = document.querySelector('.cl-pop'), img = pop.querySelector('.cl-pop-body img'), wrap = document.querySelector('.v-wrap');
+    const p = pop.getBoundingClientRect(), w = wrap.getBoundingClientRect(), i = img.getBoundingClientRect();
+    const tab = document.querySelector('.v-views .v-view-tab').getBoundingClientRect(), card = document.querySelector('.cl-strip .cl-card').getBoundingClientRect();
+    const at = r => document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return { inWrap: pop.parentElement === wrap, cover: Math.abs(p.left - w.left) < 1 && Math.abs(p.width - w.width) < 1 && Math.abs(p.height - w.height) < 1,
+      tall: Math.abs(i.height - w.height) < 1, centred: Math.abs((i.left + i.width / 2) - (w.left + w.width / 2)) < 1, clear: getComputedStyle(img).opacity,
+      tabOnTop: at(tab).classList.contains('v-view-tab'), cardOnTop: !!at(card).closest('.cl-card') };
+  });
+  check(see.inWrap && see.cover && see.tall && see.centred && see.clear === '0.5', 'SEE THROUGH lays the picture over the model, half clear, as tall as the model and centred, so it lines up with the view: ' + JSON.stringify(see));
+  check(see.tabOnTop && see.cardOnTop, 'the pills and the strip stay above it and in reach');
+  check(Math.hypot(...(await sentViewer(v => v.cameraState().position)).map((x, i) => x - camA[i])) < 0.05, 'and the camera went back to the view the rendering was made from');
+  await view.click('.cl-pop [data-pop="see"]');
+  const pop2 = await view.locator('.cl-pop').boundingBox();
+  check(await view.evaluate(() => document.querySelector('.cl-pop').parentElement === document.body) && Math.abs(pop2.width - pop1.width) < 2, 'turned off, the window is back as it was');
   if (process.env.E2E_SHOTS) await view.screenshot({ path: process.env.E2E_SHOTS + '/client-desktop.png' });
   await view.locator('.cl-pop').focus();
   await view.keyboard.press('Escape');
   check(await view.$$eval('.cl-pop', e => e.length) === 0, 'Esc closes it');
-  if (process.env.E2E_SHOTS) await view.screenshot({ path: process.env.E2E_SHOTS + '/client-desktop-strip.png' });
-  // The eye beside SAVED VIEWS in the left pane puts the strip away.
-  await view.click('#side [data-screen="model.views"]').catch(() => {});
+  // Another browser (no notes of its own) reads them back from the website.
+  const again = await openSent(await browser.newContext({ viewport: { width: 1400, height: 900 } }));
+  await again.waitForFunction(() => document.querySelectorAll('.cl-strip [data-rendering="0"] .cl-mark').length === 2, null, { timeout: 10000, polling: 100 });
+  await again.click('.cl-strip [data-rendering="0"]');
+  await again.waitForSelector('.cl-pop textarea');
+  check(await again.$eval('.cl-pop [data-pop="star"]', b => b.getAttribute('aria-pressed')) === 'true' && await again.$eval('.cl-pop textarea', t => t.value) === 'Warmer light here', 'another browser gets the star and the comment back from the website');
 
-  console.log('\n[client page on a phone] the strip under the model, the rendering fitted to the screen');
-  const small = await openSent(await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }));
-  await small.waitForSelector('.cl-strip .cl-thumb img');
+  console.log('\n[client page on a phone] the pills, the strip, the rendering fitted to the screen');
+  const small = await openSent(await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true }), '/lab-preview/synthetic-house/');
+  await small.waitForSelector('.cl-strip .cl-card img');
   const sb = await small.locator('.cl-strip').boundingBox();
   check(sb.x >= 0 && sb.x + sb.width <= 390 && sb.y + sb.height <= 844 && sb.y > 600, 'the strip fits the bottom of the phone screen');
-  // The page opens at Room A with its iterations and renderings already open in the strip.
-  check(await small.$$eval('.cl-strip .cl-view.open', e => e.map(x => x.dataset.view).join()) === 'v-a', 'the view the page opens at shows its renderings at once');
-  await small.tap('.cl-strip .cl-view.open [data-rendering="0"]');
+  const tb = await small.locator('.v-views').boundingBox();
+  check(tb.y < 80 && tb.x > 40 && tb.x + tb.width <= 390, 'the pills run along the top, beside the menu button');
+  await small.tap('.cl-strip [data-rendering="0"]');
   await small.waitForSelector('.cl-pop img');
   if (process.env.E2E_SHOTS) await small.screenshot({ path: process.env.E2E_SHOTS + '/client-phone.png' });
   const pb = await small.locator('.cl-pop').boundingBox();
   check(pb.x >= 0 && pb.x + pb.width <= 390 && pb.y >= 0 && pb.y + pb.height <= 844, 'the rendering\'s window fits the phone screen');
+  await small.tap('.cl-pop [data-pop="star"]');
+  check((await small.locator('.cl-pop-saved').innerText()) === 'Kept in this browser only.', 'away from the website, the star is kept in this browser and says so');
   await small.tap('.cl-pop [data-pop="close"]');
   check(await small.$$eval('.cl-pop', e => e.length) === 0, 'and closes with its button');
 

@@ -226,3 +226,9 @@ html.phone.fd-model:has(.fd-task:not([hidden])) .fd-save { visibility: hidden; }
    small-targets); a computer in the phone layout keeps the sizes above. The pages' own small
    text is raised by js/touch-text.js. */
 html.touch.phone :is(.fd-title, .fd-save, .fd-section h2, .fd-switch small, .v-lb-close) { font-size: 12px; }
+
+/* The client page's renderings in the panel: small pictures, two to a row (client-view.js). */
+.fd-pics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.fd-pic { position: relative; aspect-ratio: 3 / 2; padding: 0; overflow: hidden; border-radius: 8px; border: 1px solid var(--line-2); background: #11161b; cursor: pointer; }
+.fd-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.fd-pic span { position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 7px 5px; text-align: left; font-family: var(--mono); font-size: 10px; letter-spacing: 0.04em; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: linear-gradient(to top, rgba(5, 7, 10, 0.88), rgba(5, 7, 10, 0)); }

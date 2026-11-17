@@ -188,7 +188,7 @@ let walkClick = null;          // the last single click or tap while walking, { 
 let clientMode = false;        // the client page in the lab (client-view.js): looking only
 // What the client page plugs in: { states: [{ id, label }], show(), setShow(id), furniture(),
 // setFurniture(on), hasFurniture, viewsChanged(openViewId, shown), viewApplied(view),
-// renderings: [{ id, view, label, day }], openRendering(id) }. The left pane and the phone panel offer these and the saved
+// renderings: [{ id, view, label, day, thumb }], openRendering(id) }. The left pane and the phone panel offer these and the saved
 // views, orbit and walk; nothing can be selected, edited or saved.
 let clientControls = null;
 // MODEL BESIDE (model-beside.js): the model in a pane next to another page. It shows the
@@ -205,13 +205,13 @@ function clientRenderings() {
   return rs.filter(r => views.has(r.view)).map(r => {
     const n = (seen.get(r.view) || 0) + 1; seen.set(r.view, n);
     const count = rs.filter(x => x.view === r.view).length;
-    return { id: r.id, label: views.get(r.view) + ' · ' + (r.label || 'Rendering' + (count > 1 ? ' ' + n : '')) };
+    return { id: r.id, thumb: r.thumb || '', label: views.get(r.view) + ' · ' + (r.label || 'Rendering' + (count > 1 ? ' ' + n : '')) };
   });
 }
 function clientMenuGroups() {
   const c = clientControls;
   const groups = [
-    { title: 'Saved views', screen: { id: 'model.views', on: onScreen('model.views', true), label: 'The pictures of the saved views under the model' }, items:
+    { title: 'Saved views', screen: { id: 'model.views', on: onScreen('model.views', true), label: 'The saved views along the top of the model' }, items:
       (prop.savedViews || []).map(v => ({ label: v.name, icon: 'camera', active: v.id === activeViewId, data: { viewGo: v.id }, title: v.name + ': go to this view', run: () => goToView(v.id) })) },
   ];
   if (c && c.states.length > 1) groups.push({ title: 'Show', items: c.states.map(st => ({ label: st.label, icon: st.id === c.show() ? 'check' : 'layers', active: st.id === c.show(), data: { clientShow: st.id }, run: () => { c.setShow(st.id); refreshPane(); } })) });
@@ -222,9 +222,10 @@ function clientMenuGroups() {
   if (c && c.hasFurniture) groups.push({ title: 'Display', items: [
     { label: 'Furniture', icon: c.furniture() ? 'eye' : 'eye-off', act: 'furniture', active: c.furniture(), pressed: c.furniture(), run: () => { c.setFurniture(!c.furniture()); refreshPane(); } },
   ] });
-  // The renderings, under the name of their view: a click opens the picture over the model.
+  // The renderings, a small picture each under the name of its view: a click opens the picture
+  // over the model.
   const rs = clientRenderings();
-  if (rs.length) groups.push({ title: 'Renderings', items: rs.map(r => ({ label: r.label, icon: 'image', data: { clientRendering: r.id }, title: 'Open this rendering over the model', run: () => c.openRendering(r.id) })) });
+  if (rs.length) groups.push({ title: 'Renderings', grid: true, items: rs.map(r => ({ label: r.label, pic: r.thumb, icon: r.thumb ? null : 'image', data: { clientRendering: r.id }, title: r.label + ': open this rendering over the model', run: () => c.openRendering(r.id) })) });
   // Lower when the model moves slowly on this computer or phone.
   groups.push({ title: 'Quality', items: QUALITY_NAMES.map(id => ({ label: id[0].toUpperCase() + id.slice(1), icon: quality() === id ? 'check' : 'settings', active: quality() === id, data: { quality: id }, run: () => { fieldAction('quality', id); refreshPane(); } })) });
   return groups;

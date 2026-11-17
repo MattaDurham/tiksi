@@ -9,7 +9,9 @@
 // The left pane holds every command the current page offers, in groups. A page registers them
 // with setMenuProvider(() => groups), where a group is
 //   { title, screen?: { id, on, label }, items: [{ label, key?, active?, run, icon?, dot?, act?, data?, cls?, title?, disabled?,
-//       chips?: [{ label, on, title, run }] }] }   chips: small switches at the end of the row (a tag's E and P)
+//       chips?: [{ label, on, title, run }], pic? }], grid? }   chips: small switches at the end of the row (a tag's E and P)
+// A group with `grid` lays its items out as small pictures, two to a row, each item's `pic` (an
+// image URL) with its label over it.
 // Each group folds to its header and opens again (a click on the header); that choice is this
 // browser's. `screen` is an element over the page that the group's eye shows or hides (the saved
 // view tabs, the display bar, ...); that choice is this browser's too (localStorage), the same for
@@ -80,6 +82,7 @@ const groupId = g => g.id || g.title;
 function itemHtml(it, gi, ii) {
   const data = Object.entries(it.data || {}).map(([k, v]) => ` data-${attr(k)}="${esc(v)}"`).join('');
   const title = it.title || it.label + (it.key ? ' (' + it.key + ')' : '');
+  if (it.pic) return `<button type="button" class="sd-item sd-pic${it.active ? ' active' : ''}" data-item="${gi}:${ii}"${it.act ? ` data-act="${esc(it.act)}"` : ''}${data} title="${esc(title)}"><img src="${esc(it.pic)}" alt="" loading="lazy" draggable="false"><span class="sd-label">${esc(it.label)}</span></button>`;
   return `<button type="button" class="sd-item${it.cls ? ' ' + esc(it.cls) : ''}${it.active ? ' active' : ''}" data-item="${gi}:${ii}"${it.act ? ` data-act="${esc(it.act)}"` : ''}${data}${it.disabled ? ' disabled' : ''}${it.pressed != null ? ` aria-pressed="${!!it.pressed}"` : ''} title="${esc(title)}">`
     + (it.icon ? icon(it.icon) : '<span class="sd-gap"></span>')
     + (it.dot != null ? `<i class="sd-dot" style="background:${esc(it.dot)}"></i>` : '')
@@ -100,7 +103,7 @@ function renderPane() {
     const eye = g.screen ? `<button type="button" class="sd-eye${g.screen.on ? ' on' : ''}" data-screen="${esc(g.screen.id)}" aria-pressed="${!!g.screen.on}" title="${esc((g.screen.on ? 'Hide ' : 'Show ') + (g.screen.label || 'this group over the page').replace(/^./, c => c.toLowerCase()))}">${icon(g.screen.on ? 'eye' : 'eye-off')}</button>` : '';
     return `<section class="sd-group${closed ? ' shut' : ''}" data-group="${esc(id)}">
       <header><button type="button" class="sd-head" data-fold="${gi}" aria-expanded="${!closed}" title="${closed ? 'Open' : 'Fold'} ${esc(g.title)}">${icon('chevron-down')}<span>${esc(g.title.toUpperCase())}</span></button>${eye}</header>
-      ${closed || !g.items.length ? '' : `<div class="sd-items">${g.items.map((it, ii) => itemHtml(it, gi, ii)).join('')}</div>`}
+      ${closed || !g.items.length ? '' : `<div class="sd-items${g.grid ? ' sd-grid' : ''}">${g.items.map((it, ii) => itemHtml(it, gi, ii)).join('')}</div>`}
     </section>`;
   }).join('');
   if (html === paneHtml) return;

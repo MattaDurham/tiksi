@@ -106,7 +106,7 @@ export async function openLabDialog(prop) {
         <span class="lab-rendering-note">${escapeHtml(pictureDay(p) || '')}${by === 'name' ? ' · by its file name' : by === 'label' ? ' · by its label' : ''}</span>
         ${viewChoice(p, viewId)}</div>`;
     };
-    host.innerHTML = `<p>Each saved view ticked shows on the client page as a small picture under the model${first ? '; the page opens at ' + escapeHtml(first.name) : ''}. A click on it opens its iterations (Existing and each project that changes that view) and the renderings ticked under it here: an iteration changes the model, a rendering opens as a picture floating over it. Type the name the client sees under a rendering, or leave it as "Rendering" with its date.</p>
+    host.innerHTML = `<p>Each saved view ticked shows on the client page as a pill along the top of the model${first ? '; the page opens at ' + escapeHtml(first.name) : ''}. The renderings ticked under it here show as small pictures along the bottom; one opens as a picture floating over the model, where the client can star it and comment. Type the name the client sees under a rendering, or leave it as "Rendering" with its date.</p>
       <div class="file-actions lab-all"><button type="button" class="btn" data-lab-add="">ADD RENDERINGS FROM FINDER…</button><button type="button" class="btn" data-lab-browse="">BROWSE ALL PHOTOS AND RENDERINGS</button>
         <button type="button" class="btn" data-lab-all="views">${allViewsOn ? 'UNTICK' : 'TICK'} EVERY VIEW</button>${onViews.length ? `<button type="button" class="btn" data-lab-all="renderings">${allRenderingsOn ? 'UNTICK' : 'TICK'} EVERY RENDERING</button>` : ''}</div>
       <p class="lab-added" role="status" data-lab-added>${escapeHtml(addedNote)}</p>
