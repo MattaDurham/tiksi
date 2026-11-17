@@ -96,9 +96,12 @@ try {
   c = await colours(page);
   assert.ok(c.red < 20 && c.blue > 200, 'existing furniture hidden, proposed shows: ' + JSON.stringify(c));
   assert.deepEqual(await prop(page, 'return p.tags.find(t => t.id === "tag-furniture").phases'), { e: false, p: true });
-  // Saved with that, then everything shown and every proposed half hidden.
+  // Saved with that; a second view then shows everything with every proposed half hidden
+  // (an open view keeps what it shows, so the changes are made on the second one).
   await page.locator('[data-view-add]').click();
   await page.locator('.v-view-tab').waitFor();
+  await page.locator('[data-view-add]').click();
+  await page.locator('.v-view-tab').nth(1).waitFor();
   await chip(page, FURN, 'e').click();
   await page.locator('#side [data-phase="p"]').click();
   await delay(300);
