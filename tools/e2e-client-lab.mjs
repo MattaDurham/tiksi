@@ -165,16 +165,24 @@ const viewer = (page, fn) => page.evaluate(async src => {
   return (0, eval)(src)(v, s);
 }, fn.toString());
 // The left pane slides away on the client page; it comes back with the pointer at the left edge.
+// The online runners draw the model in software, seconds a frame, so the waits are long, and the
+// pointer is moved to the edge again if the first move was not seen.
+const PANE_WAIT = 30000;
 const side = async (page, sel) => {
-  await page.mouse.move(2, 450);
-  await page.waitForFunction(() => document.documentElement.classList.contains('cl-side-open'), null, { timeout: 5000, polling: 50 });
+  const opened = () => page.evaluate(() => document.documentElement.classList.contains('cl-side-open'));
+  for (let i = 0; i < 3 && !(await opened()); i++) {
+    await page.mouse.move(40, 460);
+    await page.mouse.move(2, 450, { steps: 2 });
+    await page.waitForFunction(() => document.documentElement.classList.contains('cl-side-open'), null, { timeout: PANE_WAIT / 3, polling: 100 }).catch(() => {});
+  }
+  if (!(await opened())) throw new Error('the left pane did not open at the left edge');
   await page.waitForTimeout(280);
   await page.click('#side ' + sel);
 };
 // The pointer leaves the pane, and it slides away.
 const away = async page => {
   await page.mouse.move(900, 300);
-  await page.waitForFunction(() => !document.documentElement.classList.contains('cl-side-open'), null, { timeout: 5000, polling: 50 });
+  await page.waitForFunction(() => !document.documentElement.classList.contains('cl-side-open'), null, { timeout: PANE_WAIT, polling: 100 });
   await page.waitForTimeout(300);
 };
 async function open(context) {
@@ -201,21 +209,21 @@ try {
   check(await desk.$$eval('.cl-strip .cl-iter', e => e.map(x => x.textContent + (x.classList.contains('on') ? '*' : '')).join()) === 'Existing,Wall trim*' && await desk.$$eval('.cl-strip .cl-card', e => e.length) === 0, 'the strip has Existing and the project, the project on');
   // The left pane shows when the page opens, then slides away; it comes back at the left edge.
   await desk.mouse.move(800, 450);
-  await desk.waitForFunction(() => !document.documentElement.classList.contains('cl-side-open'), null, { timeout: 6000, polling: 100 });
+  await desk.waitForFunction(() => !document.documentElement.classList.contains('cl-side-open'), null, { timeout: PANE_WAIT, polling: 100 });
   await desk.waitForTimeout(300);
   const paneBox = await desk.locator('#side').boundingBox();
   check(paneBox.x + paneBox.width <= 1 && (await desk.locator('.v-wrap').boundingBox()).x < 5, 'the left pane slides away, and the model takes the width');
   await desk.mouse.move(2, 450);
-  await desk.waitForFunction(() => document.documentElement.classList.contains('cl-side-open'), null, { timeout: 3000, polling: 50 });
+  await desk.waitForFunction(() => document.documentElement.classList.contains('cl-side-open'), null, { timeout: PANE_WAIT, polling: 100 });
   await desk.waitForTimeout(300);
   check((await desk.locator('#side').boundingBox()).x >= -1, 'the pointer at the left edge brings it back');
   await desk.mouse.move(900, 450);
-  await desk.waitForFunction(() => !document.documentElement.classList.contains('cl-side-open'), null, { timeout: 3000, polling: 50 });
+  await desk.waitForFunction(() => !document.documentElement.classList.contains('cl-side-open'), null, { timeout: PANE_WAIT, polling: 100 });
   check(true, 'and it slides away again when the pointer leaves it');
   await desk.waitForTimeout(350);
   const tabBox = await desk.locator('.cl-side-tab').boundingBox();
   await desk.mouse.move(tabBox.x + tabBox.width - 3, tabBox.y + tabBox.height / 2);
-  await desk.waitForFunction(() => document.documentElement.classList.contains('cl-side-open'), null, { timeout: 3000, polling: 50 });
+  await desk.waitForFunction(() => document.documentElement.classList.contains('cl-side-open'), null, { timeout: PANE_WAIT, polling: 100 });
   check(true, 'the pointer on the tab at the edge opens it too');
   await desk.mouse.click(900, 300);
   check(await desk.evaluate(() => !document.documentElement.classList.contains('cl-side-open')), 'and a click on the model puts it away');
@@ -443,7 +451,7 @@ try {
   check(await view.$$eval('.cl-strip .cl-card .cl-marks', e => e.length) === 0, 'the owner\'s own marks: none yet');
   // The left pane's renderings are small pictures too.
   await view.mouse.move(2, 450);
-  await view.waitForFunction(() => document.documentElement.classList.contains('cl-side-open'), null, { timeout: 3000, polling: 50 });
+  await view.waitForFunction(() => document.documentElement.classList.contains('cl-side-open'), null, { timeout: PANE_WAIT, polling: 100 });
   const listed = await view.$$eval('#side .sd-grid [data-client-rendering]', els => els.map(e => [e.textContent.trim(), !!e.querySelector('img')]));
   check(JSON.stringify(listed) === JSON.stringify([['Room A · Rendering 1', true], ['Room A · Walnut option', true], ['West wall · Rendering', true]]), 'the left pane shows the renderings as small pictures under their views: ' + JSON.stringify(listed));
   await side(view, '[data-client-rendering="r2"]');
