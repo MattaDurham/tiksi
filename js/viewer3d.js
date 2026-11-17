@@ -3,6 +3,8 @@ import { openingDimensions } from './opening-dimensions.js';
 import { openingProfileValue, openingGridFields } from './opening-profile-edit.js';
 import { modelAnnotations } from './model-annotations.js';
 import { faceTotals } from './room-faces.js';
+import { currentScopeTarget } from './model-focus.js';
+import { measureRoom, measureFace, measureOpening, measureFixture, measureObjects, combineMeasured } from './scope-takeoff.js';
 import { floorReviewText } from './scan-surfaces.js';
 import { EVIDENCE_STATES, EVIDENCE_COLORS, evidenceState, setEvidence, elementEvidenceRecord } from './evidence.js';
 import { withUncertainty } from './uncertainty-view.js';
@@ -70,7 +72,7 @@ import { diskWorkspace } from './disk-workspace.js';
 import { ModelBatches } from './model-batch.js';
 import { ModelMirrors } from './model-mirrors.js';
 import { componentKeyOf } from './model-components.js';
-import { modelObjectTree, objectForClick, objectBelow, objectOffset, setObjectOffset, applyPartOffsets, objectBox } from './model-objects.js';
+import { modelObjectTree, objectForClick, objectBelow, objectOffset, setObjectOffset, applyPartOffsets, objectBox, sameComponent } from './model-objects.js';
 import { renderObjectList, showListTab, revealInList, objectThing, hiddenState } from './object-list.js';
 import { trimTemplate, swapTrimProduct, swapWainscot, setFrameLayout, setTrimY, trimExtent, trimStyle, trimProduct, trimLabel, isField, roomFaces } from './trims.js';
 import { trimDesign, designValues, setDesignParam, stickySnap, SCOPE_LABELS } from './trim-design.js';
@@ -4439,6 +4441,9 @@ function openContextMenu(e) {
     // Wall trim under the pointer: its panels, its reach and its selection (trim-design.js).
     const trimHere = !fieldLayout() ? trimAtPointer(e, hit) : null;
     if (trimHere) items.push(null, ...trimMenuItems(trimHere));
+    // PROJECTS open beside the model: add what is under the pointer to its project, measured.
+    const scope = currentScopeTarget() && !fieldLayout() ? scopeMenuItems(hit, thing, currentScopeTarget()) : [];
+    if (scope.length) items.push(null, ...scope, null);
     if (thing && (thing.keys.length || thing.whole)) items.push(['hide', 'HIDE ' + (thing.name ? thing.name.toUpperCase().slice(0, 40) : 'THIS OBJECT'), () => hideThings([thing], true)]);
     // A door that hangs a leaf opens or closes here; windows and cased or plain openings have none.
     const door = hit.kind === 'opening' && !fieldLayout() ? hungDoor(prop.openings.find(o => o.id === hit.id)) : null;
@@ -4456,6 +4461,92 @@ function openContextMenu(e) {
   items.push(['toggle-notes', (markersShown('notes') ? 'HIDE NOTES' : 'SHOW NOTES') + ' (' + nNotes + ')', () => toggleMarkers('notes')]);
   items.push(['toggle-pins', (markersShown('pins') ? 'HIDE PHOTO PINS' : 'SHOW PHOTO PINS') + ' (' + nPins + ')', () => toggleMarkers('pins')]);
   popupMenu(at, items);
+}
+// ---------- adding to the open project (scope-takeoff.js) ----------
+// What a right-click can add to the project PROJECTS shows: the selection when the pointer is
+// on it, the wall face, its room, the door or window, the fixture, or an imported model's
+// object (and every other copy of it). Each entry measures the thing and hands it over.
+function scopeMenuItems(hit, thing, target) {
+  const to = ' TO ' + (target.name ? target.name.toUpperCase().slice(0, 32) : 'A NEW PROJECT');
+  const out = [], add = (id, label, measure) => out.push([id, label + to, () => {
+    const m = measure();
+    if (!m) { toast('Nothing there to measure.', 'warn'); return; }
+    target.add(m);
+  }]);
+  const short = s => String(s || '').toUpperCase().slice(0, 36);
+  // Several things selected and the pointer on one of them: all of them, as one item.
+  if (thing && picked.length > 1 && picked.some(t => t.key === thing.key)) {
+    const things = picked.slice();
+    add('scope-sel', 'ADD THE ' + things.length + ' SELECTED', () => measureThingsForScope(things));
+  }
+  const room = hit.kind === 'room' || hit.kind === 'ceiling' ? prop.rooms.find(r => r.id === hit.id) : null;
+  if (hit.faceId) {
+    const f = faceById(hit.faceId);
+    if (f) {
+      add('scope-face', 'ADD ' + short(f.label), () => measureFace(f));
+      const r = f.roomId && prop.rooms.find(x => x.id === f.roomId);
+      if (r) add('scope-room', 'ADD ALL OF ' + short(r.name || 'the room'), () => measureRoom(r, allFaces()));
+    }
+  } else if (room) {
+    add('scope-room', 'ADD ' + short(room.name || 'this room'), () => measureRoom(room, allFaces()));
+  } else if (hit.kind === 'opening') {
+    const o = prop.openings.find(x => x.id === hit.id);
+    if (o) add('scope-opening', 'ADD THIS ' + (o.type === 'window' ? 'WINDOW' : 'DOOR'), () => measureOpening(o, openingScopeLabel(o)));
+  } else if (hit.kind === 'fixture') {
+    const fx = (prop.fixtures || []).find(x => x.id === hit.id);
+    if (fx) add('scope-fixture', 'ADD THIS FIXTURE', () => measureFixture(fx, fx.name || fx.category || 'Fixture'));
+  } else if (hit.kind === 'scan' && thing) {
+    const tree = scanObjs[hit.id] ? modelObjectTree(scanObjs[hit.id]) : null;
+    const o = tree && thing.sel.objectKey ? tree.byKey.get(thing.sel.objectKey) : null;
+    if (o) {
+      add('scope-object', 'ADD ' + short(o.name || 'this object'), () => measureModelObjects(hit.id, [o], o.name));
+      const copies = copiesOf(tree, o);
+      if (copies.length > 1) add('scope-copies', 'ADD ALL ' + copies.length + ' × ' + short(stemOf(o.name)), () => measureModelObjects(hit.id, copies, copies.length + ' × ' + stemOf(o.name)));
+    } else {
+      const scan = prop.scans.find(x => x.id === hit.id);
+      if (scan) add('scope-model', 'ADD ' + short(scan.name || 'this model'), () => ({ label: scan.name || 'Model', elementIds: [scan.id], measures: { count: 1 } }));
+    }
+  }
+  return out;
+}
+function openingScopeLabel(o) {
+  const f = allFaces().find(x => x.kind === 'room' && x.openings.some(h => h.id === o.id));
+  const where = f ? ((prop.rooms.find(r => r.id === f.roomId) || {}).name || 'Room') + ' ' : '';
+  return where + (o.type === 'window' ? 'window' : 'door') + ', ' + fmtLen(o.width) + ' × ' + fmtLen(o.height);
+}
+// The other copies of an imported object: every instance of the same component, else the
+// objects beside it whose names differ only by a number (Upper Door.001, Upper Door.002).
+const stemOf = name => String(name || 'object').replace(/([._ -]?\d+)+$/, '').trim() || String(name || 'object');
+function copiesOf(tree, o) {
+  const same = sameComponent(tree, o);
+  if (same.length > 1) return same;
+  const stem = stemOf(o.name);
+  return [...tree.byKey.values()].filter(x => x.kind === o.kind && x.parent === o.parent && stemOf(x.name) === stem);
+}
+function measureModelObjects(scanId, objects, label) {
+  const sizes = objects.map(o => { const b = objectBox(o); const v = new THREE.Vector3(); b.getSize(v); return [v.x, v.y, v.z]; })
+    .filter(s => s.every(Number.isFinite));
+  if (!sizes.length) return null;
+  return measureObjects(scanId, objects.map(o => o.key), sizes, label || 'Object');
+}
+// Several picked things of any kinds, measured as one.
+function measureThingsForScope(things) {
+  const list = [];
+  for (const t of things) {
+    const sel = t.sel || {};
+    if (sel.kind === 'face') { const f = faceById(sel.id); if (f) list.push(measureFace(f)); }
+    else if (sel.kind === 'room') { const r = prop.rooms.find(x => x.id === sel.id); if (r) list.push(measureRoom(r, allFaces())); }
+    else if (sel.kind === 'opening') { const o = prop.openings.find(x => x.id === sel.id); if (o) list.push(measureOpening(o, openingScopeLabel(o))); }
+    else if (sel.kind === 'fixture') { const fx = (prop.fixtures || []).find(x => x.id === sel.id); if (fx) list.push(measureFixture(fx, fx.name || 'Fixture')); }
+    else if (sel.kind === 'scan' && sel.objectKey && scanObjs[sel.id]) {
+      const o = modelObjectTree(scanObjs[sel.id]).byKey.get(sel.objectKey);
+      const m = o && measureModelObjects(sel.id, [o], o.name);
+      if (m) list.push(m);
+    }
+  }
+  if (!list.length) return null;
+  const names = [...new Set(list.map(m => m.label))];
+  return combineMeasured(list, names.length <= 2 ? names.join(' + ') : list.length + ' selected (' + names.slice(0, 2).join(', ') + ' …)');
 }
 // ---------- doors open and closed ----------
 // A door that hangs a leaf, with whether it is an interior one (a room on both sides of its
@@ -6995,6 +7086,18 @@ export function showElements(ids, { frame = true } = {}) {
   if (!scene || !prop) return 0;
   const things = [], objects = [];
   for (const id of new Set(ids || [])) {
+    // A room face (a scope item measured from one wall) or one object of an imported model.
+    if (typeof id === 'string' && id.startsWith('face:')) {
+      const f = faceById(id);
+      if (f) { const t = faceThing(id); things.push(t); const g = objectForKey(t.keys[0]); if (g) objects.push(g); }
+      continue;
+    }
+    if (typeof id === 'string' && id.startsWith('node:')) {
+      const scanId = id.slice(5, id.indexOf('#'));
+      const o = scanObjs[scanId] && modelObjectTree(scanObjs[scanId]).byKey.get(id);
+      if (o) { things.push(objectThing(scanId, o)); objects.push(...o.meshes); }
+      continue;
+    }
     const opening = (prop.openings || []).find(o => o.id === id);
     const wall = prop.walls.find(w => w.id === (opening ? opening.wallId : id));
     const room = !wall && prop.rooms.find(r => r.id === id);

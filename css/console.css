@@ -665,6 +665,22 @@ table.grid .bar.on { background: linear-gradient(90deg, #de8c2f, #f2a64b); box-s
 #items-table .it-name { display: flex; align-items: center; gap: 2px; min-width: 150px; }
 #items-table .it-links { margin: 1px 0 0 22px; width: calc(100% - 22px); padding: 1px 5px; }
 .it-state { color: var(--cyan); margin-right: 6px; }
+/* work, finish level and measured quantity under a scope item's name (scope-takeoff.js) */
+#items-table .it-work { display: flex; flex-wrap: wrap; gap: 4px; margin: 3px 0 0 22px; }
+#items-table .it-work select { width: auto; max-width: 100%; min-width: 0; font-size: 11px; padding: 2px 4px; border-color: var(--line-2); }
+#items-table .it-work select[data-work] { max-width: 220px; }
+.it-hand { align-self: center; font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; color: var(--accent); text-transform: uppercase; }
+@keyframes it-fresh { from { background: rgba(232, 151, 58, 0.22); } to { background: transparent; } }
+#items-table tr.it-fresh td { animation: it-fresh 2.4s ease-out; }
+.scope-head { display: flex; align-items: baseline; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+.scope-area { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--dim); }
+.scope-area select { width: auto; font-size: 11px; padding: 2px 4px; text-transform: none; letter-spacing: 0; }
+.scope-tip { margin: 4px 0 0; font-size: 11.5px; }
+.ip-measures { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11.5px; color: var(--dim); }
+.ip-measures span.on { color: var(--ink); }
+.ip-measures b { font-family: var(--mono); font-weight: 500; color: inherit; }
+.ip-small { margin: 0; font-size: 11.5px; line-height: 1.45; }
+.ip-small a { color: var(--accent); }
 .it-toggle {
   flex: none; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 22px;
   background: transparent; border: 0; border-radius: 4px; color: var(--faint);
