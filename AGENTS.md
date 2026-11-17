@@ -127,6 +127,13 @@ opening and hidden framing still need a field check. Update the related
 schedule, takeoff and sheets when the measurement changes. Report which uses
 the evidence supports and which still depend on a missing source.
 
+For finish-carpentry estimates, use **Bid Studio** on the property's current
+drawing. When an existing private trim package has supplier, production and
+external stair inputs, bring them in with the private rate-book workflow in
+[README.md](README.md#bid-studio). Reconcile the cut count, labor hours and total
+against the last issued package. Review field checks and identify planning
+allowances. Issue a dated package before collecting bids or client approval.
+
 ## Working on Tiksi
 
 Before changing code, read `AGENTS.local.md`. If it is missing, seed a private

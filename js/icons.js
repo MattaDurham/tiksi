@@ -112,7 +112,7 @@ export function decorate(elm, name) {
 function decorateChrome() {
   // Every page tab carries a glyph: with the words hidden (right-click the tabs) it is all
   // that shows. Pages without a glyph of their own name borrow the nearest one.
-  const glyph = { reconstruct: 'camera', research: 'search', documents: 'file' };
+  const glyph = { bids: 'budget', reconstruct: 'camera', research: 'search', documents: 'file' };
   document.querySelectorAll('#rail a[data-view]').forEach(a => decorate(a, glyph[a.dataset.view] || a.dataset.view));
   decorate(document.getElementById('btn-save'), 'save');
   decorate(document.getElementById('btn-file'), 'file');

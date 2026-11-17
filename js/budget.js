@@ -42,6 +42,7 @@ function render() {
         <span class="view-title">BUDGET</span>
         <span class="view-sub">select and deselect projects to fit the cap; totals update live</span>
         <span style="flex:1"></span>
+        <a class="btn" href="#/bids">BID STUDIO</a>
         <button class="btn primary" id="print-report">${icon('print')}PRINT REPORT</button>
       </div>
 

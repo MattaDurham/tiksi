@@ -130,6 +130,7 @@ test('typed lengths: the forms people type are read, anything else is refused wi
 // field. A field may not quietly start reading 12 as 12 inches where it read 12 feet. PLAN, MODEL's
 // wall and opening size fields and its moved-object fields went with hand editing (2026-11-13).
 const BARE_UNIT_BEFORE = {
+  'js/bid-studio.js': ['inches'],   // New stock limits, end trim and cut spacing read tape inches.
   'js/documentcenter.js': ['feet'],
   'js/fixtures-ui.js': ['feet'],
   'js/materialsview.js': ['feet'],

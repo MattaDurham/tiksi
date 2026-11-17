@@ -32,6 +32,7 @@ const reconstruction = lazyView(() => import('./reconstruction.js'));
 const research = lazyView(() => import('./research.js'));
 const projects = lazyView(() => import('./projects.js'));
 const products = lazyView(() => import('./products.js'));
+const bids = lazyView(() => import('./bid-studio.js'));
 const budget = lazyView(() => import('./budget.js'));
 const schedule = lazyView(() => import('./schedule.js'));
 const cutsheets = lazyView(() => import('./cutsheets.js'));
@@ -74,6 +75,7 @@ const VIEWS = {
   projects,
   products,
   budget,
+  bids,
   schedule,
   sheets: cutsheets,
   documents: documentcenter,
