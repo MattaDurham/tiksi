@@ -1,5 +1,15 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "printf 'Read and follow the shared Tiksi instructions at %s/AGENTS.md, including the property onboarding workflow when applicable.\\n' \"$CLAUDE_PROJECT_DIR\""
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "^mcp__.*__(build_model|save_model)$",
