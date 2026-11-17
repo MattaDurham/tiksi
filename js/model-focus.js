@@ -26,3 +26,11 @@ export function showInModel(ids, opts = {}) {
   try { return handler(ids || [], opts) || 0; }
   catch (e) { console.error('the model beside the page could not show them', e); return 0; }
 }
+
+// ---------- adding to the open project ----------
+// PROJECTS names the project it shows (or that none is open) while it is on screen; the model's
+// right-click menu then offers ADD ... TO <project> and hands the measured thing to `add`
+// (scope-takeoff.js). { name, add(measured) } or null.
+let scopeTarget = null;
+export function setScopeTarget(t) { scopeTarget = t || null; }
+export function currentScopeTarget() { return scopeTarget; }

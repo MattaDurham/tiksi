@@ -16,7 +16,11 @@ import {
 } from './store.js';
 import { fixtureLabel } from './fixtures.js';
 import { icon } from './icons.js';
-import { showInModel, modelBeside, whenModelBeside } from './model-focus.js';
+import { showInModel, modelBeside, whenModelBeside, setScopeTarget } from './model-focus.js';
+import {
+  takeoffItem, setWork, useMeasure, priceEdited, priceNote, repriceProject, costAreaFor, costAreas,
+  worksForItem, workById, measureIds, MEASURES, LEVELS,
+} from './scope-takeoff.js';
 
 const STATUSES = ['idea', 'scoped', 'committed', 'in-progress', 'done'];
 const STATUS_LABEL = { idea: 'Idea', scoped: 'Scoped', committed: 'Committed', 'in-progress': 'In progress', done: 'Done' };
@@ -66,6 +70,7 @@ export function mount(root) {
   render();
 }
 export function unmount() {
+  setScopeTarget(null);
   window.removeEventListener('keydown', onKey);
   document.removeEventListener('pointerdown', onOutside);
   moneyProblem = null;
@@ -457,13 +462,47 @@ function showProjectInModel(p, again) {
   showInModel(projectElementIds(p));
 }
 function showItemInModel(it) {
-  if (!modelBeside() || !(it.elementIds || []).length) return;
-  showInModel(it.elementIds);
+  const t = it.takeoff || {};
+  // A measured wall face or model object outlines just that, not the whole wall or model.
+  const ids = [...(t.faceIds || []), ...(t.objectKeys || [])];
+  const rest = (it.elementIds || []).filter(id => !(t.faceIds || []).length || !isWallId(id)).filter(id => !(t.objectKeys || []).length || !isScanId(id));
+  if (!modelBeside() || !(ids.length + rest.length)) return;
+  showInModel([...ids, ...rest]);
+}
+const isWallId = id => ws.data.properties.some(pr => (pr.walls || []).some(w => w.id === id));
+const isScanId = id => ws.data.properties.some(pr => (pr.scans || []).some(x => x.id === id));
+
+// ---------- adding from the model beside the page (scope-takeoff.js) ----------
+// While PROJECTS is on screen the model's right-click menu offers ADD ... TO <this project>
+// (or to a new project when none is open). The measured thing becomes a scope item with its
+// quantities, a first guess at the work, and the price book's prices.
+let justAdded = null;
+function offerScopeTarget(p) {
+  setScopeTarget({ name: p ? p.name : '', add: measured => addMeasured(p, measured) });
+}
+function addMeasured(p, measured) {
+  if (!el) return;
+  const prop = activeProperty();
+  if (!p || !ws.data.projects.includes(p)) {
+    p = newProject(measured.label, { category: 'interior' });
+    ws.data.projects.push(p);
+    activeProjectId = p.id;
+  }
+  const item = takeoffItem(measured, p, { uid, today: isoToday(), area: costAreaFor(p, prop) });
+  p.items.push(item);
+  // A project with no room takes the room it was first given.
+  const room = prop && !p.roomId && item.elementIds.length === 1 && prop.rooms.find(r => r.id === item.elementIds[0]);
+  if (room) p.roomId = room.id;
+  justAdded = item.id;
+  touch(); render();
+  const row = el.querySelector(`tr[data-item="${CSS.escape(item.id)}"]`);
+  if (row) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 function renderDetail(p) {
   const det = el.querySelector('#proj-detail');
   showProjectInModel(p);
+  offerScopeTarget(p);
   if (!p) { det.innerHTML = `<div class="empty-state"><span class="empty-ic">${icon('edit')}</span><b>Nothing selected</b>Select or create a project.</div>`; return; }
   const t = projectTotals(p);
   const parent = p.parentId ? projectById(p.parentId) : null;
@@ -503,7 +542,11 @@ function renderDetail(p) {
         <button class="btn" id="add-sub">${icon('plus')}ADD SUBPROJECT</button>
       </div>`}
 
-      <div class="kicker" style="margin-top:14px">SCOPE ITEMS</div>
+      <div class="scope-head"><div class="kicker">SCOPE ITEMS</div>
+        <label class="scope-area" title="Price-book prices are national averages times this area's cost factor">Prices for
+          <select data-cost-area>${costAreas().map(a => `<option value="${escapeHtml(a.id)}" ${a.id === costAreaFor(p, propOf(p)) ? 'selected' : ''}>${escapeHtml(a.label + (a.factor !== 1 ? ' (×' + a.factor + ')' : ''))}</option>`).join('')}</select></label>
+      </div>
+      ${modelBeside() ? '' : `<p class="faint scope-tip">Open MODEL BESIDE and right-click a room, wall, door or object to add it here, measured.</p>`}
       <table class="grid" id="items-table">
         <thead><tr>
           <th class="it-check" title="Done"></th>
@@ -558,6 +601,11 @@ function renderDetail(p) {
     tr.querySelectorAll('[data-sf]').forEach(inp => inp.onchange = () => { s[inp.dataset.sf] = inp.value; touch(); render(); });
   });
 
+  det.querySelector('[data-cost-area]').onchange = e => {
+    p.costArea = e.target.value;
+    repriceProject(p, p.costArea);
+    touch(); refresh(p);
+  };
   det.querySelector('#add-item').onclick = () => {
     p.items.push({
       id: uid('it'), name: 'New item', qty: 1, unit: 'ls', low: 0, likely: 0, high: 0,
@@ -646,6 +694,30 @@ function linkSummary(p, it) {
   return bits.join(' · ');
 }
 
+// The work, finish level and measured quantity under an item's name: what is being done (paint,
+// refinish, replace), how good, and which of the measured quantities it counts.
+const WORK_GROUPS = [['wall', 'Walls'], ['ceiling', 'Ceilings'], ['floor', 'Floors'], ['baseboard', 'Trim'], ['perimeter', 'Trim'],
+  ['door', 'Doors'], ['window', 'Windows'], ['cabinet', 'Cabinets'], ['cabinet-run', 'Cabinets'], ['counter', 'Counters'], ['fixture', 'Electrical'], ['object', 'Other']];
+function qtyText(v, unit) { return (unit === 'ea' ? String(Math.round(v)) : Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 })) + ' ' + unit; }
+function workLine(p, it) {
+  const works = worksForItem(it), cur = it.work && workById(it.work.id);
+  const groups = new Map();
+  for (const w of works) {
+    const g = (WORK_GROUPS.find(([k]) => k === w.applies[0]) || [0, 'Other'])[1];
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(w);
+  }
+  const workOpts = [...groups].map(([g, ws]) => `<optgroup label="${escapeHtml(g)}">${ws.map(w => `<option value="${escapeHtml(w.id)}" ${cur === w ? 'selected' : ''}>${escapeHtml(w.label + ' (per ' + w.unit + ')')}</option>`).join('')}</optgroup>`).join('');
+  const ms = it.takeoff ? measureIds(it.takeoff) : [];
+  if (!works.length && !ms.length) return '';
+  return `<div class="it-work">
+    <select data-work aria-label="Work" title="What is being done; picks the unit and the price book's prices">${cur ? '' : `<option value="">${it.takeoff ? 'Pick the work…' : 'Price from the book…'}</option>`}${workOpts}</select>
+    ${cur ? `<select data-level aria-label="Finish level" title="Finish level: the price book's range for budget, mid or high-end work">${LEVELS.map(([k, l]) => `<option value="${k}" ${it.work.level === k ? 'selected' : ''}>${l}</option>`).join('')}</select>` : ''}
+    ${ms.length ? `<select data-measure aria-label="Quantity measured" title="Which measured quantity the item counts">${ms.map(m => `<option value="${m}" ${it.takeoff.measure === m ? 'selected' : ''}>${escapeHtml(MEASURES[m].label + ' · ' + qtyText(it.takeoff.measures[m], MEASURES[m].unit))}</option>`).join('')}</select>` : ''}
+    ${cur && !it.work.book ? '<span class="it-hand" title="A price was typed by hand; picking the work or finish again puts the book\'s price back">hand price</span>' : ''}
+  </div>`;
+}
+
 function itemRow(p, it) {
   const others = p.items.filter(x => x.id !== it.id);
   const depOpts = others
@@ -653,10 +725,13 @@ function itemRow(p, it) {
   const summary = depSummary(p, it);
   const links = linkSummary(p, it);
   const open = openItems.has(it.id), done = it.status === 'done';
-  return `<tr data-item="${escapeHtml(it.id)}" class="${done ? 'it-done' : ''} ${open ? 'it-open' : ''}">
+  const fresh = justAdded === it.id;
+  if (fresh) justAdded = null;
+  return `<tr data-item="${escapeHtml(it.id)}" class="${done ? 'it-done' : ''} ${open ? 'it-open' : ''} ${fresh ? 'it-fresh' : ''}">
     <td class="it-check"><label class="it-done-tap"><input type="checkbox" data-done ${done ? 'checked' : ''} aria-label="Done: ${escapeHtml(it.name)}" title="${done && it.doneAt ? 'Done ' + escapeHtml(it.doneAt) : 'Mark done'}"></label></td>
     <td class="it-namecell"><div class="it-name"><button type="button" class="it-toggle" data-toggle aria-expanded="${open}" title="${open ? 'Hide' : 'Show'} notes and links">${icon(open ? 'chevron-down' : 'chevron-right', { size: 13 })}</button>
       <input type="text" data-if="name" value="${escapeHtml(it.name)}"></div>
+      ${workLine(p, it)}
       <button type="button" class="it-links ${links ? '' : 'none'}" data-toggle title="Status, notes, linked model elements, products and photos">${it.status === 'ordered' || it.status === 'in-progress' ? `<span class="it-state">${ITEM_LABEL[it.status]}</span>` : ''}${escapeHtml(links || 'add notes and links')}</button></td>
     <td class="num it-qty" data-label="Qty" style="width:64px"><input type="number" class="num" data-if="qty" value="${escapeHtml(it.qty ?? 1)}" min="0" step="0.5"></td>
     <td class="it-unit" data-label="Unit" style="width:56px"><input type="text" data-if="unit" value="${escapeHtml(it.unit || 'ls')}"></td>
@@ -696,6 +771,7 @@ function itemPanel(p, it) {
     <div class="ip-col">
       <label for="ip-notes-${escapeHtml(it.id)}">Notes</label>
       <textarea id="ip-notes-${escapeHtml(it.id)}" data-inote placeholder="How it was measured, what to check, who quoted it">${escapeHtml(it.notes || '')}</textarea>
+      ${pricePanel(it)}
     </div>
     <div class="ip-col">
       <label>Model elements</label>
@@ -717,6 +793,21 @@ function itemPanel(p, it) {
       </div>
     </div>
   </div>`;
+}
+
+// Where an item's quantities and prices came from: what was measured, and the price book's
+// level, placeholder material and sources.
+function pricePanel(it) {
+  const t = it.takeoff, n = priceNote(it);
+  let html = '';
+  if (t) html += `<label>Measured ${escapeHtml(t.measuredAt ? 'on ' + t.measuredAt : '')}</label><div class="ip-measures">${measureIds(t).map(m =>
+    `<span class="${t.measure === m ? 'on' : ''}">${escapeHtml(MEASURES[m].label)} <b>${escapeHtml(qtyText(t.measures[m], MEASURES[m].unit))}</b></span>`).join('')}</div>
+    <p class="faint ip-small">${escapeHtml(t.objectKeys ? 'Objects measured by their bounding boxes; check the face area against the drawings.' : 'From the model as drawn: wall area is net of doors and windows; floor and ceiling are the room outline.')}</p>`;
+  if (n) html += `<label>Price · ${escapeHtml(n.level)}</label>
+    ${n.what ? `<p class="ip-small">${escapeHtml(n.what)}</p>` : ''}
+    ${n.material ? `<p class="ip-small">Placeholder material: ${n.materialUrl ? `<a href="${escapeHtml(n.materialUrl)}" target="_blank" rel="noopener">${escapeHtml(n.material)}</a>` : escapeHtml(n.material)}. Replace it with the product you choose (FIND A PRODUCT).</p>` : ''}
+    <p class="faint ip-small">${escapeHtml(n.basis)}${n.sources.length ? ' Sources: ' + n.sources.slice(0, 3).map((u, i) => `<a href="${escapeHtml(u)}" target="_blank" rel="noopener">${i + 1}</a>`).join(', ') + '.' : ''}</p>`;
+  return html;
 }
 
 function bindItemRows(p) {
@@ -741,8 +832,16 @@ function bindItemRows(p) {
       }
       moneyProblem = null;
       it[key] = r.value;
+      priceEdited(it);
       touch(); refresh(p);
     });
+    const area = costAreaFor(p, propOf(p));
+    const work = tr.querySelector('[data-work]');
+    if (work) work.onchange = () => { if (work.value && setWork(it, { work: work.value }, area)) { moneyProblem = null; touch(); refresh(p); } };
+    const level = tr.querySelector('[data-level]');
+    if (level) level.onchange = () => { if (setWork(it, { level: level.value }, area)) { touch(); refresh(p); } };
+    const measure = tr.querySelector('[data-measure]');
+    if (measure) measure.onchange = () => { if (useMeasure(it, measure.value)) { touch(); refresh(p); } };
     const setItemStatus = s => {
       it.status = s;
       it.doneAt = s === 'done' ? (it.doneAt || isoToday()) : '';

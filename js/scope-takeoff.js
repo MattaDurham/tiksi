@@ -1,0 +1,306 @@
+// Scope items measured from the model. Right-click a room, a wall, an opening, a fixture or an
+// imported model's object in the model beside PROJECTS and ADD ... TO <project> makes a scope
+// item that already knows what it is and how big it is: a room brings its wall area (net of
+// doors and windows), floor and ceiling area, baseboard and perimeter length and its door and
+// window counts. The item then picks the work (paint, refinish, replace ...) and the finish
+// level from the price book (price-book.js); quantity, unit and the low / likely / high unit
+// prices follow. A price typed by hand stands until the work or finish level changes again.
+//
+// Pure data: no three.js and no DOM. The viewer measures (it has the faces and the meshes) and
+// hands the measurements here; PROJECTS shows and edits the result.
+
+import { PRICE_BOOK } from './price-book.js';
+
+export const SQFT = 0.09290304;   // m² in a square foot
+export const FT = 0.3048;         // m in a foot
+export const LEVELS = [['budget', 'Budget'], ['mid', 'Mid'], ['high', 'High end']];
+
+// What each measurement is and which work it can price. `fits` names the kinds of thing a work
+// applies to (price-book.js works[].applies).
+export const MEASURES = {
+  walls: { label: 'Walls, net of openings', unit: 'sf', fits: ['wall'] },
+  floor: { label: 'Floor', unit: 'sf', fits: ['floor'] },
+  ceiling: { label: 'Ceiling', unit: 'sf', fits: ['ceiling'] },
+  baseboard: { label: 'Baseboard', unit: 'lf', fits: ['baseboard'] },
+  perimeter: { label: 'Perimeter', unit: 'lf', fits: ['perimeter'] },
+  doors: { label: 'Doors', unit: 'ea', fits: ['door'] },
+  windows: { label: 'Windows', unit: 'ea', fits: ['window'] },
+  fixtures: { label: 'Fixtures', unit: 'ea', fits: ['fixture'] },
+  count: { label: 'Count', unit: 'ea', fits: ['object', 'cabinet', 'fixture', 'door', 'window'] },
+  front: { label: 'Face area', unit: 'sf', fits: ['counter', 'wall'] },
+  length: { label: 'Length', unit: 'lf', fits: ['cabinet-run', 'perimeter', 'baseboard'] },
+};
+
+const round1 = v => Math.round(v * 10) / 10;
+const money = v => Math.round(v * 100) / 100;
+
+// ---------- measuring ----------
+// Each returns { measures: { id: qty in sf / lf / ea }, label, elementIds }.
+
+function polyPerimeter(pts) {
+  let n = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length];
+    n += Math.hypot(x2 - x1, y2 - y1);
+  }
+  return n;
+}
+function polyArea(pts) {
+  let a = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length];
+    a += x1 * y2 - x2 * y1;
+  }
+  return Math.abs(a) / 2;
+}
+function openingCounts(faces) {
+  const seen = new Map();
+  for (const f of faces) for (const o of f.openings || []) seen.set(o.id, o.type);
+  const types = [...seen.values()];
+  return { doors: types.filter(t => t === 'door').length, windows: types.filter(t => t === 'window').length, ids: [...seen.keys()] };
+}
+
+// A room: its own faces (room-faces.js, kind 'room' with this roomId) give the walls.
+export function measureRoom(room, faces) {
+  const own = faces.filter(f => f.roomId === room.id);
+  const pts = room.pts || [];
+  const floor = polyArea(pts);
+  const o = openingCounts(own);
+  return {
+    label: room.name || 'Room',
+    elementIds: [room.id],
+    measures: {
+      walls: own.reduce((n, f) => n + f.net, 0) / SQFT,
+      floor: floor / SQFT,
+      ceiling: floor / SQFT,
+      baseboard: own.reduce((n, f) => n + f.baseboard, 0) / FT,
+      perimeter: polyPerimeter(pts) / FT,
+      doors: o.doors,
+      windows: o.windows,
+    },
+  };
+}
+
+// One wall face (a room's wall from inside corner to inside corner).
+export function measureFace(face) {
+  const o = openingCounts([face]);
+  return {
+    label: face.label,
+    elementIds: [...new Set(face.parts.map(p => p.wallId))],
+    faceIds: [face.id],
+    measures: { walls: face.net / SQFT, baseboard: face.baseboard / FT, length: face.length / FT, doors: o.doors, windows: o.windows },
+  };
+}
+
+// A door or window.
+export function measureOpening(o, label) {
+  return { label, elementIds: [o.id], measures: { [o.type === 'window' ? 'windows' : 'doors']: 1 } };
+}
+
+export function measureFixture(f, label) {
+  return { label, elementIds: [f.id], measures: { fixtures: 1 } };
+}
+
+// Objects of an imported model, by their bounding boxes (metres): `sizes` is one [x, y, z]
+// size per object. The face area is the two largest sides (a cabinet door's front, a counter's
+// top) and the length the largest side: an estimate from the box, not the drawn surface.
+export function measureObjects(scanId, objectKeys, sizes, label) {
+  let front = 0, length = 0;
+  for (const s of sizes) {
+    const [a, b] = [...s].sort((x, y) => y - x);
+    front += a * b; length += a;
+  }
+  const kinds = objectKinds(label);
+  return { label, elementIds: [scanId], objectKeys: [...objectKeys], measures: { count: sizes.length, front: front / SQFT, length: length / FT },
+    ...(kinds && { fits: { count: kinds } }) };
+}
+// What an object's name says it is, for the works its count can price: a cabinet's door is
+// not a room's door. null when the name says nothing (any each-priced work then fits).
+const NAMED = [
+  [/cabinet|drawer|upper|lower|base\b|front|pantry|vanity|shaker|panel/i, ['cabinet', 'object']],
+  [/door/i, ['door', 'object']],
+  [/window|sash/i, ['window', 'object']],
+  [/light|lamp|pendant|sconce|chandelier|fixture|switch|outlet|receptacle/i, ['fixture', 'object']],
+  [/pull|knob|handle|hinge/i, ['cabinet', 'object']],
+];
+export function objectKinds(name) {
+  for (const [re, kinds] of NAMED) if (re.test(name || '')) return kinds;
+  return null;
+}
+
+// Several measured things as one: the measures add up, the links join.
+export function combineMeasured(list, label) {
+  const out = { label: label || list.map(m => m.label).join(', '), elementIds: [], faceIds: [], objectKeys: [], measures: {} };
+  for (const m of list) {
+    for (const [k, v] of Object.entries(m.measures)) out.measures[k] = (out.measures[k] || 0) + v;
+    out.elementIds.push(...(m.elementIds || []));
+    out.faceIds.push(...(m.faceIds || []));
+    out.objectKeys.push(...(m.objectKeys || []));
+    for (const [k, v] of Object.entries(m.fits || {})) out.fits = { ...out.fits, [k]: [...new Set([...((out.fits || {})[k] || []), ...v])] };
+  }
+  for (const k of ['elementIds', 'faceIds', 'objectKeys']) out[k] = [...new Set(out[k])];
+  return out;
+}
+
+// ---------- the price book ----------
+export function workById(id) { return PRICE_BOOK.works.find(w => w.id === id) || null; }
+export function costAreas() { return PRICE_BOOK.areas; }
+export function areaFactor(id) { const a = PRICE_BOOK.areas.find(x => x.id === id); return a ? a.factor : 1; }
+
+// The measures an item has, with at least something to count, in MEASURES order.
+export function measureIds(takeoff) {
+  const m = (takeoff && takeoff.measures) || {};
+  return Object.keys(MEASURES).filter(k => Number(m[k]) > 0);
+}
+// Works that one measure can price (its kinds and its unit both match). A takeoff can narrow a
+// measure's kinds (objects named as cabinets count as cabinets).
+export function worksForMeasure(measureId, takeoff) {
+  const m = MEASURES[measureId];
+  if (!m) return [];
+  const fits = (takeoff && takeoff.fits && takeoff.fits[measureId]) || m.fits;
+  return PRICE_BOOK.works.filter(w => w.unit === m.unit && w.applies.some(a => fits.includes(a)));
+}
+// Works an item can take: any its measures can price, or every work when it has no takeoff.
+export function worksForItem(item) {
+  if (!item.takeoff) return PRICE_BOOK.works;
+  const ids = new Set(measureIds(item.takeoff).flatMap(m => worksForMeasure(m, item.takeoff).map(w => w.id)));
+  return PRICE_BOOK.works.filter(w => ids.has(w.id));
+}
+// The measure a work should count: the item's current one when it fits, else the first that does.
+export function measureForWork(item, work) {
+  const ids = measureIds(item.takeoff);
+  const fits = id => worksForMeasure(id, item.takeoff).includes(work);
+  if (item.takeoff && fits(item.takeoff.measure)) return item.takeoff.measure;
+  return ids.find(fits) || null;
+}
+
+// A first guess at the work, from the words of the project (its name, category and notes) and
+// what was added: "Paint the bedroom" on a room picks Paint walls.
+const HINTS = [
+  [/wallpaper/i, ['wallpaper-install', 'remove-wallpaper']],
+  [/skim|plaster/i, ['paint-walls-skim']],
+  [/refinish|sand/i, ['refinish-hardwood', 'paint-cabinet-front']],
+  [/cabinet\s*(front|door)|fronts/i, ['replace-cabinet-front']],
+  [/paint/i, ['paint-walls', 'paint-ceiling', 'paint-trim', 'paint-door', 'paint-window', 'paint-cabinet-front']],
+  [/cabinet/i, ['new-cabinets', 'replace-cabinet-front', 'paint-cabinet-front', 'cabinet-pull']],
+  [/hardware|pulls?\b|knobs?/i, ['cabinet-pull', 'replace-door-hardware']],
+  [/counter|quartz|marble|stone/i, ['counter-quartz', 'counter-stone']],
+  [/backsplash/i, ['backsplash-tile']],
+  [/tile/i, ['porcelain-floor-tile', 'wall-tile', 'backsplash-tile']],
+  [/carpet/i, ['install-carpet']],
+  [/hardwood|floor/i, ['refinish-hardwood', 'install-engineered-hardwood', 'install-solid-hardwood', 'install-lvp', 'porcelain-floor-tile', 'install-carpet']],
+  [/crown/i, ['install-crown']],
+  [/base\s*board|trim|molding|moulding/i, ['paint-trim', 'install-baseboard']],
+  [/door/i, ['paint-door', 'replace-interior-door', 'replace-door-hardware']],
+  [/window/i, ['paint-window', 'replace-window']],
+  [/light|fixture|electric|outlet|switch/i, ['replace-light-fixture', 'replace-device']],
+  [/demo|remove|tear/i, ['remove-flooring', 'remove-wallpaper', 'remove-object']],
+];
+export function guessWork(project, item) {
+  const words = [project && project.name, project && project.category, project && project.notes].filter(Boolean).join(' ');
+  const can = worksForItem(item);
+  const first = item.takeoff ? measureIds(item.takeoff)[0] : null;
+  for (const [re, ids] of HINTS) {
+    if (!re.test(words)) continue;
+    const hit = ids.map(workById).filter(w => w && can.includes(w));
+    // Prefer one the item's first measure counts (a room's walls before its floor).
+    const best = first && hit.find(w => worksForMeasure(first, item.takeoff).includes(w));
+    if (best || hit[0]) return best || hit[0];
+  }
+  return (first && worksForMeasure(first, item.takeoff)[0]) || can[0] || null;
+}
+
+// The cost area a project prices in: its own choice, else a guess from the property's address.
+export function costAreaFor(project, property) {
+  if (project && project.costArea && PRICE_BOOK.areas.some(a => a.id === project.costArea)) return project.costArea;
+  const where = property ? [property.address, property.location, property.city, property.name, property.notes].filter(v => typeof v === 'string').join(' ') : '';
+  for (const a of PRICE_BOOK.areas) if (a.match && new RegExp(a.match, 'i').test(where)) return a.id;
+  return 'national';
+}
+
+// ---------- applying ----------
+// A new scope item for what was measured. `project` is used for the first guess at the work;
+// `ids` brings uid, today and the project's cost area.
+export function takeoffItem(measured, project, ids) {
+  const measures = {};
+  for (const [k, v] of Object.entries(measured.measures || {})) if (MEASURES[k] && v > 0) measures[k] = MEASURES[k].unit === 'ea' ? Math.round(v) : round1(v);
+  const item = {
+    id: ids.uid('it'), name: measured.label, qty: 1, unit: 'ls', low: 0, likely: 0, high: 0,
+    durationDays: 0, deps: [], elementIds: [...new Set(measured.elementIds || [])], notes: '', status: 'todo', doneAt: '',
+    takeoff: { label: measured.label, measures, measure: Object.keys(MEASURES).find(k => measures[k] > 0) || null, measuredAt: ids.today },
+  };
+  if (measured.faceIds && measured.faceIds.length) item.takeoff.faceIds = measured.faceIds;
+  if (measured.objectKeys && measured.objectKeys.length) item.takeoff.objectKeys = measured.objectKeys;
+  if (measured.fits) item.takeoff.fits = measured.fits;
+  const work = guessWork(project, item);
+  if (work) setWork(item, { work: work.id, level: 'mid' }, ids.area || 'national');
+  else useMeasure(item, item.takeoff.measure);
+  return item;
+}
+
+// Count the item by another of its measures: quantity and unit follow. A work that cannot be
+// priced per that unit is cleared (the prices stay as they were, to be checked).
+export function useMeasure(item, measureId) {
+  const t = item.takeoff;
+  if (!t || !MEASURES[measureId] || !(t.measures[measureId] > 0)) return false;
+  t.measure = measureId;
+  item.qty = t.measures[measureId];
+  item.unit = MEASURES[measureId].unit;
+  const w = item.work && workById(item.work.id);
+  if (w && !worksForMeasure(measureId, t).includes(w)) {
+    const next = worksForMeasure(measureId, t)[0];
+    if (next) return setWork(item, { work: next.id }, item.work.area);
+    delete item.work;
+  }
+  return true;
+}
+
+// Choose the work and / or finish level: the unit and the book's prices follow (and, for a
+// measured item, the quantity it counts). `area` is the project's cost area.
+export function setWork(item, { work, level } = {}, area) {
+  const w = workById(work || (item.work && item.work.id));
+  if (!w) return false;
+  const lv = level || (item.work && item.work.level) || 'mid';
+  const L = w.levels[lv] || w.levels.mid;
+  const prevName = item.work ? namedFor(item, workById(item.work.id)) : null;
+  item.work = { id: w.id, level: lv, book: true, area: area || 'national' };
+  if (item.takeoff) {
+    const m = measureForWork(item, w);
+    if (m) { item.takeoff.measure = m; item.qty = item.takeoff.measures[m]; }
+  }
+  item.unit = w.unit;
+  const f = areaFactor(item.work.area);
+  item.low = money(L.low * f); item.likely = money(L.likely * f); item.high = money(L.high * f);
+  // The name follows the work while nobody has renamed the item.
+  const base = item.takeoff ? item.takeoff.label : null;
+  if (base && (item.name === base || item.name === prevName)) item.name = namedFor(item, w);
+  return true;
+}
+function namedFor(item, w) { return w && item.takeoff ? w.label + ' · ' + item.takeoff.label : item.name; }
+
+// The project's cost area changed: items still on the book's prices are priced again.
+export function repriceProject(project, area) {
+  let n = 0;
+  for (const it of project.items || []) if (it.work && it.work.book) { setWork(it, {}, area); n++; }
+  return n;
+}
+
+// A price typed by hand: the item keeps its work but is no longer on the book's prices.
+export function priceEdited(item) { if (item.work) item.work.book = false; }
+
+// One line about where the prices came from, for the item's panel.
+export function priceNote(item) {
+  const w = item.work && workById(item.work.id);
+  if (!w) return '';
+  const L = w.levels[item.work.level] || w.levels.mid;
+  const a = PRICE_BOOK.areas.find(x => x.id === item.work.area) || PRICE_BOOK.areas[0];
+  const mat = L.material;
+  return {
+    level: (LEVELS.find(l => l[0] === item.work.level) || LEVELS[1])[1],
+    what: L.note || '',
+    material: mat ? [mat.brand, mat.line].filter(Boolean).join(' ') + (mat.price ? ' · $' + mat.price + (mat.per ? '/' + mat.per : '') : '') + (mat.coverage ? ' · ' + mat.coverage : '') : '',
+    materialUrl: mat && mat.url || '',
+    basis: (item.work.book ? 'Price book ' : 'Typed by hand; the price book says ') + PRICE_BOOK.asOf + ': installed price per ' + w.unit + ', ' + a.label + (a.factor !== 1 ? ' (national × ' + a.factor + ')' : '') + '.',
+    sources: w.sources || [],
+  };
+}
