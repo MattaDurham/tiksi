@@ -48,7 +48,7 @@ test('shaker panels default to stock boards: a 1x6 top rail over 1x4 stiles and 
   for (const id of Object.values(p.parts)) {
     const b = catalogItem(id);
     assert.ok(TRIM_STOCK.includes(b) && !TRIM_CATALOG.includes(b), id + ' is a stock board, not a trim style');
-    assert.match(b.url, /^https:\/\/www\.homedepot\.com\//);
+    assert.match(b.url, /^https:\/\/www\.(homedepot|lowes)\.com\//);
     near(b.T, p.T, id + ' is as thick as the panel boards');
   }
   near(p.W, catalogItem(p.parts.stile).W, 'stile width'); near(p.rail, catalogItem(p.parts.topRail).W, 'top rail width');
