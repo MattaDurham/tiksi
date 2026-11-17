@@ -9,7 +9,9 @@
 // (view-renderings.js), as web-size copies under a name the client may see. It leaves out
 // products, prices, project scope and notes, every other photo, photo pins, notes,
 // measurements, documents, the scan capture, a piece of any project not sent, and
-// every large inline picture. The send settings are kept on the property (prop.lab).
+// every large inline picture. Each saved view keeps what it shows its own way (clientView): its
+// tags, the pieces it hides, its cuts, x-ray and levels. The send settings are kept on the
+// property (prop.lab).
 
 import { ws, getFile, touch } from './store.js';
 import { photoBytes, photoUrl } from './photos-store.js';
@@ -75,6 +77,25 @@ function scrub(value) {
 }
 const strip = (rec, fields) => { for (const f of fields) delete rec[f]; return rec; };
 
+// A saved view as the client page gets it: its camera and everything it shows its own way (tags
+// and their halves, pieces hidden one by one, section cuts with their handles put away, x-ray,
+// hidden levels, which of the sent models show). Not its markers, comparison or source.
+export function clientView(v, sentScans, scanTags = new Set(['tag-scan'])) {
+  const tags = {};
+  for (const [k, on] of Object.entries(v.tags || {})) if (typeof on === 'boolean' && !scanTags.has(k.split(':')[0])) tags[k] = on;
+  const sec = v.section && typeof v.section === 'object' ? v.section : {};
+  const section = { on: sec.on === true, height: typeof sec.height === 'number' ? sec.height : 1.2,
+    ...(Array.isArray(sec.planes) && sec.planes.length ? { planes: sec.planes, active: sec.active } : {}), done: true };
+  const out = { id: v.id, name: v.name, camera: v.camera, mode: v.mode === 'top' ? 'top' : 'orbit', tags, section, xray: v.xray === true,
+    hiddenLevels: Array.isArray(v.hiddenLevels) ? v.hiddenLevels : [], hidden: Array.isArray(v.hidden) ? v.hidden.filter(k => !/^node:/.test(k) || sentScans.has(k.slice(5).split('#')[0])) : [] };
+  if (v.models && typeof v.models === 'object') {
+    out.models = {};
+    for (const [id, on] of Object.entries(v.models)) if (sentScans.has(id) && typeof on === 'boolean') out.models[id] = on;
+  }
+  if (typeof v.xrayOpacity === 'number') out.xrayOpacity = v.xrayOpacity;
+  return out;
+}
+
 // The copy itself: { format, schema, property, materials, projects, states, furnitureTags,
 // renderings: [{ id, view, label, day, w, h, path, thumb }],
 // files: { id: { path, format, mime } } } and the list of files to send.
@@ -89,18 +110,21 @@ export function clientCopy(data, propId, choice) {
   const keepPiece = rec => { const id = pieceProjectId(rec); return !id || sentTop.has(topProjectId(data.projects, id)); };
   const p = scrub(JSON.parse(JSON.stringify(src)));
   const viewsOn = Array.isArray(choice.views) ? new Set(choice.views) : null;
+  const sentScans = new Set((p.scans || []).filter(sc => sc.kind === 'mesh' && scanLayer(sc) !== 'scan' && sc.visible !== false && keepPiece(sc)).map(sc => sc.id));
+  const scanTags = new Set((p.tags || []).filter(t => t.id === 'tag-scan').map(t => t.id));
   const prop = {
     id: p.id, name: '', wallHeight: p.wallHeight, levels: p.levels || [], activeLevelId: p.activeLevelId,
     walls: [], openings: [], rooms: [], fixtures: [], trims: [], scans: [],
-    tags: (p.tags || []).map(t => ({ ...t, visible: t.id === 'tag-scan' ? false : t.visible })),
+    // Every tag shows, both halves, but the scan capture's: what shows is each view's own
+    // (clientView), not what MODEL happened to show when the copy was made.
+    tags: (p.tags || []).map(t => { const { phases, ...rest } = t; return { ...rest, visible: !scanTags.has(t.id), ...(scanTags.has(t.id) ? { phases } : {}) }; }),
     tagOf: p.tagOf || {}, tagDefaults: p.tagDefaults || {}, tagUntaggedVisible: p.tagUntaggedVisible,
     hidden: {}, photos: [], notePins: [], photoPositions: [], cameraSets: [], docSets: [], markups: [], videos: [], measurements: [],
     env: { ...(p.env || {}), showPins: false, showNotes: false, showDims: false, showRoomLabels: false, showOpeningNumbers: false, showGrid: false, sky: (p.env && p.env.sky === 'pano') ? 'dynamic' : (p.env || {}).sky, panoPhotoId: null },
-    savedViews: (p.savedViews || []).filter(v => !viewsOn || viewsOn.has(v.id)).map(v => ({ id: v.id, name: v.name, camera: v.camera, mode: v.mode === 'top' ? 'top' : 'orbit', tags: {}, section: { on: false, height: 1.2 }, xray: false, hiddenLevels: [] })),
+    savedViews: (p.savedViews || []).filter(v => !viewsOn || viewsOn.has(v.id)).map(v => clientView(v, sentScans, scanTags)),
   };
   for (const key of ['walls', 'openings', 'rooms', 'fixtures', 'trims']) prop[key] = (p[key] || []).filter(keepPiece).map(r => strip(r, PRIVATE_FIELDS));
-  // A hidden piece in MODEL is hidden for the client too; the client page shows the rest.
-  for (const [k, on] of Object.entries(p.hidden || {})) if (on === true) prop.hidden[k] = true;
+  // Nothing is hidden for the whole page: each view hides its own pieces (clientView).
   prop.scans = (p.scans || []).filter(s => s.kind === 'mesh' && scanLayer(s) !== 'scan' && s.visible !== false && keepPiece(s))
     .map(s => strip({ ...s, name: '' }, PRIVATE_FIELDS));
   // Materials: the ones these records and models use, with their texture pictures.

@@ -48,8 +48,11 @@ function workspace() {
     { id: 't-rail-w', wallId: 'w-w', style: 'chair-rail', side: 1, f0: 0, f1: 1, y: 0.84, projectId: 'pj-trim' },
     { id: 't-rail-s', wallId: 'w-s', style: 'chair-rail', side: 1, f0: 0, f1: 0.5, y: 0.84, projectId: 'pj-trim' },
   );
-  p.savedViews.push({ id: 'v-a', name: 'Room A', camera: { position: [1, 1.6, 2], target: [3.5, 1.2, 2], fov: 50 }, mode: 'orbit', tags: {}, section: { on: false, height: 1.2 }, xray: false, hiddenLevels: [] },
-    { id: 'v-b', name: 'Room B', camera: { position: [7, 1.6, 2], target: [4.5, 1.2, 2], fov: 50 }, mode: 'orbit', tags: {}, section: { on: false, height: 1.2 }, xray: false, hiddenLevels: [] },
+  // The south baseboard stands in for a piece of furniture. Room A was saved with furniture on;
+  // Room B with it off and the baseboard hidden one by one, as views in MODEL are.
+  p.tagOf = { ...(p.tagOf || {}), 'trim:t-base-s': 'tag-furniture' };
+  p.savedViews.push({ id: 'v-a', name: 'Room A', camera: { position: [1, 1.6, 2], target: [3.5, 1.2, 2], fov: 50 }, mode: 'orbit', tags: { 'tag-furniture': true }, section: { on: false, height: 1.2 }, xray: false, hiddenLevels: [], hidden: [] },
+    { id: 'v-b', name: 'Room B', camera: { position: [7, 1.6, 2], target: [4.5, 1.2, 2], fov: 50 }, mode: 'orbit', tags: { 'tag-furniture': false }, section: { on: false, height: 1.2 }, xray: false, hiddenLevels: [], hidden: ['trim:t-base-s'] },
     // Looking at the west wall of room A, where the project's chair rail runs.
     { id: 'v-w', name: 'West wall', camera: { position: [3, 1.6, 2], target: [0.5, 1.2, 2], fov: 50 }, mode: 'orbit', tags: {}, section: { on: false, height: 1.2 }, xray: false, hiddenLevels: [] },
     { id: 'v-x', name: 'Spare', camera: { position: [6, 1.6, 3], target: [4.5, 1.2, 1], fov: 50 }, mode: 'orbit', tags: {}, section: { on: false, height: 1.2 }, xray: false, hiddenLevels: [] });
@@ -150,11 +153,29 @@ try {
   await desk.click('.cl-strip [data-go="v-b"]');
   check(await desk.$$eval('.cl-strip .cl-more', e => e.length) === 0, 'a second click closes them');
   check(await viewer(desk, (v) => v.qualityState().quality) === 'ultra', 'quality starts at Ultra');
-  const hiddenRails = () => viewer(desk, (v, s) => ['t-rail-w', 't-rail-s', 't-base-s'].map(id => !!(s.ws.data.properties[0].hidden || {})['trim:' + id]));
-  check(JSON.stringify(await hiddenRails()) === '[true,true,false]', 'Existing hides the project\'s trim and shows the rest');
+  const hiddenRails = () => viewer(desk, (v, s) => ['t-rail-w', 't-rail-s'].map(id => !!(s.ws.data.properties[0].hidden || {})['trim:' + id]));
+  check(JSON.stringify(await hiddenRails()) === '[true,true]', 'Existing hides the project\'s trim');
   await desk.click('#side [data-client-show="pj-trim"]');
-  check(JSON.stringify(await hiddenRails()) === '[false,false,false]', 'Wall trim shows it');
+  check(JSON.stringify(await hiddenRails()) === '[false,false]', 'Wall trim shows it');
   check(await desk.$eval('#side [data-client-show="pj-trim"]', b => b.classList.contains('active')), 'and is marked in the pane');
+  console.log('\n[computer] each view as it was saved, the furniture switch over it');
+  const furn = () => viewer(desk, (v, s) => { const p = s.ws.data.properties[0], t = p.tags.find(x => x.id === 'tag-furniture');
+    return JSON.stringify([t.visible !== false, !!(p.hidden || {})['trim:t-base-s'], !!document.querySelector('#side [data-act="furniture"].active')]); });
+  const goView = async id => {
+    await desk.evaluate(async id => { const v = await import(new URL(`./data/app/${'e2e0c0de'}/js/viewer3d.js`, location.href).href); v.fieldAction('view', id); }, id);
+    await desk.waitForTimeout(300);
+  };
+  await goView('v-b');
+  check(await furn() === '[false,true,false]', 'Room B as saved: furniture off, its own piece hidden, the switch off: ' + await furn());
+  await desk.click('#side [data-act="furniture"]');
+  check(await furn() === '[true,false,true]', 'turned on, the switch shows all the furniture, the piece the view hides too: ' + await furn());
+  await goView('v-a');
+  check(await furn() === '[true,false,true]', 'Room A as saved: furniture on, nothing hidden: ' + await furn());
+  await desk.click('#side [data-act="furniture"]');
+  check(await furn() === '[false,false,false]', 'turned off, the switch hides the furniture: ' + await furn());
+  await goView('v-b');
+  check(await furn() === '[false,true,false]', 'back to Room B: as it was saved again, not as the last view left it');
+  await goView('v-a');
   await desk.click('#side [data-quality="medium"]');
   check(await viewer(desk, (v) => v.qualityState().quality) === 'medium', 'the quality switch lowers it');
   // A click selects nothing.
@@ -339,6 +360,14 @@ try {
   }, fn.toString());
   await view.waitForFunction(() => [...document.querySelectorAll('.cl-strip .cl-thumb img')].length === 3 && [...document.querySelectorAll('.cl-strip .cl-thumb img')].every(i => i.complete && i.naturalWidth === 480), null, { timeout: 30000, polling: 200 });
   check(true, 'each of the three views is a small picture, 480 pixels wide as sent');
+  const listed = await view.$$eval('#side [data-client-rendering]', els => els.map(e => e.textContent.trim()));
+  check(JSON.stringify(listed) === JSON.stringify(['Room A · Rendering 1', 'Room A · Walnut option', 'West wall · Rendering']), 'the left pane lists the renderings under their views: ' + JSON.stringify(listed));
+  await view.click('#side [data-client-rendering="r2"]');
+  await view.waitForSelector('.cl-pop');
+  check((await view.locator('.cl-pop-title').innerText()).startsWith('Room A · Walnut option'), 'a click on one opens it over the model');
+  check(await view.$$eval('.cl-strip .cl-view.open', e => e.map(x => x.dataset.view).join()) === 'v-a', 'and opens its view in the strip');
+  await view.keyboard.press('Escape');
+  await view.waitForFunction(() => !document.querySelector('.cl-pop'), null, { timeout: 5000, polling: 100 });
   check(await view.$$eval('.cl-strip .cl-count', e => e.map(x => x.closest('[data-view]').dataset.view + ':' + x.textContent).join()) === 'v-a:4,v-w:3', 'a view says how much it opens: Room A two iterations and two renderings, West wall two iterations and a rendering; Room B nothing');
   const stripBox = await view.locator('.cl-strip').boundingBox(), wrapBox = await view.locator('.v-wrap').boundingBox();
   check(stripBox.y + stripBox.height <= wrapBox.y + wrapBox.height && stripBox.y > wrapBox.y + wrapBox.height / 2 && stripBox.x >= wrapBox.x, 'the strip sits at the bottom of the model');
@@ -395,8 +424,8 @@ try {
   await small.waitForSelector('.cl-strip .cl-thumb img');
   const sb = await small.locator('.cl-strip').boundingBox();
   check(sb.x >= 0 && sb.x + sb.width <= 390 && sb.y + sb.height <= 844 && sb.y > 600, 'the strip fits the bottom of the phone screen');
-  await small.tap('.cl-strip [data-go="v-a"]');
-  await small.waitForTimeout(700);
+  // The page opens at Room A with its iterations and renderings already open in the strip.
+  check(await small.$$eval('.cl-strip .cl-view.open', e => e.map(x => x.dataset.view).join()) === 'v-a', 'the view the page opens at shows its renderings at once');
   await small.tap('.cl-strip .cl-view.open [data-rendering="0"]');
   await small.waitForSelector('.cl-pop img');
   if (process.env.E2E_SHOTS) await small.screenshot({ path: process.env.E2E_SHOTS + '/client-phone.png' });

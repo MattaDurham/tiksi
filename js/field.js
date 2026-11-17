@@ -306,7 +306,7 @@ function onPanelClick(e) {
   fieldAction(act, t.dataset.id, value);
   // Moving the camera, or starting a tool that waits for taps on the model, closes the panel
   // so the view can be seen; switches stay open for more.
-  if (act === 'mode' || act === 'camera' || act === 'position' || act === 'view' || act === 'tool' || act === 'compare' || act === 'load-scan') close();
+  if (act === 'mode' || act === 'camera' || act === 'position' || act === 'view' || act === 'tool' || act === 'compare' || act === 'load-scan' || act === 'client-rendering') close();
   else render();
   refreshChrome();
 }
@@ -334,6 +334,7 @@ function render() {
         ${section('Show', st.client.states.length > 1 && `<div class="fd-segs" role="group" aria-label="What to show">${st.client.states.map(x => seg('client-show', x)).join('')}</div>`)}
         ${st.client.furniture != null ? section('Display', sw('client-furniture', { id: 'furniture', label: 'Furniture', on: st.client.furniture })) : ''}
         ${section('Saved views', views && `<div class="fd-chips">${views}</div>`)}
+        ${section('Renderings', (st.client.renderings || []).length && `<div class="fd-chips">${st.client.renderings.map(r => `<button type="button" class="fd-chip" data-act="client-rendering" data-id="${escapeHtml(r.id)}">${escapeHtml(r.label)}</button>`).join('')}</div>`)}
         ${section('Quality on this device', `<div class="fd-segs fd-quality" role="group" aria-label="Drawing quality">${st.quality.map(q => seg('quality', q)).join('')}</div>`)}
       </div>`;
     const fresh = els.panel.querySelector('.fd-body');

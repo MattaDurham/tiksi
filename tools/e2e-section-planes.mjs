@@ -165,12 +165,15 @@ try {
   assert.ok(custom.normal[0] * toCamera[0] + custom.normal[2] * toCamera[1] > 0, 'it cuts away the side nearest the camera');
   assert.equal((await scene()).clip, 3);
 
-  // A saved view keeps every plane and brings them back.
+  // A saved view keeps every plane and brings them back. Cuts changed while another view is the
+  // open tab are that view's own.
   const want = (await state()).planes.map(p => ({ kind: p.kind, normal: p.normal.map(c => Math.round(c * 1e6) / 1e6), d: Math.round(p.d * 1e6) / 1e6 }));
+  await page.locator('.v-views [data-view-add], .v-views .v-view-add').first().click();
   await page.locator('.v-views [data-view-add], .v-views .v-view-add').first().click();
   await page.locator('[data-cut-remove]').click();
   await page.locator('[data-cut-remove]').click();
   assert.equal((await state()).planes.length, 1);
+  await page.waitForTimeout(600);
   await page.locator('.v-views [role=tab]').first().click();
   await page.waitForTimeout(900);
   st = await state();
@@ -191,13 +194,16 @@ try {
   assert.equal(await bar.locator('[data-cut-add]').count(), 0, 'and the strip of controls');
   assert.equal(await bar.locator('[data-cut-edit]').isVisible(), true, 'EDIT CUTS stays to bring them back');
   assert.equal((await state()).done, true);
-  // A view saved now keeps the clean section: editing again, then going back to the view, puts
-  // the planes away again.
+  // A view saved now keeps the clean section: editing again on another view, then going back to
+  // the clean one, puts the planes away again.
   await page.locator('.v-views .v-view-add').click();
   assert.equal(await page.evaluate(async () => (await import('/js/store.js')).activeProperty().savedViews.at(-1).section.done), true, 'the view records the clean section');
+  const clean = await page.locator('.v-views [role=tab]').count();
+  await page.locator('.v-views .v-view-add').click();
   await page.locator('[data-cut-edit]').click();
   assert.deepEqual([(await scene()).sheetsShown, (await scene()).handles, (await state()).done], [true, 2, false], 'EDIT CUTS brings the planes back');
-  await page.locator('.v-views [role=tab]').last().click();
+  await page.waitForTimeout(600);
+  await page.locator('.v-views [role=tab]').nth(clean - 1).click();
   await page.waitForTimeout(900);
   assert.deepEqual([(await scene()).sheetsShown, (await scene()).handles, (await scene()).clip], [false, 0, 3], 'the saved view opens clean');
   await page.locator('#side [data-act=cut-edit]').click();

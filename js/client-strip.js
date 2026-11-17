@@ -21,7 +21,8 @@ const dayWords = day => {
 export const renderingTitle = r => (r.label || 'Rendering') + (r.day && dayWords(r.day) ? ' · ' + dayWords(r.day) : '');
 
 // `states` = [{ id, label }] with Existing first; `show()` is the state on now and `setShow(id)`
-// changes it; `goTo(viewId)` moves the camera. Returns { refresh({ view, shown }), state() }.
+// changes it; `goTo(viewId)` moves the camera. Returns { refresh({ view, shown }), openRendering(id), state() }.
+// A view gone to from the left pane or the phone panel opens what it has, as a click on it does.
 export function mountStrip({ copy, data, states, show, setShow, goTo }) {
   const views = (copy.property && copy.property.savedViews) || [];
   const pictures = copy.viewPictures && typeof copy.viewPictures === 'object' ? copy.viewPictures : null;
@@ -82,7 +83,13 @@ export function mountStrip({ copy, data, states, show, setShow, goTo }) {
     wrap.classList.toggle('cl-strip-on', shown && views.length > 0);
   }
   function refresh(now = {}) {
-    if ('view' in now) activeId = now.view || null;
+    if ('view' in now && (now.view || null) !== activeId) {
+      // Gone to from elsewhere (the left pane, the phone panel): the view opens what it has.
+      activeId = now.view || null;
+      const v = views.find(x => x.id === activeId);
+      openId = v && hasMore(v) ? v.id : null;
+      requestAnimationFrame(reveal);
+    }
     if ('shown' in now) shown = now.shown !== false;
     el.hidden = !shown || !views.length;
     attach();
@@ -198,6 +205,17 @@ export function mountStrip({ copy, data, states, show, setShow, goTo }) {
   refresh();
   return {
     refresh,
+    // Open the rendering sent as `id` (r1, r2...) over the model, and its view in the strip.
+    openRendering(id) {
+      for (const [viewId, list] of renderings) {
+        const index = list.findIndex(r => r.id === id);
+        if (index < 0) continue;
+        openId = viewId; draw(); reveal();
+        openPop(viewId, index);
+        return true;
+      }
+      return false;
+    },
     // For checks: what the strip shows.
     state: () => ({ active: activeId, open: openId, shown, pop: pop ? { view: pop.viewId, index: pop.index } : null }),
   };
