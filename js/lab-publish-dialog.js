@@ -40,7 +40,7 @@ export async function openLabDialog(prop) {
     <div class="lab-tags">${tags.filter(t => t.id !== 'tag-scan').map(t => `<label><input type="checkbox" data-lab-tag="${escapeHtml(t.id)}" ${s.furnitureTags.includes(t.id) ? 'checked' : ''}> ${escapeHtml(t.name)}</label>`).join('')}</div>
     <h3>Views and renderings</h3>
     <div data-lab-views><p>Reading the project's pictures…</p></div>
-    <p>Left out: products, prices, project scope and notes, every other photo, notes, measurements, documents and the scan capture. Pieces hidden in MODEL stay hidden.</p>
+    <p>Left out: products, prices, project scope and notes, every other photo, notes, measurements, documents and the scan capture. Each saved view shows as it is saved in MODEL: its tags, the pieces it hides, its cuts, x-ray and levels. The client's furniture switch starts as the view has it.</p>
     ${s.sentAt ? `<p>Last sent ${escapeHtml(new Date(s.sentAt).toLocaleString())}. Sending again replaces it at the same link.</p>` : ''}
     <p class="lab-summary" data-lab-summary></p>
     <div class="file-actions"><button class="btn primary" data-lab-send>SEND</button></div>

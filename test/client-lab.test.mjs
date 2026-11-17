@@ -91,13 +91,40 @@ test('the copy keeps the house and the chosen projects, and leaves the rest out'
   assert.equal(p.name, '');
   assert.deepEqual(p.notePins, []);
   assert.equal(p.env.showPins, false); assert.equal(p.env.sky, 'dynamic'); assert.equal(p.env.panoPhotoId, null);
-  assert.deepEqual(p.hidden, { 'wall:w-out': true }, 'what MODEL hid stays hidden');
-  assert.deepEqual(p.savedViews[0], { id: 'v1', name: 'Entry', camera: { position: [1, 1.6, 1], target: [3, 1.4, 3], fov: 50 }, mode: 'orbit', tags: {}, section: { on: false, height: 1.2 }, xray: false, hiddenLevels: [] });
+  assert.deepEqual(p.hidden, {}, 'nothing is hidden for the whole page: each view hides its own');
+  assert.deepEqual(p.savedViews[0], { id: 'v1', name: 'Entry', camera: { position: [1, 1.6, 1], target: [3, 1.4, 3], fov: 50 }, mode: 'orbit', tags: { 'tag-walls': false },
+    section: { on: true, height: 1, done: true }, xray: true, hiddenLevels: [], hidden: ['wall:w-out'] }, 'the view keeps what it shows its own way');
   assert.equal(p.tags.find(t => t.id === 'tag-scan').visible, false);
   assert.deepEqual(copy.materials.map(m => m.id), ['mat-oak']);
   const text = JSON.stringify(copy);
   for (const secret of ['Brandname', 'prod-', 'Bruce', '5.99', 'margin', 'private notes', 'Client wants', 'secret', 'keyframes', 'Evidence', 'IMG_1', 'Natural', 'polycam', '12 Test Lane'])
     assert.ok(!text.includes(secret), 'the copy must not carry ' + secret);
+});
+
+test('each view carries its own tags, hidden pieces, cuts and models; the page itself shows every tag but the scan', () => {
+  const v = {
+    id: 'v2', name: 'Living', camera: { position: [0, 1, 0], target: [1, 1, 1], fov: 50 }, mode: 'top',
+    tags: { 'tag-furniture': false, 'tag-furniture:e': false, 'tag-scan': true, 'tag-scan:e': true, _untagged: true },
+    section: { on: true, height: 1.1, planes: [{ id: 'c1', kind: 'side', q: [0, 0, 0, 1], pos: [1, 1, 1] }], active: 'c1', done: false },
+    xray: true, xrayOpacity: 0.3, hiddenLevels: ['lvl-2'], hidden: ['node:s-furn#0/4/0', 'node:scan-capture#0/1', 'wall:w-1'],
+    models: { 's-furn': false, 'scan-capture': true }, markers: { pins: true }, compare: 'after', source: { app: 'sketchup', scan: 's', scene: 'x' },
+  };
+  const out = L.clientView(v, new Set(['s-furn']));
+  assert.deepEqual(out.tags, { 'tag-furniture': false, 'tag-furniture:e': false, _untagged: true }, 'the scan capture\'s tag never comes');
+  assert.deepEqual(out.hidden, ['node:s-furn#0/4/0', 'wall:w-1'], 'pieces of models not sent are left out');
+  assert.deepEqual(out.models, { 's-furn': false });
+  assert.deepEqual(out.section, { on: true, height: 1.1, planes: v.section.planes, active: 'c1', done: true }, 'the cuts, with their handles put away');
+  assert.deepEqual([out.mode, out.xray, out.xrayOpacity, out.hiddenLevels], ['top', true, 0.3, ['lvl-2']]);
+  for (const k of ['markers', 'compare', 'source']) assert.equal(k in out, false, k);
+  // MODEL had furniture and its halves off when the copy was made: the page itself shows them.
+  const data = workspace();
+  const tag = id => data.properties[0].tags.find(x => x.id === id);
+  tag('tag-furniture').visible = false; tag('tag-furniture').phases = { e: false, p: false };
+  tag('tag-scan').phases = { e: false, p: false };
+  const { copy } = L.clientCopy(data, 'p1', { projects: [], furnitureTags: ['tag-furniture'] });
+  const t = id => copy.property.tags.find(x => x.id === id);
+  assert.deepEqual([t('tag-furniture').visible, 'phases' in t('tag-furniture')], [true, false]);
+  assert.deepEqual([t('tag-scan').visible, t('tag-scan').phases], [false, { e: false, p: false }]);
 });
 
 test('a material keeps the words that set its texture, not its product name', () => {

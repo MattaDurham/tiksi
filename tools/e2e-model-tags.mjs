@@ -178,8 +178,9 @@ try {
   const moved = await prop(page, `return p.tagOf[${JSON.stringify(chairKey)}]`);
   assert.equal(moved, 'tag-builtins', 'the chair moved to the chosen tag');
 
-  // A saved view keeps Roof hidden, the chair hidden on its own and the photo pins off; showing
-  // them all and going back to the tab hides them again.
+  // A saved view keeps Roof hidden, the chair hidden on its own and the photo pins off. What shows
+  // is each view's own: a second view, changed while it is the open tab, keeps its changes, and
+  // each tab gives back its own.
   await page.locator('#side [data-act=hide]').click();
   assert.equal(await prop(page, `return p.hidden[${JSON.stringify(chairKey)}]`), true, 'HIDE in the left pane hides the chair alone');
   await page.keyboard.press('Escape');
@@ -187,15 +188,20 @@ try {
   assert.equal(await prop(page, 'return p.env.showPins'), false);
   await page.locator('[data-view-add]').click();
   await page.locator('.v-view-tab').waitFor();
+  await page.locator('[data-view-add]').click();
+  await page.locator('.v-view-tab').nth(1).waitFor();
   await page.locator('.v-tags [data-tag-eye="tag-roof"]').click();
   await page.locator('#side [data-act=show-hidden]').click();
   await page.locator('#side [data-act=pins]').click();
-  assert.deepEqual(await prop(page, 'return [p.tags.find(t => t.id === "tag-roof").visible, Object.keys(p.hidden).length, p.env.showPins]'), [true, 0, true]);
+  const shownNow = 'return [p.tags.find(t => t.id === "tag-roof").visible, Object.keys(p.hidden).length, p.env.showPins]';
+  assert.deepEqual(await prop(page, shownNow), [true, 0, true]);
+  await waitUntil(async () => JSON.stringify(await prop(page, 'const v = p.savedViews[1]; return [v.tags["tag-roof"], v.hidden.length, v.markers.pins]')) === '[true,0,true]', 'the open tab keeps what shows as it changes');
   await page.locator('.v-view-tab').first().click();
   assert.deepEqual(await prop(page, `return [p.tags.find(t => t.id === "tag-roof").visible, p.hidden[${JSON.stringify(chairKey)}] === true, p.env.showPins]`), [false, true, false],
-    'the saved view brings back its tags, the hidden chair and the pins switched off');
-  await page.locator('#side [data-act=show-hidden]').click();
-  await page.locator('#side [data-act=pins]').click();
+    'the first view brings back its tags, the hidden chair and the pins switched off');
+  await page.locator('.v-view-tab').nth(1).click();
+  assert.deepEqual(await prop(page, shownNow), [true, 0, true], 'the second view gives back its own, as it was left');
+  await page.locator('.v-view-tab').first().click();
 
   // A saved view is renamed in its tab: a double-click opens the name, Enter keeps it; the
   // pencil beside the current tab opens RENAME too, and Esc leaves the name as it was.
@@ -245,7 +251,7 @@ try {
   await page.locator('canvas.v-canvas').waitFor();
   assert.equal(await prop(page, `return p.tagOf[${JSON.stringify(chairKey)}]`), moved, 'the chair is still on its new tag after a reload');
   assert.equal(await prop(page, 'return p.tags.find(t => t.id === "tag-roof").visible'), false);
-  assert.equal(await prop(page, 'return p.savedViews.length'), 1);
+  assert.equal(await prop(page, 'return p.savedViews.length'), 2);
   assert.equal(await prop(page, 'return p.savedViews[0].name'), 'Kitchen from the door', 'the new name comes back from the project file');
 
   // Rename Roof in the tag list; the name, the hidden state, the chair's tag and the saved view
@@ -266,7 +272,7 @@ try {
   assert.equal(back.name, 'Roof and gutters', 'the renamed tag survives the project file');
   assert.equal(back.visible, false);
   assert.equal(back.tagOf[chairKey], moved);
-  assert.deepEqual(back.views, [false], 'the saved view and its tags survive the project file');
+  assert.deepEqual(back.views, [false, true], 'the saved views and their own tags survive the project file');
   assert.deepEqual(errors, []);
   console.log('model tags: roof detected and hidden in MODEL and DOCUMENTS, part moved and kept, saved view (renamed in its tab) and renamed tag survive the project file');
 } finally {

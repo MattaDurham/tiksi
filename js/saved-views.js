@@ -15,8 +15,12 @@
 // `planes` (section-planes.js) is every cut the view was saved with and `active` the one whose
 // handles show; `done` is a clean section, its planes and handles put away. A view saved before
 // cuts could be rotated has only `height`, one flat cut. A view saved before Tiksi kept
-// `hidden`, `models`, `compare`, `markers`, `xrayOpacity` or `uncertainty` has none of them, and
-// going to it leaves those as they are.
+// `models`, `compare`, `markers`, `xrayOpacity` or `uncertainty` has none of them, and going to it
+// leaves those as they are; one saved before Tiksi kept `hidden` hides nothing one by one.
+//
+// What shows is each view's own: while a view is the current tab in MODEL, every change to what
+// shows (tags, objects hidden one by one, cuts, x-ray, levels, models, markers) is kept in that
+// view as it is made (keepShowing). Its camera changes only with UPDATE TO WHAT SHOWS NOW.
 
 import { OVERRIDE_UNTAGGED, parseKey, PHASES, phaseOverrideKey, phaseShown, setPhaseShown, tagById } from './tags.js';
 import { normalizeSections } from './section-planes.js';
@@ -138,11 +142,10 @@ export function nextViewName(prop) {
 // Objects hidden one by one, as a view stores them.
 export function hiddenObjects(prop) { return Object.keys(prop.hidden || {}).filter(k => prop.hidden[k] === true); }
 
-// Restore a view's objects hidden one by one: exactly those are hidden. A view without the
-// list leaves them as they are. Returns how many changed.
+// Restore a view's objects hidden one by one: exactly those are hidden, and none for a view saved
+// before Tiksi kept the list (each view's own, never the last view's). Returns how many changed.
 export function applySavedHidden(prop, view) {
-  if (!Array.isArray(view.hidden)) return 0;
-  const want = new Set(view.hidden), now = new Set(hiddenObjects(prop));
+  const want = new Set(Array.isArray(view.hidden) ? view.hidden : []), now = new Set(hiddenObjects(prop));
   let changed = 0;
   for (const k of now) if (!want.has(k)) changed++;
   for (const k of want) if (!now.has(k)) changed++;
@@ -178,6 +181,24 @@ export function updateSavedView(prop, id, state) {
   delete v.standard;
   prop.savedViews[i] = v;
   return v;
+}
+// Keep what shows now in view `id`, leaving its camera, mode and name: `state` is what MODEL's
+// viewState gives; tags and objects hidden one by one come from `prop`. Returns true when the view
+// changed.
+const CAMERA_FIELDS = ['camera', 'mode'];
+export function keepShowing(prop, id, state) {
+  const i = (prop.savedViews || []).findIndex(v => v.id === id);
+  if (i < 0) return false;
+  const old = prop.savedViews[i], given = { ...state };
+  for (const k of CAMERA_FIELDS) delete given[k];
+  const v = normalizeSavedView({ ...old, ...given, tags: tagState(prop), hidden: hiddenObjects(prop), id: undefined });
+  if (!v) return false;
+  v.id = id;
+  for (const k of CAMERA_FIELDS) v[k] = old[k];
+  if (old.standard) v.standard = old.standard;
+  if (JSON.stringify(v) === JSON.stringify(old)) return false;
+  prop.savedViews[i] = v;
+  return true;
 }
 export function renameSavedView(prop, id, name) {
   const v = (prop.savedViews || []).find(x => x.id === id), n = clean(name);
