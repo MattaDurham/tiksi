@@ -61,10 +61,10 @@
 .es-cuts .cdh { font-size: 11px; color: var(--dim); margin: 4px 0 2px; }
 @media (max-width: 1300px) { .es-wall { grid-template-columns: minmax(0, 1fr); } }
 
-.es-sets { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.es-sets { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
 label.es-set { display: flex; flex-direction: column; gap: 4px; }
 label.es-set > span:last-child { display: flex; align-items: center; gap: 6px; }
-label.es-set input { width: 100%; min-width: 0; background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--radius); padding: 6px 8px; color: var(--ink); font-variant-numeric: tabular-nums; }
+label.es-set :is(input, select) { width: 100%; min-width: 0; background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--radius); padding: 6px 8px; color: var(--ink); font-variant-numeric: tabular-nums; }
 label.es-set i { font-style: normal; font: 11px var(--mono); color: var(--faint); }
 .es-bid { display: grid; grid-template-columns: 1.4fr 0.6fr 0.8fr 1.6fr auto; gap: 8px; }
 .es-bid input { min-width: 0; background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--radius); padding: 6px 8px; color: var(--ink); }
@@ -185,3 +185,27 @@ html.touch #view .sc :is(.sc-tab th, .sc-wk, .sc-wk small, .sc-start, .sc-detail
   .sc-tab :is(th, td):nth-child(n+3):nth-child(-n+6) { display: none; }
   .sc-tab td.work { max-width: 140px; }
 }
+
+/* Typed-over labor: the room's quantities and times, and a carpenter's own times */
+.es-labor td { vertical-align: middle; }
+.es-labor td.lk { cursor: pointer; }
+.es-labor td.lk:hover { color: var(--accent); }
+.es-labor td.unit { color: var(--faint); font-size: 11.5px; padding-left: 0; white-space: nowrap; }
+.es-cell { width: 78px; text-align: right; font: inherit; font-variant-numeric: tabular-nums; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
+.es-cell:hover { border-color: var(--line-2); }
+.es-cell:focus { outline: none; border-color: var(--accent); background: var(--panel-2); }
+.es-cell.set { color: var(--accent); border-color: var(--line-2); }
+.es-labor tr.flash td { animation: es-flash 1.6s ease-out; }
+@keyframes es-flash { from { background: rgba(232, 151, 58, 0.28); } to { background: transparent; } }
+.es-addtask { margin-top: 8px; max-width: 100%; }
+.es-add { background: none; border: 0; width: 100%; text-align: left; cursor: pointer; font: inherit; font-size: 12.5px; }
+.es-dbody .dl[data-go-room] { cursor: pointer; }
+.es-labor + .es-addtask, h3 .note { font-weight: 400; text-transform: none; letter-spacing: 0; }
+
+/* SCHEDULE: a room opened into its tasks; the start date beside the title */
+.sc-tw { display: inline-block; width: 16px; padding: 0; margin-right: 4px; background: none; border: 0; color: var(--faint); font: 11px var(--mono); cursor: pointer; }
+.sc-tw:hover { color: var(--accent); }
+.sc-tab tr.g-task td { font-size: 11.5px; color: var(--dim); padding-top: 4px; padding-bottom: 4px; }
+.sc-tab tr.g-task td.work { padding-left: 34px; }
+.sc-bar.task { top: 7px; height: 12px; background: rgba(232, 151, 58, 0.45); border-color: rgba(232, 151, 58, 0.7); padding: 0; }
+.sc-start.sc-inline { flex-direction: row; align-items: center; gap: 8px; }

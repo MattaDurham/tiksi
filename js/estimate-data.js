@@ -2080,8 +2080,9 @@ export const STOCK = {
    ],
    "per_ft": 2.57,
    "max_in": 192,
-   "foot_item": "Internet #206001713, model 10000537, Store SKU #369594",
-   "foot_url": "https://www.homedepot.com/p/Woodgrain-Millwork-WM-390-11-16-in-x-2-5-8-in-Primed-Finger-Jointed-Chair-Rail-Moulding-10000537/206001713",
+   "foot_item": "Internet #206012623, model L390A-90192C-SW (Alexandria Moulding)",
+   "foot_url": "https://www.homedepot.com/p/Alexandria-Moulding-390-11-16-in-x-2-1-2-in-Primed-Finger-Jointed-Wood-Chair-Rail-Moulding-Sold-by-Linear-Foot-L390A-90192C-SW/206012623",
+   "foot_checked": "2026-11-18: the Woodgrain by-the-foot page (#206001713, model 10000537) no longer exists (not found). The by-the-foot WM 390 Home Depot lists now, at the same $2.57 a foot, is Alexandria Moulding L390A-90192C-SW, listed 11/16 x 2-1/2 in, 1/8 in narrower than the 8 ft Woodgrain sticks: check the width at the store before mixing them on one wall",
    "evidence": "Home Depot sells WM 390 two ways: 8 ft full sticks (#203209387, ship to store, at least 2) at $12.20, and in store off 16 ft stock (#206001713, 'Moulding Cut: By Linear Foot') at $2.57 a foot.",
    "note": "The 8 ft stick is cheaper per foot ($1.53), so the plan cuts from 8 ft sticks and buys a length off the 16 ft stock only for a run longer than an 8 ft stick holds. Shoppers' answers on the page say the aisle has a saw to cut the stock and you pay for the feet you take; the store page does not say."
   },
@@ -2148,13 +2149,13 @@ export const STOCK = {
      "in": 96,
      "price": 16.37,
      "item": "Lowe's item #333348, model L5184468",
-     "url": "https://www.lowes.com/search?searchTerm=333348"
+     "url": "https://www.lowes.com/pd/ReliaBilt-1-in-x-6-in-x-8-ft-Square-Primed-Pine-Board/5002022559"
     },
     {
      "in": 144,
      "price": 25.55,
      "item": "Lowe's item #356475, model L51844612",
-     "url": "https://www.lowes.com/search?searchTerm=356475"
+     "url": "https://www.lowes.com/pd/1-in-x-6-in-x-12-ft-Square-Primed-Pine-Board/5002011739"
     }
    ],
    "evidence": "RELIABILT primed finger-jointed pine 1x6, 23/32 x 5-1/2 in, the same family and thickness as the 1x4; sold in 8, 12 and 16 ft, not by the foot.",

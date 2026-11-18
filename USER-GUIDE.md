@@ -584,18 +584,20 @@ Open a product card to edit its image, price and where that price came from, ven
 
 ESTIMATE shows what a project costs, room by room. Trim drawn in MODEL is worked out the way a finish carpenter would: every piece with its ends, the boards to buy at the cheapest store length, the supplies and the hours. Scope items from PROJECTS join it, then the project's contingency, overhead and profit, and tax. Change the drawing and the estimate follows.
 
-![A project's price, hours, working days and boards to buy, then one row per room.](js/guide-assets/budget.png)
+![A project's rooms, each with its trim, boards, supplies, hours, scope items and price.](js/guide-assets/budget.png)
 
-A project's price, hours, working days and boards to buy, then one row per room.
+A project's rooms, each with its trim, boards, supplies, hours, scope items and price.
 
 ### Try it
 
 1. Draw the trim in MODEL with each section in its room's subproject (WALL TRIM, or right-click). Add other work as scope items in PROJECTS.
-2. Open ESTIMATE and choose the project on the left. The top line gives the price with its range, carpenter hours, working days with their dates, and the boards to buy.
-3. Click a room for its walls as drawn with the boards each is cut from, its cut list and its labor. Click a piece, a board, a labor task or a scope item for where its numbers come from.
-4. Under HOW THE PRICE IS BUILT set the carpenter rate, contingency, overhead and profit, tax on materials and the spare boards. PROJECTS, SCHEDULE, ALL PROJECTS and the one-pager follow.
-5. Record carpenters' bids under BIDS RECEIVED, beside the estimate's labor.
-6. ALL PROJECTS (top left) ticks projects into the program and compares them with the budget cap; PRINT REPORT prints it.
+2. Open ESTIMATE and choose the project on the left. The rooms table totals the price; HOW THE PRICE IS BUILT gives its range.
+3. Click a room for its walls as drawn with the boards each is cut from, its cut list and its labor. In the labor table type over a quantity or a time (hours each) to change it for that room; RESET goes back to the drawing's count. + ADD A TASK adds one the drawing does not count.
+4. Click a piece, a board, a labor task or a scope item for where its numbers come from. A task lists every room it is in (click one to go there); a moulding lists the store items bought, each with its store page and its record in PRODUCTS.
+5. Under WHO DOES THE WORK (left) add a carpenter or crew with their hourly rate and, for any task, their own time. Choose them under WHO DOES IT in a project's price.
+6. Under HOW THE PRICE IS BUILT set the rate (without a carpenter chosen), contingency, overhead and profit, tax on materials and the spare boards. PROJECTS, SCHEDULE, ALL PROJECTS and the one-pager follow.
+7. Record carpenters' bids under BIDS RECEIVED, beside the estimate's labor.
+8. ALL PROJECTS (top left) ticks projects into the program and compares them with the budget cap; PRINT REPORT prints it.
 
 ### Other features here
 
@@ -605,7 +607,9 @@ A project's price, hours, working days and boards to buy, then one row per room.
 
 **Counted once.** A scope item whose model elements are all drawn trim of the same project (boards written in by an earlier trim package) is left out of the money and the days; REMOVE THEM takes such items away, and REMOVED RECORDS brings them back.
 
-**Undo.** UNDO and REDO cover the projects, their scope, the estimate settings and bids.
+**Store prices.** Each board bought is a record in PRODUCTS (one per store item: an 8 ft and a 12 ft board are two), with its store page, item number and the price seen there. Check or change the price in PRODUCTS and the estimate follows.
+
+**Undo.** UNDO and REDO cover the projects, their scope, the estimate settings, typed quantities and times, and bids.
 
 > **Good to know:** Hours are the weakest numbers: they come from estimating books, not from the carpenter who will do the work. Send the installer bid form (in the trim package) and compare. Trim imported as a model, not drawn as trim sections, is not in the estimate.
 
@@ -624,7 +628,7 @@ One table: each line's days, start, end and what it waits for, with a chart of w
 ### Try it
 
 1. Choose a project on the left. Set its start date at the top.
-2. Move a room up or down to change the order the carpenter works in.
+2. Move a room up or down to change the order the carpenter works in. Double-click a room (or click its ▸) for its tasks in the order they are done, from setup to cleanup, each with its hours.
 3. For a scope item, choose what it starts AFTER: another item or a room's trim. Give scope items their days in PROJECTS; a room's days come from its hours at 6 productive hours a day.
 4. ALL PROJECTS lays the program out from the program start: projects side by side, each from its own start date, or AFTER the project it should follow.
 5. Click a line for its dates and slack.

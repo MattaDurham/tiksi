@@ -166,3 +166,64 @@ test('the trim package is priced with the job\'s contingency', () => {
   const book = J.trimForBook(root), j = J.jobOf(root);
   near(book.totals.total, j.rooms.reduce((n, r) => n + r.cost.likely, 0) * 1.1, 'the book\'s total is the trim cost with contingency');
 });
+
+test('a room\'s typed quantity or time replaces the count or the published time, and resets', () => {
+  const { root } = setup();
+  const j0 = J.jobOf(root), study = j0.rooms[0], base = study.trim[0].labor.find(l => l.task === 'base');
+  assert.ok(base && !base.qtySet && base.eachSet === '', 'counted from the drawing at the published time');
+  assert.ok(J.setRoomLabor(root, study.key, 'qty', 'base', 100)); store.touch();
+  let l = J.jobOf(root).rooms[0].trim[0].labor.find(x => x.task === 'base');
+  assert.equal(l.qty, 100); assert.ok(l.qtySet); near(l.counted, base.qty, 'the count is kept beside it');
+  near(l.hours, 100 * base.rate, 'the line\'s hours follow');
+  const r1 = J.jobOf(root).rooms[0];
+  assert.ok(r1.hours.likely >= j0.rooms[0].hours.likely + (100 - base.qty) * base.rate - 1e-9, 'and the room\'s (with setup and cleanup for any added day)');
+  assert.ok(r1.days >= j0.rooms[0].days);
+  assert.ok(J.setRoomLabor(root, study.key, 'each', 'base', 0.05)); store.touch();
+  l = J.jobOf(root).rooms[0].trim[0].labor.find(x => x.task === 'base');
+  near(l.hours, 5, '100 LF at 0.05'); assert.equal(l.eachSet, 'room');
+  near(J.jobOf(root).rooms[1].hours.likely, j0.rooms[1].hours.likely, 'the other room is untouched');
+  // A task the drawing does not count can be added.
+  assert.ok(J.setRoomLabor(root, study.key, 'qty', 'scarf', 2)); store.touch();
+  assert.ok(J.jobOf(root).rooms[0].trim[0].labor.some(x => x.task === 'scarf' && x.qty === 2));
+  assert.equal(J.setRoomLabor(root, study.key, 'qty', 'base', -1), false, 'no negative quantities');
+  for (const [f, t] of [['qty', 'base'], ['each', 'base'], ['qty', 'scarf']]) J.setRoomLabor(root, study.key, f, t, null);
+  store.touch();
+  assert.equal(root.job, undefined, 'nothing left stored');
+  near(J.jobOf(root).price.likely, j0.price.likely, 'back to the drawing');
+});
+
+test('who does the work: their rate and their own times price the job', () => {
+  const { root } = setup();
+  const j0 = J.jobOf(root);
+  const x = J.addInstaller({ name: 'Sam', rate: 100 });
+  assert.ok(J.setInstallerTime(x, 'base', 0.07));
+  assert.ok(J.setJobWho(root, x.id)); store.touch();
+  const j = J.jobOf(root), l = j.rooms[0].trim[0].labor.find(y => y.task === 'base');
+  assert.equal(j.settings.laborRate, 100); assert.equal(l.rate, 0.07); assert.equal(l.eachSet, 'who');
+  near(j.labor.likely, j.hours.likely * 100, 'hours at Sam\'s rate');
+  assert.ok(j.hours.likely > j0.hours.likely, 'a slower baseboard time adds hours');
+  // A room's typed time still wins over theirs.
+  J.setRoomLabor(root, j.rooms[0].key, 'each', 'base', 0.02); store.touch();
+  assert.equal(J.jobOf(root).rooms[0].trim[0].labor.find(y => y.task === 'base').eachSet, 'room');
+  J.setRoomLabor(root, j.rooms[0].key, 'each', 'base', null);
+  J.removeInstaller(x.id); store.touch();
+  assert.equal(root.job, undefined, 'removing them takes them off the job');
+  assert.equal(J.jobOf(root).settings.laborRate, 85);
+  assert.equal(J.setJobWho(root, 'nobody'), false);
+});
+
+test('the boards bought are PRODUCTS records with their store pages, and a record\'s price prices the board', async () => {
+  const { root, prop } = setup();
+  const JP = await import('../js/job-products.js');
+  const j0 = J.jobOf(root);
+  const made = JP.ensureBoardProducts(j0.trim, prop); store.touch();
+  const recs = store.ws.data.products.filter(p => p.trimStock);
+  assert.equal(made, recs.length); assert.ok(recs.length >= 1);
+  for (const r of recs) assert.ok(/^https:\/\/www\.(lowes|homedepot)\.com\/p/.test(r.url) && r.price > 0 && r.propertyIds.includes(prop.id) && r.priceCheckedAt, r.name);
+  assert.equal(JP.ensureBoardProducts(J.jobOf(root).trim, prop), 0, 'made once');
+  near(J.jobOf(root).boards, j0.boards, 'the records carry the prices the estimate used');
+  const line = j0.trim.buy[0].lines[0], { record } = JP.productForBoard(j0.trim.buy[0].pid, line.lenIn, line.how);
+  record.price += 10; store.touch();
+  near(J.jobOf(root).boards - j0.boards, 10 * line.order, 'ten dollars more for each of those boards');
+  assert.equal(JP.feetInches(94.5), '7\'-10 1/2"'); assert.equal(JP.feetInches(144), '12\'-0"');
+});

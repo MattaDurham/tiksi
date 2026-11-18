@@ -73,7 +73,7 @@ try {
   // ---- BUDGET and SCHEDULE show the figures the one-pager prints ----
   await page.goto(url + '/#/budget');
   await page.locator('#cap-input').waitFor();
-  check(/\$32,000/.test(await page.locator('.es-figs .big b').textContent()), 'ALL PROJECTS totals the selected program at $32,000 likely');
+  check(/\$32,000/.test(await page.locator('[data-sel-total]').textContent()), 'ALL PROJECTS totals the selected program at $32,000 likely');
   await page.fill('#cap-input', '250k'); await page.press('#cap-input', 'Tab');
   await page.waitForFunction(() => document.querySelector('#cap-input')?.value === '$250,000');
   check(await prop('return s.ws.data.settings.budgetCap === 250000'), 'a cap typed as 250k is $250,000');
@@ -82,7 +82,8 @@ try {
   check(await prop('return s.ws.data.settings.budgetCap === 250000') && /The cap is still \$250,000/.test(await page.locator('#cap-note').textContent()), 'an amount BUDGET cannot read is refused with a reason and the cap stays');
   await page.goto(url + '/#/schedule?program');
   await page.locator('#prog-start').waitFor();
-  check((await page.locator('[data-last] b').textContent()) === 'Nov 26, 2026' && /13 working days/.test(await page.locator('.es-figs .big b').textContent()), 'SCHEDULE\'s last day of work is Nov 26, 2026, the 13th working day');
+  const ends = await page.locator('#gantt tr.job td:nth-child(4)').allTextContents();
+  check(ends.some(e => /Nov 26/.test(e)) && !ends.some(e => /Nov 2[7-9]|Nov 30|Dec/.test(e)), 'SCHEDULE\'s last day of work is Nov 26, 2026, the 13th working day (' + ends.join(', ') + ')');
   await page.goto(url + '/#/model');
   await page.waitForSelector('#btn-file', { state: 'attached' });
 

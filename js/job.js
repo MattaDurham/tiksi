@@ -21,6 +21,7 @@ import {
 import { trimDesign } from './trim-design.js';
 import { trimPieces, estimateTrim } from './trim-estimate.js';
 import { cpm } from './program.js';
+import { boardPrices } from './job-products.js';
 
 export const JOB_DEFAULTS = Object.freeze({
   laborRate: 85,          // $ an hour for the carpenter
@@ -41,7 +42,63 @@ export function jobSettings(p) {
     const v = Number(own[k]);
     if (own[k] != null && own[k] !== '' && Number.isFinite(v)) out[k] = Math.min(LIMITS[k][1], Math.max(LIMITS[k][0], v));
   }
+  // Who does the work: their hourly rate and their own times per task replace the job's rate and
+  // the published times.
+  out.who = (own.who && installerById(own.who)) || null;
+  if (out.who && Number.isFinite(Number(out.who.rate))) out.laborRate = Math.min(LIMITS.laborRate[1], Math.max(0, Number(out.who.rate)));
   return out;
+}
+
+// ---------- who does the work ----------
+// Installers are kept with the workspace (settings.installers): { id, name, trade, rate ($ an hour),
+// each: { task: hours each } } where a task's time is their own; the rest are the published times.
+export const installers = () => (ws.data.settings && Array.isArray(ws.data.settings.installers)) ? ws.data.settings.installers : [];
+export const installerById = id => installers().find(x => x.id === id) || null;
+export function addInstaller(fields = {}) {
+  ws.data.settings.installers = installers().slice();
+  const x = { id: fields.id || 'inst-' + Math.random().toString(36).slice(2, 10), name: String(fields.name || 'Carpenter').slice(0, 120), trade: String(fields.trade || 'Carpenter').slice(0, 60),
+    rate: Number.isFinite(Number(fields.rate)) ? Number(fields.rate) : JOB_DEFAULTS.laborRate, each: { ...(fields.each || {}) } };
+  ws.data.settings.installers.push(x);
+  return x;
+}
+export function removeInstaller(id) {
+  ws.data.settings.installers = installers().filter(x => x.id !== id);
+  for (const p of ws.data.projects) if (p.job && p.job.who === id) { const next = { ...p.job }; delete next.who; if (Object.keys(next).length) p.job = next; else delete p.job; }
+}
+// One of an installer's times (hours each); null or '' goes back to the published time.
+export function setInstallerTime(x, task, value) {
+  const each = { ...(x.each || {}) };
+  if (value == null || value === '') delete each[task];
+  else { const v = Number(value); if (!Number.isFinite(v) || v < 0) return false; each[task] = v; }
+  x.each = each;
+  return true;
+}
+// The job's installer (an id; '' for the published times at the job's own rate).
+export function setJobWho(p, id) {
+  const root = rootOf(p);
+  if (!root || (id && !installerById(id))) return false;
+  const next = { ...(root.job || {}) };
+  if (id) next.who = id; else delete next.who;
+  if (Object.keys(next).length) root.job = next; else delete root.job;
+  return true;
+}
+
+// A room's typed quantities and times (field 'qty' or 'each'), kept on the top-level project by the
+// room's key (its subproject's id, or 'room:<name>'); null or '' goes back to the count or the rate.
+export function setRoomLabor(p, roomKey, field, task, value) {
+  const root = rootOf(p);
+  if (!root || !['qty', 'each'].includes(field) || !task) return false;
+  let v = null;
+  if (value != null && value !== '') { v = Number(value); if (!Number.isFinite(v) || v < 0) return false; }
+  const labor = { ...((root.job && root.job.labor) || {}) };
+  const room = { qty: { ...((labor[roomKey] || {}).qty || {}) }, each: { ...((labor[roomKey] || {}).each || {}) } };
+  if (v == null) delete room[field][task]; else room[field][task] = v;
+  for (const f of ['qty', 'each']) if (!Object.keys(room[f]).length) delete room[f];
+  if (Object.keys(room).length) labor[roomKey] = room; else delete labor[roomKey];
+  const next = { ...(root.job || {}) };
+  if (Object.keys(labor).length) next.labor = labor; else delete next.labor;
+  if (Object.keys(next).length) root.job = next; else delete root.job;
+  return true;
 }
 // One setting on the top-level project; a default is not stored. False for an unknown key or a non-number.
 export function setJobSetting(p, key, value) {
@@ -76,7 +133,7 @@ export function trimOf(p) {
   const root = rootOf(p), prop = propOf(root);
   if (!root || !prop || !(prop.trims || []).length) return null;
   const s = jobSettings(root);
-  const key = [rev, ws.data, s.laborRate, s.sparePerMoulding].join('|');
+  const key = [rev, ws.data, s.laborRate, s.sparePerMoulding, JSON.stringify(root.job || {})].join('|');
   const hit = trimMemo.get(root.id);
   if (hit && hit.key === key && hit.data === ws.data) return hit.value;
   const ids = new Set(treeOf(root).map(x => x.id));
@@ -93,8 +150,18 @@ export function trimOf(p) {
           if (r && pieces.some(q => q.roomId === r.id)) names.push(r.name || 'Room');
         }
         for (const q of pieces) if (!names.includes(q.room)) names.push(q.room);
+        // Each room's typed quantities and times, by the room's key (as jobOf finds the room).
+        const typed = (root.job && root.job.labor) || {}, rooms = {};
+        for (const name of names) {
+          const owners = new Set(pieces.filter(q => q.room === name).map(q => q.project).filter(Boolean));
+          const owner = owners.size === 1 && [...owners][0] !== root.id ? [...owners][0] : 'room:' + name;
+          if (typed[owner]) rooms[name] = typed[owner];
+        }
         const inputs = { pieces, faces, rooms: names.map(name => ({ name })) };
-        value = estimateTrim({ ...inputs, settings: { laborRate: s.laborRate, contingency: 0, sparePerMoulding: s.sparePerMoulding } });
+        const stock = boardPrices();
+        value = estimateTrim({ ...inputs, settings: { laborRate: s.laborRate, contingency: 0, sparePerMoulding: s.sparePerMoulding,
+          labor: { each: (s.who && s.who.each) || {}, rooms }, stock: stock.stock, priceOverrides: stock.priceOverrides } });
+        value.labor.who = s.who;
         value.inputs = inputs;
         value.sectionIds = sections.map(t => t.id);
         value.sections = sections;
@@ -114,7 +181,7 @@ export function trimOf(p) {
 export function trimForBook(p) {
   const t = trimOf(p), s = jobSettings(p);
   if (!t || t.error) return null;
-  return estimateTrim({ ...t.inputs, settings: { laborRate: s.laborRate, contingency: s.contingency, sparePerMoulding: s.sparePerMoulding } });
+  return estimateTrim({ ...t.inputs, settings: { ...t.settings, laborRate: s.laborRate, contingency: s.contingency, sparePerMoulding: s.sparePerMoulding } });
 }
 
 export function coveredBy(it, trimIds) {

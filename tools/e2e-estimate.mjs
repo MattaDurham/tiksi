@@ -74,7 +74,7 @@ try {
   await page.waitForSelector('.es-head h1');
   const j0 = await job();
   check(j0.pieces >= 4 && j0.hours > 0 && j0.covered === 1, `the study's baseboard is ${j0.pieces} pieces and ${j0.hours.toFixed(1)} hours; the old boards item is counted once`);
-  check((await page.locator('.es-figs .big b').textContent()) === await money(j0.price), 'the price is at the top');
+  check((await page.locator('.es-sec .es-t tfoot td:last-child').first().textContent()) === await money(j0.price) && await page.locator('.es-figs').count() === 0, 'the price totals the rooms table, with no figure boxes above it');
   check(await page.locator('#rail a[data-view="estimate"].active').count() === 1, 'the ESTIMATE tab is lit');
   await page.click('tr[data-room="p-study"] td:first-child');
   await page.locator('.es-open .ev-pc[data-d^="piece:"]').first().waitFor();
@@ -82,6 +82,44 @@ try {
   await page.locator('.es-open .es-cut tr[data-d^="piece:"]').first().click();
   await until(async () => /long point/.test(await page.locator('#es-dbody').textContent()), 'the piece detail');
   check(/Ends/.test(await page.locator('#es-dbody').textContent()), 'a piece opens with its length, ends and board');
+
+  console.log('\n[labor] a room\'s quantities and times are typed over in its labor table');
+  const baseHours = async () => page.evaluate(async () => { const J = await import('/js/job.js'), s = await import('/js/store.js'); return J.jobOf(s.projectById('p-trim')).rooms.find(r => r.key === 'p-study').trim[0].labor.find(l => l.task === 'base'); });
+  const b0 = await baseHours();
+  await page.locator('[data-lq="p-study|base"]').fill('50');
+  await page.locator('[data-lq="p-study|base"]').press('Tab');
+  await until(async () => (await baseHours()).qty === 50, 'the typed quantity');
+  check(Math.abs((await baseHours()).hours - 50 * b0.rate) < 1e-9 && await page.locator('tr[data-lt="p-study|base"].typed [data-lr]').count() === 1, 'typing 50 LF of base gives 50 × its time, marked typed with a RESET');
+  await page.locator('[data-lr="p-study|base"]').click();
+  await until(async () => !(await baseHours()).qtySet, 'reset');
+  check(Math.abs((await baseHours()).qty - b0.qty) < 1e-9, 'RESET goes back to the drawing\'s count');
+  await page.locator('tr[data-lt="p-study|base"] td.lk').click();
+  await until(async () => /Where the published time comes from/i.test(await page.locator('#es-dbody').textContent()), 'the task detail');
+  check(await page.locator('#es-dbody [data-go-room="p-study"]').count() === 1, 'the task\'s detail links to each room it is in');
+
+  console.log('\n[products] the boards are PRODUCTS records with their store pages');
+  await until(async () => (await page.evaluate(async () => (await import('/js/store.js')).ws.data.products.filter(p => p.trimStock).length)) > 0, 'board records');
+  await page.locator('.es-open .es-cut tr[data-d^="piece:"]').first().click();
+  await page.locator('#es-dbody [data-d^="product:"]').click();
+  await until(async () => /Bought as/i.test(await page.locator('#es-dbody').textContent()), 'the product detail');
+  check(await page.locator('#es-dbody a[href^="https://www.lowes.com/"], #es-dbody a[href^="https://www.homedepot.com/"]').count() > 0
+    && await page.locator('#es-dbody a[href^="#/products?select="]').count() > 0, 'a moulding links to its store page and its PRODUCTS record');
+
+  console.log('\n[who] who does the work sets the rate and the times');
+  await page.click('[data-add-who]');
+  await page.locator('[data-wf="rate"]').waitFor();
+  await page.locator('[data-wf="name"]').fill('Synthetic Carpenter'); await page.locator('[data-wf="name"]').press('Tab');
+  await page.locator('[data-wf="rate"]').fill('100'); await page.locator('[data-wf="rate"]').press('Tab');
+  await page.locator('[data-wt="base"]').fill('0.05'); await page.locator('[data-wt="base"]').press('Tab');
+  await until(async () => (await page.evaluate(async () => (await import('/js/store.js')).ws.data.settings.installers[0].each.base)) === 0.05, 'their time');
+  await page.goto(url + '/#/estimate?project=p-trim');
+  await page.locator('[data-job-who]').waitFor();
+  const who = await page.evaluate(async () => (await import('/js/store.js')).ws.data.settings.installers[0].id);
+  await page.selectOption('[data-job-who]', who);
+  await until(async () => (await baseHours()).rate === 0.05, 'the job uses their time');
+  check(await page.evaluate(async () => { const J = await import('/js/job.js'), s = await import('/js/store.js'); return J.jobOf(s.projectById('p-trim')).settings.laborRate; }) === 100, 'choosing them prices the job at their rate and their own baseboard time');
+  await page.selectOption('[data-job-who]', '');
+  await until(async () => (await baseHours()).rate === b0.rate, 'back to the published time');
 
   console.log('\n[price] a markup moves the price; UNDO and REDO');
   await page.locator('[data-set="contingency"]').fill('10');
@@ -117,7 +155,13 @@ try {
   const det = await page.locator('#gantt-detail').textContent();
   check(/working day/.test(det) && /Dec \d+, 2026/.test(det), 'a line gives its working days and dates (' + det + ')');
   const j1 = await job();
-  check((await page.locator('.es-figs .big b').textContent()).startsWith(String(j1.days)), `the job takes ${j1.days} working days, the trim then the item`);
+  check((await page.locator('.es-nav .es-job.here .m').textContent()) === `${j1.days} days` && await page.locator('.es-figs').count() === 0, `the job takes ${j1.days} working days, the trim then the item`);
+  await page.locator('#gantt tr[data-key="trim:p-study"] td.work').dblclick();
+  await until(async () => (await page.locator('#gantt tr.g-task').count()) > 0, 'the room\'s tasks');
+  const tasks = await page.locator('#gantt tr.g-task td.work').allTextContents();
+  check(tasks[0] === 'Set up and protect the room' && tasks[tasks.length - 1] === 'Clean up', `double-clicking a room shows its ${tasks.length} tasks in order`);
+  await page.locator('#gantt tr[data-key="trim:p-study"] [data-open-room]').click();
+  await until(async () => (await page.locator('#gantt tr.g-task').count()) === 0, 'closed');
 
   console.log('\n[addresses]');
   await page.goto(url + '/#/budget');
