@@ -6,7 +6,9 @@
 // MODEL's panel; an edit UNDO takes back is a room's floor there (PLAN, and dragging walls, are gone).
 // Each "device" is its own browser context (its own storage). One private server on a free
 // port; every project is synthetic and lives in a temporary folder.
-// E2E_STEP=<part name>[,<part name>] runs only those parts.
+// E2E_STEP=<part name>[,<part name>] runs only those parts. Without it this file runs the parts up to
+// `code`; e2e-two-devices-later.mjs runs the rest (LATER), so each file fits the suite time limit
+// on GitHub's Mac, where all of them together took about ten minutes.
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdtemp, rm, writeFile, readdir } from 'node:fs/promises';
@@ -1160,18 +1162,23 @@ async function anOriginalAddedBeforeARefusalIsKept() {
 const parts = { view: eachDeviceKeepsItsOwnView, typing: aSaveElsewhereLeavesThePageAlone, slow: aSlowActionWritesIntoTheLiveRecord, nested: aNestedRecordStaysTheLiveOne, undo: undoKeepsTheOtherDevicesChange, onepager: theOnePagerEditorKeepsWhatIsTyped, conflict: theCopiesDifferQuestionSaysWhatDiffers, older: anOlderTabDoesNotSaveOverANewerCopy,
   drafts: twoDraftsAreNotAConflict, unavailable: aProjectWithAMissingFileIsShown, import: aProjectFileAsksBeforeItReplaces, error: aPageThatFailsToOpenSaysSo, saveid: aKeptCopyTheMacAlreadyHasIsNotSentAgain, undone: recordsThatEqualAnEarlierSaveAreStillSent, code: aPageOnOlderCodeReloadsOrStopsSaving, codetyping: aCodeChangeWaitsForTheFieldInUse, coderace: anOlderPageDoesNotSaveOnceAfterTheCodeChanged, camera: aPhotoOnItsWayInHoldsTheReloadOff, olderfield: aNewerCopyWaitsForTheFieldInUse, codeoriginal: anOriginalAddedBeforeARefusalIsKept,
   originals: originalsAreNotDownloadedAndHeldForEver, pictures: theFirstScreenDoesNotWaitForEveryPicture, stored: anUnreadableStoredWorkspaceIsLeftAsItIs, model: modelKeepsItsCamera };
+const LATER = ['codetyping', 'coderace', 'camera', 'olderfield', 'codeoriginal', 'originals', 'pictures', 'stored', 'model'];
+const later = process.env.E2E_TWO_DEVICES_LATER === '1';
+const chosen = process.env.E2E_STEP ? process.env.E2E_STEP.split(',').filter(Boolean) : Object.keys(parts).filter(key => LATER.includes(key) === later);
 
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(url)).ok) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
   browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
-  // The run is stopped after fifteen minutes, naming the part it was in (the online Mac needed
-  // 9 min 46 s for the whole run, so ten minutes left it no room).
+  // The run is stopped after ten minutes, naming the part it was in (inside the browser runner's
+  // twelve-minute limit for one suite; on GitHub's Mac the whole run needed up to ten minutes).
   let timer;
   for (const key of (process.env.E2E_STEP || '').split(',').filter(Boolean)) assert.ok(parts[key], 'E2E_STEP names a part that does not exist: ' + key);
-  await Promise.race([(async () => { for (const [key, part] of Object.entries(parts)) if (!process.env.E2E_STEP || process.env.E2E_STEP.split(',').includes(key)) await part(); })(),
-    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('The run did not finish; it was in part ' + lastStep)), 900000); })]).finally(() => clearTimeout(timer));
+  await Promise.race([(async () => { for (const [key, part] of Object.entries(parts)) if (chosen.includes(key)) await part(); })(),
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('The run did not finish; it was in part ' + lastStep)), 600000); })]).finally(() => clearTimeout(timer));
   assert.deepEqual(errors, []);
-  console.log('ok   two devices: own view each; a save elsewhere updates in place; the copies-differ question names what differs; an older tab cannot save over a newer copy; drafts do not conflict; a missing project file is shown; a project file asks before replacing; a failed page says so; a kept copy the Mac has is not sent again; originals are cached and not held for ever; the first screen does not wait for every picture; an unreadable stored workspace is left as it is; MODEL keeps its camera');
+  console.log(process.env.E2E_STEP ? 'ok   two devices: ' + chosen.join(', ')
+    : later ? 'ok   two devices, later parts: a code change waits for the field in use; an older page does not save once the code changed; a photo on its way in holds the reload off; a newer copy waits for the field in use; an original added before a refusal is kept; originals are cached and not held for ever; the first screen does not wait for every picture; an unreadable stored workspace is left as it is; MODEL keeps its camera'
+    : 'ok   two devices: own view each; a save elsewhere updates in place; the copies-differ question names what differs; an older tab cannot save over a newer copy; drafts do not conflict; a missing project file is shown; a project file asks before replacing; a failed page says so; a kept copy the Mac has is not sent again; a page on older code reloads or stops saving');
 } catch (error) {
   // The failure first: a browser that will not close must not hide it.
   console.error(error);
