@@ -116,7 +116,7 @@ function renderJob(inner, job, prop) {
       <td class="num">${r.days || ''}</td><td class="num"><b>${fm(r.price.likely)}</b></td></tr>
       ${open.has(r.key) ? `<tr class="es-open"><td colspan="10">${roomBody(job, r)}</td></tr>` : ''}`;
   };
-  const otherRow = job.other.items.length ? `<tr class="es-room ${open.has('other') ? 'open' : ''}" data-room="other" tabindex="0"><td><span class="tw">${open.has('other') ? '▾' : '▸'}</span><b>Project-wide items</b></td><td colspan="6"></td><td class="num">${fm(job.other.itemCost.likely)}</td><td></td><td class="num"><b>${fm(job.other.price.likely)}</b></td></tr>
+  const otherRow = job.other.items.length ? `<tr class="es-room ${open.has('other') ? 'open' : ''}" data-room="other" tabindex="0"><td><span class="tw">${open.has('other') ? '▾' : '▸'}</span><b>Project-wide items</b></td><td colspan="6" class="note">${job.other.itemCost.high ? '' : plural(job.other.items.length, 'item') + ' without prices'}</td><td class="num">${job.other.itemCost.high ? fm(job.other.itemCost.likely) : ''}</td><td></td><td class="num"><b>${fm(job.other.price.likely)}</b></td></tr>
       ${open.has('other') ? `<tr class="es-open"><td colspan="10">${itemsTable(job.other.items)}</td></tr>` : ''}` : '';
   const table = `<section class="es-sec"><h2>Rooms</h2>
     <div class="es-tbl"><table class="es-t"><thead><tr><th>Room</th><th class="num">Trim LF</th><th class="num">Pieces</th><th class="num">Boards</th><th class="num">Supplies</th><th class="num">Hours</th><th class="num">Labor</th><th class="num">Scope items</th><th class="num">Days</th><th class="num">Price</th></tr></thead>
