@@ -243,7 +243,7 @@ try {
   // A phone opens on the model.
   await mobile.goto(url); await mobile.locator('canvas.v-canvas').waitFor();
   // The phone already shows MODEL, so it is visited last, coming back from another page.
-  for(const view of ['materials','photos','projects','products','budget','schedule','sheets','model']) {
+  for(const view of ['materials','photos','projects','products','estimate','schedule','documents','model']) {
     await navigateToView(mobile, view);
     console.log('mobile route checked:', view);
     assert.equal(await mobile.evaluate(()=>document.body.scrollWidth),402,`${view} does not widen mobile viewport`);

@@ -1,5 +1,6 @@
-// Budget view: the "here is the current budget" report.
-// Select/deselect projects against a cap, roll up by project and category, print a report.
+// The program and the budget cap: ESTIMATE's first page (estimate-view.js mounts it; #/budget opens it).
+// Select/deselect projects against a cap, roll up by project and category, print a report. Each
+// project's total is its estimate (store.js projectTotals with the estimate's rules).
 
 import {
   ws, touch, fmtMoney, readMoney, escapeHtml, projectTotals,
@@ -39,8 +40,8 @@ function render() {
   el.innerHTML = `
     <div class="view-scroll">
       <div class="view-head">
-        <span class="view-title">BUDGET</span>
-        <span class="view-sub">select and deselect projects to fit the cap; totals update live</span>
+        <span class="view-title">PROGRAM AND BUDGET CAP</span>
+        <span class="view-sub">tick projects into the program to fit the cap; each total is the project's estimate</span>
         <span style="flex:1"></span>
         <button class="btn primary" id="print-report">${icon('print')}PRINT REPORT</button>
       </div>

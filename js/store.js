@@ -903,7 +903,7 @@ export function materialById(id) {
 
 export function projectById(id) { return ws.data.projects.find(p => p.id === id) || null; }
 
-// The projects of the active property, in list order: what PROJECTS, BUDGET, SCHEDULE and the
+// The projects of the active property, in list order: what PROJECTS, ESTIMATE, SCHEDULE and the
 // scope pickers show. A project whose property is gone (or that never had one) counts as the
 // active property's, so nothing drops out of sight.
 export function propertyProjects() {

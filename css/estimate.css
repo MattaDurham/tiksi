@@ -166,3 +166,21 @@ html.touch #view .bp-doc { min-height: 44px; justify-content: center; }
 /* PROJECTS: where a project's total includes its drawn trim */
 .proj-estimate-note { margin: -4px 0 12px; font-size: 12px; color: var(--dim); line-height: 1.5; }
 .proj-estimate-note a { color: var(--accent); font: 600 10.5px var(--mono); letter-spacing: 0.08em; margin-left: 4px; }
+
+/* On a touch screen (an iPad, a phone): every control a finger's size, no reading text under 12
+   points, fields at 16 points so the phone does not zoom into them. The wall drawings and cut
+   diagrams are drawings: pinch to read them. */
+html.touch #view .est :is(.gl, .crumb, .eyebrow, .pill, .small, .note, .muted),
+html.touch #view .est :is(.est-brand b, .est-proj .m, .figs span, .est-in, .est-bid-form label, .rows .m, .rows .d),
+html.touch #view .est #est-dbody :is(.d-eyebrow, .d-sec h4, .d-src, .kv dt, .kv dd, p, ul),
+html.touch #view .bp :is(.gl, .bp-f, .bp-doc span, .bp-total span, .bp-check, .note),
+html.touch #view .proj-estimate-note, html.touch #view .proj-estimate-note a { font-size: 12px; }
+html.touch #view .est :is(.est-proj, .est-toc a, .est-toc .subs a) { min-height: 44px; display: flex; align-items: center; font-size: 13px; }
+html.touch #view .est details.est-room > summary { min-height: 44px; align-items: center; }
+html.touch #view .est :is(.est-find input, .est-in input, .est-bid-form input, .est-bid-form select),
+html.touch #view .bp :is(.bp-f input, .bp-f select, .bp-f textarea) { font-size: 16px; min-height: 44px; }
+html.touch #view .est-det .dbar button { width: 44px; height: 44px; }
+html.touch #view .bp-check input { width: 22px; height: 22px; }
+html.touch #view .bp-check { min-height: 44px; }
+html.touch #view .proj-estimate-note a { display: inline-flex; align-items: center; min-height: 44px; }
+html.touch #view .est a.dl { display: inline-block; min-height: 24px; }

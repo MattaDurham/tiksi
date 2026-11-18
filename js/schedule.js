@@ -75,7 +75,7 @@ function render() {
       <div class="gantt-wrap" id="gantt"></div>
       ${plans.map(x => criticalPathLine(x)).join('')}
       ${plans.length === 0 ? `<div class="empty-state" style="margin-top:14px"><span class="empty-ic">${icon('schedule')}</span><b>No schedulable work</b>
-        Select projects in BUDGET and give scope items durations and dependencies in PROJECTS.</div>` : ''}
+        Tick projects into the program in ESTIMATE and give scope items durations and dependencies in PROJECTS; drawn trim brings its own install days.</div>` : ''}
     </div>`;
 
   el.querySelector('#prog-start').onchange = e => {

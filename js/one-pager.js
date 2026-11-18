@@ -48,7 +48,7 @@ export function onePagerFacts(prop, data) {
   const rooms = (prop.rooms || []).filter(r => r && r.kind !== 'unscanned' && r.pts && r.pts.length >= 3);
   const floorArea = roomsFloorArea(prop.rooms || []);
   const levels = (prop.levels || []).length || 1;
-  // The projects, cost and span come from program.js, the calculation BUDGET and SCHEDULE
+  // The projects, cost and span come from program.js, the calculation ESTIMATE and SCHEDULE
   // show, so the page a client sees agrees with both.
   const own = programProjects(prop, d);
   const top = own.filter(pr => !pr.parentId);
