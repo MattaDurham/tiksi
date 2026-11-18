@@ -2766,7 +2766,7 @@ function deleteTrims(ids) {
 // reach 'all' takes every section it covers, of any kind, and `style` may then be a test.
 function editTrims(fn, label, reach, style) {
   const ids = trimIds();
-  let list = reach === 'all' ? designNow().pool(ids, trimScope) : reach ? designNow().members(ids, trimScope) : ids.map(trimById).filter(Boolean);
+  let list = Array.isArray(reach) ? reach : reach === 'all' ? designNow().pool(ids, trimScope) : reach ? designNow().members(ids, trimScope) : ids.map(trimById).filter(Boolean);
   if (typeof style === 'function') list = list.filter(style);
   else if (style) list = list.filter(t => t.style === style);
   if (!list.length) return 0;
@@ -2813,7 +2813,9 @@ function renderTrimPanel() {
     // A layout number for every section of this kind the scope reaches.
     design: (key, value, label) => editTrims(t => setDesignParam(t, key, value), label || 'trim layout', true),
     line: (t, edge, dy, label) => moveTrimLine(t, edge, dy, label),
-    swapStyle: (style, productId) => editTrims(t => swapTrimProduct(t, productId, trimWallHeight(t)), 'swap trim', true, style),
+    // A moulding goes to its kind across the reach, and to the rails and caps on its line (trim-design.js).
+    swapStyle: (style, productId) => editTrims(t => swapTrimProduct(t, productId, trimWallHeight(t)), 'swap trim', design.mouldingReach(ids, trimScope, style)),
+    mouldingReach: style => design.mouldingReach(ids, trimScope, style),
     // A style chosen here goes to every section of its kind the reach covers, whatever style
     // each is now: every field becomes this wainscoting, every crown this crown.
     preset: (kind, id) => {

@@ -108,7 +108,7 @@ function scopeHtml(ctx) {
 function mouldingsHtml(ctx) {
   const styles = Object.keys(TRIM_STYLES).filter(k => ctx.trims.some(t => t.style === k));
   return `<div class="tp-sub">MOULDINGS</div>` + styles.map(k => {
-    const mine = ctx.reach.filter(t => t.style === k);
+    const mine = ctx.mouldingReach ? ctx.mouldingReach(k) : ctx.reach.filter(t => t.style === k);
     const ids = new Set(mine.map(t => t.product));
     const cur = ids.size === 1 ? [...ids][0] : '';
     const items = catalogFor(k);

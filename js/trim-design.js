@@ -195,6 +195,18 @@ export function trimDesign(env) {
     const styles = new Set(seedIds.map(byId).filter(Boolean).map(t => t.style));
     return pool(seedIds, scope).filter(t => styles.has(t.style));
   }
+  // The sections a moulding picked for `style` goes to: that style across the reach and, at the
+  // project's reach (or the sections picked), the other rails and caps on the same line, so the
+  // top of the wainscoting is one moulding everywhere (a chair rail in one room, a wainscot cap
+  // in the next). Base, crown and fields keep to their own kind.
+  function mouldingReach(seedIds, scope, style) {
+    const list = members(seedIds, scope).filter(t => t.style === style);
+    const group = (trimStyle({ style }) || {}).group;
+    if (!lineRule(scope).anyHeight || group !== 'Rails and caps' || !list.length) return list;
+    const lines = list.map(t => t.y);
+    const more = pool(seedIds, scope).filter(t => t.style !== style && (trimStyle(t) || {}).group === group && lines.some(y => Math.abs(t.y - y) < BAND));
+    return [...list, ...more];
+  }
   // What each scope covers for this selection, for the panel's buttons.
   function scopes(seedIds) {
     const seeds = seedIds.map(byId).filter(Boolean);
@@ -364,7 +376,7 @@ export function trimDesign(env) {
     return out;
   }
 
-  return { info, layout, pool, members, scopes, planLine, lineStops, stepCols, summary, notes, byId };
+  return { info, layout, pool, members, mouldingReach, scopes, planLine, lineStops, stepCols, summary, notes, byId };
 }
 
 // How a height line moves at each reach. Every section of the grabbed kind comes onto the

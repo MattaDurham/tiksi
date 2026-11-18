@@ -177,6 +177,11 @@ test('raising the chair rail carries the room: the field under it stretches, the
   const fam = d2.planLine(copy(d2.pool([seed.id], 'project')), seed.id, 'move', 0.1, { scope: 'project' });
   near(fam.patches.get(cap.id).y, 1.0, 'the study\'s cap comes onto the rail line', 1e-4);
   assert.ok(!d2.planLine(copy(d2.pool([seed.id], 'room')), seed.id, 'move', 0.1, { scope: 'room' }).patches.has(cap.id), 'a room reach leaves the next room alone');
+  // A moulding picked for the rail at the project's reach goes to the study's cap on that line too.
+  const reachIds = d2.mouldingReach([seed.id], 'project', 'chair-rail').map(t => t.id);
+  for (const t of [...living.rail, ...study.rail, cap]) assert.ok(reachIds.includes(t.id), t.style + ' ' + t.id + ' takes the moulding');
+  for (const t of [...living.base, ...living.boxes]) assert.ok(!reachIds.includes(t.id), 'base and fields keep their own');
+  assert.ok(!d2.mouldingReach([seed.id], 'room', 'chair-rail').some(t => t.id === cap.id), 'a room reach keeps to the room');
   // Not moved at all, the drag already shows where everything goes: a grab is a snap.
   const snap = d.planLine(copy(d.pool([seed.id], 'project')), seed.id, 'move', 0, { scope: 'project' });
   for (const t of study.rail) near(snap.patches.get(t.id).y, 0.9, 'a grab brings the study rail to the living line', 1e-4);
