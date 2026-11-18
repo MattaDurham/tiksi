@@ -177,3 +177,11 @@ html.touch #view .jd :is(.gl, .jd-f, .jd-doc span) { font-size: 12px; }
 .pp-sign { display: grid; grid-template-columns: 2fr 1fr; gap: 28px 24px; margin-top: auto; padding-top: 30px; font-size: 8.5pt; color: #555; }
 .pp-sign span { display: block; border-bottom: 1px solid #16181d; height: 24px; margin-bottom: 3px; }
 @media print { #print-root .pp-page { box-shadow: none; margin: 0; width: auto; } }
+
+/* SCHEDULE on a touch screen: 12-point text; on a phone the work, its days and the chart (the
+   dates and AFTER are in the line's detail and on a wider screen). */
+html.touch #view .sc :is(.sc-tab th, .sc-wk, .sc-wk small, .sc-start, .sc-detail, .sc-tab select) { font-size: 12px; }
+@media (max-width: 760px) {
+  .sc-tab :is(th, td):nth-child(n+3):nth-child(-n+6) { display: none; }
+  .sc-tab td.work { max-width: 140px; }
+}

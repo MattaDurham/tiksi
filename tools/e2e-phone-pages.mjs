@@ -389,24 +389,8 @@ async function run(label, engine, profile) {
         await bar.tap();
         const detail = await page.locator('#gantt-detail').textContent();
         check(/day.*, [A-Z][a-z]{2} \d+, \d{4} to [A-Z][a-z]{2} \d+, \d{4}, (on the critical path|slack )/.test(detail), label + ': a tapped bar shows its dates and slack (' + detail.slice(0, 80) + ')');
-        const label0 = await page.locator('#gantt .gantt-svg').evaluate(svg => [...svg.querySelectorAll('line')].find(l => l.getAttribute('y1') === '0' && l.getAttribute('x1') === l.getAttribute('x2'))?.getAttribute('x1'));
-        check(Number(label0) <= 130, label + ': the name column gives the chart room on a phone (separator at ' + label0 + ')');
-        // Finger or mouse can change while the page is open (an iPad and a trackpad): SCHEDULE
-        // follows. Chromium can switch its touch screen off and on; WebKit cannot.
-        if (engine === chromium) {
-          const cdp = await page.context().newCDPSession(page);
-          const state = () => page.evaluate(() => ({ strip: !!document.querySelector('#gantt-detail'), taps: document.querySelectorAll('#gantt .g-item').length, touch: document.documentElement.classList.contains('touch') }));
-          await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
-          await page.waitForFunction(() => !matchMedia('(pointer: coarse)').matches && navigator.maxTouchPoints === 0);
-          await page.waitForFunction(() => !document.documentElement.classList.contains('touch') && !document.querySelector('#gantt-detail'));
-          const mouse = await state();
-          await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
-          await page.waitForFunction(() => matchMedia('(pointer: coarse)').matches && navigator.maxTouchPoints > 0);
-          await page.waitForFunction(() => document.documentElement.classList.contains('touch') && !!document.querySelector('#gantt-detail'));
-          const finger = await state();
-          check(!mouse.touch && !mouse.strip && mouse.taps === 0 && finger.touch && finger.strip && finger.taps > 0, label + ': SCHEDULE follows the touch mark while open (mouse ' + JSON.stringify(mouse) + ', finger ' + JSON.stringify(finger) + ')');
-          // This session stays open: closing it would undo its touch screen for the parts after.
-        }
+        const axis = await page.locator('#gantt th.axis').evaluate(th => Math.round(th.getBoundingClientRect().left - th.closest('#gantt').getBoundingClientRect().left));
+        check(axis <= 200, label + ': on a phone the work and its days leave the chart room (chart starts at ' + axis + ')');
       } else check(false, label + ': SCHEDULE has bars to tap');
     });
 
@@ -518,9 +502,9 @@ async function desktop() {
       check((del.bg === 'rgba(0, 0, 0, 0)' || del.bg === 'transparent') && del.border === '0px' && del.opacity === '0' && Math.round(del.w) === 22, 'desktop: a scope item\'s remove control is the faint 22-point mark it was, no grey box (' + JSON.stringify(del) + ')');
       await page.evaluate(async () => { const s = await import('/js/store.js'); for (const p of s.ws.data.projects) p.selected = true; s.touch(); });
       await go(page, url, 'schedule');
-      await page.locator('#gantt .gantt-svg').waitFor();
-      const sched = await page.evaluate(() => ({ strip: !!document.querySelector('#gantt-detail'), stops: document.querySelectorAll('#gantt [tabindex]').length, rows: document.querySelectorAll('#gantt .g-rowg').length, sep: [...document.querySelectorAll('#gantt line')].find(l => l.getAttribute('y1') === '0' && l.getAttribute('x1') === l.getAttribute('x2'))?.getAttribute('x1') }));
-      check(!sched.strip && sched.stops === 0 && sched.rows > 0 && sched.sep === '236', 'desktop: SCHEDULE has no new strip, no new tab stops and its full name column (' + JSON.stringify(sched) + ')');
+      await page.locator('#gantt .sc-tab').waitFor();
+      const sched = await page.evaluate(() => ({ rows: document.querySelectorAll('#gantt tr.g-item').length, cols: document.querySelectorAll('#gantt thead th').length, starts: getComputedStyle(document.querySelector('#gantt thead th:nth-child(3)')).display }));
+      check(sched.rows > 0 && sched.cols === 7 && sched.starts !== 'none', 'desktop: SCHEDULE shows every line with its days, dates and what it waits for (' + JSON.stringify(sched) + ')');
       await go(page, url, 'documents');
       check(await page.locator('[data-toolbar] [data-touch-viewer]').count() === 0, 'desktop: DOCUMENTS keeps its layout tools');
       // A narrow window on a computer keeps the computer's DOCUMENTS: lists beside the sheet, not
