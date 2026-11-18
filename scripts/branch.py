@@ -477,9 +477,36 @@ class Workflow:
         print(f'Merged and pushed {branch}. Live server was not restarted.')
         print('Now watch main\'s checks (gh run watch on the newest main run) and fix main if they fail.')
         if not keep:
+            # GitHub marks the PR Merged a few seconds after main arrives; deleting the branch
+            # before that would leave the PR closed instead of merged. Wait for it, then clean up.
+            if self.wait_merged(slug): self.discard(slug, owner_approved=True)
+            else: print('GitHub has not marked the PR Merged yet; the branch and its worktree are kept. '
+                        '`scripts/branch.sh tidy` removes them once it has.')
+
+    MERGED_WAIT = 90   # seconds to wait for GitHub to mark a PR Merged after main is pushed
+
+    def wait_merged(self, slug):
+        """True once GitHub reads the slug's PR as Merged (or the repo has no GitHub and the branch
+        is in main), waiting up to MERGED_WAIT seconds."""
+        has_origin = bool(run(['git', 'remote', 'get-url', 'origin'], self.live, check=False))
+        if not has_origin: return self.merged('codex/' + slug)
+        deadline = time.monotonic() + self.MERGED_WAIT
+        while True:
             info = self.pr_info(slug)
-            if info and info['state'] == 'MERGED': self.discard(slug, owner_approved=True)
-            else: print('Keeping branch and worktree until GitHub confirms Merged. Run discard then.')
+            if info is None or info['state'] == 'MERGED': return True
+            if time.monotonic() >= deadline: return False
+            time.sleep(3)
+
+    def merged(self, ref):
+        """A branch is merged when main holds its tip and the tip is not one of main's own commits
+        (a branch just started from main points at main's own commit and holds no work yet)."""
+        tip = run(['git', 'rev-parse', '--verify', '--quiet', ref + '^{commit}'], self.live, check=False)
+        if not tip: return False
+        bases = [b for b in ('main', 'origin/main') if run(['git', 'rev-parse', '--verify', '--quiet', b], self.live, check=False)]
+        if not any(subprocess.run(['git', 'merge-base', '--is-ancestor', tip, b], cwd=self.live).returncode == 0 for b in bases):
+            return False
+        own = set(run(['git', 'rev-list', '--first-parent', 'main'], self.live).split())
+        return tip not in own
 
     def origin_current(self):
         """Fetch GitHub's main and refuse if it has commits the local main lacks."""
@@ -490,11 +517,14 @@ class Workflow:
                                 'up to date with origin/main, update the branch onto it and retest; nothing was merged.')
 
     def discard(self, slug, owner_approved=False):
-        if not owner_approved: raise WorkflowError('Discard requires the owner\'s instruction and --owner-approved.')
-        target = self.target(slug)
-        if self.git('status', '--porcelain', cwd=target):
-            raise WorkflowError('Dirty worktree preserved. Commit or explicitly save changes before discard.')
         branch = self.validate(slug)
+        # A branch whose work is all in main loses nothing; anything else needs the owner's word.
+        if not owner_approved and not self.merged(branch):
+            raise WorkflowError('Discard of work that is not in main requires the owner\'s instruction and --owner-approved.')
+        try: target = self.target(slug)
+        except WorkflowError: target = None   # a branch with no worktree of its own
+        if target and self.git('status', '--porcelain', cwd=target):
+            raise WorkflowError('Dirty worktree preserved. Commit or explicitly save changes before discard.')
         has_origin = bool(run(['git', 'remote', 'get-url', 'origin'], self.live, check=False))
         if has_origin: self.gh('auth', 'status')
         info = self.pr_info(slug, strict=has_origin) if has_origin else None
@@ -505,10 +535,10 @@ class Workflow:
             self.gh('pr', 'close', branch)
         # Archive ignored files before deletion; dirty source has already blocked.
         with self.lock():
-            if self.metadata(target): self.stop(slug)
+            if target and self.metadata(target): self.stop(slug)
             stamp = str(time.time_ns())
             archive = self.records / 'archives' / (slug + '-' + stamp)
-            for name in self.ignored(target):
+            for name in (self.ignored(target) if target else []):
                 source = target / name
                 if source.is_symlink() or not source.exists(): continue
                 archive.mkdir(parents=True, exist_ok=True)
@@ -516,7 +546,7 @@ class Workflow:
                 if source.is_dir(): shutil.copytree(source, archive / name, symlinks=True)
                 else: shutil.copyfile(source, archive / name)
             kept = self.keep_unshared(branch, slug, stamp)
-            self.git('worktree', 'remove', '--force', str(target), cwd=self.live)
+            if target: self.git('worktree', 'remove', '--force', str(target), cwd=self.live)
             self.git('branch', '-D', branch, cwd=self.live)
             if has_origin:
                 exists = subprocess.run(['git', 'show-ref', '--verify', '--quiet', 'refs/remotes/origin/' + branch], cwd=self.live).returncode == 0
@@ -526,7 +556,40 @@ class Workflow:
             ref, count = kept
             print(f'{branch} had {count} commit(s) that are not in main. They are kept, not deleted: '
                   f'{ref} (restore with: git branch {branch} {ref}).')
-        print(f'Discarded {branch}; private runtime, if present, preserved in {archive}')
+        print(f'Discarded {branch}' + (f'; private runtime preserved in {archive}' if archive.exists() else '') + '.')
+
+    def tidy(self, dry_run=False):
+        """Remove every codex/ branch whose work is all in main (its worktree, its local branch and its
+        GitHub copy), and list the ones that are not, with their last commit. Run after a merge and
+        at the end of a session. A worktree with unsaved changes, or a PR GitHub has not yet marked
+        Merged, is left alone and named."""
+        has_origin = bool(run(['git', 'remote', 'get-url', 'origin'], self.live, check=False))
+        if has_origin: self.git('fetch', '--quiet', '--prune', 'origin', cwd=self.live)
+        local = [b for b in run(['git', 'for-each-ref', '--format=%(refname:short)', 'refs/heads/codex/'], self.live).split() if b]
+        remote = [b.split('/', 1)[1] for b in run(['git', 'for-each-ref', '--format=%(refname:short)', 'refs/remotes/origin/codex/'], self.live).split() if b] if has_origin else []
+        removed, kept = [], []
+        for name in sorted(set(local) | set(remote)):
+            slug = name.split('/', 1)[1]
+            ref = name if name in local else 'origin/' + name
+            last = run(['git', 'log', '-1', '--format=%cs %s', ref], self.live)
+            if not self.merged(ref):
+                ahead = run(['git', 'rev-list', '--count', ref, '--not', 'main'], self.live)
+                kept.append(f'{name}: not in main ({ahead} commit(s); last {last})')
+                continue
+            if name in local:
+                try: target = self.target(slug)
+                except WorkflowError: target = None
+                if target and self.git('status', '--porcelain', cwd=target):
+                    kept.append(f'{name}: in main, but its worktree has unsaved changes'); continue
+                info = self.pr_info(slug) if has_origin else None
+                if info and info['state'] == 'OPEN':
+                    kept.append(f'{name}: in main, waiting for GitHub to mark its PR Merged'); continue
+                if not dry_run: self.discard(slug)
+            elif not dry_run:
+                self.git('push', 'origin', '--delete', name, cwd=self.live)
+            removed.append(name)
+        print(('Would remove' if dry_run else 'Removed') + (f' {len(removed)} branch(es) already in main: ' + ', '.join(removed) if removed else ' nothing: no branch is both in main and left over.'))
+        for line in kept: print('Kept ' + line)
 
     # Ignored folders that are rebuilt by a command, so not worth copying; a symlink is never
     # followed (a branch copy's node_modules and AGENTS.local.md point into the live checkout).
@@ -568,6 +631,7 @@ def main():
             child.add_argument('--keep', action='store_true')
             child.add_argument('--skip-checks', action='store_true', help='owner said the checks are not needed')
     commands.add_parser('adopt').add_argument('slug', nargs='?')
+    commands.add_parser('tidy', help='remove branches already in main; list the rest').add_argument('--dry-run', action='store_true')
     commands.add_parser('list')
     args = vars(parser.parse_args())
     command = args.pop('command')

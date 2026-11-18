@@ -1,5 +1,7 @@
 """Lifecycle and landing guards against disposable repositories, never real main."""
 import importlib.util
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -313,6 +315,78 @@ class SERVICE:
         self.assertIn('upgraded fixture', (self.root / 'index.html').read_text(encoding='utf-8'))
         self.assertEqual(self.git('status', '--porcelain'), '')
         self.assertEqual(len(self.git('rev-list', '--parents', '-n', '1', 'main').split()), 3)
+
+    def land(self, slug):
+        """Merge a branch into main as the merge tool does (a merge commit), without the tool."""
+        self.git('merge', '--no-ff', '-q', '-m', f'Merge branch codex/{slug}', f'codex/{slug}')
+
+    def test_a_merged_branch_is_discarded_without_asking_and_a_fresh_one_is_not(self):
+        target = self.start()
+        self.commit_feature(target)
+        fresh = self.start('fresh')
+        with self.assertRaisesRegex(branch.WorkflowError, 'not in main'):
+            self.workflow.discard('feature')          # its work is not in main yet
+        self.land('feature')
+        self.workflow.discard('feature')              # all of it is in main: nothing to lose
+        self.assertFalse(target.exists())
+        self.assertEqual(self.git('branch', '--list', 'codex/feature'), '')
+        with self.assertRaisesRegex(branch.WorkflowError, 'owner'):
+            self.workflow.discard('fresh')            # just started from main: may be the start of work
+        self.assertTrue(fresh.exists())
+
+    def test_merge_waits_for_github_to_read_merged_then_cleans_up(self):
+        remote = self.add_origin()
+        target = self.start()
+        self.commit_feature(target)
+        self.git('push', '-u', 'origin', 'codex/feature', cwd=target)
+        info = self.green_pr(target)
+        reads = []
+        def pr_state(*args, **kwargs):
+            reads.append(1)
+            # GitHub reads Open for a while after main arrives, then Merged.
+            return {**info, 'state': 'MERGED' if len(reads) > 4 else 'OPEN'}
+        with patch.object(self.workflow, 'pr_info', side_effect=pr_state), patch.object(self.workflow, 'gh'), \
+                patch.object(branch.time, 'sleep'):
+            self.workflow.merge('feature', owner_approved=True)
+        self.assertFalse(target.exists(), 'cleaned up once GitHub read Merged')
+        self.assertEqual(self.git('ls-remote', '--heads', str(remote), 'codex/feature'), '', 'its GitHub copy is deleted')
+
+    def test_tidy_removes_what_is_in_main_and_lists_the_rest(self):
+        remote = self.add_origin()
+        done = self.start('done'); self.commit_feature(done)
+        self.git('push', '-u', 'origin', 'codex/done', cwd=done)
+        busy = self.start('busy')
+        (busy / 'index.html').write_text('work in progress', encoding='utf-8')
+        self.git('commit', '-qam', 'Work in progress', cwd=busy)
+        self.land('done')
+        # A branch merged elsewhere, left only on GitHub.
+        gone = self.start('gone'); (gone / 'gone.txt').write_text('x', encoding='utf-8')
+        self.git('add', 'gone.txt', cwd=gone); self.git('commit', '-qm', 'Gone', cwd=gone)
+        self.git('push', '-u', 'origin', 'codex/gone', cwd=gone)
+        self.land('gone')
+        self.git('worktree', 'remove', '--force', str(gone)); self.git('branch', '-D', 'codex/gone')
+        self.children.remove('gone')
+        out = io.StringIO()
+        with patch.object(self.workflow, 'pr_info', return_value=None), contextlib.redirect_stdout(out):
+            self.workflow.tidy()
+        text = out.getvalue()
+        self.assertFalse(done.exists())
+        self.assertEqual(self.git('branch', '--list', 'codex/done'), '')
+        self.assertEqual(self.git('ls-remote', '--heads', str(remote), 'codex/done', 'codex/gone'), '')
+        self.assertTrue(busy.exists(), 'work not in main is kept')
+        self.assertIn('Kept codex/busy: not in main (1 commit(s)', text)
+        self.assertIn('codex/done', text); self.assertIn('codex/gone', text)
+
+    def test_tidy_keeps_a_merged_branch_with_unsaved_changes_or_an_open_pr(self):
+        self.add_origin()
+        dirty = self.start('dirty'); self.commit_feature(dirty)
+        self.land('dirty')
+        (dirty / 'notes.txt').write_text('unsaved', encoding='utf-8')
+        out = io.StringIO()
+        with patch.object(self.workflow, 'pr_info', return_value=None), contextlib.redirect_stdout(out):
+            self.workflow.tidy()
+        self.assertTrue(dirty.exists())
+        self.assertIn('unsaved changes', out.getvalue())
 
     def test_merge_marks_a_draft_ready_and_runs_the_quick_preflight(self):
         (self.root / 'scripts/preflight.sh').write_text('#!/bin/sh\necho "$@" > "$PREFLIGHT_ARGS"\n', encoding='utf-8')
