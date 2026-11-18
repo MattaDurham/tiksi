@@ -24,6 +24,9 @@
 // Scopes, narrowest first: the sections selected; their group (a subproject's group of pieces,
 // or else the same trim at the same height round the room); the whole room; the whole project
 // (the project the sections belong to, or every section that belongs to none).
+//
+// A section marked final (t.final) is in no scope's reach, the selection's own included: no
+// change made here reaches it until it is unmarked. finalsIn() counts the ones a scope leaves out.
 
 import { wallEnds } from './wall-joins.js';
 import { roomFaces } from './room-faces.js';
@@ -168,8 +171,11 @@ export function trimDesign(env) {
   const roomKey = t => { const i = info(t); return i ? i.roomKey : ''; };
   const top = t => topProjectId(projects, t.projectId || '') || '';
 
-  // Every section a change may touch at this scope, whatever its kind.
-  function pool(seedIds, scope) {
+  // Every section a change may touch at this scope, whatever its kind: none marked final.
+  function pool(seedIds, scope) { return covered(seedIds, scope).filter(t => !t.final); }
+  // The sections marked final that the scope would otherwise cover.
+  function finalsIn(seedIds, scope) { return covered(seedIds, scope).filter(t => t.final); }
+  function covered(seedIds, scope) {
     const all = prop.trims || [];
     const seeds = seedIds.map(byId).filter(Boolean);
     if (scope === 'selected' || !seeds.length) return seeds;
@@ -376,7 +382,7 @@ export function trimDesign(env) {
     return out;
   }
 
-  return { info, layout, pool, members, mouldingReach, scopes, planLine, lineStops, stepCols, summary, notes, byId };
+  return { info, layout, pool, finalsIn, members, mouldingReach, scopes, planLine, lineStops, stepCols, summary, notes, byId };
 }
 
 // How a height line moves at each reach. Every section of the grabbed kind comes onto the

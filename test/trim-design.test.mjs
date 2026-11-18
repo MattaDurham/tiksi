@@ -79,6 +79,26 @@ test('a section knows its room, and each scope reaches the right sections', () =
   assert.match(scopes[2].title, /Living/);
 });
 
+test('a section marked final is in no reach, and the reach says how many it left out', () => {
+  const h = house();
+  const living = dress(h, 'living', LIVING), study = dress(h, 'study', STUDY);
+  study.boxes[0].final = true; study.boxes[1].final = true; living.rail[2].final = true;
+  const d = D.trimDesign(h.env);
+  const seed = [living.boxes[0].id];
+  assert.equal(d.members(seed, 'project').length, 6, 'the project\'s boxes but the two marked final');
+  assert.deepEqual(d.finalsIn(seed, 'project').map(t => t.id).sort(), [study.boxes[0].id, study.boxes[1].id, living.rail[2].id].sort(), 'every final section the project covers');
+  assert.equal(d.pool(seed, 'room').length, 11, 'the room\'s trim but its one final rail');
+  assert.deepEqual(d.finalsIn(seed, 'room').map(t => t.id), [living.rail[2].id]);
+  assert.equal(d.scopes(seed).find(s => s.id === 'project').count, 6, 'the PROJECT button counts what a change reaches');
+  // A final section selected on its own is not in its own reach either.
+  assert.deepEqual(d.pool([study.boxes[0].id], 'selected'), []);
+  assert.deepEqual(d.finalsIn([study.boxes[0].id], 'selected').map(t => t.id), [study.boxes[0].id]);
+  // Read back from a file, final stays only as true.
+  const copy = T.normaliseTrim(JSON.parse(JSON.stringify(study.boxes[0])), null);
+  assert.equal(copy.final, true);
+  assert.equal('final' in T.normaliseTrim({ ...JSON.parse(JSON.stringify(study.boxes[2])), final: 'yes' }, null), false, 'anything but true is not final');
+});
+
 test('a subproject\'s group of pieces is the group; a project is its own pieces', () => {
   const h = house();
   const living = dress(h, 'living', LIVING), study = dress(h, 'study', STUDY);

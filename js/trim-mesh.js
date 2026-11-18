@@ -1,6 +1,6 @@
 import { Vector2, ShapeUtils } from '../vendor/three.module.min.js';
 import { wallFrame, wallEnds } from './wall-joins.js';
-import { trimLayout } from './trims.js';
+import { trimLayout, boardPieces, frameGaps } from './trims.js';
 import { sectionOf, crownRelief } from './trim-profiles.js';
 
 // ---------- wall trim ----------
@@ -95,18 +95,36 @@ export function trimMeshParts(t, wall, view, openings) {
       const sec = sectionOf(part.profile, part.W, part.T);
       const { x0, x1, y0, y1 } = part;
       // Bottom, top, left, right: each mitred at 45 degrees, its inner edge shorter by its width.
-      sweepInto(out, sec, (k, end) => { const [w, d] = sec[k]; return [end ? x1 - w : x0 + w, y0 + w, z(d + lift)]; }, [0, 1, 0], OUT, [-1, 0, 0], [1, 0, 0]);
-      sweepInto(out, sec, (k, end) => { const [w, d] = sec[k]; return [end ? x1 - w : x0 + w, y1 - w, z(d + lift)]; }, [0, -1, 0], OUT, [-1, 0, 0], [1, 0, 0]);
-      sweepInto(out, sec, (k, end) => { const [w, d] = sec[k]; return [x0 + w, end ? y1 - w : y0 + w, z(d + lift)]; }, [1, 0, 0], OUT, [0, -1, 0], [0, 1, 0]);
-      sweepInto(out, sec, (k, end) => { const [w, d] = sec[k]; return [x1 - w, end ? y1 - w : y0 + w, z(d + lift)]; }, [-1, 0, 0], OUT, [0, -1, 0], [0, 1, 0]);
+      // Where an outlet notches a side, that side is in lengths with square ends at the notch.
+      const gaps = frameGaps(part);
+      const lengths = (lo, hi, cut) => {
+        const out = []; let a = null;
+        for (const [g0, g1] of cut.slice().sort((p, q) => p[0] - q[0])) {
+          if (g1 <= lo || g0 >= hi) continue;
+          if (g0 > lo) out.push([a, g0]);
+          a = Math.min(hi, g1);
+        }
+        out.push([a, null]);
+        return out.filter(([p, q]) => !(p != null && q != null && q - p < .002) && !(p != null && p >= hi - 1e-6) && !(q != null && q <= lo + 1e-6));
+      };
+      // a, b: where a length starts and ends along its side; null is the mitred corner.
+      const along = (a, b, w, end, lo, hi) => end ? (b == null ? hi - w : b) : (a == null ? lo + w : a);
+      for (const [a, b] of lengths(x0, x1, gaps.bottom)) sweepInto(out, sec, (k, end) => { const [w, d] = sec[k]; return [along(a, b, w, end, x0, x1), y0 + w, z(d + lift)]; }, [0, 1, 0], OUT, [-1, 0, 0], [1, 0, 0]);
+      for (const [a, b] of lengths(x0, x1, gaps.top)) sweepInto(out, sec, (k, end) => { const [w, d] = sec[k]; return [along(a, b, w, end, x0, x1), y1 - w, z(d + lift)]; }, [0, -1, 0], OUT, [-1, 0, 0], [1, 0, 0]);
+      for (const [a, b] of lengths(y0, y1, gaps.left)) sweepInto(out, sec, (k, end) => { const [w, d] = sec[k]; return [x0 + w, along(a, b, w, end, y0, y1), z(d + lift)]; }, [1, 0, 0], OUT, [0, -1, 0], [0, 1, 0]);
+      for (const [a, b] of lengths(y0, y1, gaps.right)) sweepInto(out, sec, (k, end) => { const [w, d] = sec[k]; return [x1 - w, along(a, b, w, end, y0, y1), z(d + lift)]; }, [-1, 0, 0], OUT, [0, -1, 0], [0, 1, 0]);
     } else if (part.kind === 'board') {
-      const { x0, x1, y0, y1 } = part;
-      if (part.dir === 'v') {
-        const sec = sectionOf(part.profile, x1 - x0, part.T);
-        sweepInto(out, sec, (k, end) => { const [a, d] = sec[k]; return [x0 + a, end ? y1 : y0, z(d + lift)]; }, [1, 0, 0], OUT, [0, -1, 0], [0, 1, 0]);
-      } else {
-        const sec = sectionOf(part.profile, y1 - y0, part.T);
-        sweepInto(out, sec, (k, end) => { const [a, d] = sec[k]; return [end ? x1 : x0, y0 + a, z(d + lift)]; }, [0, 1, 0], OUT, [-1, 0, 0], [1, 0, 0]);
+      // A board notched round an outlet is drawn in lengths: full width with its own profile,
+      // and square-edged beside the notch.
+      for (const { x0, x1, y0, y1, whole } of boardPieces(part)) {
+        const profile = whole ? part.profile : 'flat';
+        if (part.dir === 'v') {
+          const sec = sectionOf(profile, x1 - x0, part.T);
+          sweepInto(out, sec, (k, end) => { const [a, d] = sec[k]; return [x0 + a, end ? y1 : y0, z(d + lift)]; }, [1, 0, 0], OUT, [0, -1, 0], [0, 1, 0]);
+        } else {
+          const sec = sectionOf(profile, y1 - y0, part.T);
+          sweepInto(out, sec, (k, end) => { const [a, d] = sec[k]; return [end ? x1 : x0, y0 + a, z(d + lift)]; }, [0, 1, 0], OUT, [-1, 0, 0], [1, 0, 0]);
+        }
       }
     }
     const count = out.P.length / 9 - first;

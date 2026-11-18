@@ -16,39 +16,50 @@ const section = (style, extra = {}) => T.normaliseTrim({ id: 't', style, wallId:
 const overlaps = (p, d) => p.x0 < d.x1 - 1e-9 && p.x1 > d.x0 + 1e-9 && p.y0 < d.y1 - 1e-9 && p.y1 > d.y0 + 1e-9;
 const plate = c => ({ x0: c.f0 * 4, x1: c.f1 * 4, y0: c.y0, y1: c.y1 });
 
-test('picture-frame boxes leave an outlet in the space between them', () => {
-  const t = section('picture-frame', { y: 0.14, h: 0.7 });
+// The layout of the plain wall: same parts, same keys, same places along it.
+const places = lay => lay.parts.map(p => [p.key, p.kind, p.dir || '', +p.x0.toFixed(5), +p.x1.toFixed(5)]);
+// The solid wood of a part: a notched board's pieces, or the part itself.
+const solid = p => p.kind === 'board' ? T.boardPieces(p) : [p];
+const grown = (d, m) => ({ x0: d.x0 - m, x1: d.x1 + m, y0: d.y0 - m, y1: d.y1 + m });
+
+test('picture-frame boxes stay where the plain wall puts them; a box an outlet crosses is notched round it', () => {
+  const t = section('picture-frame', { y: 0.25, h: 0.5 });
   const before = T.trimLayout(t, wall(), []);
-  const c = outlet(1.0), w = wall({ trimClearances: [c] });
-  // The plain wall puts a box over this spot.
-  assert.ok(before.parts.some(p => p.kind === 'frame' && overlaps(p, plate(c))), 'without the outlet a box covers it');
+  const box = before.parts.find(p => p.kind === 'frame');
+  // An outlet on the bottom moulding of the first box.
+  const c = outlet(box.x0 + 0.2), w = wall({ trimClearances: [c] });
   const lay = T.trimLayout(t, w, []);
-  const frames = lay.parts.filter(p => p.kind === 'frame');
-  assert.ok(frames.length >= 4, 'the wall still has boxes');
-  for (const f of frames) assert.ok(f.x1 <= plate(c).x0 - T.DEVICE_CLEAR + 1e-9 || f.x0 >= plate(c).x1 + T.DEVICE_CLEAR - 1e-9, 'no box comes within the clearance of the plate');
-  // Either side of the outlet the boxes are at least the usual gap apart.
-  const left = frames.filter(f => f.x1 <= plate(c).x0).sort((a, b) => b.x1 - a.x1)[0];
-  const right = frames.filter(f => f.x0 >= plate(c).x1).sort((a, b) => a.x0 - b.x0)[0];
-  assert.ok(right.x0 - left.x1 >= 0.1 - 1e-9, 'the space round the outlet is never less than the gap');
-  // A count set for the stretch is shared either side of the outlet.
-  const set = T.trimLayout({ ...t, colsAt: [5] }, w, []);
-  assert.equal(set.boxes.filter(b => b.row === 0).length, 5, 'five boxes set, five drawn');
+  assert.deepEqual(places(lay), places(before), 'the boxes are where the plain wall has them');
+  const hit = lay.parts.find(p => p.key === box.key);
+  assert.equal(hit.notches.length, 1, 'the box crossing the outlet is notched');
+  const n = hit.notches[0], keep = grown(plate(c), T.DEVICE_CLEAR);
+  near(n.x0, keep.x0, 'the notch starts the clearance before the plate'); near(n.x1, keep.x1, 'and ends the clearance after it');
+  assert.ok(T.frameGaps(hit).bottom.length === 1 && !T.frameGaps(hit).top.length, 'only the bottom moulding is cut');
+  assert.ok(lay.parts.filter(p => p !== hit).every(p => !p.notches), 'no other box is notched');
+  // An outlet inside a box, clear of its moulding, changes nothing.
+  const inside = outlet((box.x0 + box.x1) / 2);
+  inside.y0 = 0.45; inside.y1 = 0.56;
+  assert.ok(T.trimLayout(t, wall({ trimClearances: [inside] }), []).parts.every(p => !p.notches), 'an outlet inside a box is left alone');
 });
 
-test('board and batten: no batten on an outlet, the top rail runs on; a high outlet cuts the rail', () => {
+test('board and batten: battens keep their places; one an outlet reaches is notched and stays one board', () => {
   const t = section('board-batten', { y: 0.14, h: 0.8 });
-  const c = outlet(1.03);
+  const before = T.trimLayout(t, wall(), []);
+  const bat = before.parts.find(p => p.key === '0:v:3');
+  const c = outlet(bat.x1 + 0.02);                      // the plate overlaps the batten's right edge
   const lay = T.trimLayout(t, wall({ trimClearances: [c] }), []);
-  const battens = lay.parts.filter(p => p.kind === 'board' && p.dir === 'v');
-  for (const b of battens) assert.ok(!overlaps(b, { ...plate(c), x0: plate(c).x0 - T.DEVICE_CLEAR, x1: plate(c).x1 + T.DEVICE_CLEAR }), 'batten at ' + b.x0.toFixed(3) + ' clears the outlet');
-  const rail = lay.parts.filter(p => p.kind === 'board' && p.dir === 'h');
-  assert.equal(rail.length, 1, 'one top rail');
-  assert.ok(rail[0].x1 - rail[0].x0 > 3.9, 'the length of the wall');
-  // An outlet up at the rail: the rail is cut round it.
-  const high = { ...c, y0: 0.86, y1: 0.97 };
-  const cut = T.trimLayout(t, wall({ trimClearances: [high] }), []).parts.filter(p => p.kind === 'board' && p.dir === 'h');
-  assert.ok(cut.length >= 2, 'the rail is in pieces');
-  for (const r of cut) assert.ok(!overlaps(r, plate(high)), 'no piece of rail crosses it');
+  assert.deepEqual(places(lay), places(before), 'every batten where the plain wall has it, none added');
+  const cut = lay.parts.find(p => p.key === '0:v:3');
+  assert.equal(cut.notches.length, 1, 'the batten is notched');
+  for (const q of T.boardPieces(cut)) assert.ok(!overlaps(q, grown(plate(c), T.DEVICE_CLEAR - 1e-6)), 'no wood within the clearance of the plate');
+  near(Math.min(...T.boardPieces(cut).map(q => q.y0)), bat.y0, 'it still reaches the bottom');
+  near(Math.max(...T.boardPieces(cut).map(q => q.y1)), bat.y1, 'and the top rail');
+  // An outlet up at the rail: the rail is notched round it and is still one board.
+  const high = { ...outlet(2), y0: 0.86, y1: 0.97 };
+  const rails = T.trimLayout(t, wall({ trimClearances: [high] }), []).parts.filter(p => p.kind === 'board' && p.dir === 'h');
+  assert.equal(rails.length, 1, 'one top rail');
+  assert.equal(rails[0].notches.length, 1, 'notched round the outlet');
+  for (const q of T.boardPieces(rails[0])) assert.ok(!overlaps(q, plate(high)), 'no wood over the plate');
 });
 
 test('baseboard and chair rail stop at a device they would cross and at a radiator', () => {
@@ -61,25 +72,57 @@ test('baseboard and chair rail stop at a device they would cross and at a radiat
   const heater = { side: 1, f0: 0.4, f1: 0.6, y0: 0.05, y1: 0.4 };
   const base = T.trimLayout(section('baseboard'), wall({ trimClearances: [heater] }), []).parts;
   assert.equal(base.length, 2, 'the baseboard stops either side of the heater cover');
-  // A field over the heater cover stops at it as at a window: above it, a stretch of its own.
-  const field = T.trimLayout(section('board-batten', { y: 0.14, h: 0.8 }), wall({ trimClearances: [heater] }), []);
-  const over = field.rects.filter(r => r.x0 >= 1.6 - 1e-6 && r.x1 <= 2.4 + 1e-6);
-  assert.equal(over.length, 1, 'one stretch over the heater');
-  near(over[0].y0, 0.4, 'it starts at the heater cover\'s top');
-  assert.ok(!over[0].full, 'it is not a full-height stretch');
+  // A radiator found in a model keeps HEATER_CLEAR: the baseboard stops that far short of it.
+  const rad = { ...heater, kind: 'heater' };
+  const radBase = T.trimLayout(section('baseboard'), wall({ trimClearances: [rad] }), []).parts;
+  near(radBase[0].x1, 1.6 - T.HEATER_CLEAR, 'stops short of the radiator'); near(radBase[1].x0, 2.4 + T.HEATER_CLEAR, 'starts again past it');
   // The other face of the wall is not touched by either.
   assert.equal(T.trimLayout(section('baseboard', { side: -1 }), wall({ trimClearances: [heater, low] }), []).parts.length, 1, 'the far face runs on');
 });
 
-test('panels put stiles either side of an outlet; planks are cut round it', () => {
+test('over a radiator the field keeps its layout and stops at the radiator\'s top', () => {
+  const rad = { side: 1, f0: 0.4, f1: 0.6, y0: 0.05, y1: 0.5, kind: 'heater' };
+  const top = 0.5 + T.HEATER_CLEAR, keep = { x0: 1.6 - T.HEATER_CLEAR, x1: 2.4 + T.HEATER_CLEAR, y0: 0, y1: top };
+  // Board and batten: one stretch, battens where the plain wall has them; over the radiator they start above it.
+  const bb = section('board-batten', { y: 0.14, h: 0.8 });
+  const plain = T.trimLayout(bb, wall(), []), lay = T.trimLayout(bb, wall({ trimClearances: [rad] }), []);
+  assert.equal(lay.rects.length, 1, 'the radiator does not break the field');
+  const xs = l => l.parts.filter(p => p.dir === 'v').map(p => +p.x0.toFixed(5));
+  assert.deepEqual(xs(lay), xs(plain), 'the battens keep their places');
+  const over = lay.parts.filter(p => p.dir === 'v' && p.x0 >= keep.x0 && p.x1 <= keep.x1);
+  assert.ok(over.length >= 1, 'battens over the radiator');
+  for (const b of over) near(b.y0, top, 'a batten over the radiator starts above it');
+  for (const p of lay.parts) for (const q of solid(p)) assert.ok(!overlaps(q, keep), p.key + ' keeps off the radiator');
+  // Picture-frame boxes: the box over it is shortened to start above it and keeps its width.
+  const pf = section('picture-frame', { y: 0.25, h: 0.6 });
+  const pPlain = T.trimLayout(pf, wall(), []), pLay = T.trimLayout(pf, wall({ trimClearances: [rad] }), []);
+  const was = pPlain.parts.find(p => p.kind === 'frame' && p.x1 > keep.x0 && p.x0 < keep.x1);
+  const now = pLay.parts.find(p => p.key === was.key);
+  near(now.y0, top, 'the box starts above the radiator'); near(now.y1, was.y1, 'its top stays');
+  assert.equal(now.x0, was.x0); assert.equal(now.x1, was.x1);
+  const box = pLay.boxes.find(b => b.x0 === now.x0);
+  near(box.y0, top, 'the box outline follows');
+  // Raised panels: the panel inside a shortened box moves up with it.
+  const rp = T.trimLayout(section('raised-panel', { y: 0.14, h: 0.78 }), wall({ trimClearances: [rad] }), []);
+  for (const p of rp.parts) for (const q of solid(p)) assert.ok(!overlaps(q, keep), p.key + ' keeps off the radiator');
+  // A radiator taller than the field: nothing is left in front of it.
+  const tall = { ...rad, y1: 1.2 };
+  const gone = T.trimLayout(bb, wall({ trimClearances: [tall] }), []);
+  for (const p of gone.parts) for (const q of solid(p)) assert.ok(!overlaps(q, { ...keep, y1: 1.2 + T.HEATER_CLEAR }), p.key + ' is not in front of the tall radiator');
+  assert.equal(gone.parts.filter(p => p.dir === 'h').length, 2, 'the top rail stops either side of it');
+});
+
+test('panels keep their stiles in place and are notched round an outlet; so are planks', () => {
   const c = outlet(1.5);
-  const shaker = T.trimLayout(section('shaker', { y: 0.14, h: 0.78 }), wall({ trimClearances: [c] }), []);
-  for (const p of shaker.parts) assert.ok(!overlaps(p, plate(c)), p.kind + ' ' + (p.dir || '') + ' clears the outlet');
+  const sh = section('shaker', { y: 0.14, h: 0.78 });
+  const shaker = T.trimLayout(sh, wall({ trimClearances: [c] }), []);
+  assert.deepEqual(places(shaker), places(T.trimLayout(sh, wall(), [])), 'the stiles are where the plain wall has them');
+  for (const p of shaker.parts) for (const q of solid(p)) assert.ok(!overlaps(q, plate(c)), p.kind + ' ' + (p.dir || '') + ' clears the outlet');
   const bead = T.trimLayout(section('beadboard', { y: 0.14, h: 0.8 }), wall({ trimClearances: [c] }), []);
   assert.ok(bead.parts.length > 30, 'the boards are there');
-  for (const p of bead.parts) assert.ok(!overlaps(p, plate(c)), 'no board covers the outlet');
-  // Above and below it the boards carry on.
-  assert.ok(bead.parts.some(p => p.x0 < plate(c).x1 && p.x1 > plate(c).x0 && p.y0 >= plate(c).y1), 'a board above the outlet');
+  for (const p of bead.parts) for (const q of solid(p)) assert.ok(!overlaps(q, plate(c)), 'no board covers the outlet');
+  // Above and below it the boards carry on, each still one board.
+  assert.ok(bead.parts.some(p => p.notches && T.boardPieces(p).some(q => q.y0 >= plate(c).y1)), 'a notched board carries on above the outlet');
 });
 
 test('a hand-made clearance with no kind still stops trim as before', () => {

@@ -11,6 +11,9 @@
 //   height       a drag on the chair rail raises every rail in the room; the fields under them
 //                stretch and the baseboards stay on the floor; one UNDO takes it back
 //   right-click  ADD A PANEL HERE adds one box to that wall alone
+//   final        MARK AS FINAL turns the panel's controls off and E does nothing; SELECT THE
+//                PROJECT'S TRIM says in a pop-up that the final section is left out and selects the
+//                rest; a box width typed for them passes it by; UNMARK FINAL frees it again
 //   battens      a drag on a batten closes the spacing, and the wall gains bays
 //   moulding     the dropdown, drawn like the catalog, swaps the room's rails to another
 //                moulding; with PROJECT chosen it swaps the next room's too; the arrows step it
@@ -234,6 +237,53 @@ try {
   await waitUntil(async () => (await boxesOf(SOUTH)).length === count + 1, 'ADD A PANEL HERE adds one box');
   assert.equal((await boxesOf('box-living-w')).length, westCount, 'the other walls keep their counts');
   ok('right-click, ADD A PANEL HERE: the south wall has ' + (count + 1) + ' boxes, the others are unchanged');
+
+  // ---------- final ----------
+  const rightClickSouth = async () => { const bs = await boxesOf(SOUTH), b = bs[Math.floor(bs.length / 2)]; const q = await at(SOUTH, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2); await page.mouse.click(q.x, q.y, { button: 'right' }); };
+  await rightClickSouth();
+  await page.locator('.v-ctx [data-ctx="trim-final"]').waitFor();
+  assert.match(await page.locator('.v-ctx [data-ctx="trim-final"]').textContent(), /^MARK AS FINAL/);
+  await page.locator('.v-ctx [data-ctx="trim-final"]').click();
+  await waitUntil(async () => (await trim(SOUTH)).final === true, 'the south section is marked final');
+  await page.locator('.inspector .tp-final').waitFor();
+  assert.ok(await page.locator('.inspector [data-design="aim"]').isDisabled(), 'the panel\'s numbers are off');
+  assert.ok(await page.locator('.inspector [data-tp-edit]').isDisabled(), 'and EDIT BY DRAGGING');
+  await page.keyboard.press('e');
+  await page.waitForTimeout(200);
+  assert.match(await page.locator('.inspector [data-tp-edit]').textContent(), /^EDIT BY DRAGGING/, 'E does not start editing a final section');
+  const southAim = (await trim(SOUTH)).target;
+  await shot('05b-final');
+  // SELECT THE PROJECT'S TRIM: a pop-up says the final section is left out; OK selects the other 23.
+  await rightClickSouth();
+  let said = '';
+  page.once('dialog', d => { said = d.message(); d.accept(); });
+  await page.locator('.v-ctx [data-ctx="trim-select-project"]').click();
+  await waitUntil(async () => /TRIM SECTIONS/.test(await heading.textContent()), 'the project\'s trim is selected');
+  assert.match(said, /1 section marked final is left out/, 'the pop-up says what is left out: ' + said);
+  const chosen = await heading.textContent();
+  const total = await page.evaluate(() => window.testStore.activeProperty().trims.length);
+  assert.equal(chosen, (total - 1) + ' TRIM SECTIONS', 'every section but the final one');
+  // SELECT THE GROUP'S TRIM: the room's other three box fields. A box width typed for them at the
+  // project's reach goes to every box field but the final one.
+  await rightClickSouth();
+  page.once('dialog', d => { said = d.message(); d.accept(); });
+  await page.locator('.v-ctx [data-ctx="trim-select-group"]').click();
+  await waitUntil(async () => (await heading.textContent()) === '3 TRIM SECTIONS', 'the group\'s trim but the final section');
+  assert.match(said, /group's trim/);
+  await page.locator('.inspector [data-scope="project"]').click();
+  assert.match(await page.locator('.inspector .tp-final-note').allTextContents().then(x => x.join(' ')), /1 section marked final is left out of this reach/);
+  const aim2 = page.locator('.inspector [data-design="aim"]');
+  await aim2.fill('20"'); await aim2.press('Tab');
+  await waitUntil(async () => Math.abs(((await trim('box-study-e')).target || 0) - 20 * IN) < 1e-6, 'the typed width is applied');
+  await each('box-', async t => t.id === SOUTH ? assert.equal(t.target, southAim, 'the final section keeps its aim') : near(t.target, 20 * IN, t.id + ' aims for 20 in'));
+  // UNMARK FINAL frees it.
+  await rightClickSouth();
+  await page.locator('.v-ctx [data-ctx="trim-final"]').waitFor();
+  assert.match(await page.locator('.v-ctx [data-ctx="trim-final"]').textContent(), /^UNMARK FINAL/);
+  await page.locator('.v-ctx [data-ctx="trim-final"]').click();
+  await waitUntil(async () => !('final' in (await trim(SOUTH))), 'the south section is no longer final');
+  await page.locator('.inspector [data-scope="room"]').click();
+  ok('MARK AS FINAL: the panel is off, E does nothing, the project\'s trim is selected without it after a pop-up, a typed width passes it by; UNMARK FINAL frees it');
 
   // ---------- moulding ----------
   { const r = await trim(RAIL); const q = await at(RAIL, 2.5, r.y + 0.03); await page.mouse.click(q.x, q.y); }

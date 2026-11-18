@@ -15,7 +15,7 @@
 // Lengths: pieces and faces in metres (Tiksi's own units); cut lengths, boards and store lengths in
 // inches, as the trade and the stores sell them. ftin() quotes either to the nearest 1/16".
 
-import { trimProduct, openingBlocks } from './trims.js';
+import { trimProduct, openingBlocks, frameGaps } from './trims.js';
 import { catalogItem } from './trim-catalog.js';
 import { ESTIMATE_DATA } from './estimate-data.js';
 
@@ -163,8 +163,11 @@ export function trimPieces({ prop, projects = [], design, include = null }) {
         fi++;
         const wd = q.x1 - q.x0, ht = q.y1 - q.y0;
         const [h0, h1] = [hx(q.x0), hx(q.x1)].sort((m, n) => m - n);
+        // A side an outlet crosses is still one length, notched round it on site.
+        const gaps = frameGaps(q);
         for (const [side, len] of [['top', wd], ['bottom', wd], ['left', ht], ['right', ht]])
-          pieces.push({ ...base, kind: 'frame', frame: fi, side, len, endA: 'miter 45°', endB: 'miter 45°', box: [wd, ht], h0, h1, v0: q.y0, v1: q.y1 });
+          pieces.push({ ...base, kind: 'frame', frame: fi, side, len, endA: 'miter 45°', endB: 'miter 45°', box: [wd, ht], h0, h1, v0: q.y0, v1: q.y1,
+            ...(gaps[side].length ? { notch: gaps[side].length } : {}) });
       } else if (q.kind === 'board') {
         const [h0, h1] = [hx(q.x0), hx(q.x1)].sort((m, n) => m - n);
         let own = {};
@@ -175,7 +178,7 @@ export function trimPieces({ prop, projects = [], design, include = null }) {
           own = { product: b.id, W: b.W, T: b.T, part: role };
         }
         pieces.push({ ...base, ...own, kind: q.dir === 'v' ? 'batten' : 'rail', len: q.dir === 'v' ? q.y1 - q.y0 : q.x1 - q.x0, endA: 'square', endB: 'square',
-          h0, h1, v0: q.y0, v1: q.y1 });
+          h0, h1, v0: q.y0, v1: q.y1, ...(q.notches && q.notches.length ? { notch: q.notches.length } : {}) });
       }
     }
   }
@@ -381,7 +384,7 @@ export function estimateTrim({ pieces: piecesIn, faces: facesIn, catalog: catalo
   for (const p of cutp) {
     const sideKey = p.kind === 'frame' && p.style === 'stair' ? (p.side === undefined ? null : p.side)
       : (p.side === 'top' || p.side === 'bottom') ? 'tb' : p.kind === 'frame' ? 'lr' : '';
-    const key = [p.room, WALL[p.wall].k, p.section, p.product, p.kind, pyRound(p.Wd / IN * 16), sideKey, pyRound(p.lin * 16), cutWord(p.endL), cutWord(p.endR)];
+    const key = [p.room, WALL[p.wall].k, p.section, p.product, p.kind, pyRound(p.Wd / IN * 16), sideKey, pyRound(p.lin * 16), cutWord(p.endL), cutWord(p.endR), p.notch || 0];
     const ks = JSON.stringify(key);
     if (!groups.has(ks)) groups.set(ks, { key, list: [] });
     groups.get(ks).list.push(p);
@@ -394,7 +397,7 @@ export function estimateTrim({ pieces: piecesIn, faces: facesIn, catalog: catalo
     const g = list[0];
     G.push({ mark, room, roomId: g.roomId, wall: g.wall, section: g.section, sectionName: g.sectionName, product: g.product, kind: g.kind,
       qty: list.length, lin: g.lin, endL: cutWord(g.endL), endR: cutWord(g.endR), split: g.split || null, stair: g.style === 'stair',
-      side: g.side === undefined ? '' : g.side, part: g.part || null });
+      side: g.side === undefined ? '' : g.side, part: g.part || null, ...(g.notch ? { notch: g.notch } : {}) });
   }
 
   // ---------- plain names: where each piece goes, in words ----------
@@ -485,6 +488,8 @@ export function estimateTrim({ pieces: piecesIn, faces: facesIn, catalog: catalo
       const sp = g.split ? `, part ${g.split.split(' of ')[0]} of ${g.split.split(' of ')[1]} from left` : '';
       g.name = `${wall} · ${role}` + (w_ ? `, ${w_}` : '') + sp;
     }
+    // An outlet, switch or radiator edge crosses it: the carpenter cuts the notch on site.
+    if (g.notch) g.name += ' · cut ' + (g.notch === 1 ? 'a notch' : g.notch + ' notches') + ' on site';
     const c = CAT[g.product];
     g.size = sizeOf(c, ps[0].Wd);
     g.material = c.material || '';
