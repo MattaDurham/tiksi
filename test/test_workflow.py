@@ -367,7 +367,7 @@ class SERVICE:
         self.git('worktree', 'remove', '--force', str(gone)); self.git('branch', '-D', 'codex/gone')
         self.children.remove('gone')
         out = io.StringIO()
-        with patch.object(self.workflow, 'pr_info', return_value=None), contextlib.redirect_stdout(out):
+        with patch.object(self.workflow, 'pr_info', return_value=None), patch.object(self.workflow, 'gh'), contextlib.redirect_stdout(out):
             self.workflow.tidy()
         text = out.getvalue()
         self.assertFalse(done.exists())
@@ -383,7 +383,7 @@ class SERVICE:
         self.land('dirty')
         (dirty / 'notes.txt').write_text('unsaved', encoding='utf-8')
         out = io.StringIO()
-        with patch.object(self.workflow, 'pr_info', return_value=None), contextlib.redirect_stdout(out):
+        with patch.object(self.workflow, 'pr_info', return_value=None), patch.object(self.workflow, 'gh'), contextlib.redirect_stdout(out):
             self.workflow.tidy()
         self.assertTrue(dirty.exists())
         self.assertIn('unsaved changes', out.getvalue())
