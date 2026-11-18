@@ -32,6 +32,13 @@
 // end a, y up from the level's floor, d out from the face. Doors, windows and recorded
 // wall-fixture clearances cut runs and fields; a run that reaches the wall's end is mitred to meet
 // the next wall's trim (geometry.js does the mitre, as it does for the wall itself).
+//
+// A wall's trimClearances are the things on its faces that trim must keep off. Most (radiators,
+// heater covers, anything wide) stop trim as a window does. A small device (an outlet, a switch
+// or a thermostat: kind 'device') does not break the field: the trim is laid out round it with
+// CLEAR to spare. Boxes, stiles and battens are placed so that it falls between them, and any
+// run or board that would still cross it is cut round it. MODEL fills these in by itself from
+// the wall-mounted pieces of the property's models (trim-obstacles.js); those carry auto: true.
 
 import { sectionOf, isCrownProfile } from './trim-profiles.js';
 import { catalogItem, catalogFor, TRIM_CATALOG } from './trim-catalog.js';
@@ -204,14 +211,69 @@ export function openingBlocks(wall, openings, L, H) {
 
 // A surface-mounted or recessed fixture can reserve space on one wall face.
 // The horizontal limits follow the wall, and the heights are above its floor.
-export function trimClearanceBlocks(wall, side, L, H) {
+// Trim keeps this far off a device (the moulding never touches the plate).
+export const DEVICE_CLEAR = 0.0127;
+function clearancesOn(wall, side, L, H, devices) {
   if (!Array.isArray(wall.trimClearances)) return [];
   return wall.trimClearances.flatMap(c => {
     if (!c || c.side !== side || ![c.f0, c.f1, c.y0, c.y1].every(Number.isFinite)) return [];
-    const x0 = clamp(c.f0, 0, 1) * L, x1 = clamp(c.f1, 0, 1) * L;
-    const y0 = clamp(c.y0, 0, H), y1 = clamp(c.y1, 0, H);
-    return x0 < x1 && y0 < y1 ? [{ x0, x1, y0, y1 }] : [];
+    if ((c.kind === 'device') !== devices) return [];
+    const m = devices ? DEVICE_CLEAR : 0;
+    const x0 = clamp(c.f0, 0, 1) * L - m, x1 = clamp(c.f1, 0, 1) * L + m;
+    const y0 = clamp(c.y0, 0, H) - m, y1 = clamp(c.y1, 0, H) + m;
+    return x0 < x1 && y0 < y1 ? [{ x0, x1, y0, y1, ...(devices ? { device: true } : {}) }] : [];
   });
+}
+// What stops trim as an opening does: everything but small devices.
+export function trimClearanceBlocks(wall, side, L, H) { return clearancesOn(wall, side, L, H, false); }
+// Small devices, each grown by DEVICE_CLEAR: the trim is laid out round them.
+export function trimDeviceBlocks(wall, side, L, H) { return clearancesOn(wall, side, L, H, true); }
+
+// The pieces of [a, b] left once each device's keep-out is taken out: the device and its
+// clearance, at least `least` wide and centred on it, so the boxes either side of an outlet are
+// never closer than the usual gap.
+export function spansAround(a, b, devices, least = 0) {
+  const outs = devices.map(d => { const c = (d.x0 + d.x1) / 2, w = Math.max(d.x1 - d.x0, least); return [c - w / 2, c + w / 2]; })
+    .sort((p, q) => p[0] - q[0]);
+  const spans = [];
+  let x = a;
+  for (const [lo, hi] of outs) {
+    if (hi <= x) continue;
+    if (lo > x) spans.push([x, Math.min(lo, b)]);
+    x = Math.max(x, hi);
+    if (x >= b) break;
+  }
+  if (x < b) spans.push([x, b]);
+  return spans.filter(([p, q]) => q - p > 1e-6);
+}
+// `n` boxes shared among spans by width (largest remainder), none in a span too narrow to hold one.
+function shareCount(spans, n, least) {
+  const ok = spans.map(([a, b]) => b - a >= least);
+  const sum = spans.reduce((s, [a, b], i) => s + (ok[i] ? b - a : 0), 0);
+  if (!n || !sum) return spans.map(() => 0);
+  const raw = spans.map(([a, b], i) => ok[i] ? n * (b - a) / sum : 0);
+  const out = raw.map(Math.floor);
+  let left = n - out.reduce((s, v) => s + v, 0);
+  raw.map((v, i) => [v - out[i], i]).sort((p, q) => q[0] - p[0]).forEach(([, i]) => { if (left > 0 && ok[i]) { out[i]++; left--; } });
+  return out;
+}
+// A straight board with each device it crosses cut out of it: the pieces either side, and the
+// pieces below and above the device where it sits inside the board's height.
+function cutBoard(part, devices) {
+  let pieces = [part];
+  for (const d of devices) {
+    const next = [];
+    for (const p of pieces) {
+      if (d.x1 <= p.x0 || d.x0 >= p.x1 || d.y1 <= p.y0 || d.y0 >= p.y1) { next.push(p); continue; }
+      const cx0 = Math.max(p.x0, d.x0), cx1 = Math.min(p.x1, d.x1);
+      for (const q of [{ x0: p.x0, x1: cx0, y0: p.y0, y1: p.y1 }, { x0: cx1, x1: p.x1, y0: p.y0, y1: p.y1 },
+        { x0: cx0, x1: cx1, y0: p.y0, y1: Math.max(p.y0, d.y0) }, { x0: cx0, x1: cx1, y0: Math.min(p.y1, d.y1), y1: p.y1 }]) {
+        if (q.x1 - q.x0 > .003 && q.y1 - q.y0 > .003) next.push({ ...p, ...q });
+      }
+    }
+    pieces = next;
+  }
+  return pieces;
 }
 
 // [x0, x1] minus the intervals in `cuts`, pieces shorter than `min` dropped. Each piece says
@@ -286,7 +348,7 @@ function colsPerRect(rects, total) {
   return out;
 }
 
-function layPicturePreset(t, p, recipe, r, rect, out, push) {
+function layPicturePreset(t, p, recipe, r, rect, out, push, devices = []) {
   const gap = t.gap ?? .1, inset = t.inset ?? .09;
   const a = r.x0 + inset, b = r.x1 - inset;
   const c = r.y0 + (t.insetBottom ?? inset), d = r.y1 - (t.insetTop ?? inset);
@@ -304,13 +366,14 @@ function layPicturePreset(t, p, recipe, r, rect, out, push) {
   };
   if (b - a <= p.W * 2 || d - c <= p.W * 2) return;
   const across = shares => splitSpan(a, b, shares.length, shares, gap);
-  // Fit one ordinary band above/below an opening, or where the preset will not fit.
+  const devs = devices.filter(v => v.x1 > a && v.x0 < b && v.y1 > c && v.y0 < d);
+  // Fit one ordinary band above/below an opening, round a device, or where the preset will not fit.
   const top = across(recipe.columns);
-  if (!r.full || !top.length || top.some(([x, y]) => y - x <= Math.max(p.W * 2, t.minBox || 0))) {
-    const n = Math.max(1, Math.min(autoCount(t.style, b - a, d - c, null, t.target, gap),
-      Math.floor((b - a + gap) / (p.W * 2 + gap))));
-    splitSpan(a, b, n, null, gap).forEach(([x, y], i) => addBox(x, y, c, d, i, 0));
-    if (r.full) out.cols = Math.max(out.cols, n);
+  if (!r.full || devs.length || !top.length || top.some(([x, y]) => y - x <= Math.max(p.W * 2, t.minBox || 0))) {
+    const fit = w => w <= p.W * 2 ? 0 : Math.max(1, Math.min(autoCount(t.style, w, d - c, null, t.target, gap), Math.floor((w + gap) / (p.W * 2 + gap))));
+    const boxes = spansAround(a, b, devs, gap).flatMap(([x, y]) => { const n = fit(y - x); return n ? splitSpan(x, y, n, null, gap) : []; });
+    boxes.forEach(([x, y], i) => addBox(x, y, c, d, i, 0));
+    if (r.full) out.cols = Math.max(out.cols, boxes.length);
     return;
   }
   out.cols = Math.max(out.cols, top.length);
@@ -354,29 +417,40 @@ export function trimLayout(t, wall, openings, face = {}) {
   const atA = t.f0 <= 1e-3, atB = t.f1 >= 1 - 1e-3;
   const x0 = atA ? e0 : Math.max(e0, t.f0 * L), x1 = atB ? e1 : Math.min(e1, t.f1 * L);
   if (x1 - x0 < MIN_PIECE) return out;
-  const blocks = [...openingBlocks(wall, openings, L, H), ...trimClearanceBlocks(wall, t.side === -1 ? -1 : 1, L, H)];
+  const side = t.side === -1 ? -1 : 1;
+  const blocks = [...openingBlocks(wall, openings, L, H), ...trimClearanceBlocks(wall, side, L, H)];
+  const devices = trimDeviceBlocks(wall, side, L, H).filter(d => d.x1 > x0 && d.x0 < x1);
   const W = p.W, T = p.T;
   const push = part => { if (out.parts.length < MAX_PARTS) out.parts.push(part); };
 
   if (style.kind === 'run' || style.kind === 'crown') {
     const crown = style.kind === 'crown' || isCrownProfile(p.profile);
     const yb = crown ? H - W : clamp(t.y, 0, Math.max(0, H - W)), yt = yb + W;
-    const cuts = blocks.filter(b => b.y1 > yb + 1e-6 && b.y0 < yt - 1e-6);
+    const cuts = [...blocks, ...devices].filter(b => b.y1 > yb + 1e-6 && b.y0 < yt - 1e-6);
     for (const piece of subtract(x0, x1, cuts, MIN_PIECE)) {
       push({ kind: 'run', x0: piece.x0, x1: piece.x1, y: yb, W, T, profile: p.profile, crown, mitreA: piece.a && atA, mitreB: piece.b && atB });
     }
     return out;
   }
 
-  // Fields.
+  // Fields. Whatever board still crosses a device once the layout has gone round it is cut.
+  layField(t, style, p, x0, x1, H, blocks, devices, out, push);
+  if (devices.length) out.parts = out.parts.flatMap(part => part.kind === 'board' ? cutBoard(part, devices) : [part]);
+  return out;
+}
+
+function layField(t, style, p, x0, x1, H, blocks, devices, out, push) {
+  const W = p.W, T = p.T;
   const y0 = clamp(t.y, 0, H - MIN_FIELD), y1 = clamp(t.y + (t.h || style.h), y0 + MIN_FIELD, H);
   const rects = fieldRects(x0, x1, y0, y1, blocks);
   out.rects = rects;
   const rows = Math.max(1, t.rows || 1);
+  // The devices standing in a band of a rectangle.
+  const devsIn = (r, lo, hi) => devices.filter(d => d.x1 > r.x0 && d.x0 < r.x1 && d.y1 > lo && d.y0 < hi);
   const recipe = t.style === 'picture-frame' && framePreset(t.frameLayout);
   if (recipe) {
-    rects.forEach((r, i) => layPicturePreset(t, p, recipe, r, i, out, push));
-    return out;
+    rects.forEach((r, i) => layPicturePreset(t, p, recipe, r, i, out, push, devices));
+    return;
   }
   if (style.planks) {
     const pitch = Math.max(.01, t.spacing || p.pitch || W);
@@ -393,7 +467,7 @@ export function trimLayout(t, wall, openings, face = {}) {
         for (let x = r.x0; x < r.x1 - .005; x += step) push({ kind: 'board', dir: 'v', x0: x, x1: Math.min(r.x1, x + piece), y0: r.y0, y1: r.y1, T, profile: p.profile, d: p.backer || 0 });
       }
     }
-    return out;
+    return;
   }
 
   const userCols = colsPerRect(rects, t.cols);
@@ -425,39 +499,54 @@ export function trimLayout(t, wall, openings, face = {}) {
       const spans = rowsHere > 1 ? rowSplit(iy0, iy1, rowGap) : [[iy0, iy1]];
       if (!spans.length) continue;
       const set = setCols(r);
+      const rowH = spans[0][1] - spans[0][0];
       // Framed panels count their clear widths between stiles once a target is set; without one they fit as before.
-      const n = frame && set != null ? set : set ? set : frame || !t.target ? autoCount(t.style, ix1 - ix0, spans[0][1] - spans[0][0], null, t.target, gap)
-        : autoCount(t.style, r.x1 - r.x0 - 2 * stile, spans[0][1] - spans[0][0], null, t.target, stile);
-      if (r.full) out.cols = Math.max(out.cols, n);
+      const fit = w => frame || !t.target ? autoCount(t.style, w, rowH, null, t.target, gap) : autoCount(t.style, w - 2 * stile, rowH, null, t.target, stile);
+      // Each piece of the stretch between devices: its ends (stiles stand there) and its boxes.
       // Boxes: inside the inset, a gap between. Framed panels: stiles at both ends and between bays.
-      // A stretch set to no boxes, or whose boxes would be too narrow to read as boxes, stays plain wall.
-      let across = !n ? [] : frame ? splitSpan(ix0, ix1, n, r.full ? t.widths : null, gap) : splitSpan(r.x0 + stile, r.x1 - stile, n, r.full ? t.widths : null, stile);
-      if (frame && t.minBox && across.some(([a, b]) => b - a < t.minBox - 1e-9)) across = [];
-      if (frame && !across.length) continue;
-      if (!frame) {
-        const xs = [r.x0, ...across.slice(0, -1).map(([, b]) => b), r.x1 - stile];
-        for (const x of xs) push({ kind: 'board', dir: 'v', x0: x, x1: x + stile, y0: iy0, y1: iy1, T, profile: 'eased' });
-      }
-      across.forEach(([bx0, bx1], i) => {
-        spans.forEach(([c, d], j) => {
-          if (!frame && j > 0) push({ kind: 'board', dir: 'h', x0: bx0, x1: bx1, y0: c - stile, y1: c, T, profile: 'eased' });
-          if (bx1 - bx0 < .03 || d - c < .03) return;
-          out.boxes.push({ x0: bx0, x1: bx1, y0: c, y1: d, col: i, row: j, rect: rects.indexOf(r) });
-          if (frame) push({ kind: 'frame', x0: bx0, x1: bx1, y0: c, y1: d, W, T, profile: p.profile });
-          else if (p.panelThickness) push({ kind: 'board', dir: 'h', x0: bx0, x1: bx1, y0: c, y1: d, T: p.panelThickness, profile: 'flat' });
-          else if (t.style === 'raised-panel') {
-            const bevel = Math.min(.05, (bx1 - bx0) / 4, (d - c) / 4);
-            push({ kind: 'frame', x0: bx0 + .003, x1: bx1 - .003, y0: c + .003, y1: d - .003, W: bevel, T: T * .9, profile: 'raised-bevel' });
-            push({ kind: 'board', dir: 'h', x0: bx0 + .003 + bevel, x1: bx1 - .003 - bevel, y0: c + .003 + bevel, y1: d - .003 - bevel, T: T * .54, profile: 'flat' });
-          }
+      // A piece set to no boxes, or whose boxes would be too narrow to read as boxes, stays plain wall.
+      const devs = devsIn(r, iy0, iy1);
+      const pieces = devs.length ? spansAround(ix0, ix1, devs, frame ? gap : 0).filter(([a, b]) => b - a >= (frame ? W * 2 + .03 : stile)) : [[ix0, ix1]];
+      // A stretch set to no boxes stays plain only for picture-frame boxes; panels always get one.
+      const given = set != null && (frame || set) ? set : null;
+      const counts = !devs.length ? [given != null ? given : fit(ix1 - ix0)]
+        : given != null ? shareCount(pieces, given, frame ? W * 2 + .03 : 2 * stile + .03)
+        : pieces.map(([a, b]) => (frame ? b - a < W * 2 + .03 : b - a < 2 * stile + .03) ? 0 : fit(b - a));
+      const n = counts.reduce((s, v) => s + v, 0);
+      if (r.full) out.cols = Math.max(out.cols, n);
+      let col = 0;
+      pieces.forEach(([a, b], k) => {
+        let across = !counts[k] ? [] : frame ? splitSpan(a, b, counts[k], r.full && !devs.length ? t.widths : null, gap) : splitSpan(a + stile, b - stile, counts[k], r.full && !devs.length ? t.widths : null, stile);
+        if (frame && t.minBox && across.some(([p0, p1]) => p1 - p0 < t.minBox - 1e-9)) across = [];
+        if (frame && !across.length) return;
+        if (!frame) {
+          const xs = [a, ...across.slice(0, -1).map(([, q]) => q), b - stile];
+          for (const x of xs) push({ kind: 'board', dir: 'v', x0: x, x1: x + stile, y0: iy0, y1: iy1, T, profile: 'eased' });
+        }
+        across.forEach(([bx0, bx1]) => {
+          const i = col++;
+          spans.forEach(([c, d], j) => {
+            if (!frame && j > 0) push({ kind: 'board', dir: 'h', x0: bx0, x1: bx1, y0: c - stile, y1: c, T, profile: 'eased' });
+            if (bx1 - bx0 < .03 || d - c < .03) return;
+            out.boxes.push({ x0: bx0, x1: bx1, y0: c, y1: d, col: i, row: j, rect: rects.indexOf(r) });
+            if (frame) push({ kind: 'frame', x0: bx0, x1: bx1, y0: c, y1: d, W, T, profile: p.profile });
+            else if (p.panelThickness) push({ kind: 'board', dir: 'h', x0: bx0, x1: bx1, y0: c, y1: d, T: p.panelThickness, profile: 'flat' });
+            else if (t.style === 'raised-panel') {
+              const bevel = Math.min(.05, (bx1 - bx0) / 4, (d - c) / 4);
+              push({ kind: 'frame', x0: bx0 + .003, x1: bx1 - .003, y0: c + .003, y1: d - .003, W: bevel, T: T * .9, profile: 'raised-bevel' });
+              push({ kind: 'board', dir: 'h', x0: bx0 + .003 + bevel, x1: bx1 - .003 - bevel, y0: c + .003 + bevel, y1: d - .003 - bevel, T: T * .54, profile: 'flat' });
+            }
+          });
         });
       });
     }
-    return out;
+    return;
   }
 
   if (style.bays) {
     // Board and batten, square grid: a top rail, vertical battens, and (grid) rails between rows.
+    // A device in the field falls in a bay: the battens of each piece of wall either side of it
+    // stand clear of it.
     const spacing = t.spacing || p.spacing || .45;
     const rail = Math.max(W, p.rail || W);
     for (const r of rects) {
@@ -468,17 +557,22 @@ export function trimLayout(t, wall, openings, face = {}) {
       const spans = rowsHere > 1 ? splitSpan(r.y0, by1, rowsHere, t.heights, W) : [[r.y0, by1]];
       if (!spans.length) continue;
       const set = setCols(r);
-      const n = set || autoCount(t.style, r.x1 - r.x0, spans[0][1] - spans[0][0], t.style === 'grid' ? t.spacing : spacing);
-      if (r.full) out.cols = Math.max(out.cols, n);
-      const batten = Math.min(W, r.x1 - r.x0);
-      const bays = splitSpan(r.x0 + batten, r.x1 - batten, n, r.full ? t.widths : null, batten);
-      const xs = r.x1 - r.x0 < W * 2 ? [(r.x0 + r.x1 - batten) / 2] : [r.x0, ...bays.slice(0, -1).map(([, b]) => b), r.x1 - batten];
-      for (const x of xs) push({ kind: 'board', dir: 'v', x0: x, x1: x + batten, y0: r.y0, y1: by1, T, profile: 'eased' });
+      const devs = devsIn(r, r.y0, by1);
+      const fit = w => autoCount(t.style, w, spans[0][1] - spans[0][0], t.style === 'grid' ? t.spacing : spacing);
+      const pieces = devs.length ? spansAround(r.x0, r.x1, devs, 0).filter(([a, b]) => b - a >= Math.min(W, .01)) : [[r.x0, r.x1]];
+      const counts = !devs.length ? [set || fit(r.x1 - r.x0)] : set ? shareCount(pieces, set, W * 2 + .03).map(v => Math.max(1, v)) : pieces.map(([a, b]) => fit(b - a));
+      if (r.full) out.cols = Math.max(out.cols, counts.reduce((s, v) => s + v, 0));
+      let col = 0;
+      pieces.forEach(([a, b], k) => {
+        const batten = Math.min(W, b - a);
+        const bays = splitSpan(a + batten, b - batten, counts[k], r.full && !devs.length ? t.widths : null, batten);
+        const xs = b - a < W * 2 ? [(a + b - batten) / 2] : [a, ...bays.slice(0, -1).map(([, q]) => q), b - batten];
+        for (const x of xs) push({ kind: 'board', dir: 'v', x0: x, x1: x + batten, y0: r.y0, y1: by1, T, profile: 'eased' });
+        bays.forEach(([p0, p1]) => { const i = col++; spans.forEach(([c, d], j) => out.boxes.push({ x0: p0, x1: p1, y0: c, y1: d, col: i, row: j, rect: rects.indexOf(r) })); });
+      });
       for (let j = 1; j < spans.length; j++) push({ kind: 'board', dir: 'h', x0: r.x0, x1: r.x1, y0: spans[j][0] - W, y1: spans[j][0], T, profile: 'eased' });
-      bays.forEach(([a, b], i) => spans.forEach(([c, d], j) => out.boxes.push({ x0: a, x1: b, y0: c, y1: d, col: i, row: j, rect: rects.indexOf(r) })));
     }
   }
-  return out;
 }
 
 // The vertical extent a record occupies on its wall (for dragging and the panel), metres.

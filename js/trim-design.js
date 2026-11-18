@@ -195,6 +195,18 @@ export function trimDesign(env) {
     const styles = new Set(seedIds.map(byId).filter(Boolean).map(t => t.style));
     return pool(seedIds, scope).filter(t => styles.has(t.style));
   }
+  // The sections a moulding picked for `style` goes to: that style across the reach and, at the
+  // project's reach (or the sections picked), the other rails and caps on the same line, so the
+  // top of the wainscoting is one moulding everywhere (a chair rail in one room, a wainscot cap
+  // in the next). Base, crown and fields keep to their own kind.
+  function mouldingReach(seedIds, scope, style) {
+    const list = members(seedIds, scope).filter(t => t.style === style);
+    const group = (trimStyle({ style }) || {}).group;
+    if (!lineRule(scope).anyHeight || group !== 'Rails and caps' || !list.length) return list;
+    const lines = list.map(t => t.y);
+    const more = pool(seedIds, scope).filter(t => t.style !== style && (trimStyle(t) || {}).group === group && lines.some(y => Math.abs(t.y - y) < BAND));
+    return [...list, ...more];
+  }
   // What each scope covers for this selection, for the panel's buttons.
   function scopes(seedIds) {
     const seeds = seedIds.map(byId).filter(Boolean);
@@ -216,59 +228,78 @@ export function trimDesign(env) {
   // the drag began), `seedId` the one grabbed and `edge` what was grabbed: 'move' (the whole
   // section), 'top' or 'bottom' (one edge of a field). Returns the change to each record and the
   // distance actually moved once every section is kept inside its wall and no field is crushed.
-  // opts.all: every record moves by the same distance (several sections picked to move together).
+  // opts.scope: the reach the move is made at (lineRule says what each one does);
+  // opts.all: every record moves (several sections picked to move together);
+  // opts.align: the seed's kind of trim comes onto the seed's own line, wherever it was;
+  // opts.anyHeight: with align, every section of that kind in the records, not only those near it.
   function planLine(records, seedId, edge, dy, opts = {}) {
+    const rule = opts.scope ? { ...lineRule(opts.scope, edge), ...opts } : opts;
     const items = [];
     for (const t of records) {
       const e = edges(t), i = info(t);
       if (!e || !i) continue;
-      items.push({ t, id: t.id, style: t.style, room: i.roomKey, H: i.H, ...e, lo: false, hi: false });
+      items.push({ t, id: t.id, style: t.style, room: i.roomKey, H: i.H, ...e, lo: false, hi: false, offLo: 0, offHi: 0 });
     }
     const seed = items.find(x => x.id === seedId);
     const none = { patches: new Map(), dy: 0, moved: 0 };
     if (!seed) return none;
     const want = seed.rigid || edge === 'move' ? ['lo', 'hi'] : edge === 'top' ? ['hi'] : ['lo'];
+    const at = (it, e) => e === 'lo' ? it.y0 : it.y1;
     const queue = [];
-    // Trim standing on the floor stays there unless it is the piece in hand.
-    const mark = (it, e, force) => {
+    // Trim standing on the floor stays there unless it is the piece in hand. `off` is how far an
+    // edge first moves to reach its line, before the drag's own distance.
+    const mark = (it, e, force, off = 0) => {
       if (it.rigid) {
         if (it.lo || (!force && it.y0 <= FLOOR)) return;
-        it.lo = it.hi = true; queue.push(it); return;
+        it.lo = it.hi = true; it.offLo = it.offHi = off; queue.push(it); return;
       }
       if (it[e] || (!force && e === 'lo' && it.y0 <= FLOOR)) return;
-      it[e] = true; queue.push(it);
+      it[e] = true; it[e === 'lo' ? 'offLo' : 'offHi'] = off; queue.push(it);
     };
     for (const it of items) {
-      const parallel = it.style === seed.style && want.every(e => Math.abs((e === 'lo' ? it.y0 : it.y1) - (e === 'lo' ? seed.y0 : seed.y1)) < BAND);
-      if (it === seed || parallel) for (const e of want) mark(it, e, it === seed);
-      else if (opts.all) { mark(it, 'lo', true); mark(it, 'hi', true); }
+      const near = want.every(e => Math.abs(at(it, e) - at(seed, e)) < BAND);
+      // Across the project a line is also kept by trim of the same family near it: a chair rail
+      // in one room and a wainscot cap in the next, or two styles of wainscoting.
+      const family = rule.align && rule.anyHeight && near && it.rigid === seed.rigid && (trimStyle(it.t) || {}).group === (trimStyle(seed.t) || {}).group;
+      const parallel = (it.style === seed.style && (near || (rule.align && rule.anyHeight))) || family;
+      if (it === seed || parallel) for (const e of want) mark(it, e, it === seed, rule.align && it !== seed ? at(seed, e) - at(it, e) : 0);
+      else if (rule.all) { mark(it, 'lo', true); mark(it, 'hi', true); }
     }
-    // Whatever meets a moving piece in the same room moves with it.
+    // Whatever meets a moving piece in the same room moves with it, by the same amount.
     while (queue.length) {
       const m = queue.pop();
-      const spans = m.rigid ? [[m.y0, m.y1]] : [m.lo ? [m.y0, m.y0] : null, m.hi ? [m.y1, m.y1] : null].filter(Boolean);
+      const spans = m.rigid ? [[m.y0, m.y1, m.offLo]] : [m.lo ? [m.y0, m.y0, m.offLo] : null, m.hi ? [m.y1, m.y1, m.offHi] : null].filter(Boolean);
       for (const o of items) {
         if (o === m || o.room !== m.room) continue;
-        for (const [a, b] of spans) {
-          if (o.rigid) { if (o.y1 >= a - TOUCH && o.y0 <= b + TOUCH) mark(o, 'lo'); continue; }
-          if (o.y0 >= a - TOUCH && o.y0 <= b + TOUCH) mark(o, 'lo');
-          if (o.y1 >= a - TOUCH && o.y1 <= b + TOUCH) mark(o, 'hi');
+        for (const [a, b, off] of spans) {
+          if (o.rigid) { if (o.y1 >= a - TOUCH && o.y0 <= b + TOUCH) mark(o, 'lo', false, off); continue; }
+          if (o.y0 >= a - TOUCH && o.y0 <= b + TOUCH) mark(o, 'lo', false, off);
+          if (o.y1 >= a - TOUCH && o.y1 <= b + TOUCH) mark(o, 'hi', false, off);
         }
       }
     }
+    // Where each edge ends up for a move of d, and the d every section allows.
+    const lo0 = it => it.y0 + (it.lo ? it.offLo : 0), hi0 = it => it.y1 + (it.hi ? it.offHi : 0);
     let lo = -Infinity, hi = Infinity;
     for (const it of items) {
-      if (it.lo && it.hi) { lo = Math.max(lo, -it.y0); hi = Math.min(hi, it.H - it.y1); }
-      else if (it.hi) { lo = Math.max(lo, it.y0 + MIN_FIELD - it.y1); hi = Math.min(hi, it.H - it.y1); }
-      else if (it.lo) { lo = Math.max(lo, -it.y0); hi = Math.min(hi, it.y1 - MIN_FIELD - it.y0); }
+      if (!it.lo && !it.hi) continue;
+      if (it.lo) lo = Math.max(lo, -lo0(it));
+      if (it.hi) hi = Math.min(hi, it.H - hi0(it));
+      if (it.rigid) continue;
+      // The field keeps its least height.
+      if (it.lo && it.hi) { if (hi0(it) - lo0(it) < MIN_FIELD - 1e-9) { lo = Infinity; } }
+      else if (it.hi) lo = Math.max(lo, lo0(it) + MIN_FIELD - hi0(it));
+      else hi = Math.min(hi, hi0(it) - MIN_FIELD - lo0(it));
     }
     const d = lo > hi ? 0 : clamp(dy, lo, hi);
+    if (lo > hi && items.some(it => (it.lo && it.offLo) || (it.hi && it.offHi))) return none;
     const patches = new Map();
     for (const it of items) {
       // An edge that does not move keeps its exact place.
-      if (it.lo && it.hi) patches.set(it.id, it.rigid ? { y: r4(it.y0 + d) } : { y: r4(it.y0 + d), h: it.t.h });
-      else if (it.hi) patches.set(it.id, { y: it.y0, h: r4(it.y1 + d) - it.y0 });
-      else if (it.lo) patches.set(it.id, { y: r4(it.y0 + d), h: it.y1 - r4(it.y0 + d) });
+      const y0 = r4(lo0(it) + d), y1 = r4(hi0(it) + d);
+      if (it.lo && it.hi) patches.set(it.id, it.rigid ? { y: y0 } : { y: y0, h: (it.offLo || it.offHi) ? y1 - y0 : it.t.h });
+      else if (it.hi) patches.set(it.id, { y: it.y0, h: y1 - it.y0 });
+      else if (it.lo) patches.set(it.id, { y: y0, h: it.y1 - y0 });
     }
     return { patches, dy: d, moved: patches.size };
   }
@@ -345,7 +376,17 @@ export function trimDesign(env) {
     return out;
   }
 
-  return { info, layout, pool, members, scopes, planLine, lineStops, stepCols, summary, notes, byId };
+  return { info, layout, pool, members, mouldingReach, scopes, planLine, lineStops, stepCols, summary, notes, byId };
+}
+
+// How a height line moves at each reach. Every section of the grabbed kind comes onto the
+// grabbed one's line, so a drag (or a typed height) leaves them all at one height. In a room or a
+// group that is the sections near its height (two rails of one kind at different heights stay
+// two lines); for the whole project, or the sections picked, it is every one of that kind, and
+// trim of the same family near the line (chair rails with a wainscot cap, one style of
+// wainscoting with another). Picked sections of other kinds move by the same distance.
+export function lineRule(scope, edge) {
+  return { align: true, anyHeight: scope === 'project' || scope === 'selected', all: scope === 'selected' && edge === 'move' };
 }
 
 // A drag's raw value settles on steps of `step`, and leaves a step only once the pointer is
