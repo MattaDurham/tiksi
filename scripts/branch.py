@@ -396,14 +396,30 @@ class Workflow:
     # and the phone run on Safari's engine passed.
     REQUIRED_CHECKS = ('Regression',)
 
+    def job(self, job_id):
+        """The GitHub Actions record of one job (runner and steps), or None when it cannot be read."""
+        try: return json.loads(self.gh('api', f'repos/{{owner}}/{{repo}}/actions/jobs/{job_id}'))
+        except (WorkflowError, ValueError, OSError): return None
+
+    def never_ran(self, check):
+        """A check that was cancelled before any runner took it (GitHub had no machine free): it
+        tested nothing, so it is no verdict on the change."""
+        found = re.search(r'/job/(\d+)', check.get('detailsUrl') or '')
+        if not found or check.get('conclusion') != 'CANCELLED': return False
+        job = self.job(found[1])
+        return bool(job) and not job.get('runner_name') and not job.get('steps')
+
     def verdict(self, checks):
         """Refuse a check that finished without passing; return the ones still running.
 
         A check still running is no verdict, so the merge goes ahead on the
-        owner's word and main's own run grades it after the push.
+        owner's word and main's own run grades it after the push. Nor is a check
+        that never ran: one cancelled before any runner took it, and the summary
+        check when its only failures are such checks.
         """
         running = [name for name in self.REQUIRED_CHECKS
                    if name not in {check.get('name') or check.get('context') for check in checks}]
+        failed = []
         for check in checks:
             name = check.get('name') or check.get('context') or 'check'
             if 'status' in check:
@@ -411,10 +427,16 @@ class Workflow:
             else:
                 done, result = check.get('state') not in ('PENDING', 'EXPECTED', None), check.get('state')
             if not done: running.append(name)
-            elif result not in ('SUCCESS', 'SKIPPED', 'NEUTRAL'):
-                raise WorkflowError(f'{name} finished {str(result).lower()}; merge refused. Fix it, or rerun a check '
-                                    'your change cannot affect, or merge with --skip-checks on the owner\'s instruction.')
-        return running
+            elif result not in ('SUCCESS', 'SKIPPED', 'NEUTRAL'): failed.append((name, result, check))
+        unrun = [name for name, _, check in failed if self.never_ran(check)]
+        # The summary check last: a refusal names the group that actually failed.
+        for name, result, _ in sorted(failed, key=lambda f: f[0] in self.REQUIRED_CHECKS):
+            if name in unrun or (name in self.REQUIRED_CHECKS and unrun and all(n in unrun or n in self.REQUIRED_CHECKS for n, _, _ in failed)):
+                if name not in unrun: unrun.append(name)
+                continue
+            raise WorkflowError(f'{name} finished {str(result).lower()}; merge refused. Fix it, or rerun a check '
+                                'your change cannot affect, or merge with --skip-checks on the owner\'s instruction.')
+        return running + [name + ' (never ran)' for name in unrun]
 
     def merge(self, slug, owner_approved=False, keep=False, skip_checks=False):
         if not owner_approved: raise WorkflowError('Merge requires the owner\'s instruction and --owner-approved.')
@@ -427,7 +449,7 @@ class Workflow:
             print('Skipping the online checks and the unit tests on the owner\'s instruction.')
         else:
             running = self.verdict(info.get('statusCheckRollup') or [])
-            if running: print(f'Still running, no verdict yet: {", ".join(running)}. Merging without waiting; '
+            if running: print(f'Still running or never ran, no verdict yet: {", ".join(running)}. Merging without waiting; '
                               'main\'s own run grades the merge.')
         branch = self.validate(slug)
         self.private_guard(target, branch)
