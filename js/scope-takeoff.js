@@ -1,5 +1,5 @@
 // Scope items measured from the model. Right-click a room, a wall, an opening, a fixture or an
-// imported model's object in the model beside PROJECTS and ADD ... TO <project> makes a scope
+// imported model's object in the model beside ESTIMATE and ADD ... TO <room> makes a scope
 // item that already knows what it is and how big it is: a room brings its wall area (net of
 // doors and windows), floor and ceiling area, baseboard and perimeter length and its door and
 // window counts. The item then picks the work (paint, refinish, replace ...) and the finish
@@ -7,7 +7,7 @@
 // prices follow. A price typed by hand stands until the work or finish level changes again.
 //
 // Pure data: no three.js and no DOM. The viewer measures (it has the faces and the meshes) and
-// hands the measurements here; PROJECTS shows and edits the result.
+// hands the measurements here; ESTIMATE shows and edits the result in the room.
 
 import { PRICE_BOOK } from './price-book.js';
 

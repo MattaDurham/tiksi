@@ -108,7 +108,7 @@ try {
     store.touch();
   });
   if (await page.locator('[data-cancel]').count()) await page.locator('[data-cancel]').click();   // close the PIN tool
-  await page.locator('#rail a[data-view="materials"]').click({ noWaitAfter: true }); await delay(300);   // leave MODEL and come back, so it draws the new pins
+  await page.locator('#rail a[data-view="photos"]').click({ noWaitAfter: true }); await delay(300);   // leave MODEL and come back, so it draws the new pins
   await page.locator('#rail a[data-view="model"]').click({ noWaitAfter: true }); await page.locator('canvas.v-canvas').waitFor();
   await page.locator('.v-pin-row', { hasText: 'Spec sheet.pdf' }).locator('[data-locate]').click();
   await delay(900);

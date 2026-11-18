@@ -1,7 +1,6 @@
 // Phone layout: the model fills the screen and everything else lives in one side panel.
 // Made for the field and for showing clients: no toolbars, no inspector, big touch targets.
-// It switches on by itself on phone-sized screens; FIELD VIEW (rail foot), PHONE LAYOUT (the
-// top bar, whenever the desktop layout was chosen on a small or touch screen) and DESKTOP
+// It switches on by itself on phone-sized screens; "Phone layout" in the Tiksi menu and DESKTOP
 // LAYOUT (the panel) override that in this browser.
 //
 // Two separate questions, two separate tests:
@@ -71,7 +70,7 @@ export function fieldRouted(name) {
   const title = document.querySelector(`#rail a[data-view="${name}"]`);
   els.title.textContent = name === 'guide' ? 'Guide' : pageLabel(title ? title.textContent : name);
   document.documentElement.classList.toggle('fd-model', name === 'model');
-  // Which page is showing, for rules that leave PLAN and MODEL to their own styles.
+  // Which page is showing, for rules that leave MODEL to its own styles.
   document.documentElement.dataset.view = name;
   if (samePage) render(); else close();
   // A note started from another page: MODEL is up now, so its note tool can take the tap.
@@ -94,12 +93,12 @@ function apply() {
   // The desktop layout chosen on a phone keeps a way back on screen: the top bar shows it.
   if (els) els.back.hidden = on || !(media && media.matches || touchDevice());
   // UNDO and REDO move into the slim bar on a phone (editing pages show them there) and back
-  // into the Tiksi menu on the desktop, where Cmd+Z and Cmd+Shift+Z do the same. The buttons
+  // onto the top bar, beside FILE, on the desktop. The buttons
   // keep their ids and handlers.
   const history = document.getElementById('edit-history');
   if (history && els) {
     if (on && history.parentElement !== els.bar) els.bar.append(history);
-    else if (!on && history.parentElement === els.bar) document.getElementById('tk-top')?.append(history);
+    else if (!on && history.parentElement === els.bar) document.getElementById('btn-file')?.before(history);
   }
   refreshChrome();
 }

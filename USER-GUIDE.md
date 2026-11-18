@@ -19,9 +19,8 @@ Open **GUIDE** in the Tiksi menu (the logo at the top left) for chapter search, 
 - [Read tape measurements from a walk-through video](#measure)
 - [Reconstruct a model from photos](#reconstruct)
 - [Research real products and suppliers](#sourcing)
-- [Turn the design into scoped work](#projects)
 - [Keep specifications and ordering links](#products)
-- [Estimate a project](#budget)
+- [Price a project room by room](#budget)
 - [Schedule the work](#schedule)
 - [Print a useful specification sheet](#sheets)
 - [Make a drawing set from the model](#documents)
@@ -36,37 +35,32 @@ Open **GUIDE** in the Tiksi menu (the logo at the top left) for chapter search, 
 
 ## Your first renovation workflow
 
-Tiksi connects a property, its design, reference photos and project work. Start with one room and follow it all the way to a scope and a specification sheet.
+Tiksi connects a property, its design, reference photos and project work. Start with one room and follow it all the way to a price, a schedule and a specification sheet.
 
-![The same sample property appears throughout this guide. The tabs across the top change pages; the Tiksi menu (the logo) holds the project list, FILE (saving, importing and settings), GUIDE, UNDO and REDO.](js/guide-assets/start.png)
+![The same sample property appears throughout this guide. The six tabs across the top change pages; beside them are the property, UNDO and REDO, and FILE (saving, importing and settings). The Tiksi menu (the logo) holds the GUIDE and the screen options.](js/guide-assets/start.png)
 
-The same sample property appears throughout this guide. The tabs across the top change pages; the Tiksi menu (the logo) holds the project list, FILE (saving, importing and settings), GUIDE, UNDO and REDO.
+The same sample property appears throughout this guide. The six tabs across the top change pages; beside them are the property, UNDO and REDO, and FILE (saving, importing and settings). The Tiksi menu (the logo) holds the GUIDE and the screen options.
 
 ### Where everything lives
 
 | Workspace | Use it for |
 | --- | --- |
-| FILE | Open, import, save, exchange models, edit the one-pager and change settings. |
-| MODEL | Inspect the 3D design with its dimensions, room areas and door and window numbers, imported scans, photo pins and before/after. |
-| MATERIALS | Choose and tune finishes or make a material from a photo. |
-| PHOTOS | Keep site images, notes, room links and model pins together. |
-| MEASURE | Read tape measurements from walk-through video frames and apply them to the model. |
-| PHOTO TO 3D | Reconstruct a textured model from overlapping photographs. |
-| SOURCING | Research products and compare cited supplier evidence. |
-| PROJECTS | Turn the design into scoped work, quantities and dependencies. |
-| PRODUCTS | Keep specifications, vendor links and selected product prices. |
-| ESTIMATE | What each project costs, room by room: drawn trim worked out into boards, supplies and carpenter hours, scope items, markups and bids; all projects against a budget cap. |
-| SCHEDULE | When the work happens, in working days: the carpenter's rooms in order, what each line waits for, and the program's dates. |
-| DOCUMENTS | Drawing sets and saved PDFs; the trim package and the client proposal from the estimate; cut sheets for scope items and products. |
+| FILE | Save, open and import projects, exchange models with other programs, bring back removed records and change settings. On the top bar beside UNDO and REDO. |
+| MODEL | Inspect the 3D design with its dimensions, room areas and door and window numbers, imported scans, photo pins and before/after; draw trim and paint finishes. |
+| PHOTOS | PHOTOS keeps site images, notes, room links and model pins together; VIDEOS reads tape measurements from walk-through videos and applies them to the model. |
+| PRODUCTS | PRODUCTS keeps real products with their store pages, prices and spec sheets; MATERIALS sets each finish and how it looks; FIND A PRODUCT researches products and suppliers. |
+| ESTIMATE | Set up and price each project room by room: drawn trim worked out into boards, supplies and carpenter hours, scope items, who does the work, markups and bids; all projects against a budget cap. |
+| SCHEDULE | When the work happens, in working days: the carpenter's rooms in order with their tasks, what each line waits for, and the program's dates. |
+| DOCUMENTS | Drawing sets and saved PDFs; the trim package and the proposal; cut sheets for scope items and products; SEND, for the one-pager, the proposal and the client page. |
 
 ### A useful first session
 
 1. Choose FILE → Project → NEW PROPERTY, or keep the demo property while you learn. Back from a site visit with everything in one folder? Choose NEW PROPERTY FROM A FOLDER instead and skip the next step.
 2. Use FILE → Import for a scan, Polycam link or photos.
 3. In MODEL, check the walls, rooms, doors and windows with DIMENSIONS, ROOMS and NUMBERS. Change them in SketchUp with EDIT IN SKETCHUP; saves there come back to Tiksi.
-4. In PHOTOS, add reference images and pin them to the model. In MATERIALS, choose the proposed finishes.
-5. In PROJECTS, add scope items, quantities, costs and durations. Link products and model elements to the work.
-6. Review ESTIMATE and SCHEDULE, then print from DOCUMENTS. Finish with FILE → Project → SAVE PROJECT so the work travels in a .tiksi file.
+4. In PHOTOS, add reference images and pin them to the model. In PRODUCTS → MATERIALS, choose the proposed finishes.
+5. In ESTIMATE, start a project with + NEW PROJECT, add its rooms, and add each room's scope items with quantities, prices and working days. Link products and model elements to the work from each item's record.
+6. Review SCHEDULE, then print from DOCUMENTS and send the client what they need from DOCUMENTS → SEND. Finish with FILE → Project → SAVE PROJECT so the work travels in a .tiksi file.
 
 > **Good to know:** The screenshots and recordings use a synthetic sample renovation. Their drawings, images, products and prices illustrate the controls; they are not a surveyed room or a supplier quote.
 
@@ -78,16 +72,16 @@ The same sample property appears throughout this guide. The tabs across the top 
 
 Save a property as a .tiksi file. It carries the plan, models, original captures, pinned photos, materials, linked projects and specified products together.
 
-![FILE → Project is the home for SAVE PROJECT, SAVE AS, OPEN / IMPORT and NEW PROPERTY.](js/guide-assets/files.png)
+![FILE → Project is the home for SAVE PROJECT, SAVE AS, OPEN / IMPORT, NEW PROPERTY and REMOVED RECORDS.](js/guide-assets/files.png)
 
-FILE → Project is the home for SAVE PROJECT, SAVE AS, OPEN / IMPORT and NEW PROPERTY.
+FILE → Project is the home for SAVE PROJECT, SAVE AS, OPEN / IMPORT, NEW PROPERTY and REMOVED RECORDS.
 
 ### Try it
 
 1. With the local server, edits save into the project’s .tiksi file on the Mac. Wait for SAVED TO DISK. FILE → Project → SAVE PROJECT also flushes pending edits.
 2. Use SAVE AS to export another copy. In the static hosted edition, choose a filename and destination on first save when your browser offers a picker; later saves update that file or download it.
 3. To reopen work, choose OPEN / IMPORT and select its .tiksi file, or drop the file on Tiksi.
-4. Opening updates the property with the same ID and leaves unrelated properties in place. Choose the property at the top of the app to switch between them.
+4. Opening updates the property with the same ID and leaves unrelated properties in place. Choose the property on the top bar to switch between them.
 5. FILE → Settings → Where this project is kept shows the canonical file path on the Mac. Existing bundles in the server’s configured project folders are discovered automatically. The static edition instead offers CHOOSE FOLDER and OPEN FROM FOLDER.
 
 <details><summary>Find saving, importing and settings in one place</summary>
@@ -111,6 +105,8 @@ Open FILE, look at Project, switch to Import, inspect 3D exchange, then open Set
 **Conflicting copies.** The local server combines unrelated edits and asks which values to use when the Mac and this device changed the same records. Recovery copies are kept. In the static edition, open a newer linked-folder copy before saving over it.
 
 **Whole-workspace backup.** FILE → Settings → Workspace backup & maintenance → SAVE WORKSPACE BACKUP includes every property.
+
+**Removed records.** FILE → Project → REMOVED RECORDS… lists the projects, rooms, scope items and products removed from the open property, with what they held. RESTORE puts one back with its original IDs; nothing that exists now is overwritten.
 
 > **Good to know:** The local server saves project bundles on the Mac. First connection migrates old browser data to disk with a recovery bundle. On the Mac itself, wait for SAVED TO DISK before closing; closing with unsaved work warns. A phone or another computer keeps what it has not sent yet in its own browser and sends it the next time Tiksi is opened there; while an original too large to keep is unsent, the phone bar reads Keep open. The static edition retains browser autosave and portable exports.
 
@@ -166,21 +162,21 @@ The left pane holds MODEL's views, tools and switches, in groups that fold to th
 
 1. Open MODEL and use FRAME if the room is outside the camera. Drag or middle-drag to orbit about the point under the cursor, hold Shift to pan (even mid-drag), scroll to zoom, or use TOP for a plan, drawn in PARALLEL projection. On a trackpad, pinch also zooms. STANDARD VIEWS in the left pane look at the model from the top, bottom, front, back, left, right or a corner (ISO).
 2. Click a wall to select its face: the surface one room sees, from inside corner to inside corner. The panel gives its square feet gross and net of doors and windows, its length and its baseboard length, and its finish. Shift-click adds more faces and the panel totals them; SELECT THIS ROOM'S WALLS on a floor selects them all. Walls, doors and windows change in SketchUp: EDIT IN SKETCHUP opens the project's model there, and a save comes back to Tiksi.
-3. Turn on DIMENSIONS, ROOMS and NUMBERS in the bar over the model (or under DISPLAY in the left pane) to label every wall's length, each room's name and area, and each door and window's number. The labels read the same from any angle.
+3. Under DISPLAY in the left pane, turn on Wall dimensions, Room names and areas, and Door and window numbers to label every wall's length, each room's name and area, and each door and window's number. The labels read the same from any angle.
 4. Use SECTION to cut through the building and reveal interiors: the cut floats in the view as a see-through plane. Drag its arrow to slide it and a ring to turn it. Choose DONE when the cuts are placed: the planes, their handles and the strip go away and a clean section is left. Use X-RAY to inspect overlapping references.
-5. For lighting, choose LIGHT (or FILE → Settings → Model environment, which also holds render quality). For an image export, use FILE → 3D exchange → SAVE VIEW IMAGE while MODEL is open.
+5. For lighting and render quality, open Lighting and sun under DISPLAY. For an image, choose Render a still image there, or RENDER THIS VIEW on a saved view's tab.
 
 ### Other features here
 
-**Undo and redo.** Press Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (Ctrl+Y also redoes), or choose UNDO and REDO in the Tiksi menu (on a phone, in the top bar). MODEL and MEASURE share up to 80 edits per project during this session, such as finishes, door states, trim and applied tape readings. Disk saves and view switches retain history; a reload or file import starts fresh. Unrelated shared edits are kept; a conflicting change disables restoration rather than overwriting it. Photos, notes and imported references are outside this undo.
+**Undo and redo.** Press Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z (Ctrl+Y also redoes), or choose UNDO and REDO on the top bar. MODEL and PHOTOS → VIDEOS share up to 80 edits per project during this session, such as finishes, door states, trim and applied tape readings. Disk saves and view switches retain history; a reload or file import starts fresh. Unrelated shared edits are kept; a conflicting change disables restoration rather than overwriting it. Photos, notes and imported references are outside this undo.
 
 **Walk mode.** Choose WALK, then use W/A/S/D or the arrow keys to move and Shift to move faster. Drag to look or click the canvas to capture the mouse; looking only turns you where you stand. Double-click a spot (double-tap on a touch screen) to go there. Walls, fixtures and the surfaces of imported models are solid: you stop about a foot short of them and slide along them, and doors let you through. Escape releases the mouse or exits walk mode.
 
-**Measure surfaces.** Choose MEASURE and click two surface points to display a distance. CLEAR MEASURES removes temporary measurements; image export can include them.
+**Measure surfaces.** Choose Measure (D) under TOOLS and click two surface points to display a distance. Measures are temporary: Clear measures removes them, and a still image can include them. Readings to keep come from walk-through videos in PHOTOS → VIDEOS.
 
 **Field of view.** Choose FIELD OF VIEW (Z), as in SketchUp, then press and drag on the model: up narrows the view and down widens it, while the camera stays where it stands (the middle button still orbits and scroll still moves the camera). The panel shows the angle across the picture's long and short sides and its 35 mm equivalent, and has the iPhone 17 Pro lenses: 0.5× (14 mm, the ultra wide), 1× (24 mm, the lens Polycam keyframes come from) and 2× (48 mm), plus DEFAULT. An outline shows the phone's 4:3 picture, fitted in the window, so the model lines up with keyframes and photos taken at that lens. The lenses are also under CAMERA in the left pane and in the phone's view panel. A saved view keeps its lens.
 
-**Parallel projection.** PARALLEL, in the bar over the model beside TOP and under CAMERA in the left pane (Shift+P), draws the model with no perspective: lines that are parallel in the building stay parallel on the screen, as on a drawing. It is the far end of FIELD OF VIEW: keep dragging up past the narrowest angle, or choose PARALLEL in its panel; drag down to bring the perspective back. TOP turns it on and ORBIT turns it off again. Zoom, pan and orbit work as usual, and a saved view keeps it.
+**Parallel projection.** Parallel projection, under CAMERA in the left pane (Shift+P), draws the model with no perspective: lines that are parallel in the building stay parallel on the screen, as on a drawing. It is the far end of FIELD OF VIEW: keep dragging up past the narrowest angle, or choose PARALLEL in its panel; drag down to bring the perspective back. Plan: top, north up (T) turns it on and Orbit turns it off again. Zoom, pan and orbit work as usual, and a saved view keeps it.
 
 **Wall faces.** MODEL draws and selects the finished wall from inside corner to inside corner. An exposed wall end joins the same face when it continues the visible run, including across a small step at the joint. A return that turns a corner has its own surface. Each room along a shared wall has its own face. Click the face or a return to see its finish and takeoff. AREA, GROSS includes the doors and windows. AREA, NET subtracts their openings. BASEBOARD LENGTH measures the finished wall at the floor between door openings. Applying a finish paints the whole selected run, and one UNDO restores the previous finish. THE WALL BEHIND opens the wall itself, for its research, scope, products, photos and trim.
 
@@ -192,7 +188,7 @@ The left pane holds MODEL's views, tools and switches, in groups that fold to th
 
 **Standard views.** STANDARD VIEWS in the left pane go to TOP, BOTTOM, FRONT, BACK, LEFT, RIGHT and ISO, as SketchUp has them. FRONT looks from the plan's bottom edge toward its top; the four sides keep a slight lift so floors and sills read. TOP looks straight down, north up the screen. BOTTOM looks straight up from under the model; the ground is put away while the camera is below it, and any other view puts it back.
 
-**Lighting.** Open LIGHT and choose a preset. Trim detail uses angled light and stronger contrast to reveal moulding and joints. Bright work light spreads light evenly for layout. Natural follows the sun settings; Overcast softens shadows, Soft interior lifts indoor light, and Lamplight shows what the modeled fixtures contribute. Brightness lifts the picture and Contrast separates light and dark tones. Under Fine tune lights, Fill light lifts shadows, Angled light lights across profiles, and Contact shadows darken joins on High and Ultra when the view is still. Room lights can be on after dark, always on, or off. Lamp level adjusts their estimated output, and Lamp color sets the color of fixtures that have none specified. Sun and sky holds time, direction and location. Presets leave those settings alone. The sun casts shadows and reaches rooms through openings. Lighting is saved with the property.
+**Lighting.** Open Lighting and sun under DISPLAY and choose a preset. Trim detail uses angled light and stronger contrast to reveal moulding and joints. Bright work light spreads light evenly for layout. Natural follows the sun settings; Overcast softens shadows, Soft interior lifts indoor light, and Lamplight shows what the modeled fixtures contribute. Brightness lifts the picture and Contrast separates light and dark tones. Under Fine tune lights, Fill light lifts shadows, Angled light lights across profiles, and Contact shadows darken joins on High and Ultra when the view is still. Room lights can be on after dark, always on, or off. Lamp level adjusts their estimated output, and Lamp color sets the color of fixtures that have none specified. Sun and sky holds time, direction and location. Presets leave those settings alone. The sun casts shadows and reaches rooms through openings. Lighting is saved with the property. The same panel holds the render quality and how see-through X-ray is.
 
 **Levels.** Show or hide levels in the model while retaining their geometry in the property.
 
@@ -202,9 +198,9 @@ The left pane holds MODEL's views, tools and switches, in groups that fold to th
 
 **The model beside any page.** MODEL BESIDE, in the top bar, keeps the model open in a pane to the right of every other page. Drag the bar between them to give either side more room (arrow keys move it too; a double-click puts it back to half and half); the switch and the share are remembered in this browser. The pane shows the model and the buttons over it: orbit, zoom and select there, and click it before using MODEL’s keys, which otherwise stay with the page. OPEN MODEL opens the MODEL page on the same view; the X closes the pane. A selection is drawn with a thick orange edge and an orange tint over everything it covers, fainter where something else is in front of it.
 
-**On a phone or tablet.** A phone or tablet draws at its own quality: Medium until you choose another under FILE → Settings → Model environment, where it reads QUALITY ON THIS DEVICE. The choice is kept on that device and never changes the quality saved with the property, which computers use. To keep the page alive on a small device, MODEL there also lights only the four rooms nearest the camera, draws at most 500,000 points of a point cloud, shrinks large textures inside imported models, and does not load a scan file over 150 MB: it says the scan is too large for this device. In the phone layout the side panel has Measure, BEFORE / AFTER, the open saved view's Rename, Update and Delete, and LOAD ANYWAY for a scan that was not loaded; a banner over the model says what a tap does, with DONE. A tap on a note opens it to edit or delete, and in Top view one finger pans.
+**On a phone or tablet.** A phone or tablet draws at its own quality: Medium until you choose another under Lighting and sun in MODEL, where it reads QUALITY ON THIS DEVICE. The choice is kept on that device and never changes the quality saved with the property, which computers use. To keep the page alive on a small device, MODEL there also lights only the four rooms nearest the camera, draws at most 500,000 points of a point cloud, shrinks large textures inside imported models, and does not load a scan file over 150 MB: it says the scan is too large for this device. In the phone layout the side panel has Measure, BEFORE / AFTER, the open saved view's Rename, Update and Delete, and LOAD ANYWAY for a scan that was not loaded; a banner over the model says what a tap does, with DONE. A tap on a note opens it to edit or delete, and in Top view one finger pans.
 
-**Photos and documents on surfaces.** PIN (P) hangs a photo or a document flat on the wall, floor or scan surface you click, like a print put up by hand. A photo hangs at a print size (11 x 14 in unless you choose another); a PDF page or sheet image hangs at its true size, so a 24 x 36 in drawing is 24 x 36 in on the wall. A pin on a wall keeps its place on that wall and moves with it when the wall moves. Select a pinned document and choose READ IT to fly in front of it, or OPEN THE PDF. PHOTOS in the mode bar hides or shows every pin, camera and numbered position.
+**Photos and documents on surfaces.** PIN (P) hangs a photo or a document flat on the wall, floor or scan surface you click, like a print put up by hand. A photo hangs at a print size (11 x 14 in unless you choose another); a PDF page or sheet image hangs at its true size, so a 24 x 36 in drawing is 24 x 36 in on the wall. A pin on a wall keeps its place on that wall and moves with it when the wall moves. Select a pinned document and choose READ IT to fly in front of it, or OPEN THE PDF. Photo pins, under DISPLAY, hides or shows every pin, camera and numbered position.
 
 **Photo mode.** PHOTO MODE (on a selected pin, PHOTO in the pinned list, or an orange camera pyramid in the model) stands where the photo was taken and lays the photo over the model, OVER with an opacity slider or SIDE BY SIDE. The lens comes from the photo file (an iPhone ultra-wide photo is about 102° across), and a photo with no camera yet starts at the scan frame taken nearest in time, when scan cameras are imported. Line it up by eye, or choose FIT WITH POINTS and click a sharp corner in the photo, then the same spot in the model, four times or more: the camera is solved and the average error shown. A crooked photo is turned upright. SAVE CAMERA FOR THIS PHOTO keeps it, and the camera shows as a pyramid in the model. Anything that will not line up is where the model and the site differ. Esc or DONE ends.
 
@@ -212,11 +208,15 @@ The left pane holds MODEL's views, tools and switches, in groups that fold to th
 
 **Scan cameras.** A Polycam raw data export (turn on Developer Mode in Polycam before scanning) records the camera of every scan frame. Under SCAN CAMERAS, with nothing selected, IMPORT POLYCAM CAMERAS reads them from the export folder, and LINE UP WITH THE MODEL fits each tracking session to the model from its depth maps, reporting how many points land within 5 cm. ADD SHARP FRAMES AS PHOTOS then adds scan frames as photos with their cameras already placed. PLACE PHOTOS AUTOMATICALLY sends photos to the placement helper on the Mac running Tiksi, which matches them against the scan frames; install it once with python3 tools/install-photo-placement.py and fill in the export folder path. Check each placed photo in PHOTO MODE; UNDO AUTOMATIC PLACEMENT puts the previous cameras back.
 
-**Notes anywhere.** Right-click a wall, floor, scan or the ground and choose ADD NOTE HERE, or use NOTE (N) and click. The note links to the room and wall under it. Right-click a note to edit, move or delete it; NOTES in the mode bar hides or shows them all. Both switches are kept with the property.
+**Notes anywhere.** Right-click a wall, floor, scan or the ground and choose ADD NOTE HERE, or use NOTE (N) and click. The note links to the room and wall under it. Right-click a note to edit, move or delete it; Notes, under DISPLAY, hides or shows them all. Both switches are kept with the property.
 
-**Open and closed doors.** Interior doors stand ajar so you can see through rooms, and exterior doors are shut. Right-click a door and choose CLOSE DOOR or OPEN DOOR to change that one; its panel on the right has the same choice under SHOWN. CLOSE ALL DOORS, at the bottom of the right-click menu and under Display in the Tiksi menu, shuts every interior door at once, and OPEN ALL DOORS stands them ajar again. Each is one step for Undo. DOCUMENTS plans still draw every door's swing.
+**Open and closed doors.** Interior doors stand ajar so you can see through rooms, and exterior doors are shut. Right-click a door and choose CLOSE DOOR or OPEN DOOR to change that one; its panel on the right has the same choice under SHOWN. CLOSE ALL DOORS, at the bottom of the right-click menu and under DISPLAY in the left pane, shuts every interior door at once, and OPEN ALL DOORS stands them ajar again. Each is one step for Undo. DOCUMENTS plans still draw every door's swing.
 
 **Mark up the model.** MARK UP (U) turns the view into a drawing surface, with its tools in a bar at the bottom: pen, highlighter, line, eraser, numbered note and MOVE, six colours and three line widths. An Apple Pencil or a tablet pen draws with its pressure, and fingers still orbit and zoom; while the pencil is down a resting hand is ignored. With no pencil, a finger or the mouse draws, and two fingers, the wheel, a right-drag or a Space-drag move the view; the finger button in the bar switches between drawing and moving. Ink goes onto the surfaces of the model itself: a stroke across a wall is drawn on that wall, follows it round a corner, stays on the plane of the wall over a window opening, and shows from any view, so marks from anywhere join the open markup. The box button in the bar (S) switches to ink flat on the screen instead: that ink belongs to the camera it was drawn from, so move the view and it is put away, the chip above the bar flies back to it, and the next flat mark from a new view starts a new markup. LINE (L) draws straight lines the way SketchUp does: click a point on a face, then the next; the line stays on the plane of that face and snaps to the ends, middles and edges you can see (those of the model and of the lines already drawn) and to the red, green and blue axes, and parallel or perpendicular to the edge touched last, with a label saying which. Type a length and press Enter to place the next point that far along; Shift holds the direction, the arrow keys hold the red, green or blue axis, a click on the first point closes the shape and Esc ends the line. A numbered note is pinned to the wall, floor or scan under it and shows from any view; tap it to change its words. The list in the bar opens, renames, ticks off or deletes each markup and saves a picture of it. UNDO and REDO step through the marks while MARK UP is on. Markups are kept in the project file.
+
+**Uncertainty.** Uncertainty, under DISPLAY, shades the model by how well each part of its geometry is known: measured, observed, inferred or unknown.
+
+**Which room a piece belongs to.** The PROJECT section of a selection's panel puts the selected trim sections and plan elements in a project and one of its rooms, the way ESTIMATE prices them. Linking a piece to a single scope item is done from that item's record in ESTIMATE.
 
 **Edit in SketchUp.** EDIT IN SKETCHUP (in MODEL) brings the project's .skp up to date and opens it in SketchUp. Save there and walls, openings and rooms come back. It needs the project kept in a folder and Tiksi running on the Mac with SketchUp.
 
@@ -245,7 +245,7 @@ MODEL as it starts: its views, tools and tags in the left pane. Roof is hidden i
 5. To move an object of an imported model, type how far under MOVE, or choose MOVE IT IN THE VIEW (M) and drag an arrow. PUT IT BACK returns it to where the model file has it.
 6. Open the TAGS tab of the list for the tags themselves, with how many objects each holds. Click an eye to hide or show a whole tag. Rename a tag by typing over its name, change its colour with the swatch, add one with ADD TAG, or delete one with the X: its objects move to Untagged.
 7. Choose the + at the top left of the model (or SAVE THIS VIEW in the left pane) to save the current camera as a view, with everything that decides what shows: the tags, the section cuts and whether they were done, x-ray, hidden levels, objects hidden one by one, which imported models show, BEFORE or AFTER, photo pins and notes. Click a tab to go back to it; double-click to rename; right-click to update it to what shows now (its camera too), move it or delete it. Page Up and Page Down step through the tabs. What shows is each view's own: while a view is the open tab, whatever you hide or show (tags, objects one by one, cuts, x-ray, levels, models) is kept in that view as you change it, and going to another view shows that view as it was left. Only its camera waits for UPDATE TO WHAT SHOWS NOW.
-8. Every view, tool and switch of MODEL is in the left pane. Click a group's header to fold it to the header, and again to open it. The eye beside SAVED VIEWS, DISPLAY and COMPONENTS shows or hides that bar over the model.
+8. Every view, tool and switch of MODEL is in the left pane. Click a group's header to fold it to the header, and again to open it. The eye beside SAVED VIEWS and COMPONENTS shows or hides the saved-view tabs and the component list over the model.
 9. RESTART TIKSI at the bottom of the Tiksi menu (the logo) saves what is waiting, then starts the Mac's Tiksi server again with the newest code (after a merge, say). The page reloads by itself when the server is back, in a few seconds. If photo to 3D or another long job is running on the Mac, Tiksi names it and asks before stopping it.
 
 ### Other features here
@@ -287,7 +287,7 @@ The exchange panel chooses what to export, the file format and the model that a 
 3. Edit and save/export from the other application. Keep the drawing origin and units consistent so the returned model aligns.
 4. In the exchange panel, choose the prior model or Tiksi floorplan under Revision of, then choose IMPORT / BRING BACK MODEL. Keep Show returned model in place of the floorplan enabled. Tiksi preserves the before state automatically.
 5. In MODEL, use BEFORE and AFTER to compare from the same camera. Select the visible model to inspect the appropriate materials.
-6. Map material slots to catalog finishes and choose CREATE FINISH ESTIMATE. Review the resulting scope quantities, product matches and prices in PROJECTS and BUDGET.
+6. Map material slots to catalog finishes and choose CREATE FINISH ESTIMATE. Review the resulting scope quantities, product matches and prices in ESTIMATE.
 
 <details><summary>Compare the preserved before state with the proposed design</summary>
 
@@ -317,7 +317,7 @@ Open MODEL with a saved comparison. Choose BEFORE, inspect the earlier model, th
 
 ## Choose and customize finishes
 
-**Where:** MATERIALS
+**Where:** PRODUCTS → MATERIALS
 
 Materials control the appearance of walls, floors and ceilings. Use the built-in catalog, customize it, or turn a close-up photograph into a surface material.
 
@@ -327,10 +327,10 @@ Select a material to open its preview and controls. The catalog can be searched 
 
 ### Try it
 
-1. Open MATERIALS and search or filter the catalog. Select a material to preview it.
+1. Open PRODUCTS → MATERIALS and search or filter the catalog. Select a material to preview it.
 2. Adjust color, roughness and the controls offered by its pattern. For tile or plank patterns, set real repeat dimensions.
 3. Use DUPLICATE when you want a separate variation. Use NEW MATERIAL for a new custom finish.
-4. For a photographed finish, select its image in PHOTOS and choose MATERIAL, or select/upload a source image in the material editor.
+4. For a photographed finish, select its image in PHOTOS and choose MATERIAL (the new material opens here), or select/upload a source image in the material editor.
 5. Put it on the model with PAINT in MODEL (Tools, or press B): choose the finish in the panel, then click a wall, a trim section, a door, a floor or a ceiling. Use SOURCE THIS MATERIAL to research a purchasable match.
 
 ### Other features here
@@ -347,7 +347,7 @@ Select a material to open its preview and controls. The catalog can be searched 
 
 **Built-in reset.** RESET TO DEFAULT restores a built-in material. Custom copies can be kept as separate alternatives.
 
-**Appearance vs product.** A visual finish is not yet a manufacturer specification. Link a sourced product and its price to the scope when selected.
+**Appearance vs product.** A visual finish is not yet a manufacturer specification. Under PRODUCT, choose the product it is from PRODUCTS; with one linked, the typed maker and number are put away. With none, type them and ADD TO PRODUCTS makes the record. A proposed product can be kept beside the installed one.
 
 <a id="photos"></a>
 
@@ -364,7 +364,7 @@ Select a gallery card to open its inspector. Send to offers PIN IN 3D, MATERIAL 
 ### Try it
 
 1. Put pictures anywhere in the project folder, or use UPLOAD or CAMERA (on a phone): a photo added in Tiksi is saved into the folder's Photos folder.
-2. Select a card and give it a useful name, room and notes. Link the relevant scope items and model elements.
+2. Select a card and give it a useful name, room and notes. Link the relevant scope items (listed by project and room, as ESTIMATE has them) and model elements.
 3. Choose PIN IN 3D, then click the matching surface in MODEL. Use the gallery’s PLACE … IN 3D action to place unpinned photos one after another.
 4. Return to PHOTOS to filter by room, or by pinned, unpinned or selected. Double-click a card or choose ZOOM for a large viewer.
 5. Choose DOWNLOAD or SHOW IN FINDER when you need the original file.
@@ -387,7 +387,7 @@ Open PHOTOS and select an unpinned reference card. Choose PIN IN 3D, then click 
 
 **Photos Tiksi held.** Photos added before Tiksi read the project folder are moved into its Photos folder the first time PHOTOS opens, with their notes, pins and links, and Tiksi lets go of its copy. A photo already in the folder is linked to that file instead of written twice.
 
-**Material from a photo.** MATERIAL creates a photo-based finish that you can tune in MATERIALS.
+**Material from a photo.** MATERIAL creates a photo-based finish and opens it in PRODUCTS → MATERIALS to tune.
 
 **360 panorama.** Mark a true equirectangular image as 360 PANORAMA, then USE AS SKY for the model environment.
 
@@ -403,18 +403,18 @@ Open PHOTOS and select an unpinned reference card. Choose PIN IN 3D, then click 
 
 ## Read tape measurements from a walk-through video
 
-**Where:** MEASURE
+**Where:** PHOTOS → VIDEOS
 
-A phone video of someone holding a tape against cabinets, doors, appliances and fixtures holds many more measurements than a quick look finds. MEASURE keeps the original video with the project, points you at the seconds where a tape blade is visible, and records each reading you take from a frame. It finds likely frames; a person reads the numbers.
+A phone video of someone holding a tape against walls, doors and windows holds many more measurements than a quick look finds. VIDEOS keeps the original video with the project, points you at the seconds where a tape blade is visible, and records each reading you take from a frame. It finds likely frames; a person reads the numbers.
 
 ### Try it
 
-1. Open MEASURE and choose ADD VIDEO (MP4 or MOV, up to 600 MB), or drop the file on the view. PHOTOS and FILE → Import send videos here too. The original file is kept in the project.
+1. Open PHOTOS → VIDEOS and choose ADD VIDEO (MP4 or MOV, up to 600 MB), or drop the file on the view. A video dropped on PHOTOS or chosen in FILE → Import comes here too. The original file is kept in the project.
 2. With the local Tiksi server and ffmpeg on the Mac, the video is analysed once: a strip of one thumbnail per second appears under the frame, and seconds where a long yellow strip (a tape blade) is visible are outlined in yellow.
 3. Use TAPE ▶ (Shift+→) to jump between those seconds. Each jump looks at the frames around that moment and shows the sharpest one in which the blade is still visible. → and ← step one second; . and , step a tenth; B looks for the sharpest frame near any moment.
 4. Scroll to zoom and drag to pan. Shift+drag (or CROP) draws a box around the numbers; the box is kept with the reading.
 5. Type the value as the tape shows it: 33 1/2, 33-1/2", 2'-9 1/2" or 850 mm. A bare number means inches, or millimetres when Settings shows millimetres; the field shows how it was read. Add what was measured, the direction (width, height, depth) and how sure you are (clear, probable, unreadable).
-6. Attach the reading to a door or window width or height or a wall length, or keep it as a note. SAVE READING stores it with its frame. APPLY changes that size in the model, so UNDO in the top bar reverts it.
+6. Attach the reading to a wall's length, a door opening's width or height, a door leaf's width, or a window's width or height, or keep it as a note. SAVE READING stores it with its frame. APPLY changes that size in the model, so UNDO on the top bar reverts it.
 7. Readings nobody has explained yet (no element, nothing said about what was measured, or unreadable numbers) collect in ASK THE OWNER with their frames. COPY LIST copies the questions as text to send.
 
 ### Other features here
@@ -433,20 +433,20 @@ A phone video of someone holding a tape against cabinets, doors, appliances and 
 
 ## Reconstruct a model from photos
 
-**Where:** PHOTO TO 3D
+**Where:** FILE → Import → PHOTOS → 3D
 
 On a supported Mac, Apple Object Capture can turn overlapping original photographs into a textured model. Use Polycam for a room capture when that is the more practical route.
 
-![PHOTO TO 3D separates selecting photos and reconstruction settings from reviewing saved jobs and importing a result.](js/guide-assets/reconstruct.png)
+![PHOTO TO 3D, opened from FILE → Import, separates selecting photos and reconstruction settings from reviewing saved jobs and importing a result.](js/guide-assets/reconstruct.png)
 
-PHOTO TO 3D separates selecting photos and reconstruction settings from reviewing saved jobs and importing a result.
+PHOTO TO 3D, opened from FILE → Import, separates selecting photos and reconstruction settings from reviewing saved jobs and importing a result.
 
 ### Try it
 
 1. Take sharp photographs while moving around the subject or space: aim for 60–150 images with about 70% overlap from two or three heights. Keep lighting consistent and retain the originals.
-2. Open PHOTO TO 3D. Choose original photos or select stored gallery images; the local engine requires at least 20 images.
+2. Open FILE → Import → PHOTOS → 3D. Choose original photos or select stored gallery images; the local engine requires at least 20 images.
 3. Name the model, choose detail and photo order, then start RECONSTRUCT 3D MODEL. Preview detail is useful for checking a capture before a larger run.
-4. Monitor the job. You can leave the workspace and return to the saved job on this Mac.
+4. Monitor the job. You can leave the page and come back to the saved job on this Mac through FILE → Import → PHOTOS → 3D.
 5. When complete, choose Review in 3D, Save GLB or Save native OBJ and maps. Choose Add to this property to keep the result with the design, then check its placement and scale in MODEL against a known dimension.
 
 ### Other features here
@@ -465,18 +465,18 @@ PHOTO TO 3D separates selecting photos and reconstruction settings from reviewin
 
 ## Research real products and suppliers
 
-**Where:** SOURCING
+**Where:** PRODUCTS → FIND A PRODUCT
 
-Start from a material, a model element, a product or a brief. Sourcing researches alternatives and keeps the evidence with the selections you save.
+Start from a material, a model element, a scope item, a product or a brief. FIND A PRODUCT researches alternatives and keeps the evidence with the selections you save.
 
-![The sourcing brief collects the required product, budget, region, dimensions and specifications before research starts.](js/guide-assets/sourcing.png)
+![The brief collects the required product, budget, region, dimensions and specifications before research starts.](js/guide-assets/sourcing.png)
 
-The sourcing brief collects the required product, budget, region, dimensions and specifications before research starts.
+The brief collects the required product, budget, region, dimensions and specifications before research starts.
 
 ### Try it
 
-1. Open SOURCING, or choose SOURCE THIS MATERIAL / RESEARCH ALTERNATIVES from the relevant material or product.
-2. Describe what you need and include finish, size, price unit, budget, region and required performance. Link scope items when appropriate.
+1. Open PRODUCTS → FIND A PRODUCT, or choose SOURCE THIS MATERIAL (a material), RESEARCH ALTERNATIVES (a product) or FIND A PRODUCT (a scope item's record in ESTIMATE).
+2. Describe what you need and include finish, size, price unit, budget, region and required performance. Link scope items (listed by project and room) when appropriate.
 3. Choose Focused agent or Deep specialist team, then START RESEARCH. The local server needs its research provider to be ready.
 4. Review candidates, vendor offers and cited evidence. Select candidates and use COMPARE SELECTED for a side-by-side view.
 5. Use SAVE TO PRODUCTS for a chosen candidate. Review the saved product and its scope links before using its price in the project.
@@ -487,60 +487,11 @@ The sourcing brief collects the required product, budget, region, dimensions and
 
 **Evidence and unknowns.** Inspect opened sources, fit notes, conflicts and missing information instead of relying on a product name alone.
 
-**Revisit progress.** The job panel exposes current status and cancellation. Returning to SOURCING restores the current saved job; cancellation does not resume it later.
+**Revisit progress.** The job panel exposes current status and cancellation. Returning to FIND A PRODUCT restores the current saved job; cancellation does not resume it later.
 
 **Selection history.** Saved product selections carry their research context and evidence in project files.
 
-> **Good to know:** Live sourcing needs the local server and a current, signed-in Codex CLI on its host. The availability message explains setup problems. The screenshot shows a brief, not fabricated live results. Saving a candidate does not order it; confirm current supplier price, availability, price units and fit before purchasing.
-
-<a id="projects"></a>
-
-## Turn the design into scoped work
-
-**Where:** PROJECTS
-
-A project is a package of work such as kitchen finishes. Its scope items hold quantities, cost ranges, durations, dependencies and links back to the design.
-
-![Choose a project to edit its scope. Each row can carry quantity, unit, low/likely/high unit costs, days and predecessors.](js/guide-assets/projects.png)
-
-Choose a project to edit its scope. Each row can carry quantity, unit, low/likely/high unit costs, days and predecessors.
-
-### Try it
-
-1. Choose NEW PROJECT and type its name in the field that opens (Esc removes a new project you have not used). Set its category, status and earliest start, and write the scope notes.
-2. Use ADD ITEM for each piece of work. Name it clearly and enter its quantity and unit.
-3. Enter low, likely and high unit costs. Keep quantity and price units consistent; the totals are calculated from these inputs.
-4. Add duration in days. Use the predecessor summary control to choose the items that must finish first.
-5. Open a scope item with the arrow beside its name to see its status, notes, linked rooms and walls, products and photos. Link rooms, walls and products there; each link opens MODEL, PRODUCTS or PHOTOS on that record. Photos can be linked to an item in PHOTOS.
-6. Tick the box at the start of a row when the item is done. Done items move to the bottom and the project counts them.
-7. Use the project’s selection checkbox to include or exclude it from the budget program and schedule.
-8. For a list of small jobs, such as a punch list, use ADD SUBPROJECT. Each subproject has its own status, priority, room and source, and is listed under its project, open ones first.
-
-### Other features here
-
-**Find a project.** Search matches project names, notes, source and room, and every scope item name and note; press / to jump to the box. The status chips show how many projects and subprojects have each status. VIEW filters by category, room, priority and program, sorts, and groups the list. The list remembers these in this browser for each property.
-
-**Board.** BOARD shows one column per status. Drag a card to another column, or focus it and press Left or Right, to change its status.
-
-**Priced and done.** The line above a project’s fields shows its likely total, how many items have a price and how many are done. A project with no prices says so instead of showing $0.
-
-**Add from the model.** With MODEL BESIDE on, right-click a room, a wall, a door or window, a fixture or an object of an imported model and choose the ADD entry that names the open project (with no project open, it starts a new one). The item arrives measured: a room brings its walls net of doors and windows, floor, ceiling, baseboard and perimeter, and its door and window counts; an object brings its count, face area and length from its box, and ADD ALL adds every copy of it. Right-click one of several selected things to add them all as one item.
-
-**Work, finish level and unit.** Under each item, pick the work (paint, refinish, replace, install …), the finish level (Budget, Mid, High end) and, for a measured item, which quantity it counts. Quantity, unit and the low, likely and high unit prices follow from the price book: installed prices with a placeholder material for each level, to be replaced with the product you choose. Prices for (above the items) applies a cost area such as New York City. A price typed by hand stands until you pick the work or level again. A room also counts the toilets, vanities, tubs and dishwashers drawn in it and estimates recessed lights at one per 25 sf of ceiling; a base cabinet run brings its length and counter top. Permits are priced per permit from each place’s own fees: add an item and pick one under Permits.
-
-**Draft finish estimates.** CREATE FINISH ESTIMATE on an imported model can seed measured scope items. Review and complete them here.
-
-**Dependencies.** Select several predecessors when a task depends on more than one item. Check the schedule for cycles or missing durations.
-
-**Element links.** A scope item can refer to the wall, room or model surface that generated the work. With MODEL BESIDE on, opening a project selects in the model every room, wall, door, window and fixture it and its subprojects are linked to, and brings them into view; clicking into a scope item selects that item’s own; a link to an element selects it in the pane instead of leaving PROJECTS.
-
-**Selection vs deletion.** Deselecting a project removes it from program calculations while retaining its scope for comparison.
-
-**Subprojects.** A subproject is a project inside a project, one level deep. Change its priority and status from the parent’s SUBPROJECTS table, move it with Part of, and record where it came from in Source. BUDGET and SCHEDULE show it as Project / Subproject. Deleting a project deletes its subprojects.
-
-**Across properties.** PROJECTS, BUDGET, SCHEDULE and CUT SHEETS show the projects of the active property. A new project belongs to the active property; choose another property in PROPERTY to see its projects.
-
-> **Good to know:** Costs are per quantity unit: 120 square feet at $5 per square foot totals $600. Use one lump-sum quantity for a lump-sum quote. Set zero duration days for budget-only items; they stay out of the schedule.
+> **Good to know:** Live research needs the local server and a current, signed-in Codex CLI on its host. The availability message explains setup problems. The screenshot shows a brief, not fabricated live results. Saving a candidate does not order it; confirm current supplier price, availability, price units and fit before purchasing.
 
 <a id="products"></a>
 
@@ -550,16 +501,16 @@ Choose a project to edit its scope. Each row can carry quantity, unit, low/likel
 
 Products are the real fixtures and materials you may buy. Keep manufacturer details, specifications, price units and vendor links connected to the scope.
 
-![Open a product card to edit its image, price and where that price came from, vendor and manufacturer links, specification lines, spec documents and work items.](js/guide-assets/products.png)
+![Open a product card to edit its image, price and where that price came from, vendor and manufacturer links, specification lines and spec documents, and to see the work it is used in.](js/guide-assets/products.png)
 
-Open a product card to edit its image, price and where that price came from, vendor and manufacturer links, specification lines, spec documents and work items.
+Open a product card to edit its image, price and where that price came from, vendor and manufacturer links, specification lines and spec documents, and to see the work it is used in.
 
 ### Try it
 
-1. Choose NEW PRODUCT for a manual entry, or save a candidate from SOURCING. A new product needs an image: paste an image link, upload a picture or paste one into the form.
+1. Choose NEW PRODUCT for a manual entry, or save a candidate from FIND A PRODUCT. A new product needs an image: paste an image link, upload a picture or paste one into the form.
 2. Enter brand, model, category, specification lines and notes. Type a few letters in Category to narrow the list, or type a new category. Add the vendor link (where to buy) and the manufacturer link (the maker's product page).
 3. Record the price with its unit: each, square foot or linear foot, for example. Under the price, keep the link to the page showing it; Tiksi records the date it was checked. REFRESH asks a research agent for the current price of that exact model and changes the price only when it finds a verified USD price.
-4. Tick the work items the product is for. A ticked item lists the product on its cut sheet, and the product is saved in that property's project file.
+4. Link a product to the work from the scope item's record in ESTIMATE (Products, + Link a product). The product then lists the items it is used in, each opening its project in ESTIMATE; the item lists the product on its cut sheet; and the product is saved in that property's project file.
 5. Open the saved manuals and spec sheets, the spec folder or the project folder from the editor (on the Mac that keeps the project folders), or use CUT SHEETS to print the saved specification.
 
 ### Other features here
@@ -568,7 +519,9 @@ Open a product card to edit its image, price and where that price came from, ven
 
 **Status filter.** Find products missing an image or price, prices not checked in 90 days, products with spec documents, or products not yet linked to work.
 
-**Research alternatives.** Reopen sourcing from an existing product without losing its current saved specification.
+**Research alternatives.** RESEARCH ALTERNATIVES opens FIND A PRODUCT from an existing product without losing its current saved specification.
+
+**Boards from the estimate.** Every trim board a project buys is a product here, one per store item (an 8 ft and a 12 ft board are two), with the store page, item number and the price seen there, made when ESTIMATE first opens the project. ESTIMATE prices each board from its record, so a price checked or changed here changes the estimate.
 
 **Evidence history.** Products saved from research retain cited evidence and source context. Every price change keeps its source link and date.
 
@@ -578,11 +531,11 @@ Open a product card to edit its image, price and where that price came from, ven
 
 <a id="budget"></a>
 
-## Estimate a project
+## Price a project room by room
 
 **Where:** ESTIMATE
 
-ESTIMATE shows what a project costs, room by room. Trim drawn in MODEL is worked out the way a finish carpenter would: every piece with its ends, the boards to buy at the cheapest store length, the supplies and the hours. Scope items from PROJECTS join it, then the project's contingency, overhead and profit, and tax. Change the drawing and the estimate follows.
+ESTIMATE is where a project is set up and priced. A project holds its rooms. Each room has its drawn trim, worked out the way a finish carpenter would (every piece with its ends, the boards to buy at the cheapest store length, the supplies and the hours), and the rest of the work done in it as scope items. Then come the project's contingency, overhead and profit, and tax. Change the drawing or a number and the price follows.
 
 ![A project's rooms, each with its trim, boards, supplies, hours, scope items and price.](js/guide-assets/budget.png)
 
@@ -590,28 +543,39 @@ A project's rooms, each with its trim, boards, supplies, hours, scope items and 
 
 ### Try it
 
-1. Draw the trim in MODEL with each section in its room's subproject (WALL TRIM, or right-click). Add other work as scope items in PROJECTS.
-2. Open ESTIMATE and choose the project on the left. The rooms table totals the price; HOW THE PRICE IS BUILT gives its range.
-3. Click a room for its walls as drawn with the boards each is cut from, its cut list and its labor. In the labor table type over a quantity or a time (hours each) to change it for that room; RESET goes back to the drawing's count. + ADD A TASK adds one the drawing does not count.
-4. Click a piece, a board, a labor task or a scope item for where its numbers come from. A task lists every room it is in (click one to go there); a moulding lists the store items bought, each with its store page and its record in PRODUCTS.
-5. Under WHO DOES THE WORK (left) add a carpenter or crew with their hourly rate and, for any task, their own time. Choose them under WHO DOES IT in a project's price.
-6. Under HOW THE PRICE IS BUILT set the rate (without a carpenter chosen), contingency, overhead and profit, tax on materials and the spare boards. PROJECTS, SCHEDULE, ALL PROJECTS and the one-pager follow.
-7. Record carpenters' bids under BIDS RECEIVED, beside the estimate's labor.
-8. ALL PROJECTS (top left) ticks projects into the program and compares them with the budget cap; PRINT REPORT prints it.
+1. + NEW PROJECT, at the foot of the projects on the left, starts a project for the open property. Type its name over the title, set its status (Idea, Scoped, Committed, In progress, Done) and write its notes under it. DELETE takes it away with its rooms.
+2. + Add a room, under the rooms table, adds a room from the model by its name, or a room or area not in the model, named where it is added. Open a room to rename it, link it to a room in the model, or REMOVE THIS ROOM.
+3. Draw the trim in MODEL with each section in its room (WALL TRIM, or right-click; the PROJECT section of the panel puts selected pieces in a project's room). Open the room for its walls as drawn with the boards each is cut from, its cut list and its labor. In the labor table type over a quantity or a time (hours each) to change it for that room; RESET goes back to the drawing's count. + Add a task adds one the drawing does not count.
+4. Under SCOPE ITEMS in the room, + ADD ITEM adds the rest of the work: type its name, quantity, unit, low, likely and high price each, and working days; × removes it. Under the name, pick the work and finish level from the price book and, for a measured item, the quantity it counts. PROJECT-WIDE ITEMS holds work for the whole job: permits, protection, a dumpster, measuring and ordering.
+5. Click an item's details link for its record in the right-hand column: its status, what it starts after, notes, the rooms and walls it is linked to in the model, its products and photos, CUT SHEET and FIND A PRODUCT. Click a piece, a board, a labor task or a line of the price for where its numbers come from. A task lists every room it is in (click one to go there); a moulding lists the store items bought, each with its store page and its record in PRODUCTS.
+6. Under WHO DOES THE WORK (left) add a carpenter or crew with their hourly rate and, for any task, their own time. Choose them under WHO DOES IT in a project's price.
+7. Under HOW THE PRICE IS BUILT set the rate (without a carpenter chosen), contingency, overhead and profit, tax on materials, the spare boards and the price book area. SCHEDULE, ALL PROJECTS, the proposal and the one-pager follow.
+8. Record carpenters' bids under BIDS RECEIVED, beside the estimate's labor.
+9. ALL PROJECTS (top left) ticks projects into the program and compares them with the budget cap; PRINT REPORT prints it.
 
 ### Other features here
 
 **Pieces and boards.** Inside corners are coped (the longer piece runs square into the corner), outside corners mitred, runs longer than a board spliced with 45° scarfs. Each room is cut from its own boards; each board is bought at the cheapest length the store sells that holds its cuts, plus a spare of each moulding.
 
-**Hours.** From published production rates counted from the drawing: feet of base, rail and cap, frames, battens, copes, outside corners, scarfs, caulk, fill and paint, with setup and cleanup each day in a room. Low and high hours come from the rates' range.
+**Hours.** Each task's quantity, counted from the drawing (feet of base, rail and cap, frames, battens, copes, outside corners, scarfs, caulk, fill and paint, with setup and cleanup each day in a room), times its time: the carpenter's own when one is chosen and has one, otherwise the published production rate. A time or quantity typed in a room wins over both. Low and high hours come from the published rates' range.
 
-**Counted once.** A scope item whose model elements are all drawn trim of the same project (boards written in by an earlier trim package) is left out of the money and the days; REMOVE THEM takes such items away, and REMOVED RECORDS brings them back.
+**Add from the model.** With MODEL BESIDE on, right-click a room, a wall, a door or window, a fixture or an object of an imported model and choose the ADD entry: it adds to the room opened last in ESTIMATE, or to the project-wide items when no room is open. The item arrives measured: a room brings its walls net of doors and windows, floor, ceiling, baseboard and perimeter, and its door and window counts; an object brings its count, face area and length from its box, and ADD ALL adds every copy of it. Right-click one of several selected things to add them all as one item.
+
+**Work, finish level and unit.** Under an item's name, pick the work (paint, refinish, replace, install …), the finish level (Budget, Mid, High end) and, for a measured item, which quantity it counts. Quantity, unit and the low, likely and high prices each follow from the price book: installed prices with a placeholder material for each level, to be replaced with the product you choose. The price book area, under HOW THE PRICE IS BUILT, applies a cost area such as New York City to every item of the project. A price typed by hand stands until you pick the work or level again. A room also counts the toilets, vanities, tubs and dishwashers drawn in it and estimates recessed lights at one per 25 sf of ceiling; a base cabinet run brings its length and counter top. Permits are priced per permit from each place’s own fees: add an item and pick one under Permits.
+
+**Draft finish estimates.** CREATE FINISH ESTIMATE on an imported model in MODEL seeds measured scope items. Review and complete them here.
+
+**Counted once.** A scope item whose model elements are all drawn trim of the same project (boards written in by an earlier trim package) is left out of the money and the days; REMOVE THEM takes such items away.
 
 **Store prices.** Each board bought is a record in PRODUCTS (one per store item: an 8 ft and a 12 ft board are two), with its store page, item number and the price seen there. Check or change the price in PRODUCTS and the estimate follows.
 
-**Undo.** UNDO and REDO cover the projects, their scope, the estimate settings, typed quantities and times, and bids.
+**Removed, not lost.** A removed project, room or scope item is kept with the property: FILE → Project → REMOVED RECORDS… puts it back as it was.
 
-> **Good to know:** Hours are the weakest numbers: they come from estimating books, not from the carpenter who will do the work. Send the installer bid form (in the trim package) and compare. Trim imported as a model, not drawn as trim sections, is not in the estimate.
+**Across properties.** ESTIMATE, SCHEDULE and CUT SHEETS show the projects of the property chosen on the top bar. A new project belongs to that property.
+
+**Undo.** UNDO and REDO on the top bar cover the projects, their rooms and scope items, the estimate settings, typed quantities and times, and bids.
+
+> **Good to know:** Prices are each: 120 square feet at $5 a square foot is $600; use a quantity of 1 for a lump-sum quote. An item with no working days stays out of the schedule. Hours are the weakest numbers: they come from estimating books, not from the carpenter who will do the work, until you type their own times; send the installer bid form (in the trim package) and compare. Trim imported as a model, not drawn as trim sections, is not in the estimate.
 
 <a id="schedule"></a>
 
@@ -629,7 +593,7 @@ One table: each line's days, start, end and what it waits for, with a chart of w
 
 1. Choose a project on the left. Set its start date at the top.
 2. Move a room up or down to change the order the carpenter works in. Double-click a room (or click its ▸) for its tasks in the order they are done, from setup to cleanup, each with its hours.
-3. For a scope item, choose what it starts AFTER: another item or a room's trim. Give scope items their days in PROJECTS; a room's days come from its hours at 6 productive hours a day.
+3. For a scope item, choose what it starts AFTER: another item or a room's trim. Give scope items their working days in ESTIMATE; a room's days come from its hours at 6 productive hours a day.
 4. ALL PROJECTS lays the program out from the program start: projects side by side, each from its own start date, or AFTER the project it should follow.
 5. Click a line for its dates and slack.
 
@@ -656,8 +620,8 @@ Choose a scope item or product from the list, review its sheet, then PRINT.
 ### Try it
 
 1. Link the relevant model elements, materials, photos and products before printing.
-2. Open DOCUMENTS, choose CUT SHEETS and select the scope item you want to communicate, or choose a product sheet.
-3. Review the generated content. Missing information is best completed in PROJECTS, PRODUCTS or PHOTOS.
+2. Open DOCUMENTS, choose CUT SHEETS and select the scope item you want to communicate, or choose a product sheet. CUT SHEET in a scope item's record in ESTIMATE opens that item's sheet.
+3. Review the generated content. Missing information is best completed in ESTIMATE, PRODUCTS or PHOTOS.
 4. Choose PRINT and use the browser print dialog to print or save a PDF.
 
 ### Other features here
@@ -696,7 +660,7 @@ A sheet with a floor plan cut at 3'-11", a section through the plan, a 3D view a
 
 **Plan layer.** Plans draw the cut walls solid, door swings, windows, wall dimensions and room names with areas as crisp vectors over the model.
 
-**Schedules.** Door and window, room, product and scope item lists stay in step with the model, PRODUCTS and PROJECTS. A PLAN view can show each door and window's number from the schedule (Door and window numbers, with Wall dimensions and Room names and areas).
+**Schedules.** Door and window, room, product and scope item lists stay in step with the model, PRODUCTS and ESTIMATE. A PLAN view can show each door and window's number from the schedule (Door and window numbers, with Wall dimensions and Room names and areas).
 
 **Revisions.** Each saved PDF becomes the next revision in the title block and a document of the property, so it travels in the project file.
 
@@ -716,7 +680,7 @@ Choose the project and the document; the right column holds your business detail
 
 ### Try it
 
-1. Open DOCUMENTS and choose JOB DOCUMENTS, then the project.
+1. Open DOCUMENTS and choose JOB DOCUMENTS, then the project (DOCUMENTS → SEND lists each project's proposal too).
 2. TRIM PACKAGE: a summary, options priced other ways, the buy list, each room with its walls and the boards cut for them, cut lists, the installer bid form with hours, the price build-up and appendices for supplies, tools and labor rates. Its total is the trim at cost with the contingency.
 3. PROPOSAL: the work room by room, the price, the working days and dates, the deposit, what is and is not included, and a place to sign. Fill in your business and the client on the right.
 4. PRINT OR SAVE PDF, then Save as PDF for a PDF with real text.
@@ -727,27 +691,27 @@ Choose the project and the document; the right column holds your business detail
 
 ## Send the client a one-pager
 
-**Where:** FILE → Project → OPEN ONE-PAGER
+**Where:** DOCUMENTS → SEND → OPEN ONE-PAGER
 
 Every property has a one-page teaser for its client: a picture, the pitch, the scope, the budget range and the schedule on one Letter page. The text is drafted from the project and can be edited by hand; every saved version is a PDF among the property's documents, and the newest version is the one to send.
 
 ### Try it
 
-1. A new property starts with version 1, made the moment it is created (by name or from a Polycam scan). Properties from before this feature get their text drafted the next time Tiksi opens; their first version is saved from the editor or when Tiksi closes.
-2. Open FILE → Project → OPEN ONE-PAGER, or OPEN in the ONE-PAGER section of DOCUMENTS. The page on the right follows every edit.
+1. A new property has its text drafted from the project when it is made. No version is saved until you save one: a one-pager with nothing priced is not worth sending.
+2. Open DOCUMENTS → SEND. It says whether the newest version is current or the project changed since. OPEN ONE-PAGER opens the editor; the page on the right follows every edit.
 3. Edit the headline, tagline, summary and highlights, name who it is prepared for and by, and choose the picture at the top: the newest rendering or site photo, a 3D view of the model, or the floor plan. Toggles take the budget range, schedule, rooms, plan or products off the page.
-4. SAVE VERSION makes the next PDF and lists it among the property's saved documents. DOWNLOAD PDF gives a copy of the page as it looks now; SEND… hands the newest version to Mail, Messages or AirDrop where the browser offers that.
-5. When Tiksi closes while the project changed since the newest version, the browser first asks Leave site?. Cancel to stay, and Tiksi asks UPDATE THE ONE-PAGER?: UPDATE NOW saves the next version right there, REVIEW FIRST opens the editor, NOT NOW keeps quiet until the project changes again. Leave closes without a new version.
+4. SAVE VERSION makes the next PDF and lists it among the property's saved documents (DOCUMENTS → DRAWINGS AND FILES). DOWNLOAD PDF gives a copy of the page as it looks now; SEND… hands the newest version to Mail, Messages or AirDrop where the browser offers that.
+5. When Tiksi closes while the project changed since the newest version (or none is saved), the browser first asks Leave site?. Cancel to stay, and Tiksi asks UPDATE THE ONE-PAGER?: UPDATE NOW saves the next version right there, REVIEW FIRST opens the editor, NOT NOW keeps quiet until the project changes again. Leave closes without a new version.
 
 ### Other features here
 
 **Text that follows the project.** Until a line is edited by hand, the headline, tagline, summary and highlights are written again from the rooms, floor area, scope, budget, schedule and products each time a version is saved. REDRAFT FROM THE PROJECT writes them again on purpose.
 
-**What a version was made of.** Each saved version remembers the project it was laid out from, so FILE, DOCUMENTS and the closing question can say whether the one-pager is current or behind.
+**What a version was made of.** Each saved version remembers the project it was laid out from, so SEND and the closing question can say whether the one-pager is current or behind.
 
 **Versions.** Versions are numbered and dated: 12 Elm Street - one-pager v3 - 2026-11-06.pdf. Older versions stay in the documents, so what was sent last month can be found again.
 
-**When closing asks.** FILE → Settings → One-pager: ask when the project changed since the last version (the default), every time, or never.
+**When closing asks.** Remind me when closing Tiksi, beside OPEN ONE-PAGER in SEND: when the project changed since the last version (the default), every time, or never.
 
 > **Good to know:** The page is laid out in the browser and printed at 200 dots per inch, so it looks the same everywhere. Browsers only let a page ask a generic Leave site? question before it closes, which is why Tiksi's own question comes after choosing to stay.
 
@@ -755,14 +719,14 @@ Every property has a one-page teaser for its client: a picture, the pitch, the s
 
 ## Send the client a page in the lab
 
-**Where:** FILE → Project → SEND TO THE LAB…
+**Where:** DOCUMENTS → SEND → SEND TO THE LAB…
 
 A view-only copy of the property goes to its page in the lab on thedurham.nyc. The page is Tiksi's own MODEL, with little switched on: the saved views as pills along the top, the renderings as small pictures along the bottom, orbit and walk, Existing or one of the projects you send (it opens on the first project), furniture on or off, and the drawing quality (it starts at Ultra; a client on a slow phone can lower it). The left pane slides away and comes back at the left edge. On a phone it is Tiksi's phone layout: the model full screen, the three-line button, the pills along the top and the renderings along the bottom.
 
 ### Try it
 
 1. Put the new work in projects: in MODEL, select pieces and choose their project in the PROJECT section. Save views in MODEL; the first one ticked is where the page opens.
-2. Open SEND TO THE LAB…, tick the projects to offer and give each a short name, and tick the tags the furniture switch hides.
+2. In DOCUMENTS → SEND (which says when the page was last sent), choose SEND TO THE LAB…. Tick the projects to offer and give each a short name, and tick the tags the furniture switch hides.
 3. Look over VIEWS AND RENDERINGS: every saved view is listed with a tick, and under it the renderings of that view, each with its own tick and a box for the name the client sees. Untick what should not go. The line above SEND counts what is going.
 4. Press SEND. A small frame in the window shows the client page taking the picture of each view; keep the window in front until it says Sent.
 5. OPEN THE PREVIEW shows the copy as sent, on this Mac. OPEN THE LAB PAGE opens it online when the Mac has the lab's upload key.
@@ -792,16 +756,16 @@ A view-only copy of the property goes to its page in the lab on thedurham.nyc. T
 
 **Where:** FILE → Settings
 
-Display units, model environment, project folders and workspace maintenance live in the same File panel. Most everyday work needs only project saves.
+Display units, where projects are kept, the SketchUp mirror and workspace maintenance live in FILE → Settings. Most everyday work needs only project saves.
 
-![Settings groups display, model environment and workspace maintenance. This synthetic screenshot shows the static edition’s folder controls; the local server displays the canonical Mac file path instead.](js/guide-assets/settings.png)
+![Settings groups display, where the project is kept and workspace maintenance. This synthetic screenshot shows the static edition’s folder controls; the local server displays the canonical Mac file path instead.](js/guide-assets/settings.png)
 
-Settings groups display, model environment and workspace maintenance. This synthetic screenshot shows the static edition’s folder controls; the local server displays the canonical Mac file path instead.
+Settings groups display, where the project is kept and workspace maintenance. This synthetic screenshot shows the static edition’s folder controls; the local server displays the canonical Mac file path instead.
 
 ### Try it
 
 1. Open FILE → Settings and choose INCHES (feet and inches, square feet) or MILLIMETRES (square metres). Precision sets how finely lengths show: 1/16" and 1 mm unless you change it. Stored lengths are never rounded.
-2. For rendering, open MODEL first, then FILE → Settings → Model environment. Adjust quality, lighting and the offered view settings.
+2. Render quality and lighting are MODEL's own: open Lighting and sun under DISPLAY in MODEL.
 3. With the local server, Where this project is kept shows its canonical .tiksi path on the Mac. Desktop and Tailscale clients share those files and originals.
 4. In the static edition, CHOOSE FOLDER links the open project to a folder. OPEN FROM FOLDER reopens a saved copy, and KEEP THEM IN ONE FOLDER links projects without a folder of their own. These controls depend on browser folder permission.
 5. Open Workspace backup & maintenance and choose SAVE WORKSPACE BACKUP to export every property together. Browser-storage maintenance applies to the static edition.
@@ -813,6 +777,8 @@ Settings groups display, model environment and workspace maintenance. This synth
 **Save workspace backup.** Exports every property together. Keep a .tiksi per property for ordinary project handoffs.
 
 **Add demo projects.** Adds sample projects to the workspace without replacing unrelated properties.
+
+**Onboard with a coding agent.** Under Workspace backup & maintenance: a prompt to paste into Claude or Codex, opened in the Tiksi checkout with a site-visit folder, so the agent follows Tiksi's onboarding steps for this property.
 
 **Clean unused storage.** Removes unreferenced browser assets only after the offered review/confirmation. Keep them if you need them for an older JSON-only project.
 
@@ -841,13 +807,13 @@ On a phone Tiksi opens on the model, full screen, with one side panel behind the
 
 **PHOTOS on a phone.** One column with the camera first. A tapped photo's details slide up over the gallery; CLOSE, or the photo again, puts them away.
 
-**PROJECTS on a phone.** Scope items stack as cards with their numbers labelled. Removing an item asks first, since PROJECTS has no undo.
+**ESTIMATE on a phone.** A room's scope items stack as cards: the name across the top, its numbers in boxes under it. Removing an item asks first; REMOVED RECORDS (FILE) brings it back.
 
 **SCHEDULE on a phone.** Tap a bar for its dates and slack; the line above the chart shows them.
 
 **DOCUMENTS on a phone.** Sheets and saved documents are for looking at: arrange sheets and save PDFs on the Mac. Product documents in the project folder open on the Mac running Tiksi.
 
-**PHOTO TO 3D on a phone.** The camera takes one photo per tap. TAKE A PHOTO then reads TAKE ANOTHER PHOTO with the count so far; CLEAR SELECTION starts the count again.
+**PHOTO TO 3D on a phone.** Open it from FILE → Import. The camera takes one photo per tap. TAKE A PHOTO then reads TAKE ANOTHER PHOTO with the count so far; CLEAR SELECTION starts the count again.
 
 > **Good to know:** A phone keeps only what it has not sent yet; the Mac holds the project. The save state in the bar says whether everything has reached it.
 
@@ -865,7 +831,7 @@ Use the visible tooltips and inspector labels when you forget a control. These a
 
 **Mark up.** U: mark up on or off, in MODEL. While it is on, P: pen. H: highlighter. E: eraser. N: numbered note. V: move the view. 1, 2, 3: line width. Space-drag: move the view. Cmd/Ctrl+Z and Cmd/Ctrl+Shift+Z: undo and redo a mark. Esc: leave.
 
-**Undo.** UNDO / REDO in the Tiksi menu work in MODEL and MEASURE (applied tape readings). Cmd/Ctrl+Z: undo. Cmd/Ctrl+Shift+Z or Ctrl+Y: redo. History is per project for the current session. Escape ends an active tool action.
+**Undo.** UNDO / REDO on the top bar work in MODEL and PHOTOS → VIDEOS (applied tape readings), and for the projects in ESTIMATE and SCHEDULE. Cmd/Ctrl+Z: undo. Cmd/Ctrl+Shift+Z or Ctrl+Y: redo. History is per project for the current session. Escape ends an active tool action.
 
 **Where is save/import?.** Open FILE at the top (on a phone, FILE in the side panel). Project handles .tiksi files; Import handles captures and photos; 3D exchange handles editing in other applications.
 
@@ -877,7 +843,7 @@ Use the visible tooltips and inspector labels when you forget a control. These a
 
 **Why is my estimate unpriced?.** Add a verified price with the matching unit. Ambiguous product matches and units other than the supported takeoff price unit need manual review.
 
-**Can I return to this chapter?.** The guide URL includes its chapter. Bookmark or copy the address, or use GUIDE at the top of Tiksi.
+**Can I return to this chapter?.** The guide URL includes its chapter. Bookmark or copy the address, or open GUIDE from the Tiksi menu (the logo).
 
 ---
 

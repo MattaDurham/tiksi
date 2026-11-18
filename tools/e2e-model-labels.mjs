@@ -33,7 +33,7 @@ try {
   browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   page.setDefaultTimeout(60000);
-  await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's mode bar and tools on the screen (tiksi-menu.js)
+  await page.addInitScript(() => localStorage.setItem('tiksi.onScreen.v1', '{"all":true}'));   // MODEL's tools on the screen (tiksi-menu.js)
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   const saved = () => page.waitForFunction(() => document.querySelector('#save-status')?.textContent === 'SAVED TO DISK', null, { timeout: 120000 });
   await page.goto('http://127.0.0.1:' + port + '/#/budget');
@@ -68,11 +68,11 @@ try {
   };
   const idle = () => waitUntil(() => page.evaluate(async () => (await import('/js/viewer3d.js')).viewerIdle()), 'MODEL has settled');
   const env = () => page.evaluate(() => { const e = window.testStore.activeProperty().env; return { dims: e.showDims, rooms: e.showRoomLabels, numbers: e.showOpeningNumbers }; });
-  const pill = kind => page.locator(`.v-pill[data-annot="${kind}"]`);
+  const pill = kind => page.locator(`#side [data-annot="${kind}"]`);
   const pressed = async loc => (await loc.getAttribute('aria-pressed')) === 'true';
   const texts = sel => page.locator(sel).evaluateAll(els => els.map(e => e.textContent).sort());
   const rooms = () => page.locator('.v-annot-room').evaluateAll(els => els.map(e => [e.querySelector('b')?.textContent, e.querySelector('span')?.textContent]).sort());
-  const parallelPill = page.locator('.v-pill[data-parallel]');
+  const parallelPill = page.locator('#side [data-parallel]');
   const parallelOn = () => pressed(parallelPill);
   const camera = () => page.evaluate(async () => (await import('/js/viewer3d.js')).markupState().camera);
   const distance = c => Math.hypot(...c.position.map((v, i) => v - c.target[i]));
@@ -159,10 +159,10 @@ try {
 
   // ---------- PARALLEL ----------
   assert.equal(await parallelOn(), false, 'MODEL opens in perspective');
-  await page.locator('.v-pill[data-mode="top"]').click();
+  await page.locator('#side [data-mode="top"]').click();
   await waitUntil(parallelOn, 'TOP turns PARALLEL on');
-  assert.ok(await page.locator('.v-pill[data-parallel].active').count() === 1, 'the pill is lit');
-  await page.locator('.v-pill[data-mode="orbit"]').click();
+  assert.ok(await page.locator('#side [data-parallel].active').count() === 1, 'the pane item is lit');
+  await page.locator('#side [data-mode="orbit"]').click();
   await waitUntil(async () => !(await parallelOn()), 'ORBIT turns PARALLEL off again');
   ok('TOP turns PARALLEL on and ORBIT turns it off');
   await canvas.click({ position: { x: 5, y: 5 } });   // keys go to the view, not a button
@@ -222,7 +222,7 @@ try {
   assert.equal(view.parallel, true, 'the saved view keeps camera.parallel');
   await parallelPill.click();
   await waitUntil(async () => !(await parallelOn()), 'the pill turns PARALLEL off');
-  await page.locator('.v-pill[data-mode="orbit"]').click();
+  await page.locator('#side [data-mode="orbit"]').click();
   await page.locator('#side [data-act=front]').click();
   await page.waitForTimeout(900);
   await page.locator('.v-view-tab').first().click();

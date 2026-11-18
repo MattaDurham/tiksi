@@ -42,7 +42,7 @@ async function shot(name) {
   console.log('Screenshot:', name);
 }
 async function fileTab(tab) {
-  if (!await page.locator('[data-file-dialog]').count()) await page.locator('#tiksi-menu').click().then(() => page.locator('#btn-file').click());
+  if (!await page.locator('[data-file-dialog]').count()) await page.locator('#btn-file').click();
   await page.locator(`[data-file-tab="${tab}"]`).click();
   if (tab === 'exchange') await page.locator('[data-engines]').filter({ hasText: 'Local engines' }).waitFor();
   await settle(250);
@@ -132,7 +132,7 @@ async function tagsShot() {
 }
 
 try {
-  await page.goto(origin.href); await page.locator('[data-prop-name]').waitFor();
+  await page.goto(origin.href); await page.locator('#btn-file').waitFor();   // an empty preview has no property until the sample is added
   const ids = await seedGuide(page);
   await settle();
   if (!demosOnly && (!only || only === 'tags')) await tagsShot();
@@ -146,7 +146,8 @@ try {
   await go('materials');
   await page.locator('.mv-search').fill('sage');
   await page.locator('.mv-card[data-id="mat-guide-sage"]').click(); await settle(1600); await shot('materials');
-  await go('photos'); await page.locator(`.ph-card[data-id="${ids.photoIds[0]}"]`).click(); await settle(); await shot('photos');
+  // The Mac keeps photos in the project's folder, where a card is the folder's file, not the record.
+  await go('photos'); await page.locator('.ph-card').first().click(); await settle(); await shot('photos');
   await go('reconstruct'); await page.locator('.rc-start').waitFor(); await settle(600); await shot('reconstruct');
   await go('research');
   await page.locator('#research-query').fill('Matte sage interior paint for the sample kitchen. Demonstration brief; no research run.');
@@ -154,9 +155,11 @@ try {
   await page.locator('#research-finish').fill('Soft sage, washable matte finish');
   await page.locator('#research-dimensions').fill('920 sf of wall finish; confirm real coverage');
   await settle(); await shot('sourcing');
-  await go('projects'); await page.locator('.proj-card[data-id="guide-project-kitchen"]').click(); await settle(); await shot('projects');
   await go('products'); await page.locator('[data-edit="guide-product-paint"]').click(); await settle(); await shot('products');
-  await go('budget'); await shot('budget');
+  await go('estimate?project=guide-project-kitchen'); await page.locator('.es-rooms').waitFor();
+  const firstRoom = page.locator('.es-rooms tr.es-room').first();
+  if (await firstRoom.count()) await firstRoom.locator('td').first().click();
+  await settle(); await shot('budget');
   await go('schedule'); await shot('schedule');
   await go('sheets'); await page.locator('.sl-item[data-kind="item"][data-id="guide-item-paint"]').click(); await settle(); await shot('sheets');
   await go('documents'); await page.locator('[data-new-set]').click(); await settle();

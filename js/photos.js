@@ -39,7 +39,7 @@ function savedHidden() {
 }
 function saveHidden() { try { localStorage.setItem(HIDDEN_KEY, JSON.stringify([...filters.hidden])); } catch (e) { /* this device only */ } }
 
-// Module-persistent view state (survives view switches, like the plan editor).
+// Module-persistent view state (survives view switches).
 const filters = { hidden: savedHidden(), room: '', pin: '', q: '' };
 let selectedId = null;
 let shown = PAGE;               // how many of the visible photos have cards
@@ -147,7 +147,7 @@ function loadImage(src) {
   });
 }
 
-// Average colour of a (thumbnail) image: the plan and cut sheets colour elements by material.color.
+// Average colour of a (thumbnail) image: the model and cut sheets colour elements by material.color.
 async function averageColor(src) {
   const img = await loadImage(src);
   const c = document.createElement('canvas');
@@ -168,12 +168,12 @@ async function averageColor(src) {
 // while the view is mounted, so navigating away or switching property mid-upload neither
 // aborts the batch nor throws.
 async function addFiles(list) {
-  // Videos are tape-measure evidence: they are kept as originals and reviewed in MEASURE.
+  // Videos are tape-measure evidence: they are kept as originals and reviewed in VIDEOS.
   const clips = Array.from(list || []).filter(isVideoFile);
   if (clips.length) {
     const { added, failed } = await importVideos(prop, clips);
     if (failed.length) alert('Not added:\n' + failed.join('\n'));
-    if (added.length && confirm(added.length + ' video' + (added.length === 1 ? '' : 's') + ' added. Open MEASURE to review the frames?')) { location.hash = '#/measure?video=' + encodeURIComponent(added[0].id); return; }
+    if (added.length && confirm(added.length + ' video' + (added.length === 1 ? '' : 's') + ' added. Open VIDEOS to review the frames?')) { location.hash = '#/measure?video=' + encodeURIComponent(added[0].id); return; }
   }
   // PDFs (shop drawings, spec sheets, schedules) become documents that can be pinned in the model.
   const pdfs = Array.from(list || []).filter(f => f && (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)));
@@ -291,7 +291,7 @@ async function materialFromPhoto(p) {
   // Photo-based PBR record (see the material contract): albedo comes from this photo.
   Object.assign(m, { pattern: 'photo', photoId: p.id, tile: [1, 1], roughness: 0.85, metalness: 0, normalScale: 0.5, accent: null });
   touch();
-  location.hash = '#/materials';
+  location.hash = '#/materials?select=' + encodeURIComponent(m.id);
 }
 
 // Stop lighting the model with this photo (it is no longer a panorama, or is being deleted).
@@ -474,7 +474,6 @@ function renderHead() {
     <div class="ph-head-actions">
       <span class="ph-hint">${listing ? 'drop images anywhere - they are saved into ' + escapeHtml(listing.folder) + '/Photos' : 'drop images anywhere - or paste'}</span>
       ${canPlace ? `<button class="btn primary" data-act="place" title="Open the model and click where each unpinned photo was taken; each one links to the room and wall there">PLACE ${unpinned.length} IN 3D</button>` : ''}
-      <button class="btn" data-act="reconstruct">PHOTO TO 3D</button>
       <button class="btn" data-act="camera" title="Take a photo with the phone camera">CAMERA</button>
       <button class="btn ${canPlace ? '' : 'primary'}" data-act="upload">UPLOAD</button>
       <input type="file" class="hidden-file" data-file="upload" accept="image/*,application/pdf,.pdf" multiple>
@@ -489,8 +488,6 @@ function renderHead() {
 }
 
 function bindUploadButtons(root) {
-  const reconstruct = root.querySelector('[data-act=reconstruct]');
-  if (reconstruct) reconstruct.onclick = () => { location.hash = '#/reconstruct'; };
   const up = root.querySelector('[data-file=upload]'), cam = root.querySelector('[data-file=camera]');
   const upBtn = root.querySelector('[data-act=upload]'), camBtn = root.querySelector('[data-act=camera]');
   if (upBtn) upBtn.onclick = () => up.click();
@@ -743,7 +740,10 @@ function scopeOptionsHtml(p) {
   const groups = {};
   for (const { project, item } of allScopeItems()) {
     if (project.propertyId && project.propertyId !== prop.id && !have.has(item.id)) continue;
-    (groups[project.name] = groups[project.name] || []).push(item);
+    // Labelled as ESTIMATE shows them: the job, then the room (its subproject).
+    const parent = project.parentId && ws.data.projects.find(x => x.id === project.parentId);
+    const label = parent ? `${parent.name} › ${project.name}` : project.name;
+    (groups[label] = groups[label] || []).push(item);
   }
   return Object.entries(groups).map(([name, items]) =>
     `<optgroup label="${escapeHtml(name)}">${items.map(it =>
@@ -785,7 +785,7 @@ function renderDetail() {
     selectedId = null;
     setSheet(false);
     pane.innerHTML = `<div class="ph-detail-body"><h3>PHOTO</h3>
-      <div class="empty">Select a photo to name it, add notes, link it to rooms, walls and scope items, or send it to the plan, the model or the material library.<br><br>
+      <div class="empty">Select a photo to name it, add notes, link it to rooms, walls and scope items, or send it to the model or the material library.<br><br>
       Double-click a card to open the viewer.</div></div>`;
     return;
   }
@@ -920,7 +920,7 @@ export function mount(root) {
       <p class="muted">No property yet. Create one with NEW PROPERTY under FILE.</p></div>`;
     return;
   }
-  // Deep link from PROJECTS: #/photos?select=<photoId> selects that photo.
+  // Deep link (an item's photos in ESTIMATE, a pin in MODEL): #/photos?select=<photoId> selects that photo.
   const m = /[?&]select=([^&]+)/.exec(location.hash);
   let opened = false;
   if (m) {
@@ -943,7 +943,7 @@ export function mount(root) {
       <div class="ph-drop" hidden><div class="ph-drop-box">DROP PHOTOS TO ADD THEM TO ${escapeHtml(prop.name).toUpperCase()}</div></div>
     </div>`;
   render();
-  // Sent here to see one photo (a capture, a link from PROJECTS): its details open. A redraw of
+  // Sent here to see one photo (a capture, a link from ESTIMATE): its details open. A redraw of
   // the page (a background save brings it back) keeps them open if they were.
   if (opened || sheetOpen) setSheet(true);
 

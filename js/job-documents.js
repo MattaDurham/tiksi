@@ -1,4 +1,4 @@
-// DOCUMENTS > JOB DOCUMENTS: what a job prints, written from the job (job.js) so every figure is
+// DOCUMENTS > PROJECT DOCUMENTS: what a project prints, written from the job (job.js) so every figure is
 // ESTIMATE's and every date SCHEDULE's.
 //   TRIM PACKAGE  the book for the carpenter and the yard: summary, options, buy list, each room's
 //                 walls with their boards, cut lists, installer bid form, price build-up, appendices
@@ -56,11 +56,11 @@ function docHtml(root) {
 function render() {
   if (!el) return;
   const root = chosen(), tops = propertyProjects().filter(p => !p.parentId);
-  if (!root) { el.innerHTML = '<div class="empty-state"><b>No projects</b>Make a project in PROJECTS; its estimate writes these documents.</div>'; return; }
+  if (!root) { el.innerHTML = '<div class="empty-state"><b>No projects</b>Start a project in ESTIMATE; its estimate writes these documents.</div>'; return; }
   const B = ws.data.settings.business || {}, T = termsOf(root);
   const f = (scope, key, label, value, type = 'text') => `<label class="jd-f"><span>${esc(label)}</span>${type === 'textarea' ? `<textarea rows="3" data-${scope}="${key}">${esc(value || '')}</textarea>` : `<input type="${type}" data-${scope}="${key}" value="${esc(value ?? '')}">`}</label>`;
   el.innerHTML = `<div class="jd">
-    <nav class="jd-list" aria-label="Job documents">
+    <nav class="jd-list" aria-label="Project documents">
       <label class="jd-f"><span>Project</span><select id="jd-job">${tops.map(p => `<option value="${esc(p.id)}" ${p.id === root.id ? 'selected' : ''}>${esc(p.name || 'Project')}</option>`).join('')}</select></label>
       ${DOCS.map(([id, title, what]) => `<button type="button" class="jd-doc ${id === docId ? 'here' : ''}" data-doc="${id}"><b>${esc(title)}</b><span>${esc(what)}</span></button>`).join('')}
       <a class="jd-doc" href="#/estimate?project=${encodeURIComponent(root.id)}"><b>Open the estimate</b><span>Rates, markups and bids</span></a>

@@ -91,7 +91,7 @@ try {
   // Polling never wipes a new draft. Browsing away also leaves the job active.
   await page.fill('#research-region', 'Edited while researching');
   await page.evaluate(() => { location.hash = '#/products'; });
-  await page.waitForSelector('#research-prod'); assert.equal(cancelCalls, 0);
+  await page.waitForSelector('#new-prod'); assert.equal(cancelCalls, 0);
   finish = true;
   await page.evaluate(() => { location.hash = '#/research'; });
   await page.waitForSelector('[data-save-candidate="0"]');
@@ -196,11 +196,11 @@ try {
   const app = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
   app.on('pageerror', error => errors.push(error.message));
   await app.goto(address + 'app#/products');
-  await app.waitForSelector('#research-prod');
-  await app.click('#research-prod');
+  await app.waitForSelector('.doc-parts [data-part="find"]');
+  await app.click('.doc-parts [data-part="find"]');   // PRODUCTS › FIND A PRODUCT
   await app.waitForSelector('#research-query');
   assert.equal(new URL(app.url()).hash, '#/research');
-  await app.click('#rail [data-view="materials"]');
+  await app.click('.doc-parts [data-part="materials"]');
   await app.locator('.mv-card').first().click();
   const materialName = await app.inputValue('[data-f="name"]');
   await app.click('[data-research]');

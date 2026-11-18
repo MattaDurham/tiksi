@@ -1,13 +1,13 @@
-// The program: a property's selected projects, totalled as BUDGET shows them and laid out
-// as SCHEDULE draws them. BUDGET, SCHEDULE and the one-pager all read these functions, so
+// The program: a property's selected projects, totalled as ESTIMATE's ALL PROJECTS shows them and laid out
+// as SCHEDULE draws them. ESTIMATE, SCHEDULE and the one-pager all read these functions, so
 // the cost and the span a client sees are the ones on those pages. Pure data, no DOM.
 //
-// Selected means pr.selected is set: a project without the flag is parked, as BUDGET shows
+// Selected means pr.selected is set: a project without the flag is parked, as ALL PROJECTS shows
 // it. Subprojects are projects of their own (with a parentId) and count when selected.
 
 import { projectTotals, projectWork, itemPriced } from './store.js';
 
-// The projects of a property as BUDGET and SCHEDULE list them: the property's own, and any
+// The projects of a property as ESTIMATE and SCHEDULE list them: the property's own, and any
 // whose property is missing from the workspace (they show under every property).
 export function programProjects(prop, data) {
   const d = data || { properties: [], projects: [] };

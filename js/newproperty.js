@@ -15,12 +15,11 @@
 import { ws, touch, propertyTemplate, escapeHtml, fmtBytes, fmtLen, fmtArea, roomsFloorArea, getFile, activeProperty } from './store.js';
 import { parseCaptureUrl, resolveCapture, downloadAsset, fetchCover, fetchCaptureDirect, fetchCoverDirect, relaysFor, DEFAULT_RELAYS } from './polycam.js';
 import { importScanBytes, importScanFile, SCAN_ACCEPT } from './scans.js';
-import { placeScanBytes, seedProject, proposalSummary } from './scan2plan.js';
+import { placeScanBytes, proposalSummary } from './scan2plan.js';
 import { proposeFixtures, openFixtureReview } from './fixtures-ui.js';
 import { chooseScanPlacement } from './scanplace.js';
 import { addPhotoFromFile } from './photos-store.js';
 import { icon } from './icons.js';
-import { makeFirstOnePager, openOnePagerEditor } from './one-pager-dialog.js';
 import { addDocumentFromFile } from './documents.js';
 import { addVideoFromFile } from './videos.js';
 import {
@@ -176,9 +175,6 @@ function submit(value, into, linkOnly) {
     touch();
     closeDialog();
     app.refresh(); app.remount();
-    // Every property starts with a one-pager: its first draft is version 1, made right away.
-    makeFirstOnePager(p).then(v => { if (v) app.toast('One-pager version 1 saved for ' + p.name + '. FILE > Project > OPEN ONE-PAGER edits it.'); })
-      .catch(e => { console.error(e); app.toast('The first one-pager could not be made: ' + (e.message || e), 'error'); });
     return;
   }
   startLinkImport(link, into);
@@ -404,11 +400,7 @@ async function proposePlan(prop, scan, signal) {
   if (mode === 'reference') { step.ok('kept as reference; the plan is unchanged'); finish(prop, null, null); return; }
   if (applied && !result.review?.required) step.ok(proposalSummary(result, applied));
   else step.warn(proposalSummary(result, applied));
-  let project = null;
   if (applied) {
-    const added = mode === 'level' || mode === 'beside';
-    project = seedProject(prop, applied, (added ? prop.name + ': ' + scan.name : (prop.source && prop.source.title ? prop.source.title : prop.name)) + ': scope from scan');
-    if (project) { ws.data.projects.push(project); touch(); log('Seeded a starter project with the takeoffs', 'ok', project.items.length + ' scope items linked to the model'); }
     // What stands in the rooms, read now and offered for review when the run is done.
     const fx = log('Reading counters, cabinets and furniture from the scan', 'run');
     try {
@@ -441,15 +433,9 @@ function finish(prop, result, applied, fixtures) {
     <div class="np-actions">
       ${fixtures ? `<button class="btn" data-np-fixtures>${icon('scan')}REVIEW ${fixtures.proposals.length} FIXTURE${fixtures.proposals.length === 1 ? '' : 'S'}</button>` : ''}
       <button class="btn primary" data-np-go="model">${icon('model')}OPEN MODEL</button>
-      <button class="btn" data-np-onepager-open hidden>${icon('file')}OPEN ONE-PAGER</button>
     </div>`;
-  // The first one-pager is part of making the property: version 1, from the scan's cover
-  // photo (or the model) and the proposed plan and scope. The dialog reads done once it is in.
-  const opStep = log('Making the first one-pager', 'run');
-  makeFirstOnePager(prop, { progress: t => opStep && opStep.detail(t) })
-    .then(v => { if (opStep) opStep.ok(v ? 'version ' + v.n + ' saved to the documents' : 'already there'); const b = dlg && dlg.querySelector('[data-np-onepager-open]'); if (b) { b.hidden = false; b.onclick = () => { closeDialog(); app.remount(); openOnePagerEditor(prop); }; } })
-    .catch(e => { console.error(e); if (opStep) opStep.warn('not made: ' + (e.message || e)); })
-    .finally(() => { if (dlg) dlg.dataset.state = 'done'; });
+  // A one-pager is made in DOCUMENTS once there is scope and a price to show.
+  dlg.dataset.state = 'done';
   box.querySelectorAll('[data-np-go]').forEach(b => b.onclick = () => { closeDialog(); location.hash = '#/' + b.dataset.npGo; app.remount(); });
   const fxBtn = box.querySelector('[data-np-fixtures]');
   if (fxBtn) fxBtn.onclick = async () => {
@@ -522,22 +508,6 @@ async function attachFile(prop, file, link) {
     dlg.querySelector('[data-np-fallback]').hidden = false;
     setStatus('Could not use that file: ' + String(e && e.message || e), 'fail');
   }
-}
-
-// Used by the plan view's ATTACH SCAN FILE and by drops elsewhere: the same path, no dialog.
-export async function attachScanFileToProperty(prop, file, viewHooks) {
-  const buffer = await file.arrayBuffer();
-  const scan = await importScanBytes(buffer, file.name, prop, viewHooks, prop.source ? { source: { kind: prop.source.kind, url: prop.source.url, captureId: prop.source.captureId } } : null);
-  if (!scan) return null;
-  if (prop.source) { prop.source.status = 'resolved'; touch(); }
-  if (scan.kind !== 'mesh') return { scan, result: null, applied: null };
-  const rec = await getFile(scan.id);
-  const out = await placeScanBytes(prop, scan, rec.buffer, viewHooks, fit => chooseScanPlacement(fit, scan.name));
-  if (out.applied) {
-    const project = seedProject(prop, out.applied, prop.name + ': scope from ' + scan.name);
-    if (project) { ws.data.projects.push(project); touch(); }
-  }
-  return Object.assign({ scan }, out);
 }
 
 // ---------- a property from a folder ----------

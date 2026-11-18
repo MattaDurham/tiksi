@@ -1,4 +1,4 @@
-// ESTIMATE, SCHEDULE and JOB DOCUMENTS in a browser: a synthetic study with baseboard drawn round it
+// ESTIMATE, SCHEDULE and PROJECT DOCUMENTS in a browser: a synthetic study with baseboard drawn round it
 // is worked out room by room; a piece opens its detail; a markup moves the price and UNDO puts it
 // back; a bid is recorded; an item the drawing already prices is removed; a scope item is set to
 // wait for the trim in working days; the old BUDGET and CUT SHEETS addresses open their new homes;
@@ -40,7 +40,7 @@ const job = () => page.evaluate(async () => {
 const money = v => page.evaluate(v => import('/js/store.js').then(s => s.fmtMoney(v)), v);
 
 try {
-  await page.goto(url + '/#/projects');
+  await page.goto(url + '/#/estimate');
   await page.waitForSelector('#btn-file', { state: 'attached' });
   await page.evaluate(async () => {
     const s = await import('/js/store.js'), T = await import('/js/trims.js'), D = await import('/js/trim-design.js');
@@ -97,6 +97,34 @@ try {
   await until(async () => /Where the published time comes from/i.test(await page.locator('#es-dbody').textContent()), 'the task detail');
   check(await page.locator('#es-dbody [data-go-room="p-study"]').count() === 1, 'the task\'s detail links to each room it is in');
 
+  console.log('\n[scope items] added, priced and removed inside the room');
+  const studyItems = async () => page.evaluate(async () => (await import('/js/store.js')).projectById('p-study').items.map(i => ({ id: i.id, name: i.name, qty: i.qty, likely: i.likely, status: i.status })));
+  const n0 = (await studyItems()).length, price0 = (await job()).price;
+  await page.click('[data-add-item="p-study"]');
+  await until(async () => (await studyItems()).length === n0 + 1, 'a new item');
+  const added = (await studyItems()).at(-1);
+  const row = `tr[data-si="${added.id}"]`;
+  await page.locator(row + ' [data-si-f="name"]').fill('Patch plaster');
+  await page.locator(row + ' [data-si-f="name"]').press('Tab');
+  await page.locator(row + ' [data-si-f="qty"]').fill('2');
+  await page.locator(row + ' [data-si-f="qty"]').press('Tab');
+  await page.locator(row + ' [data-si-money="likely"]').fill('$150');
+  await page.locator(row + ' [data-si-money="likely"]').press('Tab');
+  await until(async () => (await studyItems()).at(-1).likely === 150, 'the price');
+  const it1 = (await studyItems()).at(-1);
+  check(it1.name === 'Patch plaster' && it1.qty === 2 && Math.abs((await job()).price - price0 - 300) < 0.01, 'a new item typed in the room (2 at $150) adds $300 to the price');
+  await page.locator(row + ' [data-si-money="low"]').fill('lots');
+  await page.locator(row + ' [data-si-money="low"]').press('Tab');
+  await until(async () => (await page.locator('[data-money-problem]').count()) === 1, 'the refusal');
+  check(true, 'a price that cannot be read is refused with a reason');
+  await page.locator(row + ' .si-more').click();
+  await page.locator('#es-dbody [data-sid-status]').selectOption('ordered');
+  await until(async () => (await studyItems()).at(-1).status === 'ordered', 'status');
+  check(true, 'the item\'s record in the detail column sets its status');
+  await page.click(`[data-si-del="${added.id}"]`);
+  await until(async () => (await studyItems()).length === n0, 'removed');
+  check(Math.abs((await job()).price - price0) < 0.01, 'removing it takes its price back off');
+
   console.log('\n[products] the boards are PRODUCTS records with their store pages');
   await until(async () => (await page.evaluate(async () => (await import('/js/store.js')).ws.data.products.filter(p => p.trimStock).length)) > 0, 'board records');
   await page.locator('.es-open .es-cut tr[data-d^="piece:"]').first().click();
@@ -126,11 +154,11 @@ try {
   await page.locator('[data-set="contingency"]').press('Tab');
   await until(async () => Math.abs((await job()).price - j0.price * 1.1) < 0.01, 'the price with 10% contingency');
   check(true, 'contingency 10% raises the price by 10%');
-  await page.locator('.es-head h1').click();
+  await page.locator('.es-head .es-kicker').click();
   await page.keyboard.press('ControlOrMeta+z');
   await until(async () => Math.abs((await job()).price - j0.price) < 0.01, 'undo');
   check(true, 'UNDO puts it back');
-  await page.locator('.es-head h1').click();
+  await page.locator('.es-head .es-kicker').click();
   await page.keyboard.press('ControlOrMeta+Shift+z');
   await until(async () => Math.abs((await job()).price - j0.price * 1.1) < 0.01, 'redo');
   check(true, 'REDO sets it again');

@@ -210,7 +210,7 @@ try {
   assert.equal((await state()).done, false, 'the left pane edits the cuts too');
 
   // The cuts stay with the property when the view is left and opened again.
-  await page.locator('#rail a[data-view=materials]').click();
+  await page.locator('#rail a[data-view=photos]').click();
   await page.locator('#rail a[data-view=model]').click();
   await page.waitForFunction(() => window.testScene?.getObjectByName('section planes')?.children.length === 3);
   assert.equal((await scene()).clip, 3);
@@ -235,7 +235,7 @@ try {
   assert.equal(st.on, false); assert.equal(st.planes.length, 0);
   assert.deepEqual([sc.sheets, sc.clip, sc.handles], [0, 0, 0]);
   assert.equal(await bar.isVisible(), false);
-  assert.equal(await page.locator('[data-section]').getAttribute('class'), 'v-pill ');
+  assert.ok(!/\bactive\b/.test(await page.locator('[data-section]').getAttribute('class')), 'SECTION is off in the left pane');
 
   assert.deepEqual(errors, []);
   console.log('ok   section planes: flat, side-to-side and custom cuts clip together; the arrow slides and the rings turn a plane; SNAP holds 5 cm and 15 degrees and frees them when off; flip, slider, saved view, hidden planes, remount and removal');

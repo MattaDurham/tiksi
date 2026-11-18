@@ -96,7 +96,7 @@ try {
   await page.getByRole('button',{name:'USE AS SKY',exact:true}).click();
   await page.waitForFunction(()=>window.test.property.env.sky==='pano');
   assert.equal(await page.evaluate(()=>window.test.property.env.panoPhotoId===window.pano.id),true);
-  await page.getByRole('button',{name:'PHOTO TO 3D',exact:true}).click();assert.match(page.url(),/#\/reconstruct$/);
+  await page.evaluate(()=>{location.hash='#/reconstruct';});   // FILE › Import › PHOTOS → 3D opens this address (this harness has no top bar)
   await page.evaluate(()=>{window.test.photos.unmount();window.test.reconstruction.mount(document.querySelector('#view'));});
   await page.waitForFunction(()=>document.querySelector('.rc-engine').textContent.includes('ready'));
   assert.equal(await page.locator('.rc-photo').count(),1); // Renamed JPEG/PNG stays selectable by MIME; panoramas excluded.
@@ -115,14 +115,14 @@ try {
   await page.evaluate(()=>window.test.store.save());
   await page.setViewportSize({width:1200,height:900});
   await page.goto('http://localhost:' + server.address().port + '/#/photos');
-  await page.locator('.ph-head [data-act=reconstruct]').click();
+  await page.evaluate(() => { location.hash = '#/reconstruct'; });   // FILE › Import › PHOTOS → 3D opens it
   await page.waitForFunction(()=>document.querySelector('.rc-engine')?.textContent.includes('ready'));
   assert.match(page.url(), /#\/reconstruct$/);
-  assert.equal(await page.locator('#rail [data-view=reconstruct].active').count(),1);
+  assert.equal(await page.locator('#rail [data-view=photos].active').count(),1, 'PHOTO TO 3D is shown under PHOTOS');
   assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector('#view')).overflowY),'auto');
   await page.locator('#rail [data-view=photos]').click();
   await page.waitForSelector('.ph-head');
-  await page.locator('#rail [data-view=reconstruct]').click();
+  await page.evaluate(() => { location.hash = '#/reconstruct'; });
   await page.waitForSelector('.rc-start');
   job.state='complete';job.stats={triangles:1,textures:0,bytes:model.length};
   await page.waitForFunction(()=>document.querySelector('.rc-job-select').textContent.includes('complete'));

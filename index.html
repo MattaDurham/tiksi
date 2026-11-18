@@ -47,30 +47,25 @@
     </div>
     <nav id="rail" aria-label="Pages" title="Right-click to show the icon alone or the icon and the word">
       <a href="#/model" data-view="model">MODEL</a>
-      <a href="#/materials" data-view="materials">MATERIALS</a>
       <a href="#/photos" data-view="photos">PHOTOS</a>
-      <a href="#/measure" data-view="measure">MEASURE</a>
-      <a href="#/reconstruct" data-view="reconstruct">PHOTO TO 3D</a>
-      <a href="#/research" data-view="research">SOURCING</a>
-      <a href="#/projects" data-view="projects">PROJECTS</a>
       <a href="#/products" data-view="products">PRODUCTS</a>
       <a href="#/estimate" data-view="estimate">ESTIMATE</a>
       <a href="#/schedule" data-view="schedule">SCHEDULE</a>
       <a href="#/documents" data-view="documents">DOCUMENTS</a>
     </nav>
+    <div id="tb-tools" class="tb-tools">
+      <select id="property-select" class="tb-select" aria-label="Property"></select>
+      <div id="edit-history" class="history-actions" role="group" aria-label="Undo and redo" hidden>
+        <button id="btn-undo" class="tb-btn" data-act="undo" aria-label="Undo" disabled>UNDO</button>
+        <button id="btn-redo" class="tb-btn" data-act="redo" aria-label="Redo" disabled>REDO</button>
+      </div>
+      <button id="btn-file" class="tb-btn" title="Save, open, import, 3D exchange, removed records and settings">FILE</button>
+    </div>
     <button type="button" id="btn-beside" class="tb-btn beside-toggle" aria-pressed="false" title="Show the model beside the other pages">MODEL BESIDE</button>
     <span id="save-status" class="save-status">SAVED</span>
     <div id="tk-hold" hidden>
       <div id="tk-top" class="tk-top">
-        <label class="tk-field"><span>PROJECT</span><select id="property-select" class="tb-select" aria-label="Property"></select></label>
-        <div class="tk-row">
-          <button id="btn-file" class="tb-btn" title="Open, import, save, 3D exchange and settings">FILE</button>
-          <a href="#/guide" class="tb-btn guide-entry" title="User guide, screenshots and feature walkthroughs">GUIDE</a>
-        </div>
-        <div id="edit-history" class="history-actions" role="group" aria-label="Undo and redo" hidden>
-          <button id="btn-undo" class="tb-btn" data-act="undo" aria-label="Undo" disabled>UNDO</button>
-          <button id="btn-redo" class="tb-btn" data-act="redo" aria-label="Redo" disabled>REDO</button>
-        </div>
+        <a href="#/guide" class="tb-btn guide-entry" title="User guide, screenshots and feature walkthroughs">GUIDE</a>
       </div>
     </div>
   </header>

@@ -17,7 +17,7 @@ export const EXISTING_LABEL = 'Existing';
 const COLLECTIONS = Object.values(PIECE_KINDS);
 
 // Drop a projectId that names no project of this property; keep a valid one as it is. A
-// project deleted from PROJECTS waits in the property's recovery list (recovery.js), so its
+// project deleted in ESTIMATE waits in the property's recovery list (recovery.js), so its
 // pieces keep their link and come back with it when it is restored.
 export function normalisePieceProjects(data) {
   const projects = Array.isArray(data && data.projects) ? data.projects : [];

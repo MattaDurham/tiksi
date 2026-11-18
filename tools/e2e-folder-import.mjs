@@ -129,7 +129,7 @@ try {
     await page.goto(url);
     await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
     const held = await propertyCount(page);
-    await page.click('#tiksi-menu').then(() => page.click('#btn-file'));
+    await page.click('#btn-file');
     await page.click('[data-new-folder]');
     const steps = await reviewAndCreate(page, { name: 'Elm Street kitchen', where: 'kept in this folder', held });
     check(steps.some(s => s.state === 'ok' && s.text.includes(join(visit, 'Tiksi', 'Elm Street kitchen.tiksi'))), 'the run names the project file it will write in the folder');
@@ -152,7 +152,7 @@ try {
     await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
     const again = await activeProperty(page);
     check(again.id === prop.id && again.scans.length === 1 && again.walls.length === prop.walls.length, 'after a reload the property comes back from that file');
-    await page.click('#tiksi-menu').then(() => page.click('#btn-file'));
+    await page.click('#btn-file');
     await page.locator('[data-agent-onboarding] summary').click();
     const prompt = await page.locator('[data-agent-prompt]').inputValue();
     check(prompt.includes('AGENTS.local.md') && prompt.includes(prop.id) && prompt.includes(saved),
@@ -181,7 +181,7 @@ try {
     await page.goto('http://localhost:' + staticServer.address().port + '/');
     await page.waitForSelector('#btn-file', { state: 'attached' });
     const held = await propertyCount(page);
-    await page.click('#tiksi-menu').then(() => page.click('#btn-file'));
+    await page.click('#btn-file');
     await page.click('[data-new-property]');
     const waiting = page.waitForEvent('filechooser');
     await page.click('[data-np-folder]');
@@ -192,7 +192,7 @@ try {
     await checkProperty(page, steps, 'Elm Street kitchen');
     check(JSON.stringify(await fingerprint(visit)) === JSON.stringify(before) && !existsSync(join(visit, 'Tiksi')), 'the picked folder is untouched');
     await page.click('[data-np-cancel]', { noWaitAfter: true, timeout: 90000 });
-    await page.click('#tiksi-menu').then(() => page.click('#btn-file'));
+    await page.click('#btn-file');
     await page.locator('[data-agent-onboarding] summary').click();
     const prompt = await page.locator('[data-agent-prompt]').inputValue();
     const prop = await activeProperty(page);

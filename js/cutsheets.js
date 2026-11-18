@@ -13,7 +13,7 @@ let current = null; // {kind:'item'|'product', id}
 
 export function mount(root) {
   el = root;
-  // Deep link from PROJECTS: #/sheets?item=<scope item id> shows that item's sheet.
+  // Deep link from an item in ESTIMATE: #/sheets?item=<scope item id> shows that item's sheet.
   const m = /[?&]item=([^&]+)/.exec(location.hash);
   if (m) { current = { kind: 'item', id: decodeURIComponent(m[1]) }; history.replaceState(null, '', '#/sheets'); }
   render();
@@ -63,7 +63,7 @@ function render() {
   };
 
   const view = el.querySelector('#sheet-view');
-  view.innerHTML = currentSheetHtml() || '<p class="muted">Nothing to show yet. Add scope items in PROJECTS or products in PRODUCTS.</p>';
+  view.innerHTML = currentSheetHtml() || '<p class="muted">Nothing to show yet. Add scope items to a room in ESTIMATE, or products in PRODUCTS.</p>';
 }
 
 function currentSheetHtml() {
@@ -172,7 +172,7 @@ export function itemSheetHtml(project, item) {
       ${wallArea || floorArea ? `<tr><td><b>Takeoff totals</b></td><td></td><td></td>
         <td class="num"><b>${wallArea ? fmtArea(wallArea) + ' wall' : ''}${wallArea && floorArea ? ', ' : ''}${floorArea ? fmtArea(floorArea) + ' floor' : ''}</b></td><td></td></tr>` : ''}
       </tbody></table>
-    <p style="font-size:10.5px; color:#666; margin-top:4px">Lengths and areas are measured on wall centre lines (CL), as the plan is drawn: clear room dimensions and finished floor areas are smaller by half of each wall's thickness.</p>` : ''}
+    <p style="font-size:10.5px; color:#666; margin-top:4px">Lengths and areas are measured on wall centre lines (CL), as MODEL draws them: clear room dimensions and finished floor areas are smaller by half of each wall's thickness.</p>` : ''}
 
     ${matIds.size ? `<h2>Materials</h2>
       <table><tbody>${[...matIds].map(id => {
@@ -181,8 +181,13 @@ export function itemSheetHtml(project, item) {
       }).join('')}</tbody></table>` : ''}
 
     ${prods.length ? `<h2>Specified products</h2>${prods.map(productBlock).join('')}
-      <table style="margin-top:8px"><tbody><tr><td><b>Product subtotal (unit prices)</b></td>
-      <td class="num"><b>${fmtMoney(prods.reduce((n, p) => n + (p.price || 0), 0))}</b></td></tr></tbody></table>` : ''}
+      ${(() => {
+        // A product sold in the item's unit is needed item-quantity times; otherwise only its unit price is known.
+        const q = Number(item.qty) || 1, same = p => String(p.unit || 'ea').toLowerCase() === String(item.unit || 'ea').toLowerCase();
+        const all = prods.every(same);
+        return `<table style="margin-top:8px"><tbody><tr><td><b>Product subtotal${all ? ` (${q} ${escapeHtml(item.unit || 'ea')})` : ' (unit prices: the units differ from the item\'s)'}</b></td>
+      <td class="num"><b>${fmtMoney(prods.reduce((n, p) => n + (p.price || 0) * (all ? q : 1), 0))}</b></td></tr></tbody></table>`;
+      })()}` : ''}
 
     ${sitePhotosHtml(photos)}
 

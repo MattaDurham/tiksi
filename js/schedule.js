@@ -162,7 +162,7 @@ function jobView(root) {
     <div class="es-acts"><label class="sc-start sc-inline"><span>Starts</span><input type="date" id="job-start" value="${esc(origin)}"></label><a class="btn small" href="#/estimate?project=${encodeURIComponent(root.id)}">${icon('budget')}ESTIMATE</a></div></header>
     ${sched.rows.length ? table(lines, origin, sched.days) + `<div class="sc-detail" id="gantt-detail" role="status">Click a line for its dates and slack.</div>` : '<p class="note">Nothing to schedule yet.</p>'}
     ${sched.cyclic ? '<p class="note">Some lines wait for each other in a loop; those links are left out.</p>' : ''}
-    <p class="note">Working days, Monday to Friday. The carpenter does the rooms one after another, in the order shown: move a room with the arrows, and double-click a room (or its ▸) for its tasks in order. A scope item starts with the job unless you choose what it starts AFTER. Days for scope items are set in PROJECTS; a room's days come from its hours at 6 productive hours a day.</p>`;
+    <p class="note">Working days, Monday to Friday. The carpenter does the rooms one after another, in the order shown: move a room with the arrows, and double-click a room (or its ▸) for its tasks in order. A scope item starts with the job unless you choose what it starts AFTER. Days for scope items are typed in their room in ESTIMATE; a room's days come from its hours at 6 productive hours a day.</p>`;
   return { html, bind: inner => {
     inner.querySelector('#job-start').onchange = e => { root.startDate = e.target.value; touch(); render(); };
     inner.querySelectorAll('[data-after]').forEach(s => s.onchange = () => {
@@ -199,7 +199,7 @@ function programView(prop) {
   }
   const html = `<header class="es-head"><div class="es-kicker">Schedule</div><h1>All projects</h1>
     <div class="es-acts"><label class="sc-start sc-inline"><span>Program start</span><input type="date" id="prog-start" value="${esc(start)}"></label></div></header>
-    ${plans.length ? table(lines, start, days) + `<div class="sc-detail" id="gantt-detail" role="status">Click a line for its dates and slack.</div>` : `<p class="note">Nothing to schedule: tick projects into the program in ESTIMATE, and give scope items days in PROJECTS or draw trim.</p>`}
+    ${plans.length ? table(lines, start, days) + `<div class="sc-detail" id="gantt-detail" role="status">Click a line for its dates and slack.</div>` : `<p class="note">Nothing to schedule: tick projects into the program in ESTIMATE, and give scope items days in ESTIMATE or draw trim.</p>`}
     <p class="note">Working days, Monday to Friday. Projects run side by side, each from its own start date, unless one is set to start AFTER another. Open a project on the left to change the order of its rooms or what its lines wait for.</p>`;
   return { html, bind: inner => {
     inner.querySelector('#prog-start').onchange = e => { ws.data.settings.programStart = e.target.value; touch(); render(); };

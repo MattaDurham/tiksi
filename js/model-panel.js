@@ -53,7 +53,7 @@ function materialsHtml(scan, obj) {
     <p class="empty">Each material of the model once, with the parts that use it. Choosing a library material changes every part that uses it. Names and colours do not establish a product identity.</p>
     ${slots.length > FILTER_AT ? `<input type="search" class="search-input" data-mp-filter placeholder="filter materials..." value="${escapeHtml(filter)}">` : ''}
     ${rows}
-    <button class="btn" data-estimate>CREATE FINISH ESTIMATE</button><p class="empty">Measured triangle surface areas. Map only finish surfaces to include; review overlaps and waste in Scope before ordering. Amounts come from the coverage stored on a material and are estimates from area.</p>`;
+    <button class="btn" data-estimate>CREATE FINISH ESTIMATE</button><p class="empty">Measured triangle surface areas. Map only finish surfaces to include; review overlaps and waste in ESTIMATE before ordering. Amounts come from the coverage stored on a material and are estimates from area.</p>`;
 }
 
 function productOptions(selectedId) {
@@ -207,9 +207,9 @@ export function bindModelPanel(root, ctx) {
     try { await ctx.reload(); } catch (e) { say(e.message, 'error'); }
   });
   const estimate = panel.querySelector('[data-estimate]');
-  if (estimate) estimate.onclick = () => { try { const pr = createModelEstimate(prop, scan, modelRoot(obj)); say('Created ' + pr.name + '. Review quantities and prices in Scope / Budget.'); } catch (e) { say(e.message, 'warn'); } };
+  if (estimate) estimate.onclick = () => { try { const pr = createModelEstimate(prop, scan, modelRoot(obj)); say('Created ' + pr.name + '. Review quantities and prices in ESTIMATE.'); } catch (e) { say(e.message, 'warn'); } };
   const compEstimate = panel.querySelector('[data-component-estimate]');
-  if (compEstimate) compEstimate.onclick = () => { try { const pr = createComponentEstimate(prop, scan, inner(obj)); say('Created ' + pr.name + ' with ' + plural(pr.items.length, 'component') + '. Review counts and prices in Scope / Budget.'); } catch (e) { say(e.message, 'warn'); } };
+  if (compEstimate) compEstimate.onclick = () => { try { const pr = createComponentEstimate(prop, scan, inner(obj)); say('Created ' + pr.name + ' with ' + plural(pr.items.length, 'component') + '. Review counts and prices in ESTIMATE.'); } catch (e) { say(e.message, 'warn'); } };
   panel.querySelectorAll('[data-mp-select]').forEach(b => b.onclick = () => {
     const c = modelComponents(inner(obj)).find(x => x.key === b.dataset.mpSelect);
     if (!c) return;

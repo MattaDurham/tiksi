@@ -1,4 +1,4 @@
-// MEASURE view: step through a walk-through video's frames, read the tape, record readings.
+// VIDEOS (in PHOTOS): step through a walk-through video's frames, read the tape, record readings.
 // The local frame service (server/video_frames.py) supplies a 1 fps contact sheet, seconds
 // where a yellow tape blade is likely visible, and the sharpest full-resolution frame near a
 // moment. It ranks frames for review; a person reads the numbers. Without the service the
@@ -17,10 +17,9 @@ import {
 } from './videos.js';
 
 const TILE_W = 96, ZOOM_MAX = 16;
-const SUGGESTIONS = ['base cabinet width', 'base cabinet height', 'base cabinet depth', 'wall cabinet width', 'wall cabinet height', 'wall cabinet depth',
-  'tall cabinet width', 'counter depth', 'counter height', 'backsplash height', 'toe kick height', 'sink base width', 'sink width', 'range width',
-  'range opening', 'dishwasher opening', 'fridge opening width', 'fridge opening height', 'fridge surround depth', 'door leaf width', 'door leaf height',
-  'door opening width', 'door casing width', 'window width', 'window height', 'window sill height', 'ceiling height', 'wall length'];
+// What a reading can be attached to and applied to the model (measurements.js elementTargets):
+// a wall's length, a door or window opening's width and height, a door slab's width.
+const SUGGESTIONS = ['wall length', 'door opening width', 'door opening height', 'door leaf width', 'window width', 'window height'];
 
 let el = null, prop = null, caps = null;
 const view = { videoId: null, t: 0, zoom: { s: 1, x: 0, y: 0 }, crop: null, cropMode: false, editingId: null, autoZoom: true, box: null };
@@ -627,14 +626,14 @@ export function redo() { if (prop && restoreGeometryEdit(prop, 'redo')) { say('R
 let dropRoot = null;
 export function mount(root) {
   prop = activeProperty(); el = root;
-  if (!prop) { root.innerHTML = '<div class="view-scroll"><div class="kicker">MEASURE</div><p class="muted">No property yet. Create one with NEW PROPERTY under FILE.</p></div>'; el = null; return; }
+  if (!prop) { root.innerHTML = '<div class="view-scroll"><div class="kicker">VIDEOS</div><p class="muted">No property yet. Create one with NEW PROPERTY under FILE.</p></div>'; el = null; return; }
   const wanted = new URLSearchParams(location.hash.split('?')[1] || '').get('video');
   if (wanted && videos().some(v => v.id === wanted)) view.videoId = wanted;
   if (!videos().some(v => v.id === view.videoId)) { view.videoId = videos()[0]?.id || null; view.t = 0; view.editingId = null; dropFrame(); }
   root.innerHTML = `
     <div class="ms-layout">
       <aside class="ms-videos">
-        <div class="ms-head"><span class="view-title">MEASURE</span><span class="view-sub" data-head-sub></span></div>
+        <div class="ms-head"><span class="view-title">VIDEOS</span><span class="view-sub" data-head-sub></span></div>
         <div class="ms-actions"><button class="btn primary" data-act="add">ADD VIDEO</button><input type="file" class="hidden-file" data-file accept="${VIDEO_ACCEPT}" multiple></div>
         <p class="ms-service" data-service></p>
         <div class="ms-video-list"></div>

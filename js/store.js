@@ -90,6 +90,7 @@ export function setSaveStatus(text, busy) {
   const el = document.getElementById('save-status');
   if (!el) return;
   el.textContent = text;
+  el.title = text;   // shortened with … when the top bar is narrow
   el.classList.toggle('busy', !!busy);
 }
 
@@ -903,7 +904,7 @@ export function materialById(id) {
 
 export function projectById(id) { return ws.data.projects.find(p => p.id === id) || null; }
 
-// The projects of the active property, in list order: what PROJECTS, BUDGET, SCHEDULE and the
+// The projects of the active property, in list order: what ESTIMATE, SCHEDULE and the
 // scope pickers show. A project whose property is gone (or that never had one) counts as the
 // active property's, so nothing drops out of sight.
 export function propertyProjects() {
@@ -1172,7 +1173,7 @@ export function itemsTotals(pr) {
 
 // What a project costs and what work it schedules, the same on every page. Without rules these are
 // its scope items; job.js sets its rules when the app starts (drawn trim, markups, the carpenter's
-// days), so PROJECTS, ESTIMATE, SCHEDULE, the program and the one-pager agree.
+// days), so ESTIMATE, SCHEDULE, the program and the one-pager agree.
 let costRule = null, workRule = null;
 export function setProjectRules({ cost = null, work = null } = {}) { costRule = cost; workRule = work; }
 export function projectTotals(pr) {

@@ -194,8 +194,10 @@ const field = (label, key, placeholder = '') => `<div class="field"><label for="
 function render() {
   if (!root) return;
   const items = allScopeItems();
+  // A scope item's place as ESTIMATE shows it: the job, then the room (its subproject).
+  const jobRoom = project => { const parent = project.parentId && ws.data.projects.find(x => x.id === project.parentId); return parent ? `${parent.name} › ${project.name}` : project.name; };
   root.innerHTML = `<div class="view-scroll research-view">
-    <div class="view-head"><span class="view-title">MATERIAL & FIXTURE RESEARCH</span><span class="view-sub">Find products, compare evidence and save selections to your digital twin.</span></div>
+    <div class="view-head"><span class="view-title">FIND A PRODUCT</span><span class="view-sub">Find products, compare evidence and save selections to your digital twin.</span></div>
     <div class="research-layout"><form class="card research-brief">
       <button type="button" class="btn" data-history>RESEARCH HISTORY</button>
       <h3 class="kicker">${context.name ? 'RESEARCH THIS SELECTION' : 'RESEARCH BRIEF'}</h3>
@@ -208,7 +210,7 @@ function render() {
       <div class="field"><label for="research-specifications">Required specifications</label><textarea id="research-specifications" data-brief="specifications" maxlength="1000" placeholder="Performance, installation, certifications or compatibility">${esc(draft.specifications)}</textarea></div>
       <div class="field"><label for="research-mode">Research depth</label><select id="research-mode" data-brief="mode"><option value="focused" ${draft.mode === 'focused' ? 'selected' : ''}>Focused agent</option><option value="team" ${draft.mode === 'team' ? 'selected' : ''}>Deep specialist team</option></select></div>
       <p class="research-hint">Focused research finds candidates and sources. A team investigates fit, suppliers and pricing, sustainability and reviews, then reconciles findings.</p>
-      <div class="field"><label for="research-scope">Link saved selections to scope items</label><select id="research-scope" data-scope multiple size="${Math.min(6, Math.max(2, items.length))}">${items.map(({ project, item }) => `<option value="${esc(item.id)}" ${draft.itemIds.includes(item.id) ? 'selected' : ''}>${esc(project.name)} / ${esc(item.name)}</option>`).join('')}</select></div>
+      <div class="field"><label for="research-scope">Link saved selections to scope items</label><select id="research-scope" data-scope multiple size="${Math.min(6, Math.max(2, items.length))}">${items.map(({ project, item }) => `<option value="${esc(item.id)}" ${draft.itemIds.includes(item.id) ? 'selected' : ''}>${esc(jobRoom(project))} › ${esc(item.name)}</option>`).join('')}</select></div>
       ${context.materialId ? '<p class="research-hint">Saved products also link to the selected material.</p>' : ''}
       <p class="research-hint" data-availability role="status"></p>
       <button class="btn primary" data-start type="submit">START RESEARCH</button>

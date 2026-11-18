@@ -14,15 +14,7 @@
 }
 
 /* ---------- mode bar (top centre) ---------- */
-.v-modes {
-  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 2px; padding: 4px;
-  border-radius: 999px; z-index: 5;
-  background: rgba(12, 16, 19, 0.66);
-  -webkit-backdrop-filter: blur(12px) saturate(1.2); backdrop-filter: blur(12px) saturate(1.2);
-  border: 1px solid rgba(139, 154, 167, 0.22);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-}
+
 .v-pill {
   background: transparent; border: 0; color: var(--dim); cursor: pointer; white-space: nowrap;
   font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; padding: 6px 12px; border-radius: 999px;
@@ -231,7 +223,6 @@ html.touch .v-light-list summary { padding: 8px 0; }
 .v-pin-row img { width: 40px; height: 30px; object-fit: cover; border-radius: 3px; border: 1px solid var(--line-2); }
 .v-pin-row .v-pin-name { flex: 1; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .v-pin-row .btn { width: auto; margin: 0; }
-.tool-col .v-scan-row { font-size: 10px; }
 .inspector .field input[type=range] { width: 100%; accent-color: var(--accent); }
 .inspector .field textarea { min-height: 44px; }
 
@@ -272,8 +263,6 @@ html.touch .v-light-list summary { padding: 8px 0; }
 .v-note-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .v-note-actions .btn { width: auto; margin: 0; }
 .v-note-chip { flex: none; width: 18px; height: 18px; border-radius: 2px; background: #f5d66a; box-shadow: inset -5px -5px 0 -2px #d9b84a; }
-
-.v-modes { max-width: calc(100% - 24px); flex-wrap: wrap; justify-content: center; width: max-content; border-radius: 20px; }
 .v-xray-control { position: absolute; top: calc(100% + 8px); display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 16px; background: rgba(12, 16, 19, 0.88); border: 1px solid var(--line-2); color: var(--dim); font: 9px var(--mono); white-space: nowrap; }
 .v-xray-range { width: 110px; accent-color: var(--accent); }
 .v-xray-control output { min-width: 32px; color: var(--accent); }
@@ -307,8 +296,7 @@ html.touch .v-light-list summary { padding: 8px 0; }
 .v-cams .stat-line.small { font-size: 11px; opacity: 0.85; }
 
 /* TAGS: the tool column's show/hide rows and the inspector's tag list. */
-.tool-col .v-tag-btn { font-size: 10px; }
-.tool-col .v-tag-btn .v-tag-dot { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 8px; margin-right: 6px; border: 1px solid var(--line-2); }
+
 .v-tags .v-tag-row { display: grid; grid-template-columns: 26px 22px minmax(0, 1fr) auto auto 24px; gap: 6px; align-items: center; padding: 3px 0; }
 .v-tags .v-tag-phases { display: inline-flex; gap: 3px; }
 .v-tags .v-tag-phase { width: 22px; height: 22px; padding: 0; font: 600 10px var(--mono, monospace); border: 1px solid var(--line-2); border-radius: 4px; background: transparent; color: var(--faint); text-decoration: line-through; cursor: pointer; }
@@ -353,17 +341,16 @@ html.touch .v-light-list summary { padding: 8px 0; }
 @media (pointer: coarse) {
   .v-view-tab, .v-view-add, .v-view-edit, .v-view-name { height: 44px; }
   .v-view-name { font-size: 16px; }   /* 16px: a phone or tablet does not zoom into the box */
-  .v-wrap.v-views-on .v-modes { top: 64px; }
+  
 }
 .v-view-add svg { width: 14px; height: 14px; }
 .v-view-add span { letter-spacing: 0.12em; }
-.v-wrap.v-views-on .v-modes { top: 52px; }
 
 /* The left column folds away when the Tiksi menu has none of its groups on the screen. */
 @media (min-width: 761px) { .editor-layout.v-no-tools { grid-template-columns: minmax(0, 1fr) var(--side-w, 272px); } }
-.editor-layout.v-no-tools > .tool-col { display: none; }
 @media (max-width: 760px) { .editor-layout.v-no-tools { grid-template: minmax(300px, 55vh) auto / minmax(0, 1fr); } }
-.v-modes[hidden], .v-compass[hidden], .v-views[hidden] { display: none; }
+.v-compass[hidden],
+.v-views[hidden] { display: none; }
 
 /* ---------- component list: a panel floating over the left of the model (js/object-list.js) ---------- */
 .v-objects {
@@ -422,14 +409,19 @@ html.phone .v-objects { display: none !important; }
 /* While the list is on the screen, the bars centred over the model are centred over what is
    left of it, so the list never covers the view bar, the section bar, a message or a progress card. */
 .v-wrap { --list-w: 286px; }
-.v-wrap.v-list-on .v-modes, .v-wrap.v-list-on .v-sections, .v-wrap.v-list-on .v-toast, .v-wrap.v-list-on .v-progress { left: calc(50% + (var(--list-w) + 12px) / 2); }
+.v-wrap.v-list-on .v-sections,
+.v-wrap.v-list-on .v-toast,
+.v-wrap.v-list-on .v-progress { left: calc(50% + (var(--list-w) + 12px) / 2); }
 .v-wrap.v-list-on .v-sections { max-width: calc(100% - var(--list-w) - 36px); }
 /* The view bar shares the top edge with the compass on the right: it keeps clear of both. */
-.v-wrap.v-list-on .v-modes { left: calc(50% + (var(--list-w) - 68px) / 2); max-width: calc(100% - var(--list-w) - 116px); }
+
 .v-wrap.v-list-on .v-toast { max-width: calc(70% - var(--list-w) / 2); }
 .v-objects { width: var(--list-w); }
 /* A container cannot restyle itself from its own query: the narrower list is set on the parts. */
-@container (max-width: 760px) { .v-objects, .v-modes, .v-sections, .v-toast, .v-progress { --list-w: 228px; } }
+@container (max-width: 760px) { .v-objects,
+.v-sections,
+.v-toast,
+.v-progress { --list-w: 228px; } }
 /* A panel opened on purpose (lighting and sun) sits over the list. */
 .v-env.open { z-index: 7; }
 

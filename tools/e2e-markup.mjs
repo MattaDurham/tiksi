@@ -78,7 +78,7 @@ try {
   {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, acceptDownloads: true });
     const { page, errors } = await open(context, 'model');
-    await page.locator('.v-modes [data-mode=top]').click();
+    await page.locator('#side [data-act=top-mode]').click();
     await delay(900);   // the camera flight to the top view
     const box = await page.locator('canvas.v-canvas').boundingBox();
     const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
@@ -256,7 +256,7 @@ try {
     const { page, errors } = await open(context, 'model');
     const cdp = await context.newCDPSession(page);
     const touch = touchOf(cdp), pen = penOf(cdp);
-    await page.locator('.v-modes [data-mode=orbit]').waitFor();
+    await page.locator('#side [data-act=orbit]').waitFor();
     await delay(900);
     const box = await page.locator('canvas.v-canvas').boundingBox();
     const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
@@ -341,7 +341,7 @@ try {
   {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
     const { page, errors } = await open(context, 'model');
-    await page.locator('.v-modes [data-mode=top]').click();
+    await page.locator('#side [data-act=top-mode]').click();
     await delay(900);
     await page.locator('#side [data-act=markup]').click();
     await page.locator('.mk-bar').waitFor();

@@ -172,7 +172,8 @@ try {
     assert.deepEqual(back, [['Base cabinet', 2], ['Hinge', 4], ['Screw #8', 12], ['Wine bottle', 300]], 'an SKP export keeps the components and their nesting');
   }
   // MATERIALS: say what a material is, its colour and its product; the card shows it.
-  await page.locator('#rail a[data-view=materials]').click();
+  await page.locator('#rail a[data-view=products]').click();
+  await page.locator('[data-part=materials]').click();
   // Building the page synthesises textures and draws every swatch; on a slow software-GL
   // runner that blocks input for many seconds. Wait until it has settled, then click.
   await page.waitForFunction(async () => (await import('/js/textures.js')).pendingTextureJobs() === 0

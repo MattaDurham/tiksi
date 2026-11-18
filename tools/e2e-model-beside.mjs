@@ -57,8 +57,8 @@ try {
     mo.observe(document.querySelector('#view'), { childList: true, subtree: true });
   }));
 
-  await page.goto(url + '/#/projects'); await page.reload();
-  await page.locator('.proj-card').first().waitFor();
+  await page.goto(url + '/#/estimate?project=' + ids.bath); await page.reload();
+  await page.locator('.es-rooms').waitFor();
   await settle();
   assert.equal(await page.locator('#beside').isHidden(), true, 'the model is not beside the page until asked for');
 
@@ -75,9 +75,8 @@ try {
   assert.equal(await page.locator('#beside .v-objects').isVisible(), false, 'the component list stays with MODEL');
   assert.equal(await page.locator('#side').isVisible(), false, 'the model does not take over the left pane');
 
-  // ---------- opening a project outlines what it is linked to, and brings it into view ----------
+  // ---------- the project shown is outlined when the model opens beside it, and brought into view ----------
   const before = await cam();
-  await page.locator('.proj-card', { hasText: 'Primary bath refresh' }).click();
   await page.waitForFunction(async want => {
     const s = (await import('/js/viewer3d.js')).selectionState();
     return s && want.every(id => s.things.includes(id)) && s.things.length === want.length;
@@ -90,25 +89,25 @@ try {
     return Math.hypot(p[0] - was[0], p[1] - was[1], p[2] - was[2]) > 0.5;
   }, before);
   await page.waitForTimeout(900);   // the camera's flight
-  assert.equal(new URL(page.url()).hash, '#/projects', 'the page stays PROJECTS');
+  assert.ok(new URL(page.url()).hash.startsWith('#/estimate'), 'the page stays ESTIMATE');
 
   // ---------- clicking into a scope item outlines only its own elements ----------
-  await page.locator(`tr[data-item="${ids.item}"] [data-if="name"]`).click();
+  if (!await page.locator(`tr[data-si="${ids.item}"]`).count()) await page.locator('tr[data-room="other"] td:first-child').click();
+  await page.locator(`tr[data-si="${ids.item}"] .si-more`).click();
   await page.waitForFunction(async want => {
     const s = (await import('/js/viewer3d.js')).selectionState();
     return s && s.things.length === want.length && want.every(id => s.things.includes(id));
   }, ids.walls);
 
   // ---------- a link to an element selects it beside the page instead of leaving ----------
-  await page.locator(`tr[data-item="${ids.item}"] .it-links`).click();
-  const chip = page.locator(`tr[data-more="${ids.item}"] a[href="#/model?select=${encodeURIComponent(ids.walls[1])}"]`);
+  const chip = page.locator(`#es-dbody a[href="#/model?select=${encodeURIComponent(ids.walls[1])}"]`);
   await chip.click();
   await page.waitForFunction(async id => { const s = (await import('/js/viewer3d.js')).selectionState(); return s && s.id === id && s.things.length === 1; }, ids.walls[1]);
-  assert.equal(new URL(page.url()).hash, '#/projects', 'the link did not open MODEL');
+  assert.ok(new URL(page.url()).hash.startsWith('#/estimate'), 'the link did not open MODEL');
 
   // ---------- the keys stay with the page until the model is clicked ----------
   await page.evaluate(async id => (await import('/js/model-focus.js')).showInModel([id], { frame: false }), ids.walls[0]);
-  await page.locator('#proj-detail .card').first().click({ position: { x: 6, y: 6 } });
+  await page.locator('.es-head .es-kicker').click();
   await page.keyboard.press('Backspace');
   await page.keyboard.press('t');
   assert.ok(await page.evaluate(async id => (await import('/js/store.js')).activeProperty().walls.some(w => w.id === id), ids.walls[0]),
@@ -153,7 +152,7 @@ try {
   await page.waitForFunction(() => location.hash === '#/model' && !!document.querySelector('#view canvas'));
   assert.equal(await page.locator('#beside').isHidden(), true, 'MODEL shows the model once, as the page');
   assert.equal((await sel()).beside, false);
-  await page.click('#rail a[data-view="projects"]');
+  await page.click('#rail a[data-view="estimate"]');
   await page.locator('#beside canvas').waitFor();
   await page.waitForFunction(async () => ((await import('/js/viewer3d.js')).selectionState() || {}).things?.length > 0);
 
@@ -163,7 +162,7 @@ try {
   await page.waitForFunction(() => location.hash === '#/model' && !!document.querySelector('#view canvas'));
   const kept = await cam();
   assert.ok(Math.hypot(kept[0] - there[0], kept[1] - there[1], kept[2] - there[2]) < 0.05, 'MODEL opens on the view the pane showed');
-  await page.click('#rail a[data-view="projects"]');
+  await page.click('#rail a[data-view="estimate"]');
   await page.locator('#beside canvas').waitFor();
   await page.click('#beside [data-bs-close]');
   assert.equal(await page.locator('#beside').isHidden(), true);

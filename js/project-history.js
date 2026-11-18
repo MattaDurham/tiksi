@@ -1,5 +1,5 @@
 // Undo and redo for a property's projects: their scope items, prices, subprojects and estimate
-// settings, bids and terms, whichever page changed them (PROJECTS, ESTIMATE, DOCUMENTS, the model's
+// settings, bids and terms, whichever page changed them (ESTIMATE, SCHEDULE, DOCUMENTS, the model's
 // ADD TO menu). MODEL and MEASURE keep their own geometry history (edit-history.js).
 //
 // After each change made on this device the property's projects are compared with how they were;
