@@ -1871,7 +1871,7 @@ export const OPTIONS = {
    "per_lf": 2.42,
    "seen": "2026-11-17",
    "url": "https://www.lowes.com/search?searchTerm=61009",
-   "notes": "$29.00 per 12 ft, delivered (not stocked at Yonkers); 8 ft $24.38."
+   "notes": "$29.00 per 12 ft, delivered (not stocked at the store checked); 8 ft $24.38."
   },
   {
    "role": "1x6",
@@ -1931,7 +1931,7 @@ export const OPTIONS = {
    "per_lf": 1.62,
    "seen": "2026-11-17",
    "url": "https://www.lowes.com/search?searchTerm=61008",
-   "notes": "$19.42 per 12 ft, delivered (not stocked at Yonkers); 8 ft $15.78."
+   "notes": "$19.42 per 12 ft, delivered (not stocked at the store checked); 8 ft $15.78."
   },
   {
    "role": "1x4",
