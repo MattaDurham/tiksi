@@ -9,7 +9,7 @@
 // Addresses: #/estimate?project=<id>, #/estimate?program, and the old #/budget (the program).
 
 import {
-  ws, touch, onChange, activeProperty, propertyProjects, projectById, escapeHtml, fmtMoney, fmtLen, readMoney, uid, isoToday, fmtDate,
+  ws, touch, onChange, activeProperty, propertyProjects, projectById, escapeHtml, fmtLen, readMoney, uid, isoToday, fmtDate,
 } from './store.js';
 import { jobOf, rootOf, setJobSetting, JOB_DEFAULTS } from './job.js';
 import { programTotals, lastWorkDay, workday } from './program.js';
@@ -23,11 +23,13 @@ import { icon } from './icons.js';
 
 const IN = 0.0254;
 const esc = escapeHtml;
+// Whole dollars everywhere on the page, so a column reads alike; a single board's price keeps its cents.
+const fm = v => (v < 0 ? '-' : '') + '$' + Math.abs(Math.round(Number(v) || 0)).toLocaleString('en-US');
 const m2 = v => '$' + (Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const hrs = v => (Math.round((Number(v) || 0) * 10) / 10).toFixed(1);
 const pct = v => +(v * 100).toFixed(3) + '%';
 const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many || one + 's');
-const range = t => t.low === t.high ? '' : `${fmtMoney(t.low)} to ${fmtMoney(t.high)}`;
+const range = t => t.low === t.high ? '' : `${fm(t.low)} to ${fm(t.high)}`;
 const lenIn = inches => fmtLen(inches * IN);
 
 let el = null, off = null, timer = null;
@@ -69,9 +71,9 @@ function render(keep) {
   const tops = propertyProjects().filter(p => !p.parentId);
   const scroll = keep ? el.querySelector('.es-main')?.scrollTop || 0 : 0;
   const nav = `<nav class="es-nav" aria-label="Jobs">
-      <a class="es-job ${t.program ? 'here' : ''}" href="#/estimate?program" data-program><span>All projects</span><span class="m">${fmtMoney(programTotals(propertyProjects()).likely)}</span></a>
+      <a class="es-job ${t.program ? 'here' : ''}" href="#/estimate?program" data-program><span>All projects</span><span class="m">${fm(programTotals(propertyProjects()).likely)}</span></a>
       <div class="gl">Projects</div>
-      ${tops.map(p => { const j = jobOf(p); return `<a class="es-job ${t.id === p.id ? 'here' : ''}" href="#/estimate?project=${encodeURIComponent(p.id)}" data-job="${esc(p.id)}"><span>${esc(p.name || 'Project')}</span><span class="m">${j ? fmtMoney(j.price.likely) : ''}</span></a>`; }).join('') || '<p class="note">No projects yet: make one in PROJECTS.</p>'}
+      ${tops.map(p => { const j = jobOf(p); return `<a class="es-job ${t.id === p.id ? 'here' : ''}" href="#/estimate?project=${encodeURIComponent(p.id)}" data-job="${esc(p.id)}"><span>${esc(p.name || 'Project')}</span><span class="m">${j ? fm(j.price.likely) : ''}</span></a>`; }).join('') || '<p class="note">No projects yet: make one in PROJECTS.</p>'}
     </nav>`;
   el.innerHTML = `<div class="es">${nav}<main class="es-main"><div class="es-in" id="es-in"></div></main>
     <aside class="es-det" aria-label="Details"><div class="es-dbar"><button type="button" data-back aria-label="Back" disabled>‹</button><span class="crumb" id="es-crumb">Details</span><button type="button" data-close aria-label="Close">×</button></div><div class="es-dbody" id="es-dbody"></div></aside></div>`;
@@ -95,10 +97,10 @@ function renderJob(inner, job, prop) {
   const rows = job.rooms.filter(r => r.trim.length || r.items.length);
   const head = `<header class="es-head"><div class="es-kicker">${esc(prop ? prop.name || '' : '')}</div><h1>${esc(root.name || 'Project')}</h1>
     <div class="es-figs">
-      <div class="big" data-d="cost:price"><b>${fmtMoney(job.price.likely)}</b><span>price${range(job.price) ? ', ' + range(job.price) : ''}</span></div>
+      <div class="big" data-d="cost:price"><b>${fm(job.price.likely)}</b><span>price${range(job.price) ? ', ' + range(job.price) : ''}</span></div>
       <div data-d="cost:hours"><b>${trim ? hrs(job.hours.likely) : '–'}</b><span>carpenter hours</span></div>
       <div data-d="cost:days"><b>${days || '–'}</b><span>${days ? `working days, ${fmtDate(workday(start, 0))} to ${fmtDate(lastWorkDay(start, days))}` : 'working days'}</span></div>
-      <div data-d="cost:order"><b>${trim ? order : '–'}</b><span>${trim ? `boards to buy, ${fmtMoney(job.boards)}` : 'boards to buy'}</span></div>
+      <div data-d="cost:order"><b>${trim ? order : '–'}</b><span>${trim ? `boards to buy, ${fm(job.boards)}` : 'boards to buy'}</span></div>
     </div>
     <div class="es-acts"><a class="btn small" href="#/schedule?project=${encodeURIComponent(root.id)}">${icon('schedule')}SCHEDULE</a><a class="btn small" href="#/documents?job=${encodeURIComponent(root.id)}">${icon('print')}DOCUMENTS</a></div></header>`;
   const warn = [
@@ -109,31 +111,31 @@ function renderJob(inner, job, prop) {
     const has = r.trim.length > 0;
     return `<tr class="es-room ${open.has(r.key) ? 'open' : ''}" data-room="${esc(r.key)}" tabindex="0" aria-expanded="${open.has(r.key)}">
       <td><span class="tw">${open.has(r.key) ? '▾' : '▸'}</span><b>${esc(r.name)}</b>${r.project === root && !has ? '' : ''}</td>
-      <td class="num">${has ? Math.round(r.trimLf) : ''}</td><td class="num">${has ? r.pieces : ''}</td><td class="num">${has ? fmtMoney(r.boards) : ''}</td><td class="num">${has ? fmtMoney(r.supplies) : ''}</td>
-      <td class="num">${has ? hrs(r.hours.likely) : ''}</td><td class="num">${has ? fmtMoney(r.labor.likely) : ''}</td><td class="num">${r.itemCost.high ? fmtMoney(r.itemCost.likely) : ''}</td>
-      <td class="num">${r.days || ''}</td><td class="num"><b>${fmtMoney(r.price.likely)}</b></td></tr>
+      <td class="num">${has ? Math.round(r.trimLf) : ''}</td><td class="num">${has ? r.pieces : ''}</td><td class="num">${has ? fm(r.boards) : ''}</td><td class="num">${has ? fm(r.supplies) : ''}</td>
+      <td class="num">${has ? hrs(r.hours.likely) : ''}</td><td class="num">${has ? fm(r.labor.likely) : ''}</td><td class="num">${r.itemCost.high ? fm(r.itemCost.likely) : ''}</td>
+      <td class="num">${r.days || ''}</td><td class="num"><b>${fm(r.price.likely)}</b></td></tr>
       ${open.has(r.key) ? `<tr class="es-open"><td colspan="10">${roomBody(job, r)}</td></tr>` : ''}`;
   };
-  const otherRow = job.other.items.length ? `<tr class="es-room ${open.has('other') ? 'open' : ''}" data-room="other" tabindex="0"><td><span class="tw">${open.has('other') ? '▾' : '▸'}</span><b>Project-wide items</b></td><td colspan="6"></td><td class="num">${fmtMoney(job.other.itemCost.likely)}</td><td></td><td class="num"><b>${fmtMoney(job.other.price.likely)}</b></td></tr>
+  const otherRow = job.other.items.length ? `<tr class="es-room ${open.has('other') ? 'open' : ''}" data-room="other" tabindex="0"><td><span class="tw">${open.has('other') ? '▾' : '▸'}</span><b>Project-wide items</b></td><td colspan="6"></td><td class="num">${fm(job.other.itemCost.likely)}</td><td></td><td class="num"><b>${fm(job.other.price.likely)}</b></td></tr>
       ${open.has('other') ? `<tr class="es-open"><td colspan="10">${itemsTable(job.other.items)}</td></tr>` : ''}` : '';
   const table = `<section class="es-sec"><h2>Rooms</h2>
     <div class="es-tbl"><table class="es-t"><thead><tr><th>Room</th><th class="num">Trim LF</th><th class="num">Pieces</th><th class="num">Boards</th><th class="num">Supplies</th><th class="num">Hours</th><th class="num">Labor</th><th class="num">Scope items</th><th class="num">Days</th><th class="num">Price</th></tr></thead>
     <tbody>${rows.map(roomRow).join('')}${otherRow}${rows.length || otherRow ? '' : '<tr><td colspan="10" class="note">Nothing to price: draw trim for this project in MODEL (each section in a room\'s subproject), or add scope items in PROJECTS.</td></tr>'}</tbody>
-    <tfoot><tr><td>Total</td><td class="num">${trim ? Math.round(job.rooms.reduce((n, r) => n + r.trimLf, 0)) : ''}</td><td class="num">${trim ? job.rooms.reduce((n, r) => n + r.pieces, 0) : ''}</td><td class="num">${trim ? fmtMoney(job.boards) : ''}</td><td class="num">${trim ? fmtMoney(job.supplies) : ''}</td><td class="num">${trim ? hrs(job.hours.likely) : ''}</td><td class="num">${trim ? fmtMoney(job.labor.likely) : ''}</td><td class="num">${fmtMoney(job.itemCost.likely)}</td><td class="num">${days || ''}</td><td class="num">${fmtMoney(job.price.likely)}</td></tr></tfoot></table></div>
+    <tfoot><tr><td>Total</td><td class="num">${trim ? Math.round(job.rooms.reduce((n, r) => n + r.trimLf, 0)) : ''}</td><td class="num">${trim ? job.rooms.reduce((n, r) => n + r.pieces, 0) : ''}</td><td class="num">${trim ? fm(job.boards) : ''}</td><td class="num">${trim ? fm(job.supplies) : ''}</td><td class="num">${trim ? hrs(job.hours.likely) : ''}</td><td class="num">${trim ? fm(job.labor.likely) : ''}</td><td class="num">${fm(job.itemCost.likely)}</td><td class="num">${days || ''}</td><td class="num">${fm(job.price.likely)}</td></tr></tfoot></table></div>
     <p class="note">Each room is cut from its own boards, so its cut list stands alone. Boards are bought at the cheapest store length that holds their cuts; the buy list adds ${plural(s.sparePerMoulding, 'spare board')} of each moulding. Hours come from published production rates counted from the drawing. Click a room to see its walls, boards and cut list.</p></section>`;
   const set = (key, label, value, unit, step) => `<label class="es-set"><span>${esc(label)}</span><span><input type="number" min="0" step="${step}" inputmode="decimal" data-set="${key}" value="${value}">${unit ? `<i>${unit}</i>` : ''}</span></label>`;
-  const line = (label, v, k, sub) => `<tr data-d="cost:${k}"><td>${esc(label)}${sub ? `<span class="note"> ${esc(sub)}</span>` : ''}</td><td class="num">${fmtMoney(v.low)}</td><td class="num">${fmtMoney(v.likely)}</td><td class="num">${fmtMoney(v.high)}</td></tr>`;
+  const line = (label, v, k, sub) => `<tr data-d="cost:${k}"><td>${esc(label)}${sub ? `<span class="note"> ${esc(sub)}</span>` : ''}</td><td class="num">${fm(v.low)}</td><td class="num">${fm(v.likely)}</td><td class="num">${fm(v.high)}</td></tr>`;
   const one = v => ({ low: v, likely: v, high: v });
   const build = `<section class="es-sec"><h2>How the price is built</h2>
     <div class="es-sets">${set('laborRate', 'Carpenter rate', s.laborRate, '$/hr', 1)}${set('contingency', 'Contingency', +(s.contingency * 100).toFixed(2), '%', 1)}${set('markup', 'Overhead and profit', +(s.markup * 100).toFixed(2), '%', 1)}${set('taxRate', 'Tax on materials', +(s.taxRate * 100).toFixed(3), '%', 0.125)}${set('sparePerMoulding', 'Spare boards each', s.sparePerMoulding, '', 1)}</div>
     <div class="es-tbl"><table class="es-t es-build"><thead><tr><th></th><th class="num">Low</th><th class="num">Likely</th><th class="num">High</th></tr></thead><tbody>
-      ${trim ? line('Boards and supplies', one(job.materials), 'materials', `${order} boards, supplies counted from the job`) + line('Carpenter', job.labor, 'labor', `${hrs(job.hours.likely)} hrs at ${fmtMoney(s.laborRate)}/hr; low and high from the rates' range`) : ''}
+      ${trim ? line('Boards and supplies', one(job.materials), 'materials', `${order} boards, supplies counted from the job`) + line('Carpenter', job.labor, 'labor', `${hrs(job.hours.likely)} hrs at ${fm(s.laborRate)}/hr; low and high from the rates' range`) : ''}
       ${job.itemCost.high ? line('Scope items', job.itemCost, 'items', 'priced in PROJECTS') : ''}
-      <tr class="sub"><td>Cost</td><td class="num">${fmtMoney(job.cost.low)}</td><td class="num">${fmtMoney(job.cost.likely)}</td><td class="num">${fmtMoney(job.cost.high)}</td></tr>
+      <tr class="sub"><td>Cost</td><td class="num">${fm(job.cost.low)}</td><td class="num">${fm(job.cost.likely)}</td><td class="num">${fm(job.cost.high)}</td></tr>
       ${s.contingency ? line(`Contingency ${pct(s.contingency)}`, job.contingency, 'contingency') : ''}
       ${s.markup ? line(`Overhead and profit ${pct(s.markup)}`, job.markup, 'markup') : ''}
-      ${s.taxRate ? line(`Tax ${pct(s.taxRate)} on ${fmtMoney(job.materials)} of materials`, one(job.tax), 'tax') : ''}
-      <tr class="tot"><td>Price</td><td class="num">${fmtMoney(job.price.low)}</td><td class="num">${fmtMoney(job.price.likely)}</td><td class="num">${fmtMoney(job.price.high)}</td></tr></tbody></table></div></section>`;
+      ${s.taxRate ? line(`Tax ${pct(s.taxRate)} on ${fm(job.materials)} of materials`, one(job.tax), 'tax') : ''}
+      <tr class="tot"><td>Price</td><td class="num">${fm(job.price.low)}</td><td class="num">${fm(job.price.likely)}</td><td class="num">${fm(job.price.high)}</td></tr></tbody></table></div></section>`;
   inner.innerHTML = head + warn + table + build + bidsHtml(job);
   bindJob(inner, job);
 }
@@ -159,14 +161,14 @@ function roomBody(job, r) {
 }
 const fmtQ = q => Math.abs(q - Math.round(q)) < 1e-9 ? String(Math.round(q)) : (Math.round(q * 10) / 10).toString();
 const itemsTable = items => `<div class="es-tbl"><table class="es-t"><thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Low</th><th class="num">Likely</th><th class="num">High</th><th class="num">Days</th></tr></thead><tbody>
-  ${items.map(it => { const q = it.qty ?? 1; return `<tr data-d="item:${esc(it.id)}"><td>${esc(it.name || 'Item')}</td><td class="num">${fmtQ(q)} ${esc(it.unit || '')}</td><td class="num">${fmtMoney((it.low || 0) * q)}</td><td class="num">${fmtMoney((it.likely || 0) * q)}</td><td class="num">${fmtMoney((it.high || 0) * q)}</td><td class="num">${it.durationDays || ''}</td></tr>`; }).join('')}</tbody></table></div>`;
+  ${items.map(it => { const q = it.qty ?? 1; return `<tr data-d="item:${esc(it.id)}"><td>${esc(it.name || 'Item')}</td><td class="num">${fmtQ(q)} ${esc(it.unit || '')}</td><td class="num">${fm((it.low || 0) * q)}</td><td class="num">${fm((it.likely || 0) * q)}</td><td class="num">${fm((it.high || 0) * q)}</td><td class="num">${it.durationDays || ''}</td></tr>`; }).join('')}</tbody></table></div>`;
 
 function bidsHtml(job) {
   const root = job.root, bids = root.bids || [], labor = job.labor.likely;
   return `<section class="es-sec"><h2>Bids received</h2>
-    <p class="note">What carpenters quote for the labor on the installer bid form (DOCUMENTS), beside the estimate's ${fmtMoney(labor)} for ${hrs(job.hours.likely)} hours.</p>
+    <p class="note">What carpenters quote for the labor on the installer bid form (DOCUMENTS), beside the estimate's ${fm(labor)} for ${hrs(job.hours.likely)} hours.</p>
     ${bids.length ? `<div class="es-tbl"><table class="es-t"><thead><tr><th>Bidder</th><th>Date</th><th class="num">Hours</th><th class="num">Amount</th><th class="num">Against the estimate</th><th></th></tr></thead><tbody>
-      ${bids.map(b => { const d = (Number(b.amount) || 0) - labor; return `<tr><td><b>${esc(b.who)}</b>${b.scope ? `<span class="note"> ${esc(b.scope)}</span>` : ''}</td><td>${esc(b.date ? fmtDate(b.date) : '')}</td><td class="num">${b.hours ? hrs(b.hours) : ''}</td><td class="num">${fmtMoney(Number(b.amount) || 0)}</td><td class="num ${d > 0 ? 'over' : 'under'}">${labor ? (d >= 0 ? '+' : '−') + fmtMoney(Math.abs(d)) : ''}</td><td><button class="btn small ghost" data-del-bid="${esc(b.id)}">REMOVE</button></td></tr>`; }).join('')}</tbody></table></div>` : ''}
+      ${bids.map(b => { const d = (Number(b.amount) || 0) - labor; return `<tr><td><b>${esc(b.who)}</b>${b.scope ? `<span class="note"> ${esc(b.scope)}</span>` : ''}</td><td>${esc(b.date ? fmtDate(b.date) : '')}</td><td class="num">${b.hours ? hrs(b.hours) : ''}</td><td class="num">${fm(Number(b.amount) || 0)}</td><td class="num ${d > 0 ? 'over' : 'under'}">${labor ? (d >= 0 ? '+' : '−') + fm(Math.abs(d)) : ''}</td><td><button class="btn small ghost" data-del-bid="${esc(b.id)}">REMOVE</button></td></tr>`; }).join('')}</tbody></table></div>` : ''}
     <form class="es-bid" data-add-bid><input name="who" placeholder="Bidder" required aria-label="Bidder"><input name="hours" type="number" min="0" step="0.5" placeholder="Hours" aria-label="Hours"><input name="amount" placeholder="Amount" required aria-label="Amount"><input name="scope" placeholder="What it covers" aria-label="What it covers"><button class="btn small" type="submit">ADD BID</button></form></section>`;
 }
 
@@ -254,12 +256,12 @@ function detail(key, job) {
     const lines = t.rooms.flatMap(r => (r.labor || []).filter(l => l.task === id).map(l => ({ room: r.name, ...l })));
     const h = lines.reduce((n, l) => n + l.hours, 0);
     return { kind: 'Labor', title: esc(task.label), sub: `${task.hours} hrs per ${esc(task.unit_one || task.unit)} (low ${task.low ?? task.hours}, high ${task.high ?? task.hours})`,
-      html: kv([['This job', `${hrs(h)} hrs, ${fmtMoney(h * s.laborRate)}`]]) + `<ul>${lines.map(l => `<li>${esc(l.room)}: ${fmtQ(l.qty)} ${esc(l.unit)} → ${hrs(l.hours)} hrs</li>`).join('')}</ul><h4>Where the rate comes from</h4><p>${esc(task.basis || '')}</p><p class="note">${esc(task.source || '')}</p>` };
+      html: kv([['This job', `${hrs(h)} hrs, ${fm(h * s.laborRate)}`]]) + `<ul>${lines.map(l => `<li>${esc(l.room)}: ${fmtQ(l.qty)} ${esc(l.unit)} → ${hrs(l.hours)} hrs</li>`).join('')}</ul><h4>Where the rate comes from</h4><p>${esc(task.basis || '')}</p><p class="note">${esc(task.source || '')}</p>` };
   }
   if (kind === 'item') {
     const hit = job.tree.flatMap(x => (x.items || []).map(it => ({ x, it }))).find(y => y.it.id === id); if (!hit) return null;
     const { it, x } = hit, q = it.qty ?? 1;
-    return { kind: 'Scope item', title: esc(it.name || 'Item'), sub: esc(x.name), html: kv([['Quantity', `${fmtQ(q)} ${esc(it.unit || '')}`], ['Each', `${fmtMoney(it.low || 0)} / ${fmtMoney(it.likely || 0)} / ${fmtMoney(it.high || 0)}`], ['Days', it.durationDays || ''], ['Notes', esc(it.notes || '')]]) + '<p><a class="btn small" href="#/projects">EDIT IN PROJECTS</a></p>', model: (it.elementIds || []).length ? it.elementIds : null };
+    return { kind: 'Scope item', title: esc(it.name || 'Item'), sub: esc(x.name), html: kv([['Quantity', `${fmtQ(q)} ${esc(it.unit || '')}`], ['Each', `${fm(it.low || 0)} / ${fm(it.likely || 0)} / ${fm(it.high || 0)}`], ['Days', it.durationDays || ''], ['Notes', esc(it.notes || '')]]) + '<p><a class="btn small" href="#/projects">EDIT IN PROJECTS</a></p>', model: (it.elementIds || []).length ? it.elementIds : null };
   }
   if (kind === 'cost') {
     const text = {
@@ -268,7 +270,7 @@ function detail(key, job) {
       days: 'Working days, Monday to Friday, one carpenter: each room takes its hours at 6 productive hours a day, at least a day, and the rooms follow one another in the order the subprojects are listed. SCHEDULE shows the dates.',
       order: 'Boards bought at the cheapest store length that holds their cuts (up to 12\'-0", or 13\'-0" when that buys less), each room from its own boards, plus the spares. The buy list with item numbers is in DOCUMENTS.',
       materials: 'Trim boards and supplies (nails, glue, adhesive, caulk, filler, primer, paint, protection, blades) at the store prices seen on the dates in the data.',
-      labor: `Carpenter hours × ${fmtMoney(s.laborRate)}/hr.`, items: 'Installed prices typed in PROJECTS or taken from the price book, each with its own range.',
+      labor: `Carpenter hours × ${fm(s.laborRate)}/hr.`, items: 'Installed prices typed in PROJECTS or taken from the price book, each with its own range.',
       contingency: 'For what the drawing cannot show: out-of-square walls, hidden conditions, a re-cut.', markup: 'Overhead and profit, on the cost and contingency.', tax: 'Sales tax on the boards and supplies bought. Scope items are installed prices; their tax is in them.',
     }[id];
     return text ? { kind: 'The price', title: esc({ price: 'Price', hours: 'Carpenter hours', days: 'Working days', order: 'Boards to buy', materials: 'Boards and supplies', labor: 'Carpenter', items: 'Scope items', contingency: 'Contingency', markup: 'Overhead and profit', tax: 'Tax' }[id]), html: `<p>${esc(text)}</p>` } : null;
@@ -285,20 +287,20 @@ function renderProgram(inner) {
     const j = jobOf(p), on = p.selected || ws.data.projects.some(x => x.parentId === p.id && x.selected);
     return `<tr><td><label class="es-check"><input type="checkbox" data-sel="${esc(p.id)}" ${on ? 'checked' : ''} aria-label="In the program: ${esc(p.name)}"></label></td>
       <td><a href="#/estimate?project=${encodeURIComponent(p.id)}" data-job="${esc(p.id)}"><b>${esc(p.name || 'Project')}</b></a></td><td>${esc(p.status || '')}</td>
-      <td class="num">${fmtMoney(j.price.low)}</td><td class="num"><b>${fmtMoney(j.price.likely)}</b></td><td class="num">${fmtMoney(j.price.high)}</td><td class="num">${j.schedule.days || ''}</td></tr>`;
+      <td class="num">${fm(j.price.low)}</td><td class="num"><b>${fm(j.price.likely)}</b></td><td class="num">${fm(j.price.high)}</td><td class="num">${j.schedule.days || ''}</td></tr>`;
   }).join('');
   const left = cap - sel.likely;
   inner.innerHTML = `<header class="es-head"><div class="es-kicker">All projects</div><h1>The program</h1>
-    <div class="es-figs"><div class="big"><b>${fmtMoney(sel.likely)}</b><span>in the program${range(sel) ? ', ' + range(sel) : ''}</span></div>
-      <div><b><input type="text" id="cap-input" value="${fmtMoney(cap)}" aria-label="Budget cap"></b><span id="cap-note">budget cap</span></div>
-      <div class="${left < 0 ? 'over' : ''}"><b>${fmtMoney(Math.abs(left))}</b><span>${left < 0 ? 'over the cap' : 'left under the cap'}</span></div></div>
+    <div class="es-figs"><div class="big"><b>${fm(sel.likely)}</b><span>in the program${range(sel) ? ', ' + range(sel) : ''}</span></div>
+      <div><b><input type="text" id="cap-input" value="${fm(cap)}" aria-label="Budget cap"></b><span id="cap-note">budget cap</span></div>
+      <div class="${left < 0 ? 'over' : ''}"><b>${fm(Math.abs(left))}</b><span>${left < 0 ? 'over the cap' : 'left under the cap'}</span></div></div>
     <div class="es-acts"><button class="btn small" id="print-report">${icon('print')}PRINT REPORT</button></div></header>
     <section class="es-sec"><div class="es-tbl"><table class="es-t"><thead><tr><th></th><th>Project</th><th>Status</th><th class="num">Low</th><th class="num">Likely</th><th class="num">High</th><th class="num">Days</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="note">No projects.</td></tr>'}</tbody></table></div>
     <p class="note">A ticked project and its subprojects count in the program. Each price is the project's estimate: drawn trim and scope items with its markups.</p></section>`;
   const capIn = inner.querySelector('#cap-input');
   capIn.onchange = () => {
     const r = readMoney(capIn.value);
-    if (Number.isNaN(r.value)) { inner.querySelector('#cap-note').textContent = r.error + ' The cap is still ' + fmtMoney(cap) + '.'; inner.querySelector('#cap-note').setAttribute('role', 'alert'); return; }
+    if (Number.isNaN(r.value)) { inner.querySelector('#cap-note').textContent = r.error + ' The cap is still ' + fm(cap) + '.'; inner.querySelector('#cap-note').setAttribute('role', 'alert'); return; }
     d.settings.budgetCap = r.value; touch(); render(true);
   };
   inner.querySelectorAll('[data-sel]').forEach(c => c.onchange = () => {
@@ -307,7 +309,7 @@ function renderProgram(inner) {
   });
   inner.querySelectorAll('[data-job]').forEach(a => a.onclick = e => { e.preventDefault(); go({ id: a.dataset.job }); });
   inner.querySelector('#print-report').onclick = () => printSheet(`<div class="sheet"><div class="sheet-page"><div class="s-head"><span class="s-brand">TIKSI</span><span class="s-doc">PROGRAM</span></div>
-    <h1>${esc((activeProperty() || {}).name || '')}: the program</h1><p>Budget cap ${fmtMoney(cap)}; in the program ${fmtMoney(sel.likely)} (${fmtMoney(sel.low)} to ${fmtMoney(sel.high)}); ${left < 0 ? fmtMoney(-left) + ' over' : fmtMoney(left) + ' under'} the cap.</p>
+    <h1>${esc((activeProperty() || {}).name || '')}: the program</h1><p>Budget cap ${fm(cap)}; in the program ${fm(sel.likely)} (${fm(sel.low)} to ${fm(sel.high)}); ${left < 0 ? fm(-left) + ' over' : fm(left) + ' under'} the cap.</p>
     <table class="grid"><thead><tr><th>Project</th><th>In the program</th><th class="num">Low</th><th class="num">Likely</th><th class="num">High</th></tr></thead><tbody>
-    ${tops.map(p => { const j = jobOf(p); return `<tr><td>${esc(p.name)}</td><td>${p.selected ? 'yes' : 'no'}</td><td class="num">${fmtMoney(j.price.low)}</td><td class="num">${fmtMoney(j.price.likely)}</td><td class="num">${fmtMoney(j.price.high)}</td></tr>`; }).join('')}</tbody></table></div></div>`);
+    ${tops.map(p => { const j = jobOf(p); return `<tr><td>${esc(p.name)}</td><td>${p.selected ? 'yes' : 'no'}</td><td class="num">${fm(j.price.low)}</td><td class="num">${fm(j.price.likely)}</td><td class="num">${fm(j.price.high)}</td></tr>`; }).join('')}</tbody></table></div></div>`);
 }

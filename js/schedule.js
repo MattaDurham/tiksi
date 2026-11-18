@@ -17,6 +17,8 @@ import { restoreProjectEdit } from './project-history.js';
 import { icon } from './icons.js';
 
 const esc = escapeHtml;
+// Whole dollars everywhere on the page, so a column reads alike; a single board's price keeps its cents.
+const fm = v => (v < 0 ? '-' : '') + '$' + Math.abs(Math.round(Number(v) || 0)).toLocaleString('en-US');
 const hrs = v => (Math.round((Number(v) || 0) * 10) / 10).toFixed(1);
 const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many || one + 's');
 let el = null, off = null, timer = null, picked = '';
