@@ -26,7 +26,7 @@ const browser = await chromium.launch({ headless: true });
 const viewMarkers = {
   model: 'canvas.v-canvas', materials: '.mv-grid',
   photos: '.ph-grid', projects: '#new-project', products: '#new-prod',
-  budget: '#cap-input', schedule: '#prog-start', sheets: '#sheet-view',
+  estimate: '.es', schedule: '.sc', documents: '.doc-parts',
 };
 async function waitUntil(predicate, message, timeoutMs = 30_000) {
   const deadline = performance.now() + timeoutMs;
@@ -95,11 +95,12 @@ try {
   // The app opens on MODEL; there is no PLAN link.
   assert.equal(await page.evaluate(() => document.querySelector('#rail a.active')?.dataset.view), 'model', 'the desktop opens on MODEL');
   assert.equal(await page.locator('#rail a[data-view="plan"]').count(), 0, 'the rail has no PLAN link');
-  for (const view of ['model','materials','photos','projects','products','budget','schedule','sheets']) {
+  for (const view of ['model','materials','photos','projects','products','estimate','schedule','documents']) {
     await navigateToView(page, view);
     console.log('route checked:', view);
   }
   assert.deepEqual(errors, [], 'all eight desktop routes mount without exceptions');
+  assert.equal(await page.locator('#rail a[data-view="budget"], #rail a[data-view="sheets"]').count(), 0, 'BUDGET and CUT SHEETS are parts of ESTIMATE and DOCUMENTS now');
   await navigateToView(page, 'projects'); await page.locator('#new-project').waitFor();
   await page.locator('#new-project').click();
   await page.locator('#proj-detail [data-f=name]').fill('Synthetic audit project'); await page.locator('#proj-detail [data-f=name]').press('Enter');
@@ -130,11 +131,11 @@ try {
   await page.locator('#prod-done').click();
   assert.ok(await page.evaluate(async () => { const s = await import('/js/store.js'); return s.projectSlice(s.activeProperty().id).products.some(p => p.name === 'Synthetic audit product' && p.itemIds.length === 1); }), 'the new product is linked to the work item and saved with this property');
   assert.ok((await page.locator('#view').innerText()).includes('Synthetic audit product'));
-  await navigateToView(page, 'budget'); await page.locator('#cap-input').waitFor(); await page.locator('#cap-input').fill('50000'); await page.locator('#cap-input').press('Tab');
+  await navigateToView(page, 'estimate'); await page.locator('[data-program]').click(); await page.locator('#cap-input').waitFor(); await page.locator('#cap-input').fill('50000'); await page.locator('#cap-input').press('Tab');
   await page.locator('#print-report').click(); assert.ok((await page.locator('#print-root').innerText()).includes('$50,000'));
-  await navigateToView(page, 'schedule'); await page.locator('#prog-start').waitFor(); await page.locator('#prog-start').fill('2026-10-15'); await page.locator('#prog-start').press('Tab');
-  assert.ok(await page.locator('.gantt-svg').count());
-  await navigateToView(page, 'sheets'); await page.locator('.sl-item').first().waitFor(); await page.getByRole('button', {name:'Synthetic audit product',exact:true}).click();
+  await navigateToView(page, 'schedule'); await page.locator('[data-program]').click(); await page.locator('#prog-start').waitFor(); await page.locator('#prog-start').fill('2026-10-15'); await page.locator('#prog-start').press('Tab');
+  await page.waitForFunction(() => document.querySelector('#prog-start')?.value === '2026-10-15');
+  await navigateToView(page, 'documents'); await page.locator('[data-part="sheets"]').click(); await page.locator('.sl-item').first().waitFor(); await page.getByRole('button', {name:'Synthetic audit product',exact:true}).click();
   assert.equal(await page.locator('#sheet-view h1').innerText(), 'Synthetic audit product'); await page.locator('#print-sheet').click();
   assert.ok((await page.locator('#print-root').innerText()).includes('Synthetic audit product'));
 
@@ -242,7 +243,7 @@ try {
   // A phone opens on the model.
   await mobile.goto(url); await mobile.locator('canvas.v-canvas').waitFor();
   // The phone already shows MODEL, so it is visited last, coming back from another page.
-  for(const view of ['materials','photos','projects','products','budget','schedule','sheets','model']) {
+  for(const view of ['materials','photos','projects','products','estimate','schedule','documents','model']) {
     await navigateToView(mobile, view);
     console.log('mobile route checked:', view);
     assert.equal(await mobile.evaluate(()=>document.body.scrollWidth),402,`${view} does not widen mobile viewport`);

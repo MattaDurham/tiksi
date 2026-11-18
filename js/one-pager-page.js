@@ -67,7 +67,7 @@ export function onePagerHtml(prop, data, assets = {}, opts = {}) {
   const stats = [];
   if (show.budget && f.budget.priced) stats.push(stat('Likely cost', fmtMoney(f.budget.likely), f.budget.low !== f.budget.high ? fmtMoney(f.budget.low) + ' to ' + fmtMoney(f.budget.high) : plural(f.program.length, 'project') + ' priced'));
   else if (show.budget && f.program.length) stats.push(stat('Scope', plural(f.program.length, 'project'), f.scopeItems ? plural(f.scopeItems, 'scope item') + ', not priced yet' : 'not priced yet'));
-  if (show.schedule && f.days > 0) stats.push(stat('Schedule', 'About ' + plural(f.days, 'calendar day'), f.start ? workDates(f, false) : ''));
+  if (show.schedule && f.days > 0) stats.push(stat('Schedule', 'About ' + plural(f.days, 'working day'), f.start ? workDates(f, false) : ''));
   if (show.rooms && f.rooms.length) stats.push(stat('Modeled portion', plural(f.rooms.length, 'floor region') + (f.floorArea > 0 ? ' · ' + fmtArea(f.floorArea) : ''), f.rooms.slice(0, MAX_ROOMS).map(r => r.name || 'Room').join(', ') + (f.rooms.length > MAX_ROOMS ? ', …' : '') + (f.floorArea > 0 ? '. Area calculated from model geometry; not verified whole-property area' : '')));
   if (!stats.length) stats.push(stat('Status', 'In design', 'Scope and budget to follow'));
   const planInSide = show.plan && planSvg && !(hero && hero.plan);

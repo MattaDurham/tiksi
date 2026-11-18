@@ -69,8 +69,8 @@ export function onePagerFacts(prop, data) {
   const renderings = (prop.photos || []).filter(ph => ph && ph.kind === 'photo' && ph.source === 'rendering');
   const scopeItems = own.reduce((n, pr) => n + (pr.items || []).length, 0);
   const start = ISO_DATE_RE.test(str(d.settings && d.settings.programStart)) ? d.settings.programStart : '';
-  // SCHEDULE lays the program out from its start (today when none is set) in calendar days.
-  // lastDay is the last calendar day with work on it, the date SCHEDULE shows as its last day.
+  // SCHEDULE lays the program out from its start (today when none is set) in working days.
+  // lastDay is the last working day with work on it, the date SCHEDULE shows as its last day.
   const { days, lastDay } = programSchedule(own, start || isoToday());
   return { name: prop.name || 'Property', address: str(prop.address), rooms, floorArea, levels, projects, program, scopeItems, budget, products, photos, renderings,
     scans: (prop.scans || []).length, days, start, lastDay: start ? lastDay : '' };
@@ -99,7 +99,7 @@ export function draftText(facts) {
   else if (f.projects.length) s.push(plural(f.projects.length, 'project') + ' ' + (f.projects.length === 1 ? 'is' : 'are') + ' under consideration: ' + list(f.projects.map(p => p.name)) + '.');
   else s.push('Scope, budget and schedule will fill in as the design takes shape.');
   if (f.budget.priced) s.push('The likely cost is ' + fmtMoney(f.budget.likely) + (f.budget.low !== f.budget.high ? ', within a range of ' + fmtMoney(f.budget.low) + ' to ' + fmtMoney(f.budget.high) : '') + '.');
-  if (f.days > 0) s.push('The work takes about ' + plural(f.days, 'calendar day') + (f.start ? workDates(f) : '') + '.');
+  if (f.days > 0) s.push('The work takes about ' + plural(f.days, 'working day') + (f.start ? workDates(f) : '') + '.');
   if (f.products.length) s.push(plural(f.products.length, 'product') + ' ' + (f.products.length === 1 ? 'is' : 'are') + ' recorded for review, such as ' + list(f.products.slice(0, 2).map(p => [p.brand, p.name].filter(Boolean).join(' ')), 2) + '.');
   const highlights = [];
   for (const p of f.projects.slice(0, MAX_HIGHLIGHTS)) highlights.push(p.name + (p.priced ? ': ' + fmtMoney(p.likely) + ' likely' : p.items ? ': ' + plural(p.items, 'scope item') : ''));

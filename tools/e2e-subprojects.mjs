@@ -97,11 +97,11 @@ try {
   await page.click('.proj-card[data-id="proj-list"]');
   check(await page.locator('#proj-detail [data-f="parentId"]').isDisabled(), 'a project with subprojects cannot be put under another');
 
-  console.log('\n[budget] subprojects are labelled with their project');
+  console.log('\n[estimate] a project\'s subprojects are its rows in ESTIMATE');
   await page.evaluate(async () => { const s = await import('/js/store.js'); for (const p of s.ws.data.projects) p.selected = true; s.touch(); });
-  await page.goto(url + '/#/budget');
-  await page.waitForSelector('.view-title');
-  check((await page.textContent('body')).includes('Fix list / Toilet is clogged'), 'BUDGET shows "Fix list / Toilet is clogged"');
+  await page.goto(url + '/#/estimate?project=proj-list');
+  await page.waitForSelector('.es-head h1');
+  check((await page.textContent('.es-in')).includes('Toilet is clogged'), 'ESTIMATE for Fix list has a row for "Toilet is clogged"');
 
   console.log('\n[delete] deleting a project deletes its subprojects');
   await page.goto(url + '/#/projects');
@@ -131,13 +131,13 @@ try {
   await page.waitForSelector('#proj-list .proj-card[data-id="proj-cabin"]');
   check((await cards()).join() === 'Cabin porch', 'Lake Cabin lists only its own project (' + (await cards()).join() + ')');
   await page.goto(url + '/#/budget');
-  await page.waitForSelector('.view-title');
-  const budget = await page.textContent('body');
-  check(budget.includes('Cabin porch') && !budget.includes('Kitchen'), 'BUDGET shows the Lake Cabin project only');
-  await page.goto(url + '/#/schedule');
-  await page.waitForSelector('.view-title');
-  const gantt = (await page.textContent('#gantt')).toLowerCase();   // the chart draws names in capitals
-  check(gantt.includes('cabin porch') && !gantt.includes('kitchen'), 'SCHEDULE shows the Lake Cabin project only');
+  await page.waitForSelector('#cap-input');
+  const budget = await page.textContent('.es-in');
+  check(budget.includes('Cabin porch') && !budget.includes('Kitchen'), 'ALL PROJECTS shows the Lake Cabin project only');
+  await page.goto(url + '/#/schedule?program');
+  await page.waitForSelector('.sc-in h1');
+  const nav = (await page.textContent('.es-nav')).toLowerCase();
+  check(nav.includes('cabin porch') && !nav.includes('kitchen'), 'SCHEDULE lists the Lake Cabin project only');
   check((await data()).length === 3, 'switching property keeps every project in the workspace');
 
   check(errors.length === 0, 'no page errors (' + errors.join('; ') + ')');

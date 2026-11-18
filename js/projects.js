@@ -1,5 +1,6 @@
 import { keepRemoved, openRecovery } from './recovery.js';
 import { takeoffState } from './source-revision.js';
+import { restoreProjectEdit } from './project-history.js';
 // Projects view: capture ideas, scope them into line items with budget ranges,
 // durations and dependencies. The budget and schedule views read from this data.
 // A project can hold subprojects (one level deep): small pieces of work such as a punch list,
@@ -69,6 +70,9 @@ export function mount(root) {
   document.addEventListener('pointerdown', onOutside);
   render();
 }
+// UNDO and REDO in the top bar (and Cmd/Ctrl+Z): the projects' own history (project-history.js).
+export function undo() { if (restoreProjectEdit('undo')) render(); }
+export function redo() { if (restoreProjectEdit('redo')) render(); }
 export function unmount() {
   setScopeTarget(null);
   window.removeEventListener('keydown', onKey);
@@ -897,7 +901,7 @@ function bindItemRows(p) {
       openResearch({ kind: 'scope-item', id: it.id, name: it.name, propertyId: p.propertyId, itemIds: [it.id] });
     };
   });
-  // PROJECTS has no undo, and on a phone the button sits where a thumb lands: ask first.
+  // On a phone the button sits where a thumb lands: ask first (UNDO also brings it back).
   det.querySelectorAll('[data-del-item]').forEach(x => x.onclick = () => {
     const id = x.dataset.delItem, it = p.items.find(i => i.id === id);
     if (!it) return;

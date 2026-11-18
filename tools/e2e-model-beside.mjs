@@ -146,8 +146,8 @@ try {
   assert.ok(Math.abs(await width('#view') - keptW) < 6, 'the share and the switch are remembered after a reload');
 
   // ---------- other pages get the model too; MODEL itself takes it back ----------
-  await page.click('#rail a[data-view="budget"]');
-  await page.waitForFunction(() => location.hash === '#/budget');
+  await page.click('#rail a[data-view="estimate"]');
+  await page.waitForFunction(() => location.hash.startsWith('#/estimate'));
   await page.locator('#beside canvas').waitFor();
   await page.click('#rail a[data-view="model"]');
   await page.waitForFunction(() => location.hash === '#/model' && !!document.querySelector('#view canvas'));

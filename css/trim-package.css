@@ -1,0 +1,120 @@
+/* The printed wall trim package (js/trim-package-doc.js): US letter, ink on paper, one accent for
+   marks and diagrams. Everything is scoped under .tpkg so none of it reaches the app. On screen each
+   section is a white letter sheet on the app's dark background; on paper the sheets print plainly
+   and the @page rules the module returns give the margins, running header, footer and page numbers. */
+.tpkg {
+  --ink: #16191f; --ink2: #3b414d; --muted: #646b78; --line: #d5d9e0; --line2: #eceef2; --sunk: #f4f5f7; --acc: #1f5a8f; --acc-w: #e6eef6; --warn: #9a4a06;
+  /* the trim drawings in their printed colours, on screen too */
+  --td-wall: #fbfbfa; --td-wall-line: #9aa0a8; --td-case: #eceef1; --td-open: #fff;
+  --td-piece: #d9e6f2; --td-piece-line: #1f5a8f; --td-label: #12395c; --td-halo: #fff;
+  --td-ink: #1f2329; --td-ink2: #3b414d; --td-muted: #7a7462;
+  --td-board: #fff; --td-board-line: #9aa0a8; --td-other: #eceef1;
+  --td-wood: #8a6a1f; --td-off: #f3f1ea; --td-off-line: #b9b2a0; --td-hl: #1f5a8f;
+  color: var(--ink); font: 9.5pt/1.4 "Helvetica Neue", Helvetica, Arial, sans-serif;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+.tpkg * { box-sizing: border-box; }
+.tpkg .page { background: #fff; width: 8.5in; min-height: 11in; margin: 0 auto 24px; padding: 0.78in 0.55in 0.72in; box-shadow: 0 2px 16px rgba(0, 0, 0, 0.5); position: relative; break-after: page; }
+.tpkg .page:last-child { break-after: auto; }
+.tpkg h1 { font-size: 20pt; line-height: 1.1; margin: 0 0 8pt; letter-spacing: -.01em; color: var(--ink); }
+.tpkg h2 { font-size: 11pt; margin: 14pt 0 5pt; break-after: avoid; color: var(--ink); }
+.tpkg h3 { color: var(--ink); }
+.tpkg p { margin: 0 0 7pt; }
+.tpkg ul, .tpkg ol { margin: 1em 0; padding-left: 40px; }   /* the browser's own list spacing, which the app's reset takes away */
+.tpkg li { margin: 0; padding: 0; }
+.tpkg .lede { font-size: 10.5pt; color: var(--ink2); max-width: 6.6in; }
+.tpkg .note { font-size: 8pt; color: var(--muted); max-width: 7in; }
+.tpkg .sm { font-size: 7.5pt; color: var(--muted); }
+.tpkg .url { word-break: break-all; }
+.tpkg .from { display: flex; flex-wrap: wrap; gap: 2pt 10pt; font-size: 8pt; color: var(--muted); margin: -2pt 0 8pt; }
+.tpkg .from b { color: var(--ink); }
+.tpkg table { width: 100%; border-collapse: collapse; margin: 4pt 0 8pt; font-size: 8.5pt; color: var(--ink); background: none; }
+.tpkg th { text-align: left; font: 600 7pt/1.2 "Helvetica Neue", Arial, sans-serif; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); border-bottom: 1.2pt solid var(--ink); padding: 3pt 4pt; vertical-align: bottom; background: none; }
+.tpkg td { padding: 2.6pt 4pt; border-bottom: .5pt solid var(--line); vertical-align: top; }
+.tpkg tr { break-inside: avoid; }
+.tpkg thead { display: table-header-group; }
+.tpkg tfoot { display: table-row-group; }
+.tpkg .r { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tpkg .c { text-align: center; }
+.tpkg .nw { white-space: nowrap; }
+.tpkg tr.g td { background: var(--sunk); font-weight: 600; border-bottom: .5pt solid var(--line); padding-top: 4pt; }
+.tpkg tfoot td { border-top: 1.2pt solid var(--ink); border-bottom: 0; font-weight: 700; }
+.tpkg table.cl td { padding: 2pt 4pt; }
+.tpkg .figs { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: 4pt; margin: 10pt 0; }
+.tpkg .figs div { padding: 7pt 9pt; border-right: 1px solid var(--line); }
+.tpkg .figs div:last-child { border-right: 0; }
+.tpkg .figs b { display: block; font-size: 16pt; font-variant-numeric: tabular-nums; }
+.tpkg .figs span { font-size: 7.5pt; color: var(--muted); }
+.tpkg .toc { margin: 0 0 10pt; padding-left: 16pt; }
+.tpkg .stamp { border: 1.2pt solid var(--ink); border-radius: 3pt; padding: 6pt 9pt; display: flex; gap: 10pt; align-items: baseline; margin-top: 10pt; break-inside: avoid; }
+.tpkg .stamp b { font-size: 7.5pt; text-transform: uppercase; letter-spacing: .07em; white-space: nowrap; }
+.tpkg .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3pt 12pt; margin: 6pt 0; }
+.tpkg .kv dt { color: var(--muted); } .tpkg .kv dd { margin: 0; }
+.tpkg .two { display: grid; grid-template-columns: 1fr 1fr; gap: 20pt; }
+.tpkg .sign { display: grid; grid-template-columns: 2fr 1fr 2fr 1fr; gap: 14pt; margin-top: 26pt; }
+.tpkg .sign span { border-top: .8pt solid var(--ink); padding-top: 2pt; font-size: 7.5pt; color: var(--muted); }
+.tpkg table.yn td:nth-child(n+2) { white-space: nowrap; width: 1%; }
+.tpkg .cols { columns: 3; }
+/* room pages */
+.tpkg .rstats { display: flex; gap: 16pt; font-size: 8pt; color: var(--ink2); margin: -2pt 0 6pt; }
+.tpkg .rstats b { color: var(--ink); }
+.tpkg .pics { display: flex; gap: 6pt; margin-bottom: 8pt; }
+.tpkg .pics img { flex: 1; min-width: 0; height: 2.3in; object-fit: cover; border-radius: 3pt; border: .5pt solid var(--line); }
+.tpkg .wrow { display: grid; grid-template-columns: 1fr; gap: 4pt; padding: 5pt 0 6pt; border-top: .5pt solid var(--line); break-inside: avoid; }
+.tpkg .wrow h3 { grid-column: 1; margin: 0; font-size: 8.5pt; display: flex; justify-content: space-between; }
+.tpkg .wrow h3 span { font-weight: 400; color: var(--muted); font-size: 7.5pt; }
+.tpkg .wrow .el { display: flex; align-items: flex-end; justify-content: center; }
+.tpkg .elev, .tpkg .cutsvg { max-width: none; }
+.tpkg .elev .lb { font-family: "SF Mono", Menlo, monospace; font-weight: 700; fill: #12395c; paint-order: stroke; stroke: #fff; stroke-linejoin: round; }
+.tpkg .elev .dm { font-family: "Helvetica Neue", Arial, sans-serif; fill: #3b414d; }
+.tpkg .elev .ev-wall { fill: #fbfbfa; stroke: #9aa0a8; } .tpkg .elev .ev-case { fill: #eceef1; stroke: #a9afb8; } .tpkg .elev .ev-open { fill: #fff; stroke: #8a919b; }
+.tpkg .elev .ev-sash { stroke: #a9afb8; } .tpkg .elev .ev-pc { fill: #d9e6f2; stroke: #1f5a8f; cursor: default; } .tpkg .elev .ev-rk { fill: none; stroke: #1f5a8f; stroke-opacity: .55; } .tpkg .elev .ev-dim { stroke: #646b78; }
+.tpkg .cuts { display: flex; flex-direction: column; gap: 3pt; }
+.tpkg .cuts .none { font-size: 7pt; color: var(--muted); }
+.tpkg .legend { display: block; gap: 0; font: 7pt/1.4 "Helvetica Neue", Helvetica, Arial, sans-serif; color: var(--muted); margin: 0 0 4pt; }   /* not the app's own .legend */
+.tpkg .legend i { display: inline-block; width: 14pt; height: 7pt; vertical-align: -1pt; border: .6pt solid var(--acc); background: var(--acc-w); margin: 0 3pt 0 8pt; }
+.tpkg .legend i.oth { border-color: #9aa0a8; background: #eceef1; }
+.tpkg .legend i.wd { border-color: #8a6a1f; background: repeating-linear-gradient(45deg, #fff 0 1.2pt, #8a6a1f 1.2pt 1.6pt); }
+.tpkg .legend i.off { border-color: #b9b2a0; background: #f3f1ea; }
+/* cut diagrams: boards to one scale, architectural dimensions */
+.tpkg .cdg { break-inside: avoid; margin: 2pt 0 1pt; }
+.tpkg .cdh { font-size: 7pt; color: var(--ink2); margin: 0 0 1pt; } .tpkg .cdh span { color: var(--muted); }
+.tpkg .cutsvg { display: block; overflow: visible; }
+.tpkg .cutsvg text { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; }
+.tpkg .cutsvg .cd-board { fill: #fff; stroke: #9aa0a8; stroke-width: .25; stroke-dasharray: .8 .5; cursor: default; }
+.tpkg .cutsvg .cd-cut { fill: var(--acc-w); stroke: var(--acc); stroke-width: .25; cursor: default; }
+.tpkg .cutsvg .cd-cut.oth { fill: #eceef1; stroke: #9aa0a8; }
+.tpkg .cutsvg .cd-wedge, .tpkg .cutsvg .cd-trim { stroke: #8a6a1f; stroke-width: .12; }
+.tpkg .cutsvg .cd-hatch { stroke: #8a6a1f; stroke-width: .14; }
+.tpkg .cutsvg .cd-off { fill: #f3f1ea; stroke: #b9b2a0; stroke-width: .18; }
+.tpkg .cutsvg .cd-dim, .tpkg .cutsvg .cd-ext, .tpkg .cutsvg .cd-lead { stroke: #3d434c; stroke-width: .14; }
+.tpkg .cutsvg .cd-ext { stroke: #8a9099; } .tpkg .cutsvg .cd-lead { stroke: #8a9099; stroke-dasharray: .5 .4; }
+.tpkg .cutsvg .cd-tick { stroke: #2b2f36; stroke-width: .3; }
+.tpkg .cutsvg .cd-dt { fill: #1f2329; font-variant-numeric: tabular-nums; } .tpkg .cutsvg .cd-dt.cd-wt { fill: #7a7462; font-style: italic; }
+.tpkg .cutsvg .cd-all { font-weight: 700; }
+.tpkg .cutsvg .cd-nm { fill: var(--acc); font-weight: 600; } .tpkg .cutsvg .cd-nm.oth { fill: #646b78; }
+.tpkg .cutsvg .cd-lb { fill: var(--ink2); font-weight: 700; cursor: default; }
+/* the hover highlight of the app's drawings has no place on paper */
+.tpkg .elev .ev-pc:hover, .tpkg .cutsvg .cd-cut:hover { fill: #d9e6f2; stroke: #1f5a8f; fill-opacity: 1; }
+/* bid form, options, appendices */
+.tpkg table.bid td { padding: 1.6pt 4pt; font-size: 8pt; }
+.tpkg table.bid tr.g td { padding-top: 3pt; }
+.tpkg table.bid tfoot td { padding: 3pt 4pt; }
+.tpkg table.opt td { padding: 3pt 4pt; }
+.tpkg table.opt tr.dz td { background: var(--acc-w); }
+.tpkg table.sup td, .tpkg table.tools td, .tpkg table.lab td, .tpkg table.optp td { font-size: 7.6pt; padding: 2pt 4pt; }
+.tpkg table.sup .sm, .tpkg table.tools .sm, .tpkg table.lab .sm, .tpkg table.optp .sm { font-size: 7pt; }
+.tpkg table.tools td:nth-child(1) { width: 26%; } .tpkg table.tools td:nth-child(2) { width: 34%; }
+.tpkg table.lab td:nth-child(1) { width: 24%; } .tpkg table.lab td:nth-child(2) { width: 12%; white-space: nowrap; }
+.tpkg table.optp td:nth-child(1) { width: 12%; } .tpkg table.optp td:nth-child(5) { width: 30%; }
+
+@media print {
+  /* the page margins come from @page (trimPackageHtml's css); the sheet itself prints bare */
+  .tpkg .page { width: auto; min-height: 0; margin: 0; padding: 0; box-shadow: none; }
+  #print-root .tpkg { background: #fff; }
+}
+@media screen and (max-width: 900px) {
+  .tpkg .page { width: auto; min-height: 0; padding: 24px 16px 36px; margin-bottom: 16px; }
+  .tpkg .figs { grid-template-columns: repeat(2, 1fr); }
+  .tpkg .wrow .el, .tpkg .cuts { overflow-x: auto; }
+}

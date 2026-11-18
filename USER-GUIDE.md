@@ -21,10 +21,11 @@ Open **GUIDE** in the Tiksi menu (the logo at the top left) for chapter search, 
 - [Research real products and suppliers](#sourcing)
 - [Turn the design into scoped work](#projects)
 - [Keep specifications and ordering links](#products)
-- [Compare scope against the budget](#budget)
-- [Sequence the work](#schedule)
+- [Estimate a project](#budget)
+- [Schedule the work](#schedule)
 - [Print a useful specification sheet](#sheets)
 - [Make a drawing set from the model](#documents)
+- [Print the trim package and the proposal](#job-documents)
 - [Send the client a one-pager](#one-pager)
 - [Send the client a page in the lab](#lab)
 - [Settings, backups and storage](#settings)
@@ -54,10 +55,9 @@ The same sample property appears throughout this guide. The tabs across the top 
 | SOURCING | Research products and compare cited supplier evidence. |
 | PROJECTS | Turn the design into scoped work, quantities and dependencies. |
 | PRODUCTS | Keep specifications, vendor links and selected product prices. |
-| BUDGET | Compare low, likely and high costs against a budget cap. |
-| SCHEDULE | See durations, task dependencies and the critical path. |
-| CUT SHEETS | Print a specification sheet for a scope item or product. |
-| DOCUMENTS | Lay out live plans, sections, elevations, 3D views and schedules on drawing sheets; keep saved PDFs. |
+| ESTIMATE | What each project costs, room by room: drawn trim worked out into boards, supplies and carpenter hours, scope items, markups and bids; all projects against a budget cap. |
+| SCHEDULE | When the work happens, in working days: the carpenter's rooms in order, what each line waits for, and the program's dates. |
+| DOCUMENTS | Drawing sets and saved PDFs; the trim package and the client proposal from the estimate; cut sheets for scope items and products. |
 
 ### A useful first session
 
@@ -66,7 +66,7 @@ The same sample property appears throughout this guide. The tabs across the top 
 3. In MODEL, check the walls, rooms, doors and windows with DIMENSIONS, ROOMS and NUMBERS. Change them in SketchUp with EDIT IN SKETCHUP; saves there come back to Tiksi.
 4. In PHOTOS, add reference images and pin them to the model. In MATERIALS, choose the proposed finishes.
 5. In PROJECTS, add scope items, quantities, costs and durations. Link products and model elements to the work.
-6. Review BUDGET, SCHEDULE and CUT SHEETS. Finish with FILE → Project → SAVE PROJECT so the work travels in a .tiksi file.
+6. Review ESTIMATE and SCHEDULE, then print from DOCUMENTS. Finish with FILE → Project → SAVE PROJECT so the work travels in a .tiksi file.
 
 > **Good to know:** The screenshots and recordings use a synthetic sample renovation. Their drawings, images, products and prices illustrate the controls; they are not a surveyed room or a supplier quote.
 
@@ -578,70 +578,70 @@ Open a product card to edit its image, price and where that price came from, ven
 
 <a id="budget"></a>
 
-## Compare scope against the budget
+## Estimate a project
 
-**Where:** BUDGET
+**Where:** ESTIMATE
 
-The current-budget report rolls up selected projects and scope items into low, likely and high estimates. Use it to compare the renovation program with a budget cap.
+ESTIMATE shows what a project costs, room by room. Trim drawn in MODEL is worked out the way a finish carpenter would: every piece with its ends, the boards to buy at the cheapest store length, the supplies and the hours. Scope items from PROJECTS join it, then the project's contingency, overhead and profit, and tax. Change the drawing and the estimate follows.
 
-![Budget totals follow the selected projects and their scope quantities and cost inputs. PRINT REPORT creates a shareable report.](js/guide-assets/budget.png)
+![A project's price, hours, working days and boards to buy, then one row per room.](js/guide-assets/budget.png)
 
-Budget totals follow the selected projects and their scope quantities and cost inputs. PRINT REPORT creates a shareable report.
+A project's price, hours, working days and boards to buy, then one row per room.
 
 ### Try it
 
-1. Enter or revise scope quantities and unit costs in PROJECTS first.
-2. Open BUDGET and set the program budget cap in the offered control.
-3. Compare low, likely and high totals, the category/project breakdown and the remaining budget.
-4. Check or uncheck projects directly in BUDGET, or use their PROJECTS checkboxes, to compare alternatives without deleting scope.
-5. Use PRINT REPORT to print or save a PDF through the browser print dialog.
+1. Draw the trim in MODEL with each section in its room's subproject (WALL TRIM, or right-click). Add other work as scope items in PROJECTS.
+2. Open ESTIMATE and choose the project on the left. The top line gives the price with its range, carpenter hours, working days with their dates, and the boards to buy.
+3. Click a room for its walls as drawn with the boards each is cut from, its cut list and its labor. Click a piece, a board, a labor task or a scope item for where its numbers come from.
+4. Under HOW THE PRICE IS BUILT set the carpenter rate, contingency, overhead and profit, tax on materials and the spare boards. PROJECTS, SCHEDULE, ALL PROJECTS and the one-pager follow.
+5. Record carpenters' bids under BIDS RECEIVED, beside the estimate's labor.
+6. ALL PROJECTS (top left) ticks projects into the program and compares them with the budget cap; PRINT REPORT prints it.
 
 ### Other features here
 
-**Cost ranges.** The report preserves uncertainty as low/likely/high values instead of presenting one guessed price.
+**Pieces and boards.** Inside corners are coped (the longer piece runs square into the corner), outside corners mitred, runs longer than a board spliced with 45° scarfs. Each room is cut from its own boards; each board is bought at the cheapest length the store sells that holds its cuts, plus a spare of each moulding.
 
-**Program selection.** Only the selected projects of the active property contribute to the program totals.
+**Hours.** From published production rates counted from the drawing: feet of base, rail and cap, frames, battens, copes, outside corners, scarfs, caulk, fill and paint, with setup and cleanup each day in a room. Low and high hours come from the rates' range.
 
-**Quantity changes.** Updating a scope item quantity or cost updates the report. Products provide specification context; scope costs still need review.
+**Counted once.** A scope item whose model elements are all drawn trim of the same project (boards written in by an earlier trim package) is left out of the money and the days; REMOVE THEM takes such items away, and REMOVED RECORDS brings them back.
 
-> **Good to know:** Budget totals are only as complete as the scope inputs. Include labor, waste, freight, tax and contingency where applicable to your estimate.
+**Undo.** UNDO and REDO cover the projects, their scope, the estimate settings and bids.
+
+> **Good to know:** Hours are the weakest numbers: they come from estimating books, not from the carpenter who will do the work. Send the installer bid form (in the trim package) and compare. Trim imported as a model, not drawn as trim sections, is not in the estimate.
 
 <a id="schedule"></a>
 
-## Sequence the work
+## Schedule the work
 
 **Where:** SCHEDULE
 
-The schedule uses scope-item durations and predecessors to lay out the selected projects. The critical path shows which dependency chain controls the finish.
+SCHEDULE shows when the work happens, in working days, Monday to Friday. One carpenter does a project's trim room after room; scope items run with the job unless they are set to start after something.
 
-![The Gantt view connects tasks with dependency arrows and distinguishes critical work from tasks with float.](js/guide-assets/schedule.png)
+![One table: each line's days, start, end and what it waits for, with a chart of working days beside it.](js/guide-assets/schedule.png)
 
-The Gantt view connects tasks with dependency arrows and distinguishes critical work from tasks with float.
+One table: each line's days, start, end and what it waits for, with a chart of working days beside it.
 
 ### Try it
 
-1. In PROJECTS, enter each scope item’s duration and select its predecessors.
-2. Set the project’s earliest start and ensure the project is selected for the program.
-3. Open SCHEDULE and set Program start. Inspect the Gantt chart, task dates, dependencies and critical path. A later project Earliest start delays that project.
-4. Return to PROJECTS to fix missing durations, dependency cycles or sequencing assumptions, then review the updated schedule.
+1. Choose a project on the left. Set its start date at the top.
+2. Move a room up or down to change the order the carpenter works in.
+3. For a scope item, choose what it starts AFTER: another item or a room's trim. Give scope items their days in PROJECTS; a room's days come from its hours at 6 productive hours a day.
+4. ALL PROJECTS lays the program out from the program start: projects side by side, each from its own start date, or AFTER the project it should follow.
+5. Click a line for its dates and slack.
 
 ### Other features here
 
-**Critical path.** A delay along the controlling dependency chain moves the modeled project finish.
+**Working days.** Bars and dates skip weekends, so a 5-day room started on a Thursday ends the next Wednesday. Holidays are not known.
 
-**Float.** Some tasks can move within their float without extending the modeled finish.
+**Critical work.** Lines that set the finish are amber; others show the slack they can move within.
 
-**Today marker.** The time axis shows today so you can compare the planned sequence with the current date.
-
-**Calendar days.** Durations use calendar days, with weekends shaded. Items at zero days are budget-only and are omitted. Dependencies and critical paths are calculated within each selected project.
-
-> **Good to know:** The schedule is calculated from the entered durations and dependencies. It does not automatically resolve crew capacity, delivery dates or permit constraints; include those in your planning.
+> **Good to know:** The schedule does not know crew sizes beyond the one carpenter, deliveries or inspections; set lines to start after what they wait for.
 
 <a id="sheets"></a>
 
 ## Print a useful specification sheet
 
-**Where:** CUT SHEETS
+**Where:** DOCUMENTS → CUT SHEETS
 
 Cut sheets gather the information attached to a scope item or product into a printable handoff: dimensions, materials, photos, specified products and cost context.
 
@@ -652,7 +652,7 @@ Choose a scope item or product from the list, review its sheet, then PRINT.
 ### Try it
 
 1. Link the relevant model elements, materials, photos and products before printing.
-2. Open CUT SHEETS and select the scope item you want to communicate, or choose a product sheet.
+2. Open DOCUMENTS, choose CUT SHEETS and select the scope item you want to communicate, or choose a product sheet.
 3. Review the generated content. Missing information is best completed in PROJECTS, PRODUCTS or PHOTOS.
 4. Choose PRINT and use the browser print dialog to print or save a PDF.
 
@@ -697,6 +697,27 @@ A sheet with a floor plan cut at 3'-11", a section through the plan, a 3D view a
 **Revisions.** Each saved PDF becomes the next revision in the title block and a document of the property, so it travels in the project file.
 
 > **Good to know:** Views are rendered images of the model at the chosen scale; check dimensions on site before ordering or cutting. PDFs are printed at 150 dots per inch.
+
+<a id="job-documents"></a>
+
+## Print the trim package and the proposal
+
+**Where:** DOCUMENTS → JOB DOCUMENTS
+
+JOB DOCUMENTS prints what a project needs from its estimate. The trim package is the book for the carpenter and the yard; the proposal is one page for the client. Both carry the estimate's figures and the schedule's dates.
+
+![Choose the project and the document; the right column holds your business details and the proposal's terms.](js/guide-assets/documents.png)
+
+Choose the project and the document; the right column holds your business details and the proposal's terms.
+
+### Try it
+
+1. Open DOCUMENTS and choose JOB DOCUMENTS, then the project.
+2. TRIM PACKAGE: a summary, options priced other ways, the buy list, each room with its walls and the boards cut for them, cut lists, the installer bid form with hours, the price build-up and appendices for supplies, tools and labor rates. Its total is the trim at cost with the contingency.
+3. PROPOSAL: the work room by room, the price, the working days and dates, the deposit, what is and is not included, and a place to sign. Fill in your business and the client on the right.
+4. PRINT OR SAVE PDF, then Save as PDF for a PDF with real text.
+
+> **Good to know:** Check lengths on site and store prices before ordering.
 
 <a id="one-pager"></a>
 

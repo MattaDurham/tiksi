@@ -32,7 +32,7 @@ import net from 'node:net';
 import { chromium, webkit, devices } from 'playwright';
 
 const W = 402, H = 874;
-const PAGES = ['photos', 'materials', 'measure', 'reconstruct', 'research', 'projects', 'products', 'budget', 'schedule', 'sheets', 'documents', 'guide'];
+const PAGES = ['photos', 'materials', 'measure', 'reconstruct', 'research', 'projects', 'products', 'estimate', 'schedule', 'documents', 'guide'];
 const failures = [];
 let passed = 0;
 const check = (ok, what) => { if (ok) { passed++; console.log('  ok   ' + what); } else { failures.push(what); console.log('  FAIL ' + what); } };
@@ -383,7 +383,7 @@ async function run(label, engine, profile) {
       // ---------- SCHEDULE ----------
       await go(page, url, 'schedule');
       await page.evaluate(async () => { const s = await import('/js/store.js'); for (const p of s.ws.data.projects) p.selected = true; s.touch(); });
-      await go(page, url, 'budget'); await go(page, url, 'schedule');
+      await go(page, url, 'estimate'); await go(page, url, 'schedule');
       const bar = page.locator('#gantt .g-item').first();
       if (await bar.count()) {
         await bar.tap();

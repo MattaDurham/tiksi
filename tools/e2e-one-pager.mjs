@@ -73,16 +73,16 @@ try {
   // ---- BUDGET and SCHEDULE show the figures the one-pager prints ----
   await page.goto(url + '/#/budget');
   await page.locator('#cap-input').waitFor();
-  check(/\$32,000/.test(await page.locator('.kpi.accent .k-value').textContent()), 'BUDGET totals the selected program at $32,000 likely');
+  check(/\$32,000/.test(await page.locator('.es-figs .big b').textContent()), 'ALL PROJECTS totals the selected program at $32,000 likely');
   await page.fill('#cap-input', '250k'); await page.press('#cap-input', 'Tab');
   await page.waitForFunction(() => document.querySelector('#cap-input')?.value === '$250,000');
   check(await prop('return s.ws.data.settings.budgetCap === 250000'), 'a cap typed as 250k is $250,000');
   await page.fill('#cap-input', '10x12'); await page.press('#cap-input', 'Tab');
   await page.waitForFunction(() => /is not an amount/.test(document.querySelector('#cap-note')?.textContent || ''));
   check(await prop('return s.ws.data.settings.budgetCap === 250000') && /The cap is still \$250,000/.test(await page.locator('#cap-note').textContent()), 'an amount BUDGET cannot read is refused with a reason and the cap stays');
-  await page.goto(url + '/#/schedule');
+  await page.goto(url + '/#/schedule?program');
   await page.locator('#prog-start').waitFor();
-  check((await page.locator('.kpi.accent .k-label').textContent()) === 'Last day of work' && (await page.locator('.kpi.accent .k-value').textContent()) === 'Nov 22, 2026' && /13 calendar days/.test(await page.locator('.kpi.accent .k-sub').textContent()), 'SCHEDULE\'s last day of work is Nov 22, 2026, the 13th calendar day');
+  check((await page.locator('[data-last] b').textContent()) === 'Nov 26, 2026' && /13 working days/.test(await page.locator('.es-figs .big b').textContent()), 'SCHEDULE\'s last day of work is Nov 26, 2026, the 13th working day');
   await page.goto(url + '/#/model');
   await page.waitForSelector('#btn-file', { state: 'attached' });
 
@@ -94,10 +94,10 @@ try {
   check(/No one-pager saved yet/.test(await page.locator('.op-dlg-status').textContent()), 'the editor opens and says no version is saved');
   check((await page.inputValue('[data-f="headline"]')) === 'Test House' && /2 modeled floor regions/.test(await page.inputValue('[data-f="tagline"]')), 'the headline and tagline describe the modeled floor regions');
   const summary = await page.inputValue('[data-f="summary"]');
-  check(/Kitchen refresh/.test(summary) && /\$32,000/.test(summary) && /13 calendar days, from Nov 10, 2026 to Nov 22, 2026\./.test(summary) && /Acme Shaker cabinets/.test(summary), 'the summary names the scope, the likely cost, the schedule and a product');
+  check(/Kitchen refresh/.test(summary) && /\$32,000/.test(summary) && /13 working days, from Nov 10, 2026 to Nov 26, 2026\./.test(summary) && /Acme Shaker cabinets/.test(summary), 'the summary names the scope, the likely cost, the schedule and a product');
   await page.waitForFunction(() => !!document.querySelector('.op-preview-page .op-hero img'));
   const pageText = await page.locator('.op-preview-page .op-page').innerText();
-  check(/Test House/.test(pageText) && /\$32,000/.test(pageText) && /\$25,000 to \$41,000/.test(pageText) && /13 calendar days/.test(pageText) && /2 modeled floor regions/.test(pageText) && /Shaker cabinets/.test(pageText) && /not independently verified site measurements/.test(pageText), 'the page shows the headline, budget range, schedule, modeled regions and products without implying verified site measurements');
+  check(/Test House/.test(pageText) && /\$32,000/.test(pageText) && /\$25,000 to \$41,000/.test(pageText) && /13 working days/.test(pageText) && /2 modeled floor regions/.test(pageText) && /Shaker cabinets/.test(pageText) && /not independently verified site measurements/.test(pageText), 'the page shows the headline, budget range, schedule, modeled regions and products without implying verified site measurements');
   check((await page.locator('.op-preview-page .op-plan svg polygon').count()) >= 2 && /LIVING ROOM/.test(await page.locator('.op-preview-page .op-plan').innerHTML()), 'the floor plan is drawn beside the text with its rooms named');
   check(/front\.jpg/.test(await page.locator('[data-op-hero] option').first().textContent()), 'the automatic picture is the site photo');
 
