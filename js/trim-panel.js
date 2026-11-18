@@ -84,9 +84,11 @@ const wainscotPicker = id => presetPicker('Wainscoting style', 'wainscot', WAINS
 const frameChoices = [['Custom', ''], ...Object.entries(FRAME_PRESETS).sort().map(([id, preset]) => [id + ' · ' + preset.label, id])];
 const framePicker = (id, product) => presetPicker('Picture-frame layout', 'frame', frameChoices, id, key => trimElevation(product, key), 'Several layouts');
 
+// The style pickers speak for every section of their kind the change reaches, of any style.
 function stylePickersHtml(ctx) {
-  const crown = ctx.reach.filter(t => t.style === 'crown');
-  const wainscot = ctx.reach.filter(isField);
+  const all = ctx.pool || ctx.reach;
+  const crown = all.filter(t => t.style === 'crown');
+  const wainscot = all.filter(isField);
   const frames = wainscot.filter(t => t.style === 'picture-frame');
   return [
     crown.length ? crownPicker(same(crown, t => t.product)) : '',
@@ -106,7 +108,7 @@ function scopeHtml(ctx) {
 function mouldingsHtml(ctx) {
   const styles = Object.keys(TRIM_STYLES).filter(k => ctx.trims.some(t => t.style === k));
   return `<div class="tp-sub">MOULDINGS</div>` + styles.map(k => {
-    const mine = ctx.reach.filter(t => t.style === k);
+    const mine = ctx.mouldingReach ? ctx.mouldingReach(k) : ctx.reach.filter(t => t.style === k);
     const ids = new Set(mine.map(t => t.product));
     const cur = ids.size === 1 ? [...ids][0] : '';
     const items = catalogFor(k);
@@ -251,7 +253,8 @@ export function bindTrimPanel(root, ctx) {
     if (!Number.isFinite(v) || v < 0) return ctx.rerender();
     // A typed height moves the line the section is on, with everything the change reaches.
     const yNow = same(list, t => t.y), hNow = same(list, t => t.h);
-    if (key === 'y') return yNow !== undefined ? ctx.line(list[0], 'move', v - yNow, 'trim height') : ctx.set(t => ctx.setY(t, v), 'trim height');
+    // Sections of the first one's kind all come onto the typed height (trim-design.js lineRule).
+    if (key === 'y') return ctx.line(list[0], 'move', v - (yNow !== undefined ? yNow : list[0].y), 'trim height');
     if (key === 'h') return hNow !== undefined && isField(list[0]) ? ctx.line(list[0], 'top', v - hNow, 'trim field height') : ctx.set(t => { if (isField(t)) t.h = Math.max(.08, Math.min(v, ctx.wallHeight(t) - t.y)); }, 'trim field height');
     if (key === 'from' || key === 'to') return ctx.set(t => {
       const L = ctx.wallLength(t), f = Math.max(0, Math.min(1, v / L));
