@@ -2851,6 +2851,12 @@ function fitFullHeightPanel(t) {
   t.h = Math.max(.08, top - bottom);
 }
 function deleteTrims(ids) {
+  const finals = ids.map(trimById).filter(t => t && t.final);
+  if (finals.length) {
+    ids = ids.filter(id => !finals.some(t => t.id === id));
+    if (!ids.length) return finalRefused(finals);
+    toast(finalWords(finals.length) + ' kept: marked final.', 'warn');
+  }
   if (!ids.length) return;
   beginGeometryEdit(prop, ids.length === 1 ? 'delete trim' : 'delete trim sections');
   const gone = new Set(ids);
@@ -2861,19 +2867,76 @@ function deleteTrims(ids) {
 // Change every selected section with fn(t), as one undoable edit. `reach`: the change goes to
 // every section of the same kind that CHANGES REACH covers ('style' narrows that to one kind);
 // reach 'all' takes every section it covers, of any kind, and `style` may then be a test.
+// A section marked final is never changed: a change that reaches only final sections is refused
+// with a note saying how to unmark them, and one that reaches others too leaves them as they are.
 function editTrims(fn, label, reach, style) {
   const ids = trimIds();
+  // A change that starts from a selection that is all final goes nowhere, not even to the rest of its reach.
+  const sel = ids.map(trimById).filter(Boolean);
+  if (!Array.isArray(reach) && sel.length && sel.every(t => t.final)) { finalsSkipped = sel.length; return finalRefused(sel); }
   let list = Array.isArray(reach) ? reach : reach === 'all' ? designNow().pool(ids, trimScope) : reach ? designNow().members(ids, trimScope) : ids.map(trimById).filter(Boolean);
   if (typeof style === 'function') list = list.filter(style);
   else if (style) list = list.filter(t => t.style === style);
-  if (!list.length) return 0;
+  // The final sections this change would have reached: those listed, or those the reach leaves out.
+  const finals = list.filter(t => t.final);
+  if (!Array.isArray(reach) && reach) {
+    let out = designNow().finalsIn(ids, trimScope);
+    if (reach !== 'all') { const styles = new Set(ids.map(trimById).filter(Boolean).map(t => t.style)); out = out.filter(t => styles.has(t.style)); }
+    if (typeof style === 'function') out = out.filter(style); else if (style) out = out.filter(t => t.style === style);
+    for (const t of out) if (!finals.includes(t)) finals.push(t);
+  }
+  list = list.filter(t => !t.final);
+  finalsSkipped = finals.length;
+  if (!list.length) { if (finals.length) finalRefused(finals); return 0; }
   beginGeometryEdit(prop, label || 'edit trim');
   for (const t of list) fn(t);
   touch(); rebuildModel(); renderInspector();
+  if (finals.length) toast(finalWords(finals.length) + ' left as ' + (finals.length === 1 ? 'it is' : 'they are') + ': marked final.', 'warn');
   return list.length;
+}
+let finalsSkipped = 0;           // how many final sections the last editTrims left alone
+const finalsNote = () => finalsSkipped ? ' ' + finalWords(finalsSkipped) + ' marked final left as ' + (finalsSkipped === 1 ? 'it is.' : 'they are.') : '';
+// ---------- final ----------
+// MARK AS FINAL (right-click) keeps a section from being changed by accident: dragging, the
+// panel, the catalog, deleting and every change made at a wider reach pass it by until UNMARK
+// FINAL. The outlets and radiators on its wall still shape it.
+function finalWords(n) { return n === 1 ? '1 section' : n + ' sections'; }
+function finalRefused(list) {
+  toast((list.length === 1 ? 'This section is' : 'These ' + list.length + ' sections are') + ' marked final. Right-click and choose UNMARK FINAL to change ' + (list.length === 1 ? 'it' : 'them') + '.', 'warn');
+  return 0;
+}
+// True when `t` may be changed; otherwise says why and returns false.
+function trimChangeable(t) {
+  if (!t || !t.final) return !!t;
+  finalRefused([t]);
+  return false;
+}
+function setTrimFinal(ids, on) {
+  const list = ids.map(trimById).filter(t => t && !!t.final !== on);
+  if (!list.length) return;
+  beginGeometryEdit(prop, on ? 'mark trim final' : 'unmark trim final');
+  for (const t of list) { if (on) t.final = true; else delete t.final; }
+  if (on && trimEdit) { trimEdit = false; trimReach = []; setHint(''); refreshTrimDims(); }
+  touch(); renderInspector(); requestRender(2);
+  toast(finalWords(list.length) + (on ? ' marked final. Right-click and choose UNMARK FINAL to change ' + (list.length === 1 ? 'it' : 'them') + '.' : ' no longer final.'), 'ok');
+}
+// SELECT THE GROUP'S, ROOM'S or PROJECT'S TRIM: the sections marked final are left out, and a
+// pop-up says so (OK selects the rest; Cancel keeps the selection as it is).
+function selectTrimReach(ids, scope) {
+  const design = designNow(), pool = design.pool(ids, scope), finals = design.finalsIn(ids, scope);
+  if (finals.length) {
+    const what = SCOPE_LABELS[scope].toLowerCase();
+    const msg = 'Selecting the ' + what + '\'s trim: ' + finalWords(pool.length) + '.\n\n'
+      + finalWords(finals.length) + ' marked final ' + (finals.length === 1 ? 'is' : 'are') + ' left out. Changes made to this selection will not reach '
+      + (finals.length === 1 ? 'it' : 'them') + ' until ' + (finals.length === 1 ? 'it is' : 'they are') + ' unmarked (right-click, UNMARK FINAL).';
+    if (!confirm(msg)) return;
+  }
+  if (!pool.length) { toast('Every section of the ' + SCOPE_LABELS[scope].toLowerCase() + '\'s trim is marked final.', 'warn'); return; }
+  selectTrims(pool.map(t => t.id));
 }
 // Move the height line a section is on by `dy`, with everything CHANGES REACH carries along.
 function moveTrimLine(t, edge, dy, label) {
+  if (!trimChangeable(t)) return;
   const design = designNow();
   const pool = design.pool(trimIds().includes(t.id) ? trimIds() : [t.id], trimScope);
   const plan = design.planLine(pool.map(x => JSON.parse(JSON.stringify(x))), t.id, edge, dy, { scope: trimScope });
@@ -2887,6 +2950,8 @@ const TRIM_EDIT_HINT = 'EDIT TRIM: drag a rail or the inside of a box to move th
 const BOARD_EDIT_HINT = 'EDIT TRIM BOARD: drag the selected board to move it, or one of its ends to make it longer or shorter; Shift moves it any way. Esc or E when done.';
 function editHint() { return selection && selection.board ? BOARD_EDIT_HINT : TRIM_EDIT_HINT; }
 function toggleTrimEdit() {
+  const sel = trimIds().map(trimById).filter(Boolean);
+  if (!trimEdit && sel.length && sel.every(t => t.final)) { finalRefused(sel); return; }
   trimEdit = !trimEdit && trimIds().length > 0;
   if (!trimEdit) { trimReach = []; updateOutlineTargets(); requestRender(2); }
   setHint(trimEdit ? editHint() : '');
@@ -2895,6 +2960,7 @@ function toggleTrimEdit() {
 }
 // One more or one fewer box in the stretch of wall under x, on that section alone.
 function stepTrimCols(t, x, delta) {
+  if (!trimChangeable(t)) return;
   beginGeometryEdit(prop, delta > 0 ? 'add trim panel' : 'remove trim panel');
   const r = designNow().stepCols(t, x, delta);
   if (!r) return;
@@ -2935,7 +3001,9 @@ function renderTrimPanel() {
       const at = (t.colsAt || []).slice(0, now.length); while (at.length < now.length) at.push(null);
       at[i] = n; x.colsAt = at.some(v => v != null) ? at : null; x.cols = null; x.widths = null;
     }, 'trim panels'),
-    selectReach: scope => selectTrims(design.pool(ids, scope).map(t => t.id)),
+    selectReach: scope => selectTrimReach(ids, scope),
+    finals: list.filter(t => t.final).length, setFinal: on => setTrimFinal(ids, on),
+    finalsOut: design.finalsIn(ids, trimScope).filter(t => !ids.includes(t.id)).length,
     wallHeight: trimWallHeight,
     wallLength: t => { const w = trimWall(t); return w ? Math.hypot(w.bx - w.ax, w.by - w.ay) : 1; },
     layoutOf: t => design.layout(t),
@@ -2955,6 +3023,7 @@ function renderTrimPanel() {
 // A board double-clicked into (selection.board, a trims.js key) is changed on its own: the
 // change is kept in its section's t.boards and overrides the automatic layout for that board.
 function editBoards(t, fn, label) {
+  if (!trimChangeable(t)) return;
   beginGeometryEdit(prop, label);
   fn(t);
   touch(); rebuildModel(); renderInspector();
@@ -3083,6 +3152,7 @@ let boardDrag = null;
 function startBoardDrag(e, hit) {
   const b = selectedBoard();
   if (!b || boardOfHit(hit) !== b.key) return false;
+  if (!trimChangeable(b.t)) { e.stopImmediatePropagation(); e.preventDefault(); return true; }
   const at = trimFacePoint(e, b.t);
   if (!at) return false;
   const box = boardBox(b.part), v = b.part.kind === 'board' && b.part.dir === 'v', frame = b.part.kind === 'frame';
@@ -3182,12 +3252,11 @@ function onTrimDrop(e) {
   if (clientMode || !prop || mode === 'walk') return;
   const p = catalogItem(id);
   if (!p) return;
-  const swapOn = (ids, reach) => editTrims(t => swapTrimProduct(t, id, trimWallHeight(t)), 'swap trim', reach || ids.map(trimById).filter(Boolean));
+  const swapOn = (ids, reach) => editTrims(t => swapTrimProduct(t, id, trimWallHeight(t)), 'swap trim', reach || ids.map(trimById).filter(Boolean)) > 0;
   const hit = pick(e, { pins: false, notes: false, scans: false });
   if (hit && hit.kind === 'trim' && trimById(hit.id)) {
-    if (trimIds().includes(hit.id)) swapOn(trimIds(), true);
-    else { selectTrims([hit.id]); swapOn([hit.id]); }
-    toast('Trim swapped to ' + (p.short || p.title) + '.', 'ok');
+    const done = trimIds().includes(hit.id) ? swapOn(trimIds(), true) : (selectTrims([hit.id]), swapOn([hit.id]));
+    if (done) toast('Trim swapped to ' + (p.short || p.title) + '.' + finalsNote(), finalsSkipped ? 'warn' : 'ok');
     return;
   }
   const wall = hit && !hit.cap && hit.kind === 'wall' ? prop.walls.find(w => w.id === hit.id) : null;
@@ -3195,8 +3264,8 @@ function onTrimDrop(e) {
   const side = wallSideOfHit(hit), group = s => (TRIM_STYLES[s] || {}).group;
   const kin = (prop.trims || []).filter(t => t.wallId === wall.id && t.side === side && group(t.style) === group(p.style));
   if (kin.length) {
-    selectTrims(kin.map(t => t.id)); swapOn(kin.map(t => t.id));
-    toast((kin.length === 1 ? 'This face\'s ' + (TRIM_STYLES[kin[0].style] || {}).label : kin.length + ' sections on this face') + ' swapped to ' + (p.short || p.title) + '.', 'ok');
+    selectTrims(kin.map(t => t.id));
+    if (swapOn(kin.map(t => t.id))) toast((kin.length === 1 ? 'This face\'s ' + (TRIM_STYLES[kin[0].style] || {}).label : kin.length + ' sections on this face') + ' swapped to ' + (p.short || p.title) + '.' + finalsNote(), finalsSkipped ? 'warn' : 'ok');
     return;
   }
   addTrims(id, [{ wall, side }]);
@@ -3337,6 +3406,7 @@ function onTrimPointerDown(e) {
   if (!grab) return;
   // The press is ours: the camera does not orbit, and the click is not a selection.
   e.stopImmediatePropagation(); e.preventDefault();
+  if (!trimChangeable(grab.t)) return;
   try { renderer.domElement.setPointerCapture(e.pointerId); } catch (err) { /* moves still reach the window */ }
   const design = designNow();
   // Everything the scope covers is copied as it stands: each move starts again from these.
@@ -3469,7 +3539,7 @@ function trimMenuItems(found) {
   const ids = trimIds().includes(t.id) ? trimIds() : [t.id];
   const pick = () => { if (!trimIds().includes(t.id)) selectTrims([t.id]); };
   const info = design.info(t);
-  items.push(['trim-info', trimLabel(t) + (info ? ', ' + info.roomName : ''), null]);
+  items.push(['trim-info', trimLabel(t) + (info ? ', ' + info.roomName : '') + (t.final ? ' (FINAL)' : ''), null]);
   if (v && !v.preset && (v.boxes || v.bays)) {
     const word = v.bays ? 'BAY' : 'PANEL';
     items.push(['trim-add', 'ADD A ' + word + ' HERE', () => { pick(); stepTrimCols(t, at.x, 1); }]);
@@ -3485,7 +3555,7 @@ function trimMenuItems(found) {
   for (const s of design.scopes(ids)) {
     if (s.id === 'selected') continue;
     const n = design.pool(ids, s.id).length;
-    items.push(['trim-select-' + s.id, 'SELECT THE ' + s.label + '\'S TRIM (' + n + ')', () => selectTrims(design.pool(ids, s.id).map(x => x.id))]);
+    items.push(['trim-select-' + s.id, 'SELECT THE ' + s.label + '\'S TRIM (' + n + ')', () => selectTrimReach(ids, s.id)]);
   }
   items.push(null);
   for (const s of design.scopes(ids)) items.push(['trim-reach-' + s.id, (s.id === trimScope ? '✓ ' : '') + 'CHANGES REACH: ' + s.label + ' (' + s.count + ')', () => { pick(); setTrimScope(s.id); }]);
@@ -3498,6 +3568,10 @@ function trimMenuItems(found) {
   if (boardChanges(t).total) items.push(['trim-boards-back', 'PUT EVERY BOARD BACK (' + boardChanges(t).total + ')', () => { if (!trimIds().includes(t.id)) selectTrims([t.id]); editBoards(t, x => restoreAllBoards(x), 'put trim boards back'); }]);
   items.push(null);
   items.push(['trim-edit', trimEdit ? 'DONE EDITING' : 'EDIT BY DRAGGING', () => { pick(); toggleTrimEdit(); }]);
+  // MARK AS FINAL goes to the selection when the section is in it, else to this section alone.
+  const all = ids.map(trimById).filter(Boolean), allFinal = all.every(x => x.final);
+  const many = all.length > 1 ? ' (' + all.length + ')' : '';
+  items.push(['trim-final', allFinal ? 'UNMARK FINAL' + many : 'MARK AS FINAL' + many, () => { pick(); setTrimFinal(ids, !allFinal); }]);
   items.push(['trim-delete', 'DELETE THIS SECTION', () => deleteTrims([t.id])]);
   return items;
 }

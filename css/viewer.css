@@ -486,6 +486,10 @@ html.dragging-trim .tp-mould .tp-mould-pick { border-style: dashed; }
 .tp-scope-btn.active span { color: var(--accent-ink); }
 .tp-scope-btn:focus-visible { box-shadow: var(--focus); outline: none; }
 .tp-scope-note { margin: 6px 0 8px; }
+.tp-final { margin: 8px 0 6px; padding: 7px 9px; border: 1px solid var(--accent); border-radius: 5px; background: var(--accent-soft); color: var(--ink); font-size: 12px; line-height: 1.4; }
+.tp-final b { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; margin-right: 6px; }
+.tp-final-note { margin: 6px 0; }
+.tp-is-final .btn:disabled, .tp-is-final input:disabled, .tp-is-final select:disabled { opacity: .45; cursor: not-allowed; }
 .tp-note { margin: 6px 0; padding-left: 8px; border-left: 2px solid var(--line-2); }
 
 /* DONE: a clean section. Only EDIT CUTS stays, small and faint in the bottom right corner

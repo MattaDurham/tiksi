@@ -119,6 +119,8 @@ export function normaliseTrim(t, prop) {
     ? t.colsAt.map(v => Number.isInteger(v) && v >= 0 && v <= 60 ? v : null) : null;
   t.material = typeof t.material === 'string' && t.material ? t.material : null;
   if (typeof t.name !== 'string') t.name = '';
+  // Marked final: nothing changes it until it is unmarked (trim-design.js leaves it out of every reach).
+  if (t.final === true) t.final = true; else delete t.final;
   const boards = normaliseBoards(t.boards);
   if (boards) t.boards = boards; else delete t.boards;
   setFrameLayout(t, t.frameLayout);

@@ -173,7 +173,16 @@ function layoutHtml(ctx, one) {
 // ctx: { trims, reach (the sections a change goes to), scope, scopes, setScope(id), values(t), summary, notes,
 //        wallHeight(t), wallLength(t), layoutOf(t) -> {cols, boxes, rects}, stretches(t), editing,
 //        design(key, value, label), line(t, edge, dy, label), swap(productId), swapStyle(style, productId),
-//        set(fn, label, reach), setStretch(t, i, n), selectReach(scope), remove(), toggleEdit(), selectWall(), faceName(t) }
+//        set(fn, label, reach), setStretch(t, i, n), selectReach(scope), remove(), toggleEdit(), selectWall(), faceName(t),
+//        finals (how many selected are marked final), finalsOut (final sections the reach leaves out), setFinal(on) }
+// A selection that is all final shows FINAL with UNMARK FINAL, and everything that would change it is turned off.
+function finalHtml(ctx, n) {
+  const all = ctx.finals === n, of = n === 1 ? 'This section' : 'These sections';
+  if (all) return `<div class="tp-final" role="status"><b>FINAL</b> ${of} cannot be changed until ${n === 1 ? 'it is' : 'they are'} unmarked.</div>
+    <button class="btn primary" data-tp-final="off" title="Lets ${n === 1 ? 'this section' : 'these sections'} be changed again.">UNMARK FINAL</button>`;
+  return (ctx.finals ? `<div class="empty tp-final-note">${ctx.finals} of the ${n} selected ${ctx.finals === 1 ? 'is' : 'are'} marked final and will not change.</div>` : '')
+    + (ctx.finalsOut ? `<div class="empty tp-final-note">${ctx.finalsOut} ${ctx.finalsOut === 1 ? 'section' : 'sections'} marked final ${ctx.finalsOut === 1 ? 'is' : 'are'} left out of this reach.</div>` : '');
+}
 export function trimPanelHtml(ctx) {
   const list = ctx.trims;
   const one = list.length === 1 ? list[0] : null;
@@ -186,6 +195,7 @@ export function trimPanelHtml(ctx) {
   const crownOnly = kinds.size === 1 && kinds.has('crown');
   let html = `<h3>${one ? 'WALL TRIM' : list.length + ' TRIM SECTIONS'}</h3>
     ${one ? `<div class="stat-line"><span>${escapeHtml(trimLabel(one))}</span><b></b></div><div class="stat-line"><span>Face</span><b>${escapeHtml(ctx.faceName(one))}</b></div>` : `<div class="stat-line"><span>${escapeHtml(style ? style.label : 'Several styles')}</span><b>${list.length} selected</b></div>`}
+    ${finalHtml(ctx, list.length)}
     ${scopeHtml(ctx)}
     ${ctx.scope !== 'selected' && ctx.poolCount > list.length ? `<button class="btn" data-select-reach title="Select every section in this reach, of any kind of trim.">SELECT THE ${escapeHtml(ctx.scopes.find(x => x.id === ctx.scope).label)}'S TRIM (${ctx.poolCount})</button>` : ''}
     ${stylePickersHtml(ctx)}
@@ -212,6 +222,7 @@ export function trimPanelHtml(ctx) {
     <div class="empty" style="margin:0 0 6px">Every moulding, board and panel is in PRODUCTS &gt; TRIM CATALOG. Open it floating over the model and drag an entry onto a moulding above, onto this panel, onto trim in the model or onto a wall.</div>
     <button class="btn" data-tp-catalog>OPEN THE TRIM CATALOG</button>`;
   html += `${one ? '<button class="btn" data-tp-wall>SELECT WALL</button>' : ''}
+    ${ctx.finals === list.length ? '' : `<button class="btn" data-tp-final="on" title="Nothing can change ${one ? 'this section' : 'these sections'} (dragging, this panel, the catalog, deleting, a change to the room or project) until UNMARK FINAL.">MARK AS FINAL${one ? '' : ' (' + list.length + ')'}</button>`}
     <button class="btn danger" data-tp-del>DELETE ${one ? 'THIS TRIM' : list.length + ' SECTIONS'}</button>`;
   return `<div class="tp-drop" data-tp-drop>${html}</div>`;
 }
@@ -220,6 +231,12 @@ export function bindTrimPanel(root, ctx) {
   const list = ctx.trims, one = list.length === 1 ? list[0] : null;
   const q = s => root.querySelector(s);
   q('[data-tp-edit]').onclick = () => ctx.toggleEdit();
+  root.querySelectorAll('[data-tp-final]').forEach(b => b.onclick = () => ctx.setFinal(b.dataset.tpFinal === 'on'));
+  // All final: nothing that changes the trim can be used. Selecting, the reach and the catalog stay.
+  if (list.length && ctx.finals === list.length) {
+    root.querySelectorAll('input, select, textarea, [data-tp-edit], [data-tp-del], [data-picker] button, [data-mould] button').forEach(el => { el.disabled = true; });
+    root.querySelector('[data-tp-drop]')?.classList.add('tp-is-final');
+  }
   root.querySelectorAll('[data-picker] [data-choice]').forEach(btn => btn.onclick = () => {
     const key = btn.closest('[data-picker]').dataset.picker;
     ctx.preset(key, btn.dataset.choice);
