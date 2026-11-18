@@ -92,9 +92,9 @@ try {
   await page.waitForFunction(() => window.testTextures.pendingTextureJobs() === 0, null, { timeout: 90000 });
   await captureFrame(page, 'high.png');
   const initial = await page.locator('.v-canvas').evaluate(c => ({ width: c.width, height: c.height }));
-  await page.click('#tiksi-menu').then(() => page.click('#btn-file'));await page.click('[data-file-tab=settings]');await page.getByText('Model environment',{exact:true}).click();
-  await page.selectOption('[data-file-env] [data-env=quality]', 'ultra');
-  await page.click('[data-close-file]');
+  await page.click('#side [data-act=light]');   // MODEL › DISPLAY › Lighting and sun
+  await page.selectOption('.v-env [data-env=quality]', 'ultra');
+  await page.click('#side [data-act=light]');
   await page.waitForFunction(() => window.testTextures.pendingTextureJobs() === 0, null, { timeout: 120000 });
   const ultra = await page.locator('.v-canvas').evaluate(c => ({ width: c.width, height: c.height }));
   assert.ok(ultra.width > initial.width, 'Ultra increases drawing-buffer resolution at DPR 1');
@@ -104,7 +104,7 @@ try {
   // on shared Linux software renderers. Keep every pixel assertion and bound
   // this expensive capture separately; High/Low retain their existing budget.
   await captureFrame(page, 'ultra.png', 180000);
-  await page.click('#tiksi-menu').then(() => page.click('#btn-file'));await page.click('[data-file-tab=exchange]');await page.click('[data-save-view]');
+  await page.click('#side [data-act=render]');   // MODEL › DISPLAY › Render a still image
   await page.selectOption('[data-export-size]', '3840');
   const displayed = await page.locator('[data-export-dimensions]').innerText();
   // A 4K still can occupy SwiftShader's main thread longer than Playwright's
@@ -128,8 +128,8 @@ try {
   assert.deepEqual(restored, ultra, 'Export restores interactive render size');
   await page.click('[data-section]');
   await page.click('[data-xray]');
-  await page.click('#tiksi-menu').then(() => page.click('#btn-file'));await page.click('[data-file-tab=settings]');await page.getByText('Model environment',{exact:true}).click();
-  await page.selectOption('[data-file-env] [data-env=quality]', 'low');await page.click('[data-close-file]');
+  await page.click('#side [data-act=light]');
+  await page.selectOption('.v-env [data-env=quality]', 'low');await page.click('#side [data-act=light]');
   await page.click('[data-mode=top]');
   await captureFrame(page, 'section-xray-low.png');
   // Pick a real floor through the viewer's raycaster; the join must carry the clicked element.

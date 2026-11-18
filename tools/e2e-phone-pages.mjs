@@ -32,7 +32,7 @@ import net from 'node:net';
 import { chromium, webkit, devices } from 'playwright';
 
 const W = 402, H = 874;
-const PAGES = ['photos', 'materials', 'measure', 'reconstruct', 'research', 'projects', 'products', 'budget', 'schedule', 'sheets', 'documents', 'guide'];
+const PAGES = ['photos', 'measure', 'reconstruct', 'products', 'materials', 'research', 'estimate', 'schedule', 'documents', 'guide'];
 const failures = [];
 let passed = 0;
 const check = (ok, what) => { if (ok) { passed++; console.log('  ok   ' + what); } else { failures.push(what); console.log('  FAIL ' + what); } };
@@ -123,7 +123,7 @@ async function loadDemo(page, url) {
     await (await import('/js/disk-workspace.js')).diskWorkspace.sync();
   });
   await page.waitForFunction(() => document.querySelector('#save-status')?.textContent === 'SAVED TO DISK', null, { timeout: 60000 });
-  await page.evaluate(() => { location.hash = '#/projects'; });
+  await page.evaluate(() => { location.hash = '#/estimate'; });
   await page.reload();
   await page.waitForFunction(() => /SAVED/.test(document.querySelector('#save-status')?.textContent || ''), null, { timeout: 60000 });
 }
@@ -133,7 +133,8 @@ async function loadDemo(page, url) {
 async function go(page, url, view) {
   if (!page.url().startsWith(url)) await page.goto(url + '/#/' + view);
   else await page.evaluate(h => { if (location.hash !== h) location.hash = h; }, '#/' + view);
-  await page.waitForFunction(v => document.documentElement.dataset.view === v || document.querySelector(`#rail a.active`)?.dataset.view === v, view, { timeout: 60000 });
+  // A part of a tab (VIDEOS, MATERIALS, PHOTO TO 3D…) keeps its own address under its tab.
+  await page.waitForFunction(v => location.hash.split('?')[0] === '#/' + v.split('?')[0] && !!document.querySelector('#view')?.firstElementChild && !/^Opening/.test(document.querySelector('#view').innerText), view, { timeout: 60000 });
   await page.waitForTimeout(600);
 }
 const openPanel = async page => { await page.locator('.fd-menu').tap(); await page.locator('.fd-panel').waitFor({ state: 'visible' }); await page.waitForTimeout(300); };
@@ -269,14 +270,10 @@ async function run(label, engine, profile) {
     });
 
     await part(label, 'FILE', async () => {
-      // FILE on MODEL: Settings shows the model environment, and every tab works at phone width.
+      // FILE: every tab works at phone width.
       await page.locator('.fd-panel [data-file]').scrollIntoViewIfNeeded();
       await page.locator('.fd-panel [data-file]').tap();
       await page.locator('dialog.file-dialog[open]').waitFor();
-      await page.locator('[data-file-tab=settings]').tap();
-      await page.locator('dialog.file-dialog[open] [data-file-env]').evaluate(e => e.closest('details').open = true);
-      const env = await page.locator('[data-file-env]').evaluate(e => ({ shown: getComputedStyle(e).display !== 'none' && e.getBoundingClientRect().height > 20, controls: e.querySelectorAll('select, input, button').length }));
-      check(env.shown && env.controls > 2, label + ': FILE, Settings, Model environment has its settings on MODEL (' + JSON.stringify(env) + ')');
       const fileTabs = {};
       for (const tab of ['project', 'capture', 'exchange', 'settings']) {
         await page.locator(`[data-file-tab=${tab}]`).tap();
@@ -352,30 +349,31 @@ async function run(label, engine, profile) {
       await page.waitForTimeout(450);
     });
 
-    await part(label, 'PROJECTS', async () => {
-      // ---------- PROJECTS ----------
-      await go(page, url, 'projects');
-      await page.locator('#proj-list .proj-card').first().tap();
-      await page.locator('#items-table tr[data-item]').first().waitFor();
+    await part(label, 'scope items', async () => {
+      // ---------- ESTIMATE's scope items ----------
+      await go(page, url, 'estimate');
+      await page.locator('.es-rooms tr.es-room').first().waitFor();
+      for (const tr of await page.locator('.es-rooms tr.es-room').all()) { if (await page.locator('tr[data-si]').count()) break; await tr.locator('td').first().tap(); }
+      await page.locator('tr[data-si]').first().waitFor();
       const items = () => page.evaluate(async () => { const s = await import('/js/store.js'); return s.ws.data.projects.reduce((n, p) => n + p.items.length, 0); });
-      const del = page.locator('#items-table tr[data-item] .row-del').first();
+      const del = page.locator('tr[data-si] .row-del').first();
       const delBox = await del.boundingBox();
-      check(await del.evaluate(b => getComputedStyle(b).opacity === '1') && delBox.width >= 44 && delBox.height >= 44, label + ': a scope item\'s remove button shows on a touch screen and is 44 points');
+      check(delBox.width >= 44 && delBox.height >= 44, label + ': a scope item\'s remove button is 44 points on a touch screen');
       const n0 = await items();
-      const removedId = await page.locator('#items-table tr[data-item]').first().getAttribute('data-item');
+      const removedId = await page.locator('tr[data-si]').first().getAttribute('data-si');
       let asked = '';
       page.removeAllListeners('dialog');
       page.once('dialog', d => { asked = d.message(); d.dismiss(); });
       await del.tap();
       await page.waitForTimeout(300);
-      check(/^Remove ".*" from .*\? .*It can be restored from Removed records\.$/.test(asked) && await items() === n0, label + ': removing a scope item asks first, explains recovery, and No keeps it (' + asked.slice(0, 60) + ')');
+      check(/^Remove ".*"\? REMOVED RECORDS brings it back\.$/.test(asked) && await items() === n0, label + ': removing a scope item asks first, explains recovery, and No keeps it (' + asked.slice(0, 60) + ')');
       page.once('dialog', d => d.accept());
-      await page.locator('#items-table tr[data-item] .row-del').first().tap();
+      await page.locator('tr[data-si] .row-del').first().tap();
       await page.waitForTimeout(300);
       check(await items() === n0 - 1, label + ': and Yes removes it');
-      check(await page.evaluate(async id => (await import('/js/store.js')).activeProperty().removedRecords.some(e => e.kind === 'item' && e.records.some(r => r.id === id)), removedId), label + ': the removed item is retained with its original ID for recovery');
+      check(await page.evaluate(async id => (await import('/js/store.js')).activeProperty().removedRecords.some(e => e.kind === 'item' && e.records.some(r => r.id === id)), removedId), label + ': the removed item is kept in REMOVED RECORDS');
       page.on('dialog', answer);
-      const card = await page.locator('#items-table tr[data-item]').first().boundingBox();
+      const card = await page.locator('tr[data-si]').first().boundingBox();
       check(card && card.width <= W, label + ': scope items are cards that fit the screen (' + Math.round(card?.width || 0) + ' wide)');
     });
 
@@ -383,30 +381,14 @@ async function run(label, engine, profile) {
       // ---------- SCHEDULE ----------
       await go(page, url, 'schedule');
       await page.evaluate(async () => { const s = await import('/js/store.js'); for (const p of s.ws.data.projects) p.selected = true; s.touch(); });
-      await go(page, url, 'budget'); await go(page, url, 'schedule');
+      await go(page, url, 'estimate'); await go(page, url, 'schedule');
       const bar = page.locator('#gantt .g-item').first();
       if (await bar.count()) {
         await bar.tap();
         const detail = await page.locator('#gantt-detail').textContent();
         check(/day.*, [A-Z][a-z]{2} \d+, \d{4} to [A-Z][a-z]{2} \d+, \d{4}, (on the critical path|slack )/.test(detail), label + ': a tapped bar shows its dates and slack (' + detail.slice(0, 80) + ')');
-        const label0 = await page.locator('#gantt .gantt-svg').evaluate(svg => [...svg.querySelectorAll('line')].find(l => l.getAttribute('y1') === '0' && l.getAttribute('x1') === l.getAttribute('x2'))?.getAttribute('x1'));
-        check(Number(label0) <= 130, label + ': the name column gives the chart room on a phone (separator at ' + label0 + ')');
-        // Finger or mouse can change while the page is open (an iPad and a trackpad): SCHEDULE
-        // follows. Chromium can switch its touch screen off and on; WebKit cannot.
-        if (engine === chromium) {
-          const cdp = await page.context().newCDPSession(page);
-          const state = () => page.evaluate(() => ({ strip: !!document.querySelector('#gantt-detail'), taps: document.querySelectorAll('#gantt .g-item').length, touch: document.documentElement.classList.contains('touch') }));
-          await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
-          await page.waitForFunction(() => !matchMedia('(pointer: coarse)').matches && navigator.maxTouchPoints === 0);
-          await page.waitForFunction(() => !document.documentElement.classList.contains('touch') && !document.querySelector('#gantt-detail'));
-          const mouse = await state();
-          await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
-          await page.waitForFunction(() => matchMedia('(pointer: coarse)').matches && navigator.maxTouchPoints > 0);
-          await page.waitForFunction(() => document.documentElement.classList.contains('touch') && !!document.querySelector('#gantt-detail'));
-          const finger = await state();
-          check(!mouse.touch && !mouse.strip && mouse.taps === 0 && finger.touch && finger.strip && finger.taps > 0, label + ': SCHEDULE follows the touch mark while open (mouse ' + JSON.stringify(mouse) + ', finger ' + JSON.stringify(finger) + ')');
-          // This session stays open: closing it would undo its touch screen for the parts after.
-        }
+        const axis = await page.locator('#gantt th.axis').evaluate(th => Math.round(th.getBoundingClientRect().left - th.closest('#gantt').getBoundingClientRect().left));
+        check(axis <= 200, label + ': on a phone the work and its days leave the chart room (chart starts at ' + axis + ')');
       } else check(false, label + ': SCHEDULE has bars to tap');
     });
 
@@ -460,18 +442,6 @@ async function run(label, engine, profile) {
       await go(page, url, 'reconstruct');
       const open = await page.locator('.rc-open-model').evaluate(e => ({ hidden: e.hidden, shown: getComputedStyle(e).display !== 'none' }));
       check(open.hidden && !open.shown, label + ': PHOTO TO 3D keeps OPEN MODEL hidden until there is a model (' + JSON.stringify(open) + ')');
-      await go(page, url, 'projects');
-      const clear = await page.locator('#proj-clear').evaluate(e => ({ hidden: e.hidden, shown: getComputedStyle(e).display !== 'none' }));
-      check(clear.hidden && !clear.shown, label + ': PROJECTS keeps its filter CLEAR hidden with no filter (' + JSON.stringify(clear) + ')');
-      // A tap on the in-program label flips the checkbox and does not open the card.
-      const cardEl = page.locator('#proj-list .proj-card:not(.active)').first();
-      const id = await cardEl.getAttribute('data-id');
-      const tap = await cardEl.locator('.bd-sel-tap').boundingBox();
-      const was = await page.evaluate(async id => (await import('/js/store.js')).ws.data.projects.find(p => p.id === id).selected, id);
-      await page.touchscreen.tap(tap.x + 3, tap.y + 3);
-      await page.waitForTimeout(400);
-      const now = await page.evaluate(async id => { const p = (await import('/js/store.js')).ws.data.projects.find(p => p.id === id); return { sel: p.selected, open: !!document.querySelector('#proj-list .proj-card.active[data-id="' + id + '"]') || document.querySelector('#proj-detail [data-f=name]')?.value === p.name }; }, id);
-      check(now.sel === !was && !now.open, label + ': a tap at the edge of a card\'s checkbox flips it and does not open the card (' + JSON.stringify(now) + ')');
     });
 
     await part(label, 'PHOTO TO 3D', async () => {
@@ -506,21 +476,22 @@ async function desktop() {
     context.setDefaultTimeout(20000); context.setDefaultNavigationTimeout(120000);
     const page = await context.newPage();
     page.on('dialog', d => (d.type() === 'beforeunload' ? d.accept() : d.dismiss()).catch(() => {}));
-    await page.goto(url + '/#/projects');
+    await page.goto(url + '/#/estimate');
     await page.waitForFunction(() => /SAVED/.test(document.querySelector('#save-status')?.textContent || ''), null, { timeout: 60000 });
     await loadDemo(page, url);
     await part('desktop', 'pages', async () => {
       check(!(await page.evaluate(() => document.documentElement.classList.contains('touch') || document.documentElement.classList.contains('phone'))), 'desktop: a computer is neither touch nor phone');
-      await go(page, url, 'projects');
-      await page.locator('#proj-list .proj-card').first().click();
-      await page.locator('#items-table tr[data-item]').first().waitFor();
-      const del = await page.locator('#items-table .row-del').first().evaluate(b => { const cs = getComputedStyle(b); return { bg: cs.backgroundColor, border: cs.borderTopWidth, opacity: cs.opacity, w: b.getBoundingClientRect().width }; });
-      check((del.bg === 'rgba(0, 0, 0, 0)' || del.bg === 'transparent') && del.border === '0px' && del.opacity === '0' && Math.round(del.w) === 22, 'desktop: a scope item\'s remove control is the faint 22-point mark it was, no grey box (' + JSON.stringify(del) + ')');
+      await go(page, url, 'estimate');
+      await page.locator('.es-rooms tr.es-room').first().waitFor();
+      for (const tr of await page.locator('.es-rooms tr.es-room').all()) { if (await page.locator('tr[data-si]').count()) break; await tr.locator('td').first().click(); }
+      await page.locator('tr[data-si] .row-del').first().waitFor();
+      const del = await page.locator('tr[data-si] .row-del').first().evaluate(b => { const cs = getComputedStyle(b); return { bg: cs.backgroundColor, border: cs.borderTopWidth }; });
+      check((del.bg === 'rgba(0, 0, 0, 0)' || del.bg === 'transparent') && del.border === '0px', 'desktop: a scope item\'s remove control in ESTIMATE is a quiet ×, not a button (' + JSON.stringify(del) + ')');
       await page.evaluate(async () => { const s = await import('/js/store.js'); for (const p of s.ws.data.projects) p.selected = true; s.touch(); });
       await go(page, url, 'schedule');
-      await page.locator('#gantt .gantt-svg').waitFor();
-      const sched = await page.evaluate(() => ({ strip: !!document.querySelector('#gantt-detail'), stops: document.querySelectorAll('#gantt [tabindex]').length, rows: document.querySelectorAll('#gantt .g-rowg').length, sep: [...document.querySelectorAll('#gantt line')].find(l => l.getAttribute('y1') === '0' && l.getAttribute('x1') === l.getAttribute('x2'))?.getAttribute('x1') }));
-      check(!sched.strip && sched.stops === 0 && sched.rows > 0 && sched.sep === '236', 'desktop: SCHEDULE has no new strip, no new tab stops and its full name column (' + JSON.stringify(sched) + ')');
+      await page.locator('#gantt .sc-tab').waitFor();
+      const sched = await page.evaluate(() => ({ rows: document.querySelectorAll('#gantt tr.g-item').length, cols: document.querySelectorAll('#gantt thead th').length, starts: getComputedStyle(document.querySelector('#gantt thead th:nth-child(3)')).display }));
+      check(sched.rows > 0 && sched.cols === 7 && sched.starts !== 'none', 'desktop: SCHEDULE shows every line with its days, dates and what it waits for (' + JSON.stringify(sched) + ')');
       await go(page, url, 'documents');
       check(await page.locator('[data-toolbar] [data-touch-viewer]').count() === 0, 'desktop: DOCUMENTS keeps its layout tools');
       // A narrow window on a computer keeps the computer's DOCUMENTS: lists beside the sheet, not

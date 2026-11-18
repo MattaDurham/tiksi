@@ -90,6 +90,7 @@ export function setSaveStatus(text, busy) {
   const el = document.getElementById('save-status');
   if (!el) return;
   el.textContent = text;
+  el.title = text;   // shortened with … when the top bar is narrow
   el.classList.toggle('busy', !!busy);
 }
 
@@ -903,7 +904,7 @@ export function materialById(id) {
 
 export function projectById(id) { return ws.data.projects.find(p => p.id === id) || null; }
 
-// The projects of the active property, in list order: what PROJECTS, BUDGET, SCHEDULE and the
+// The projects of the active property, in list order: what ESTIMATE, SCHEDULE and the
 // scope pickers show. A project whose property is gone (or that never had one) counts as the
 // active property's, so nothing drops out of sight.
 export function propertyProjects() {
@@ -1160,13 +1161,30 @@ export function itemTotals(it) {
   return { low: (it.low || 0) * q, likely: (it.likely || 0) * q, high: (it.high || 0) * q };
 }
 
-export function projectTotals(pr) {
+// A project's own scope items, added up, with nothing worked out from the drawing.
+export function itemsTotals(pr) {
   const t = { low: 0, likely: 0, high: 0 };
-  for (const it of pr.items) {
+  for (const it of pr.items || []) {
     const x = itemTotals(it);
     t.low += x.low; t.likely += x.likely; t.high += x.high;
   }
   return t;
+}
+
+// What a project costs and what work it schedules, the same on every page. Without rules these are
+// its scope items; job.js sets its rules when the app starts (drawn trim, markups, the carpenter's
+// days), so ESTIMATE, SCHEDULE, the program and the one-pager agree.
+let costRule = null, workRule = null;
+export function setProjectRules({ cost = null, work = null } = {}) { costRule = cost; workRule = work; }
+export function projectTotals(pr) {
+  if (costRule) { try { const t = costRule(pr); if (t) return t; } catch (e) { console.error('project cost', e); } }
+  return itemsTotals(pr);
+}
+// The work rows of a top-level project and its subprojects (those `include` accepts), or null when
+// no rule gives them.
+export function projectWork(pr, include) {
+  if (workRule) { try { const w = workRule(pr, include); if (w) return w; } catch (e) { console.error('project work', e); } }
+  return null;
 }
 
 // How far a project's scope has got: items with any price, and items marked done. A $0

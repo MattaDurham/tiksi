@@ -1,6 +1,7 @@
-// Subprojects in PROJECTS: added from a project, listed under its card (open first, highest
-// priority first, done struck through), edited from the parent's table, linked to a room,
-// moved between projects, labelled "Parent / Child" in BUDGET, and deleted with their project.
+// A project's rooms in ESTIMATE (each a subproject): a new project, rooms added from the model or
+// not in it, renamed and linked to a model room, a scope item in a room, a room removed and kept
+// in REMOVED RECORDS, the project deleted with its rooms, and ESTIMATE and SCHEDULE following the
+// property picker.
 // Synthetic workspace only. Run: node tools/e2e-subprojects.mjs (Playwright + Chromium installed).
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -25,13 +26,14 @@ const errors = [];
 page.on('pageerror', e => errors.push(e.message));
 const check = (ok, label) => { assert.ok(ok, label); console.log('  ok   ' + label); };
 page.on('dialog', d => d.accept());
+const until = async (fn, what, ms = 15000) => { const t = Date.now(); while (!(await fn())) { if (Date.now() - t > ms) throw new Error('Timed out: ' + what); await new Promise(r => setTimeout(r, 100)); } };
 const data = () => page.evaluate(async () => {
   const s = await import('/js/store.js');
   return s.ws.data.projects.map(p => ({ id: p.id, name: p.name, parentId: p.parentId, priority: p.priority, roomId: p.roomId, source: p.source, status: p.status }));
 });
 
 try {
-  await page.goto(url + '/#/projects');
+  await page.goto(url + '/#/estimate');
   await page.waitForSelector('#btn-file', { state: 'attached' });
   await page.evaluate(async () => {
     const s = await import('/js/store.js');
@@ -39,82 +41,56 @@ try {
     const p = s.propertyTemplate('Test House');
     p.rooms.push({ id: 'r-bath', level: p.levels[0].id, name: 'Hall bath', pts: [[0, 0], [2, 0], [2, 2], [0, 2]], material: null, ceilingMaterial: null });
     s.ws.data.properties.push(p); s.ws.data.settings.activePropertyId = p.id;
-    s.ws.data.projects.push(
-      { id: 'proj-list', name: 'Fix list', propertyId: p.id, category: 'interior', status: 'idea', selected: false, startDate: '', notes: '', items: [] },
-      { id: 'proj-other', name: 'Kitchen', propertyId: p.id, category: 'kitchen', status: 'idea', selected: false, startDate: '', notes: '', items: [] },
-    );
+    s.ws.data.projects.push({ id: 'proj-other', name: 'Kitchen', propertyId: p.id, category: 'kitchen', status: 'idea', selected: false, startDate: '', notes: '', items: [] });
     s.touch();
   });
-  await page.goto(url + '/#/projects');
-  await page.waitForSelector('#proj-list .proj-card');
+  await page.goto(url + '/#/estimate?project=proj-other');
+  await page.waitForSelector('.es-head [data-jf="name"]');
 
-  console.log('\n[add] subprojects are added from the project and listed under its card');
-  for (const name of ['Shelf in the basement bath', 'Door does not latch', 'Toilet is clogged']) {
-    await page.click('.proj-card[data-id="proj-list"]');
-    await page.click('#add-sub');
-    await page.waitForSelector(`.sub-crumb`);
-    // The new subproject's name field has focus; Enter keeps the typed name.
-    check(await page.evaluate(() => document.activeElement?.matches('#proj-detail [data-f="name"]')), 'ADD SUBPROJECT puts the cursor in its name field');
-    await page.keyboard.type(name);
-    await page.keyboard.press('Enter');
-  }
-  let d = await data();
-  const subs = d.filter(p => p.parentId === 'proj-list');
-  check(subs.length === 3, 'three subprojects point at their project (' + subs.length + ')');
-  check(await page.locator('#proj-list .proj-card').count() === 2, 'only top-level projects get cards');
-  check(await page.locator('.sub-list[data-parent="proj-list"] .sub-row').count() === 3, 'the three subprojects sit under their card');
-  check((await page.textContent('.view-sub')).includes('2 projects, 3 subprojects'), 'the header counts projects and subprojects');
+  console.log('\n[new] a project is started and named in ESTIMATE');
+  await page.click('[data-new-job]');
+  await page.waitForFunction(() => document.activeElement?.matches('[data-jf="name"]'));
+  check(true, '+ NEW PROJECT puts the cursor in its name');
+  await page.keyboard.type('Fix list'); await page.keyboard.press('Tab');
+  await until(async () => (await data()).some(p => p.name === 'Fix list' && !p.parentId), 'the named project');
+  const fix = (await data()).find(p => p.name === 'Fix list');
+  await page.selectOption('[data-jf="status"]', 'scoped');
+  await until(async () => (await data()).find(p => p.id === fix.id).status === 'scoped', 'its status');
+  check(true, 'its status is set at the top');
 
-  console.log('\n[edit] priority, status and room from the parent and the subproject');
-  await page.click('.proj-card[data-id="proj-list"]');
-  const row = name => page.locator('#subs-table tr', { hasText: name });
-  await row('Toilet is clogged').locator('[data-sf="priority"]').selectOption('high');
-  await row('Door does not latch').locator('[data-sf="priority"]').selectOption('medium');
-  await row('Shelf in the basement bath').locator('[data-sf="status"]').selectOption('done');
-  const order = await page.locator('.sub-list[data-parent="proj-list"] .sub-name').allTextContents();
-  check(order.join(' | ') === 'Toilet is clogged | Door does not latch | Shelf in the basement bath', 'open subprojects come first, highest priority first (' + order.join(' | ') + ')');
-  const doneRow = page.locator('.sub-row', { hasText: 'Shelf in the basement bath' });
-  check(await doneRow.evaluate(n => n.classList.contains('done') && getComputedStyle(n.querySelector('.sub-name')).textDecorationLine === 'line-through'), 'a done subproject is struck through');
-  check((await page.textContent('.proj-card[data-id="proj-list"] .p-sub')).includes('3 subprojects (2 open)'), 'the card counts open subprojects');
+  console.log('\n[rooms] rooms come from the model, or are named when not in it');
+  await page.selectOption('[data-add-room]', 'r-bath');
+  await until(async () => (await data()).some(p => p.parentId === fix.id && p.roomId === 'r-bath' && p.name === 'Hall bath'), 'the bath');
+  check(true, 'a model room becomes a room of the project with its name and link');
+  await page.selectOption('[data-add-room]', '-');
+  await page.waitForFunction(() => document.activeElement?.matches('[data-rf="name"]'));
+  await page.keyboard.type('Basement'); await page.keyboard.press('Tab');
+  await until(async () => (await data()).some(p => p.parentId === fix.id && p.name === 'Basement' && !p.roomId), 'the basement');
+  check(true, 'a room not in the model is named where it is added');
+  const basement = (await data()).find(p => p.name === 'Basement');
+  await page.selectOption(`[data-rf="roomId"][data-room-of="${basement.id}"]`, 'r-bath');
+  await until(async () => (await data()).find(p => p.id === basement.id).roomId === 'r-bath', 'linked');
+  await page.selectOption(`[data-rf="roomId"][data-room-of="${basement.id}"]`, '');
+  check(true, 'a room can be linked to a model room and unlinked');
 
-  await page.click('.sub-row:has-text("Toilet is clogged")');
-  check((await page.textContent('.sub-crumb')).includes('Fix list'), 'a subproject names its project');
-  await page.selectOption('#proj-detail [data-f="roomId"]', 'r-bath');
-  await page.fill('#proj-detail [data-f="source"]', 'Shared note, line 1');
-  await page.dispatchEvent('#proj-detail [data-f="source"]', 'change');
-  d = await data();
-  const toilet = d.find(p => p.name === 'Toilet is clogged');
-  check(toilet.roomId === 'r-bath' && toilet.source === 'Shared note, line 1' && toilet.priority === 'high', 'room, source and priority are stored on the subproject');
-  await page.click('.sub-crumb [data-open]');
-  check((await row('Toilet is clogged').locator('td').nth(3).textContent()).trim() === 'Hall bath', 'the parent\'s table shows the room');
+  console.log('\n[items] a scope item in a room');
+  await page.click(`[data-add-item="${basement.id}"]`);
+  await page.waitForSelector(`tr[data-si]`);
+  await page.keyboard.type('Shelf'); await page.keyboard.press('Tab');
+  await until(async () => page.evaluate(async id => (await import('/js/store.js')).projectById(id).items[0]?.name === 'Shelf', basement.id), 'the item');
+  check(true, 'ADD ITEM puts the cursor in the new item\'s name');
 
-  console.log('\n[move] a subproject moves to another project; a project with subprojects cannot become one');
-  await page.click('.sub-row:has-text("Door does not latch")');
-  await page.selectOption('#proj-detail [data-f="parentId"]', 'proj-other');
-  d = await data();
-  check(d.find(p => p.name === 'Door does not latch').parentId === 'proj-other', 'the subproject now belongs to Kitchen');
-  check(await page.locator('.sub-list[data-parent="proj-other"] .sub-row').count() === 1, 'it is listed under Kitchen');
-  await page.click('.proj-card[data-id="proj-list"]');
-  check(await page.locator('#proj-detail [data-f="parentId"]').isDisabled(), 'a project with subprojects cannot be put under another');
+  console.log('\n[remove] a room is removed and kept; the project is deleted with its rooms');
+  await page.click(`[data-del-room="${basement.id}"]`);
+  await until(async () => !(await data()).some(p => p.id === basement.id), 'removed');
+  check(await page.evaluate(async id => (await import('/js/store.js')).activeProperty().removedRecords.some(e => e.kind === 'projects' && e.records.some(r => r.id === id && r.items.length === 1)), basement.id), 'the removed room is kept in REMOVED RECORDS with its item');
+  await page.click('[data-del-job]');
+  await until(async () => !(await data()).some(p => p.id === fix.id || p.parentId === fix.id), 'deleted');
+  check((await data()).map(p => p.name).join() === 'Kitchen', 'deleting the project deletes its rooms; Kitchen remains');
 
-  console.log('\n[budget] subprojects are labelled with their project');
-  await page.evaluate(async () => { const s = await import('/js/store.js'); for (const p of s.ws.data.projects) p.selected = true; s.touch(); });
-  await page.goto(url + '/#/budget');
-  await page.waitForSelector('.view-title');
-  check((await page.textContent('body')).includes('Fix list / Toilet is clogged'), 'BUDGET shows "Fix list / Toilet is clogged"');
-
-  console.log('\n[delete] deleting a project deletes its subprojects');
-  await page.goto(url + '/#/projects');
-  await page.waitForSelector('#proj-list .proj-card');
-  await page.click('.proj-card[data-id="proj-list"]');
-  await page.click('#del-project');
-  d = await data();
-  check(d.map(p => p.name).sort().join() === 'Door does not latch,Kitchen', 'only Kitchen and its subproject remain (' + d.map(p => p.name).join() + ')');
-
-  console.log('\n[property] PROJECTS, BUDGET and SCHEDULE follow the PROPERTY picker');
+  console.log('\n[property] ESTIMATE and SCHEDULE follow the property picker');
   const second = await page.evaluate(async () => {
     const s = await import('/js/store.js');
-    // Kitchen stays on Test House and gets schedulable work, so leaving it out of SCHEDULE means something.
     s.projectById('proj-other').items.push({ id: 'it-cab', name: 'Cabinets', qty: 1, unit: 'ls', low: 0, likely: 0, high: 0, durationDays: 2, deps: [], elementIds: [], notes: '' });
     const q = s.propertyTemplate('Lake Cabin');
     s.ws.data.properties.push(q);
@@ -123,25 +99,19 @@ try {
     s.touch();
     return q.id;
   });
-  await page.goto(url + '/#/projects');
-  await page.waitForSelector('#proj-list .proj-card');
-  const cards = () => page.locator('#proj-list .proj-card b').allTextContents();
-  check((await cards()).join() === 'Kitchen', 'Test House lists only its own project (' + (await cards()).join() + ')');
-  await page.click('#tiksi-menu'); await page.selectOption('#property-select', second);
-  await page.waitForSelector('#proj-list .proj-card[data-id="proj-cabin"]');
-  check((await cards()).join() === 'Cabin porch', 'Lake Cabin lists only its own project (' + (await cards()).join() + ')');
-  await page.goto(url + '/#/budget');
-  await page.waitForSelector('.view-title');
-  const budget = await page.textContent('body');
-  check(budget.includes('Cabin porch') && !budget.includes('Kitchen'), 'BUDGET shows the Lake Cabin project only');
-  await page.goto(url + '/#/schedule');
-  await page.waitForSelector('.view-title');
-  const gantt = (await page.textContent('#gantt')).toLowerCase();   // the chart draws names in capitals
-  check(gantt.includes('cabin porch') && !gantt.includes('kitchen'), 'SCHEDULE shows the Lake Cabin project only');
-  check((await data()).length === 3, 'switching property keeps every project in the workspace');
+  await page.selectOption('#property-select', second);
+  await page.goto(url + '/#/estimate?program');
+  await page.waitForSelector('.es-in h1');
+  let nav = (await page.textContent('.es-nav')).toLowerCase();
+  check(nav.includes('cabin porch') && !nav.includes('kitchen'), 'ESTIMATE lists the Lake Cabin project only');
+  await page.goto(url + '/#/schedule?program');
+  await page.waitForSelector('.sc-in h1');
+  nav = (await page.textContent('.es-nav')).toLowerCase();
+  check(nav.includes('cabin porch') && !nav.includes('kitchen'), 'SCHEDULE lists the Lake Cabin project only');
+  check((await data()).length === 2, 'switching property keeps every project in the workspace');
 
   check(errors.length === 0, 'no page errors (' + errors.join('; ') + ')');
-  console.log('\nsubprojects e2e passed');
+  console.log('\nrooms e2e passed');
 } finally {
   await browser.close();
   server.close();

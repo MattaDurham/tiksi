@@ -94,9 +94,10 @@ try {
   assert.deepEqual(nodes.map(k => tagOf[k]), ['tag-roof', 'tag-furniture', 'tag-floor'], 'the slab above the storey is Roof, the box Furniture, the slab at the floor Floor');
   const chairKey = nodes[1];
 
-  // The screen starts clear: no tool column, no view bar; the tabs and the tag list are there.
-  assert.equal(await page.locator('.tool-col').isVisible(), false, 'the tools are off the screen');
-  assert.equal(await page.locator('.v-modes').isVisible(), false);
+  // The screen starts clear: no tool column and no bar of view buttons (every view control is in
+  // the pane); the tabs and the tag list are there.
+  assert.equal(await page.locator('.tool-col').count(), 0, 'no tool column');
+  assert.equal(await page.locator('.v-modes').count(), 0, 'no view bar');
   assert.ok(await page.locator('.v-views [data-view-add]').isVisible());
   // The tag list is the second tab of the component list over the left of the model.
   await page.locator('.v-objects [data-ol-tab="tags"]').click();
@@ -110,10 +111,18 @@ try {
   assert.equal(await page.locator('#side [data-act=measure]').count(), 0, 'TOOLS folds to its header');
   await page.locator('#side .sd-group[data-group="Tools"] .sd-head').click();
   assert.ok(await page.locator('#side [data-act=measure]').isVisible(), 'and opens again');
-  await page.locator('#side .sd-group[data-group="Display"] [data-screen]').click();
-  assert.ok(await page.locator('.v-modes').isVisible(), 'the eye on DISPLAY puts the view bar over the model');
-  await page.locator('#side .sd-group[data-group="Display"] [data-screen]').click();
-  assert.equal(await page.locator('.v-modes').isVisible(), false, 'and takes it off again');
+  // DISPLAY holds what the view bar held: x-ray (how see-through it is is under Lighting and
+  // sun) and uncertainty with its legend.
+  await page.locator('#side [data-xray]').click();
+  assert.equal(await page.locator('#side [data-xray]').getAttribute('aria-pressed'), 'true', 'X-RAY is in DISPLAY');
+  await page.locator('#side [data-xray]').click();
+  await page.locator('#side [data-environment]').click();
+  assert.ok(await page.locator('.v-wrap > .v-env .v-xray-range').count() === 1, 'how see-through x-ray is sits with the lighting');
+  await page.locator('#side [data-environment]').click();
+  await page.locator('#side [data-uncertainty]').click();
+  assert.ok(await page.locator('.v-legend').isVisible(), 'UNCERTAINTY shows its legend over the model');
+  await page.locator('#side [data-uncertainty]').click();
+  assert.equal(await page.locator('.v-legend').isVisible(), false, 'and hides it again');
   // STANDARD VIEWS: each looks from its own side. BOTTOM looks up from under the model with the
   // ground put away; any other view puts the ground back.
   const cam = () => page.evaluate(async () => (await import('/js/viewer3d.js')).cameraState());
@@ -151,7 +160,7 @@ try {
   assert.equal(await label.isVisible(), false, 'Icon only hides the words');
   assert.equal(await page.locator('#rail a[data-view=model] .ic').isVisible(), true, 'and keeps the icon');
   assert.equal(await page.locator('#rail a[data-view=model]').getAttribute('aria-label'), 'MODEL', 'the tab still names its page');
-  await page.locator('#rail a[data-view=materials]').click({ button: 'right' });   // any tab opens the same menu
+  await page.locator('#rail a[data-view=estimate]').click({ button: 'right' });   // any tab opens the same menu
   await page.locator('.tk-tabmenu [data-tab-labels=words]').click();
   assert.equal(await label.isVisible(), true, 'Icon and word brings them back');
 

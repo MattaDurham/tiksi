@@ -100,8 +100,7 @@ try {
   await page.locator('.fd-menu').click();
   await page.locator('.fd-panel [data-file]').click();
   await page.locator('dialog.file-dialog[open]').waitFor();
-  await page.locator('dialog.file-dialog[open] [data-file-env]').evaluate(e => e.closest('details').open = true);
-  assert.match(await page.locator('[data-file-env]').textContent(), /Add a property/);
+  assert.equal(await page.locator('dialog.file-dialog[open] [data-new-property]').isVisible(), true, 'FILE offers NEW PROPERTY');
   await page.evaluate(() => document.querySelector('dialog.file-dialog[open]').close());
 
   // ---------- phone, the demo house ----------
@@ -115,7 +114,7 @@ try {
   });
   await page.goto(url + '/');
   await page.locator('.v-wrap canvas').waitFor();
-  for (const sel of ['.v-layout > .tool-col', '.v-layout > .inspector', '.v-modes', '.v-compass', '.v-env', '.v-hint']) {
+  for (const sel of ['.v-layout > .inspector', '.v-compass', '.v-env', '.v-hint']) {
     assert.equal(await shown(page, sel), false, sel + ' is hidden on a phone');
   }
   const box = await page.locator('.v-wrap').boundingBox();
@@ -205,9 +204,10 @@ try {
   // Other pages keep a slim bar with the menu; the panel links there.
   await page.locator('.fd-menu').click();
   assert.equal(await page.locator('.fd-panel a[href="#/plan"]').count(), 0, 'the panel has no link to PLAN');
-  await page.locator('.fd-panel a[href="#/materials"]').click();
-  await page.waitForFunction(() => document.querySelector('#rail a.active')?.dataset.view === 'materials');
-  assert.equal(await page.locator('.fd-title').textContent(), 'Materials');
+  assert.equal(await page.locator('.fd-panel a[data-page]').count(), 7, 'the panel links the six tabs and the guide');
+  await page.locator('.fd-panel a[href="#/products"]').click();
+  await page.waitForFunction(() => document.querySelector('#rail a.active')?.dataset.view === 'products');
+  assert.equal(await page.locator('.fd-title').textContent(), 'Products');
   assert.equal(await shown(page, '.fd-bar'), true);
   assert.equal(await shown(page, '.fd-frame'), false, 'no overview button off the model');
 

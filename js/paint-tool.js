@@ -339,7 +339,7 @@ export function createPaintTool(host) {
         <input type="text" data-pt-new-code placeholder="Code, e.g. OC-17" aria-label="Colour code">
       </div>
       <button class="btn" data-pt-new-add>ADD AND PAINT WITH IT</button>
-      <p class="empty">Click paints one piece: the wall above a rail, one trim section, a door with its casing, a floor. Shift-click paints the same piece all round the room; Cmd-click the whole wall or group; Alt-click picks up a finish. Esc ends. Sheen, texture and the product are on the MATERIALS page.</p>`;
+      <p class="empty">Click paints one piece: the wall above a rail, one trim section, a door with its casing, a floor. Shift-click paints the same piece all round the room; Cmd-click the whole wall or group; Alt-click picks up a finish. Esc ends. A finish's roughness, pattern and product are set in MATERIALS.</p>`;
     const swatch = (holder, id) => {
       const m = materialById(id), img = holder.querySelector('img');
       if (!m || !img) return;

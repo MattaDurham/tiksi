@@ -1,13 +1,13 @@
-// The program: a property's selected projects, totalled as BUDGET shows them and laid out
-// as SCHEDULE draws them. BUDGET, SCHEDULE and the one-pager all read these functions, so
+// The program: a property's selected projects, totalled as ESTIMATE's ALL PROJECTS shows them and laid out
+// as SCHEDULE draws them. ESTIMATE, SCHEDULE and the one-pager all read these functions, so
 // the cost and the span a client sees are the ones on those pages. Pure data, no DOM.
 //
-// Selected means pr.selected is set: a project without the flag is parked, as BUDGET shows
+// Selected means pr.selected is set: a project without the flag is parked, as ALL PROJECTS shows
 // it. Subprojects are projects of their own (with a parentId) and count when selected.
 
-import { projectTotals, itemPriced, dayDiff, addDays } from './store.js';
+import { projectTotals, projectWork, itemPriced } from './store.js';
 
-// The projects of a property as BUDGET and SCHEDULE list them: the property's own, and any
+// The projects of a property as ESTIMATE and SCHEDULE list them: the property's own, and any
 // whose property is missing from the workspace (they show under every property).
 export function programProjects(prop, data) {
   const d = data || { properties: [], projects: [] };
@@ -27,26 +27,69 @@ export function programTotals(projects) {
   return t;
 }
 
-// Whole calendar days for a span that may end part-way through a day (half-day items): a
-// job that ends at day 2.5 takes 3 calendar days. The small allowance keeps float noise
-// (0.1 + 0.2) from adding a day.
+// ---------- working days ----------
+// Work is counted in working days, Monday to Friday: a 5-day job started on a Thursday ends the
+// next Wednesday. (Holidays are not known; a crew's days off are its own.)
+const isoOf = dt => dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+const dateOf = iso => { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d); };
+const weekend = dt => dt.getDay() === 0 || dt.getDay() === 6;
+// The working day `n` working days after `start` (n = 0: start itself, or the Monday after a weekend).
+export function workday(start, n) {
+  const dt = dateOf(start);
+  while (weekend(dt)) dt.setDate(dt.getDate() + 1);
+  for (let left = Math.max(0, Math.floor(n)); left > 0;) { dt.setDate(dt.getDate() + 1); if (!weekend(dt)) left--; }
+  return isoOf(dt);
+}
+// Working days from `start` up to (not counting) `date`: where work beginning on `date` sits.
+export function workdaysBetween(start, date) {
+  if (!start || !date) return 0;
+  let a = dateOf(workday(start, 0)), b = dateOf(date), n = 0, sign = 1;
+  if (b < a) { [a, b] = [b, a]; sign = -1; }
+  while (weekend(b)) b.setDate(b.getDate() + 1);
+  for (const dt = new Date(a); dt < b; dt.setDate(dt.getDate() + 1)) if (!weekend(dt)) n++;
+  return sign * n;
+}
+
+// Whole working days for a span that may end part-way through a day (half-day items): a job that
+// ends at day 2.5 takes 3 days. The small allowance keeps float noise (0.1 + 0.2) from adding a day.
 export const wholeDays = span => span > 0 ? Math.ceil(span - 1e-9) : 0;
 
-// The last calendar day with work on it, for a span of `span` days from `start` (ISO date):
-// a one-day job that starts Nov 10 ends Nov 10. '' when there is no work.
-export const lastWorkDay = (start, span) => start && wholeDays(span) > 0 ? addDays(start, wholeDays(span) - 1) : '';
+// The last working day with work on it, for a span of `span` working days from `start` (ISO
+// date): a one-day job that starts Tuesday Nov 10 ends Nov 10. '' when there is no work.
+export const lastWorkDay = (start, span) => start && wholeDays(span) > 0 ? workday(start, wholeDays(span) - 1) : '';
 
-// The selected projects laid out from `start` (ISO date): each project's critical path,
-// starting on its own start date when that is later, side by side. `days` is the program's
-// span in whole calendar days from start to the last finish (0 when nothing has a duration),
-// and `lastDay` the last calendar day with work on it.
+// The selected projects laid out from `start` (ISO date), in working days. A top-level project and
+// its subprojects are one job, laid out together (job.js: the carpenter's rooms one after another,
+// items by their dependencies); jobs run side by side, each from its own start date when that is
+// later, or after the job it is set to follow (project.after). `days` is the program's span in
+// working days and `lastDay` the last working day with work on it.
 export function programSchedule(projects, start) {
-  const plans = selectedProjects(projects).filter(p => (p.items || []).some(i => (Number(i.durationDays) || 0) > 0)).map(p => {
-    const lag = p.startDate && start ? dayDiff(start, p.startDate) : 0;
-    const offset = lag > 0 ? lag : 0;
-    const { sched, end, cyclic } = cpm(p.items || []);
-    return { p, offset, sched, end, cyclic, finish: offset + end };
-  });
+  const all = projects || [];
+  const sel = new Set(selectedProjects(all).map(p => p.id));
+  const byId = new Map(all.map(p => [p.id, p]));
+  const tops = all.filter(p => !p.parentId || !byId.has(p.parentId));
+  const include = x => sel.has(x.id);
+  let plans = tops.map(p => {
+    const subs = all.filter(x => x.parentId === p.id);
+    if (!include(p) && !subs.some(include)) return null;
+    let items = projectWork(p, include);
+    if (!items) items = [p, ...subs].filter(include).flatMap(x => (x.items || []).map(it => ({ ...it, project: x })));
+    items = items.filter(i => (Number(i.durationDays) || 0) > 0);
+    if (!items.length) return null;
+    const { sched, end, cyclic } = cpm(items);
+    const lag = p.startDate && start ? workdaysBetween(start, p.startDate) : 0;
+    return { p, items, offset: Math.max(0, lag), sched, end, cyclic };
+  }).filter(Boolean);
+  // A job set to follow another starts when that one ends (in list order; a loop is ignored).
+  const done = new Map();
+  const finish = (x, seen = new Set()) => {
+    if (done.has(x.p.id)) return done.get(x.p.id);
+    const after = x.p.after && plans.find(y => y.p.id === x.p.after);
+    if (after && !seen.has(after.p.id)) { seen.add(x.p.id); x.offset = Math.max(x.offset, finish(after, seen)); }
+    x.finish = x.offset + x.end; done.set(x.p.id, x.finish);
+    return x.finish;
+  };
+  for (const x of plans) finish(x);
   const days = wholeDays(Math.max(0, ...plans.map(x => x.finish)));
   return { plans, days, lastDay: lastWorkDay(start, days) };
 }

@@ -2,14 +2,14 @@
 // code that runs in a Web Worker so the console never freezes); this module pulls the
 // triangles out of a loaded scan, runs the core, renders a textured top-down cut of every
 // level as that level's plan underlay, and writes the proposal into a property: levels,
-// walls, openings, rooms, the scan's transform, and a starter project with the takeoffs.
+// walls, openings, rooms and the scan's transform (ESTIMATE prices the rooms from the model).
 //
 // The core works in the mesh's own frame; the result carries the transform (rotation about
 // y, translation) that the scan record and the underlay renders both use, so the scan, the
-// underlays and the proposed walls land on top of each other in PLAN and MODEL.
+// underlays and the proposed walls land on top of each other in MODEL.
 
 import * as THREE from 'three';
-import { uid, touch, levelOfWall, countsAsFloor, fmtLen, fmtArea } from './store.js';
+import { uid, touch, levelOfWall, countsAsFloor, fmtLen } from './store.js';
 import { loadMesh } from './scans.js';
 import { fitScan, placeResult, mergeProposal, existingPlan, proposedOpening, proposedRoom } from './scanmerge.js';
 import { scanToPlan } from './scan2plan-core.js';
@@ -352,35 +352,3 @@ function geometrySummary(result, applied) {
     plural(doors.length, 'door') + ', ' + plural(wins, 'window') + (n > 1 ? '' : ', ceiling ' + fmtLen(result.wallHeight)) + tail;
 }
 
-// A starter project whose scope items carry the takeoffs from the proposal, each linked to
-// the elements it came from, so cut sheets and the budget have something real to show.
-// Quantities come from the geometry; prices stay blank.
-export function seedProject(prop, applied, label) {
-  const M2_PER_SF = 0.09290304;
-  const sf = m2 => Math.round(m2 / M2_PER_SF);
-  const area = pts => { let s = 0; for (let i = 0; i < pts.length; i++) { const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length]; s += x1 * y2 - x2 * y1; } return Math.abs(s) / 2; };
-  const levels = applied.levels || prop.levels || [];
-  const multi = levels.length > 1;
-  const levelName = id => { const l = levels.find(x => x.id === id); return l ? l.name : ''; };
-  const heightOf = w => { const l = levels.find(x => x.id === w.level); return w.height || (l && l.height) || prop.wallHeight || 2.44; };
-  const items = [];
-  for (const r of applied.rooms.filter(countsAsFloor)) {
-    const a = area(r.pts);
-    const where = multi ? levelName(r.level) + ', ' + r.name : r.name;
-    items.push({ id: uid('it'), name: 'Flooring: ' + where, qty: sf(a), unit: 'sf', low: 0, likely: 0, high: 0, durationDays: 0, deps: [], elementIds: [r.id], notes: 'Takeoff from the scan: ' + fmtArea(a) + ' floor.' });
-  }
-  for (const l of levels) {
-    const walls = applied.walls.filter(w => w.level === l.id);
-    if (!walls.length) continue;
-    const wallArea = walls.reduce((n, w) => n + Math.hypot(w.bx - w.ax, w.by - w.ay) * heightOf(w), 0);
-    items.push({ id: uid('it'), name: 'Paint walls' + (multi ? ': ' + l.name : ''), qty: sf(wallArea), unit: 'sf', low: 0, likely: 0, high: 0, durationDays: 0, deps: [], elementIds: walls.map(w => w.id), notes: 'One face per wall from the scan; openings not deducted.' });
-  }
-  const doors = applied.openings.filter(o => o.type === 'door'), wins = applied.openings.filter(o => o.type === 'window');
-  if (doors.length) items.push({ id: uid('it'), name: 'Doors', qty: doors.length, unit: 'ea', low: 0, likely: 0, high: 0, durationDays: 0, deps: [], elementIds: Array.from(new Set(doors.map(o => o.wallId))), notes: 'Openings read from the scan.' });
-  if (wins.length) items.push({ id: uid('it'), name: 'Windows', qty: wins.length, unit: 'ea', low: 0, likely: 0, high: 0, durationDays: 0, deps: [], elementIds: Array.from(new Set(wins.map(o => o.wallId))), notes: 'Openings read from the scan.' });
-  if (!items.length) return null;
-  return {
-    id: uid('proj'), name: label || 'Scope from scan', propertyId: prop.id, category: 'interior', status: 'idea', selected: false, startDate: '',
-    notes: 'Quantities came from the scan-to-plan proposal. Prices are blank until you scope them.', items,
-  };
-}

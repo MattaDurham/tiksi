@@ -25,9 +25,6 @@ const write = (k, v) => { try { if (v == null) localStorage.removeItem(k); else 
 const phone = () => document.documentElement.classList.contains('phone');
 const stacked = () => !!stage && getComputedStyle(stage).flexDirection === 'column';
 
-export function besideWanted() { return wanted; }
-export function besideShown() { return mounted; }
-
 // Once, at start: the pane, the bar, the switch and the link and layout watchers.
 export function initBeside({ onOpenModel } = {}) {
   stage = document.getElementById('stage');
@@ -57,7 +54,7 @@ export function initBeside({ onOpenModel } = {}) {
     e.preventDefault();
     if (!showInModel([decodeURIComponent(m[1])], { frame: 'always' })) flash('That element is not in the model.');
   }, true);
-  // The phone layout comes and goes with the window and the FILE > Settings choice.
+  // The phone layout comes and goes with the window and the Tiksi menu's "Phone layout" choice.
   new MutationObserver(() => syncBeside(pageName)).observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
   showToggle();
 }

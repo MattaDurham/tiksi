@@ -1,6 +1,7 @@
-// The PROJECT block of the MODEL inspector (project-pieces.js): which project the selected
-// pieces belong to, and GROUP, which makes the selection one subproject so a click on any of
-// its pieces selects them all. HTML builder and binder; the viewer passes a context.
+// The JOB block of the MODEL inspector (project-pieces.js): which job, and which room of it (a
+// subproject), the selected pieces belong to, which is how ESTIMATE prices them; and GROUP, which
+// makes the selection one room of a job so a click on any of its pieces selects them all. HTML
+// builder and binder; the viewer passes a context.
 
 import { escapeHtml, uid, isoToday } from './store.js';
 import { projectChoices, groupOf, pieceProjectId, topProjectId } from './project-pieces.js';
@@ -20,13 +21,15 @@ export function projectBlockHtml(ctx) {
   const tops = projects.filter(p => p.propertyId === propId && !p.parentId);
   const n = records.length, what = n === 1 ? ctx.kindLabel : n + ' ' + ctx.kindLabel + 's';
   const parentDefault = current ? topProjectId(projects, current) : (tops[0] || {}).id || NEW;
-  const opts = choices.map(c => `<option value="${escapeHtml(c.id)}" ${c.id === current ? 'selected' : ''}>${c.depth ? '&nbsp;&nbsp;' : ''}${escapeHtml(c.label)}</option>`).join('');
+  // "Job" and "Job › Room": a job is a top-level project, its rooms its subprojects.
+  const label = c => c.depth ? c.label.replace(' / ', ' › ') : c.id ? c.label + ' (the whole project)' : c.label;
+  const opts = choices.map(c => `<option value="${escapeHtml(c.id)}" ${c.id === current ? 'selected' : ''}>${escapeHtml(label(c))}</option>`).join('');
   return `<div class="tp-sub">PROJECT</div>
     ${group ? `<div class="stat-line"><span>Group: ${escapeHtml(group.name || 'Untitled')}</span><b>${n} ${escapeHtml(ctx.kindLabel)}${n === 1 ? '' : 's'}</b></div>
       <div class="empty" style="margin:2px 0 6px">A click on any piece of this group selects the whole group. Alt-click picks one piece on its own.</div>` : ''}
-    <div class="field"><label>Belongs to</label><select data-pp-project>${current === undefined ? '<option value="" selected disabled>(several)</option>' : ''}${opts}</select></div>
-    <details class="pp-group"${ctx.openGroup ? ' open' : ''}><summary>GROUP ${escapeHtml(what.toUpperCase())} AS A SUBPROJECT</summary>
-      <div class="field"><label>Group name</label><input type="text" data-pp-name placeholder="Entry and hall"></div>
+    <div class="field"><label>Project › room it is priced in (ESTIMATE)</label><select data-pp-project>${current === undefined ? '<option value="" selected disabled>(several)</option>' : ''}${opts}</select></div>
+    <details class="pp-group"${ctx.openGroup ? ' open' : ''}><summary>GROUP ${escapeHtml(what.toUpperCase())} AS A ROOM OF A PROJECT</summary>
+      <div class="field"><label>Room name</label><input type="text" data-pp-name placeholder="Entry and hall"></div>
       <div class="field"><label>In project</label><select data-pp-parent>${tops.map(p => `<option value="${escapeHtml(p.id)}" ${p.id === parentDefault ? 'selected' : ''}>${escapeHtml(p.name || 'Untitled project')}</option>`).join('')}<option value="${NEW}" ${parentDefault === NEW ? 'selected' : ''}>New project…</option></select></div>
       <div class="field" data-pp-newwrap ${parentDefault === NEW ? '' : 'hidden'}><label>New project name</label><input type="text" data-pp-newname placeholder="Wall trim"></div>
       <button class="btn" data-pp-group>GROUP ${escapeHtml(what.toUpperCase())}</button>
@@ -53,7 +56,7 @@ export function bindProjectBlock(root, ctx) {
   if (one) one.onclick = () => ctx.selectOne();
 }
 
-// A project record shaped like the ones PROJECTS makes (projects.js newProject).
+// A project record (a job, or a room of one when it has a parentId), as ESTIMATE reads them.
 export function newProjectRecord(propId, name, fields = {}) {
   return Object.assign({
     id: uid('proj'), name, propertyId: propId,

@@ -40,10 +40,10 @@ import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 import {
   ws, activeProperty, defaultEnv, uid, touch, units, fmtLen, fmtArea, polyArea, countsAsFloor,
-  escapeHtml, deleteFile, getFile, itemById, materialById, isoToday, projectLabel, propertyProjects,
+  escapeHtml, deleteFile, getFile, materialById, isoToday, propertyProjects,
   ensureLevels, wallsOn, roomsOn, wallHeightOf, levelOfWall, levelOfRoom, levelHeight, topOfLevels, openingsOn,
 } from './store.js';
-import { placeScanBytes, seedProject, proposalSummary } from './scan2plan.js';
+import { placeScanBytes, proposalSummary } from './scan2plan.js';
 import { bringInScenes } from './sketchup-scenes.js';
 import { refreshStandardViews, standardCount } from './standard-views.js';
 import { chooseScanPlacement } from './scanplace.js';
@@ -794,7 +794,7 @@ function rebuildModel() {
 }
 
 // ---------- dimensions, room names and opening numbers ----------
-// Three switches in the mode bar, kept with the property: DIMENSIONS (each wall's centre-line
+// Three switches in the Display group, kept with the property: DIMENSIONS (each wall's centre-line
 // length), ROOMS (name and floor area) and NUMBERS (each door and window's mark, as on the
 // DOCUMENTS schedule). The dimension lines are drawn in the scene over everything; every label
 // is a tag over the view, kept on its point each frame, so it reads the same from any angle.
@@ -2597,7 +2597,7 @@ function setSelection(sel, picks, things) {
   for (const s of [was, sel]) if (s && s.kind === 'position') { const pos = (prop.photoPositions || []).find(x => x.id === s.id); if (pos) buildPositionMarker(pos); }
   updateOutlineTargets();
   renderInspector();
-  renderToolCol();
+  refreshPane();
   requestRender(2);
 }
 
@@ -2737,7 +2737,7 @@ function addTrims(productId, faces, frameLayout) {
     }
     prop.trims.push(t); ids.push(t.id);
   }
-  touch(); rebuildModel(); renderToolCol();
+  touch(); rebuildModel(); refreshPane();
   selectTrims(ids);
   toast('Added ' + p.short + ' to ' + ids.length + (ids.length === 1 ? ' wall face.' : ' wall faces.'), 'ok');
 }
@@ -3213,7 +3213,7 @@ function addMeasurePoint(e) {
   wrapEl.appendChild(label);
   measures.push({ a, b, line, label, dots: [ends, ends2] });
   setHint('MEASURE: ' + fmtLen(a.distanceTo(b)) + '. Click two more points for another, CLEAR to remove all.');
-  renderToolCol();
+  refreshPane();
   requestRender(2);
 }
 function clearMeasures() {
@@ -3450,7 +3450,7 @@ function startPinMode(photoId, one = false) {
   const ph = pinPhotoId && photoById(prop, pinPhotoId);
   // Placing a new photo chains on to the next unpinned one; MOVE PIN re-places just the one.
   pinBatch = !one && !!(ph && !ph.pin);
-  renderToolCol(); renderInspector();
+  refreshPane(); renderInspector();
   setHint(pinHint());
 }
 // What a pin lands on says where the photo belongs: the room in front of the surface (on the
@@ -4520,7 +4520,8 @@ function openContextMenu(e) {
     // Wall trim under the pointer: its panels, its reach and its selection (trim-design.js).
     const trimHere = !fieldLayout() ? trimAtPointer(e, hit) : null;
     if (trimHere) items.push(null, ...trimMenuItems(trimHere));
-    // PROJECTS open beside the model: add what is under the pointer to its project, measured.
+    // ESTIMATE open beside the model: add what is under the pointer, measured, to the room it has
+    // open (or the project). With no page offering a target, nothing is offered.
     const scope = currentScopeTarget() && !fieldLayout() ? scopeMenuItems(hit, thing, currentScopeTarget()) : [];
     if (scope.length) items.push(null, ...scope, null);
     if (thing && (thing.keys.length || thing.whole)) items.push(['hide', 'HIDE ' + (thing.name ? thing.name.toUpperCase().slice(0, 40) : 'THIS OBJECT'), () => hideThings([thing], true)]);
@@ -4541,12 +4542,13 @@ function openContextMenu(e) {
   items.push(['toggle-pins', (markersShown('pins') ? 'HIDE PHOTO PINS' : 'SHOW PHOTO PINS') + ' (' + nPins + ')', () => toggleMarkers('pins')]);
   popupMenu(at, items);
 }
-// ---------- adding to the open project (scope-takeoff.js) ----------
-// What a right-click can add to the project PROJECTS shows: the selection when the pointer is
+// ---------- adding to the job ESTIMATE has open (scope-takeoff.js) ----------
+// What a right-click can add as a scope item of the room or project ESTIMATE offers (its target,
+// set through model-focus.js): the selection when the pointer is
 // on it, the wall face, its room, the door or window, the fixture, or an imported model's
 // object (and every other copy of it). Each entry measures the thing and hands it over.
 function scopeMenuItems(hit, thing, target) {
-  const to = ' TO ' + (target.name ? target.name.toUpperCase().slice(0, 32) : 'A NEW PROJECT');
+  const to = ' TO ' + (target.name ? target.name.toUpperCase().slice(0, 32) : 'THE PROJECT');
   const out = [], add = (id, label, measure) => out.push([id, label + to, () => {
     const m = measure();
     if (!m) { toast('Nothing there to measure.', 'warn'); return; }
@@ -4875,7 +4877,7 @@ async function addScanToScene(scan) {
   let views = null;
   if (scan.scenesPending) { delete scan.scenesPending; views = bringInScenes(prop, scan); renderViews(); }
   // New tags and counts show in the lists straight away.
-  if (tagged || views) { touch(); renderToolCol(); if (!selection) renderInspector(); }
+  if (tagged || views) { touch(); refreshPane(); if (!selection) renderInspector(); }
   if (views && views.added) toast(scan.name + ': ' + views.added + ' SketchUp scene' + (views.added === 1 ? ' is' : 's are') + ' now saved views, in the tabs over the model.' + (views.skipped ? ' ' + views.skipped + ' did not fit: a property keeps 100 views.' : ''), 'ok');
   // Trim on the walls this model's outlets and radiators stand on is laid out round them.
   if (refreshTrimObstacles()) rebuildModel();
@@ -4908,7 +4910,7 @@ function loadScans(every) {
   const wanted = prop.scans.filter(scan => (every || scan.visible !== false) && !scanObjs[scan.id] && (!scanState[scan.id] || scanState[scan.id] === 'hidden'));
   // Marked now, so a second call before the queue reaches them does not queue them twice.
   for (const scan of wanted) setScanState(scan.id, 'loading');
-  if (wanted.length) renderToolCol();
+  if (wanted.length) refreshPane();
   scanQueue = scanQueue.then(async () => {
     for (const scan of wanted) {
       if (token !== mountId || !scene) return;
@@ -4921,7 +4923,7 @@ function loadScans(every) {
         console.error(e); if (token === mountId) toast('Could not load scan ' + scan.name + ': ' + errMsg(e), 'error');
       }
     }
-    if (token === mountId && scene && wanted.length) renderToolCol();
+    if (token === mountId && scene && wanted.length) refreshPane();
   }).catch(e => console.error(e));
   return scanQueue;
 }
@@ -4949,17 +4951,11 @@ async function proposePlanFromScan(s) {
       if (old) { scanRoot.remove(old); disposeScanObject(old); delete scanObjs[id]; }
       delete scanState[id];
     }
-    if (applied) {
-      const added = mode === 'level' || mode === 'beside';
-      const label = prop.name + ': scope from ' + (added ? s.name : 'scan');
-      const project = seedProject(prop, applied, label);
-      if (project && (added || !ws.data.projects.some(p => p.propertyId === prop.id && /scope from scan/i.test(p.name)))) { ws.data.projects.push(project); touch(); }
-    }
     const obj = scanObjs[s.id];
     if (obj) applyScanTransform(s, obj);
     rebuildModel(); rebuildGround(); buildAllPins();
     presetView('frame');
-    renderToolCol(); renderInspector();
+    refreshPane(); renderInspector();
     // The rooms are drawn; what stands in them is the next, optional step (never a modal
     // in the way of the plan the person is about to check).
     toast('Proposed: ' + proposalSummary(result, applied) + '.' + (applied && obj ? ' Next, optional: PROPOSE FIXTURES FROM SCAN in this scan\'s inspector.' : ''), applied && !result.review?.required ? 'ok' : 'warn', 8000);
@@ -5052,52 +5048,18 @@ function updateCompass() {
   const hv = Math.atan2(_v.dot(E), _v.dot(N));
   hud.compass.style.transform = 'rotate(' + (-hv * 180 / Math.PI).toFixed(1) + 'deg)';
 }
+// Redraw what sits over the model besides the view: the section strip, the uncertainty legend,
+// the hint and the left pane (every view control is in the pane).
 function renderHud() {
-  const bar = hud.modes;
-  if (!bar) return;
-  bar.innerHTML = `
-    <button class="v-pill ${mode === 'orbit' ? 'active' : ''}" data-mode="orbit" title="Orbit (O)">ORBIT</button>
-    <button class="v-pill ${mode === 'walk' ? 'active' : ''}" data-mode="walk" title="Walk through (W)">WALK</button>
-    <button class="v-pill ${mode === 'top' ? 'active' : ''}" data-mode="top" title="Top, north up (T), in parallel projection">TOP</button>
-    <button class="v-pill ${parallel ? 'active' : ''}" data-parallel aria-pressed="${parallel}" ${mode === 'walk' ? 'disabled' : ''} title="Parallel projection (Shift+P): no perspective, as at the far end of FIELD OF VIEW">PARALLEL</button>
-    <span class="v-pill-sep"></span>
-    <button class="v-pill ${section.on ? 'active' : ''}" data-section title="Section cuts (C)">SECTION</button>
-    <span class="v-pill-sep"></span>
-    <button class="v-pill ${xray ? 'active' : ''}" data-xray aria-pressed="${xray}" title="X-ray (X)">X-RAY</button>
-    ${xray ? `<label class="v-xray-control">TRANSPARENCY<input type="range" class="v-xray-range" min="0" max="100" step="1" value="${Math.round((1 - prop.env.xrayOpacity) * 100)}" aria-label="X-ray transparency"><output>${Math.round((1 - prop.env.xrayOpacity) * 100)}%</output></label>` : ''}
-    <span class="v-pill-sep"></span>
-    <button class="v-pill ${uncertaintyShown ? 'active' : ''}" data-uncertainty aria-pressed="${uncertaintyShown}">UNCERTAINTY</button>
-    ${uncertaintyShown ? `<span role="note" aria-label="Geometry uncertainty legend">${Object.entries(EVIDENCE_COLORS).map(([k,c]) => `<span style="border-bottom:3px solid ${c};margin-right:8px">${k}</span>`).join('')} · geometry evidence; identity is separate</span>` : ''}
-    <button class="v-pill" data-environment title="Lighting, sun and environment">LIGHT</button>
-    <button class="v-pill ${markersShown('pins') ? 'active' : ''}" data-show="pins" aria-pressed="${markersShown('pins')}" title="${markersShown('pins') ? 'Hide' : 'Show'} photo pins (${prop.photos.filter(ph => ph.pin).length})">PHOTOS</button>
-    <button class="v-pill ${markersShown('notes') ? 'active' : ''}" data-show="notes" aria-pressed="${markersShown('notes')}" title="${markersShown('notes') ? 'Hide' : 'Show'} notes (${prop.notePins.length}); right-click the model to pin one">NOTES</button>
-    <span class="v-pill-sep"></span>
-    <button class="v-pill ${annotShown('dims') ? 'active' : ''}" data-annot="dims" aria-pressed="${annotShown('dims')}" title="${annotShown('dims') ? 'Hide' : 'Show'} each wall's length, measured on its centre line">DIMENSIONS</button>
-    <button class="v-pill ${annotShown('rooms') ? 'active' : ''}" data-annot="rooms" aria-pressed="${annotShown('rooms')}" title="${annotShown('rooms') ? 'Hide' : 'Show'} each room's name and floor area">ROOMS</button>
-    <button class="v-pill ${annotShown('numbers') ? 'active' : ''}" data-annot="numbers" aria-pressed="${annotShown('numbers')}" title="${annotShown('numbers') ? 'Hide' : 'Show'} door and window numbers (D1, W1...), as on the DOCUMENTS schedule">NUMBERS</button>`;
-  bar.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => setMode(b.dataset.mode));
-  bar.querySelectorAll('[data-show]').forEach(b => b.onclick = () => toggleMarkers(b.dataset.show));
-  bar.querySelectorAll('[data-annot]').forEach(b => b.onclick = () => toggleAnnot(b.dataset.annot));
-  bar.querySelector('[data-parallel]').onclick = () => setParallel(!parallel);
-  bar.querySelector('[data-uncertainty]').onclick = () => { uncertaintyShown = !uncertaintyShown; renderHud(); requestRender(2); keepSoon(); };
-  bar.querySelector('[data-section]').onclick = toggleSection;
-  bar.querySelector('[data-xray]').onclick = toggleXray;
-  bar.querySelector('[data-environment]').onclick = () => { hud.env.hidden = !hud.env.hidden; hud.env.classList.add('open'); renderEnvPanel(); };
-  const xr = bar.querySelector('.v-xray-range');
-  if (xr) {
-    xr.oninput = () => {
-      prop.env.xrayOpacity = 1 - Number(xr.value) / 100;
-      bar.querySelector('.v-xray-control output').textContent = xr.value + '%';
-      applyXray();
-    };
-    xr.onchange = () => { touch(); keepSoon(); };
+  if (hud.legend) {
+    hud.legend.hidden = !uncertaintyShown;
+    hud.legend.innerHTML = uncertaintyShown ? `${Object.entries(EVIDENCE_COLORS).map(([k, c]) => `<span style="border-bottom:3px solid ${c};margin-right:8px">${k}</span>`).join('')} · geometry evidence; identity is separate` : '';
   }
   renderSectionBar();
   setHint('');
   refreshPane();
 }
-// The strip of section controls, over the bottom of the view whenever the cut is on (the mode
-// bar may be off the screen): the planes, the four ways to add one, and the active plane's
+// The strip of section controls, over the bottom of the view whenever the cut is on: the planes, the four ways to add one, and the active plane's
 // position, direction, snapping and removal.
 function sliderSpan(s) {
   const r = sectionRange(s), step = sectionSnap ? moveSnapStep(units()) : 0.01;
@@ -5184,7 +5146,7 @@ function toggleLevel(id) {
   keepSoon();
   if (sel && !isVisibleChain(sel)) { setSelection(null); return; }
   updateOutlineTargets();
-  renderToolCol();
+  refreshPane();
   requestRender(3);
 }
 function applyXray() {
@@ -5195,7 +5157,7 @@ function applyXray() {
   applySection();
   requestRender(3);
 }
-function toggleXray() { xray = !xray; applyXray(); renderHud(); renderToolCol(); keepSoon(); }
+function toggleXray() { xray = !xray; applyXray(); renderHud(); refreshPane(); keepSoon(); }
 // TAGS: hiding a tag hides every object on it, in the plan model and in imported models.
 function applyTagVisibility() {
   if (modelGroup) applyPlanTagVisibility(prop, modelGroup);
@@ -5204,7 +5166,7 @@ function applyTagVisibility() {
   fitShadow(); applyEnvironment(); updateOutlineTargets();
   requestRender(3);
 }
-function tagsChanged() { applyTagVisibility(); renderToolCol(); renderInspector(); touch(); keepSoon(); }
+function tagsChanged() { applyTagVisibility(); refreshPane(); renderInspector(); touch(); keepSoon(); }
 function toggleTag(id) {
   if (id && !tagById(prop, id)) return;
   setTagShown(prop, id, !tagShown(prop, id));
@@ -5352,6 +5314,7 @@ function renderEnvPanel(p = hud.env) {
         <select data-env="quality"><option value="ultra" ${quality() === 'ultra' ? 'selected' : ''}>Ultra (detail + 32-sample AO)</option><option value="high" ${quality() === 'high' ? 'selected' : ''}>High (AO + bloom)</option><option value="medium" ${quality() === 'medium' ? 'selected' : ''}>Medium</option><option value="low" ${quality() === 'low' ? 'selected' : ''}>Low</option></select>
       </div>
       ${ownQuality() ? '<p class="v-env-help">Kept on this device only. Computers keep the quality saved with the property.</p>' : ''}
+      <label class="v-row"><span>X-RAY SEE-THROUGH</span><input type="range" class="v-xray-range" min="0" max="100" step="1" value="${Math.round((1 - finiteNum(env.xrayOpacity, 0.35)) * 100)}" aria-label="X-ray see-through"><em data-xray-readout>${Math.round((1 - finiteNum(env.xrayOpacity, 0.35)) * 100)}%</em></label>
       <div class="v-checks">
         <label><input type="checkbox" data-env="showCeilings" ${env.showCeilings !== false ? 'checked' : ''}> CEILINGS</label>
         <label><input type="checkbox" data-env="showGround" ${env.showGround !== false ? 'checked' : ''}> GROUND</label>
@@ -5380,7 +5343,13 @@ function renderEnvPanel(p = hud.env) {
     } catch (e) { status.textContent = e.message + ' Manual lighting shown.'; }
   };
   updateSun();
-  p.querySelectorAll('input[type=range]').forEach(r => {
+  // How see-through X-ray draws the model (the X-ray switch is in the Display group).
+  const xr = p.querySelector('.v-xray-range');
+  if (xr) {
+    xr.oninput = () => { env.xrayOpacity = 1 - Number(xr.value) / 100; p.querySelector('[data-xray-readout]').textContent = xr.value + '%'; applyXray(); };
+    xr.onchange = () => { touch(); keepSoon(); };
+  }
+  p.querySelectorAll('input[type=range][data-env]').forEach(r => {
     r.oninput = () => {
       const key = r.dataset.env;
       if (key === 'dayOfYear') {
@@ -5448,16 +5417,6 @@ export function mountEnvironmentSettings(host) {
 // ---------- inspector ----------
 // Numbers from saved data go into attributes: anything that is not a finite number becomes the fallback.
 function finiteNum(v, fallback) { const n = Number(v); return Number.isFinite(n) ? n : fallback; }
-function scopeAssignHtml(elementId) {
-  let current = '';
-  for (const pr of propertyProjects()) for (const it of pr.items) if ((it.elementIds || []).includes(elementId)) current = it.id;
-  const groups = propertyProjects().map(pr => {
-    const opts = pr.items.map(it => `<option value="${escapeHtml(it.id)}" ${it.id === current ? 'selected' : ''}>${escapeHtml(it.name)}</option>`).join('');
-    return opts ? `<optgroup label="${escapeHtml(projectLabel(pr))}">${opts}</optgroup>` : '';
-  }).join('');
-  return `<div class="field"><label>Scope item (digital twin link)</label>
-    <select data-assign="${escapeHtml(elementId)}"><option value="">(not assigned)</option>${groups}</select></div>`;
-}
 function linkedProductsHtml(elementId) {
   const linked = [];
   for (const pr of propertyProjects()) for (const it of pr.items) {
@@ -5466,7 +5425,7 @@ function linkedProductsHtml(elementId) {
     }
   }
   if (!linked.length) return '';
-  return `<div class="field"><label>Products via scope</label>` +
+  return `<div class="field"><label>Products on its scope items</label>` +
     linked.map(p => `<div class="stat-line"><span>${escapeHtml(p.name)}</span><b>${p.price ? '$' + Math.round(p.price).toLocaleString() : ''}</b></div><button class="btn small" data-research-product="${escapeHtml(p.id)}" data-research-element="${escapeHtml(elementId)}">RESEARCH PRODUCT</button>`).join('') + `</div>`;
 }
 
@@ -5499,19 +5458,6 @@ function bindResearchActions(root) {
       // Only the clicked element's description and local linking IDs enter the research view.
       try { const { openResearch } = await import('./research.js'); openResearch(context); }
       catch (e) { toast('Could not open research: ' + e.message, 'error'); }
-    };
-  });
-}
-function bindAssign(root) {
-  root.querySelectorAll('[data-assign]').forEach(sel => {
-    sel.onchange = () => {
-      const elId = sel.dataset.assign;
-      for (const pr of ws.data.projects) for (const it of pr.items) it.elementIds = (it.elementIds || []).filter(x => x !== elId);
-      if (sel.value) {
-        const found = itemById(sel.value);
-        if (found) (found.item.elementIds = found.item.elementIds || []).push(elId);
-      }
-      touch();
     };
   });
 }
@@ -5615,7 +5561,7 @@ function renderPinPanel() {
     if (tool === 'pin') { renderPinPanel(); setHint(pinHint()); }
     renderEnvPanel();
   };
-  inspEl.querySelector('[data-cancel]').onclick = () => { tool = 'select'; pinBatch = false; renderToolCol(); renderInspector(); setHint(''); };
+  inspEl.querySelector('[data-cancel]').onclick = () => { tool = 'select'; pinBatch = false; refreshPane(); renderInspector(); setHint(''); };
 }
 
 function modelObjectEvidence(scan, object) {
@@ -5802,7 +5748,7 @@ function setModelVisible(id, on) {
   s.visible = !!on;
   applyScanTransform(s, scanObjs[id]);
   fitShadow(); applyEnvironment(); touch(); requestRender(3);
-  loadShownScans(); renderToolCol(); renderInspector(); keepSoon();
+  loadShownScans(); refreshPane(); renderInspector(); keepSoon();
 }
 function modelPanelCtx(s, obj) {
   return { prop, scan: s, obj, picks: tagPicks, models: prop.scans.map(x => ({ scan: x, root: scanObjs[x.id] && scanObjs[x.id].userData.inner })).filter(x => x.root),
@@ -6010,8 +5956,8 @@ function tagManagerHtml() {
 function bindTagManager(root) {
   root.querySelectorAll('[data-tag-eye]').forEach(b => b.onclick = () => toggleTag(b.dataset.tagEye));
   root.querySelectorAll('[data-tag-phase]').forEach(b => b.onclick = () => togglePhase(b.dataset.tagPhase, b.dataset.ph));
-  root.querySelectorAll('[data-tag-color]').forEach(i => i.onchange = () => { if (setTagColor(prop, i.dataset.tagColor, i.value)) { renderToolCol(); touch(); } });
-  root.querySelectorAll('[data-tag-name]').forEach(i => i.onchange = () => { renameTag(prop, i.dataset.tagName, i.value); renderToolCol(); renderInspector(); touch(); });
+  root.querySelectorAll('[data-tag-color]').forEach(i => i.onchange = () => { if (setTagColor(prop, i.dataset.tagColor, i.value)) { refreshPane(); touch(); } });
+  root.querySelectorAll('[data-tag-name]').forEach(i => i.onchange = () => { renameTag(prop, i.dataset.tagName, i.value); refreshPane(); renderInspector(); touch(); });
   root.querySelectorAll('[data-tag-del]').forEach(b => b.onclick = () => {
     const t = tagById(prop, b.dataset.tagDel); if (!t) return;
     const n = keysOnTag(prop, t.id).length;
@@ -6073,7 +6019,7 @@ function renderInspectorBody() {
       const l = prop.levels.find(x => x.id === input.dataset.lvlName);
       const name = input.value.trim();
       if (!l || !name) { if (l) input.value = l.name; return; }
-      beginGeometryEdit(prop, 'rename level'); l.name = name; touch(); renderToolCol();
+      beginGeometryEdit(prop, 'rename level'); l.name = name; touch(); refreshPane();
     });
     bindPinsList(inspEl);
     bindPositionsList(inspEl);
@@ -6086,7 +6032,7 @@ function renderInspectorBody() {
       const t = controls.target, lvl = levelAtHeight(t.y);
       // A new piece is seen: its tag is shown if it was hidden.
       const onTag = prop.tagDefaults[kind === 'furniture' ? 'furniture' : 'fixture'];
-      if (onTag && !tagShown(prop, onTag)) { setTagShown(prop, onTag, true); renderToolCol(); }
+      if (onTag && !tagShown(prop, onTag)) { setTagShown(prop, onTag, true); refreshPane(); }
       const f = addFixture(prop, kind, subtype, { level: lvl.id, x: Math.round(t.x * 100) / 100, y: Math.round(t.z * 100) / 100 });
       rebuildModel();
       setSelection({ kind: 'fixture', id: f.id });
@@ -6119,13 +6065,11 @@ function renderInspectorBody() {
       ${(() => { const names = wallFaceLabels(w, roomsOn(prop, lvl.id)); return ['pos', 'neg'].map(f => `<div class="field"><label>${escapeHtml(names[f])}</label>${materialSelectHtml('wall', f === 'pos' ? w.materialPos : w.materialNeg, 'data-matface="' + f + '"').replace('(none)', 'Automatic')}</div>`).join(''); })()}
       ${researchButtonHtml(w.id, 'material', 'RESEARCH WALL MATERIAL')}
       ${researchButtonHtml(w.id, 'interior', 'RESEARCH INTERIOR FINISH')}
-      ${scopeAssignHtml(w.id)}
       ${linkedProductsHtml(w.id)}
       ${photoLinksHtml(w.id)}
       <div class="empty" style="margin:8px 0">Walls, doors and windows change in SketchUp (EDIT IN SKETCHUP); saves there come back here.</div>
       ${addTrimHtml(wallTrimFaces(w), { face: wallFaceClicked === -1 ? 1 : 0, button: 'ADD TRIM TO THIS FACE' })}
-      ${trimCountHtml(w)}
-      <button class="btn" data-walk>WALK HERE</button>`;
+      ${trimCountHtml(w)}`;
     bindAddTrim(inspEl, wallTrimFaces(w), (productId, face, layout) => addTrims(productId, [{ wall: w, side: face.side }], layout));
     const wt = inspEl.querySelector('[data-wall-trims]');
     if (wt) wt.onclick = () => selectTrims((prop.trims || []).filter(t => t.wallId === w.id).map(t => t.id));
@@ -6138,8 +6082,7 @@ function renderInspectorBody() {
       if (e.target.value) w[k] = e.target.value; else delete w[k];
       touch(); rebuildModel();
     });
-    inspEl.querySelector('[data-walk]').onclick = () => setMode('walk');
-    bindAssign(inspEl); bindPhotoLinks(inspEl); bindResearchActions(inspEl);
+    bindPhotoLinks(inspEl); bindResearchActions(inspEl);
     return;
   }
   if (selection.kind === 'opening') {
@@ -6177,7 +6120,6 @@ function renderInspectorBody() {
       <div class="field"><label>Ceiling material</label>${materialSelectHtml('ceiling', r.ceilingMaterial, 'data-cmat')}</div>
       ${researchButtonHtml(r.id, 'material', 'RESEARCH FLOOR MATERIAL')}
       ${researchButtonHtml(r.id, 'ceiling', 'RESEARCH CEILING MATERIAL')}
-      ${scopeAssignHtml(r.id)}
       ${linkedProductsHtml(r.id)}
       ${photoLinksHtml(r.id)}
       ${addTrimHtml([{ label: 'Every wall of this room' }], { button: 'ADD TRIM AROUND THIS ROOM' })}
@@ -6192,7 +6134,7 @@ function renderInspectorBody() {
     inspEl.querySelector('[data-mat]').onchange = e => { beginGeometryEdit(prop, 'change floor material'); r.material = e.target.value || null; touch(); rebuildModel(); };
     inspEl.querySelector('[data-cmat]').onchange = e => { beginGeometryEdit(prop, 'change ceiling material'); r.ceilingMaterial = e.target.value || null; touch(); rebuildModel(); };
     inspEl.querySelector('[data-walk]').onclick = () => setMode('walk');
-    bindAssign(inspEl); bindPhotoLinks(inspEl); bindResearchActions(inspEl);
+    bindPhotoLinks(inspEl); bindResearchActions(inspEl);
     return;
   }
   if (selection.kind === 'pin') {
@@ -6370,7 +6312,7 @@ function renderInspectorBody() {
     if (pc) pc.onchange = e => { s.pointColor = e.target.value; upd(); };
     const flip = inspEl.querySelector('[data-flip]');
     if (flip) flip.onclick = () => { s.flip = !s.flip; upd(); };
-    inspEl.querySelector('[data-vis]').onchange = e => { s.visible = e.target.checked; upd(); loadShownScans(); renderToolCol(); };
+    inspEl.querySelector('[data-vis]').onchange = e => { s.visible = e.target.checked; upd(); loadShownScans(); refreshPane(); };
     const anyway = inspEl.querySelector('[data-load-anyway]');
     if (anyway) anyway.onclick = () => loadScanAnyway(s.id);
     inspEl.querySelector('[data-frame]').onclick = () => { if (obj) frameObject(obj); };
@@ -6391,7 +6333,7 @@ function renderInspectorBody() {
       fitShadow(); applyEnvironment();
       setSelection(null);
       touch();
-      renderToolCol();
+      refreshPane();
       try { await deleteFile(s.id); if(s.originalFileId && s.originalFileId !== s.id) await deleteFile(s.originalFileId); }
       catch (e) { console.error(e); toast('The scan record is gone but its bytes could not be removed from browser storage: ' + errMsg(e), 'warn'); }
     };
@@ -6514,7 +6456,7 @@ function putViewOnScreen(v, ms) {
   if (clientMode && clientControls && clientControls.viewApplied && (prop.savedViews || []).includes(v)) clientControls.viewApplied(v);
   const sel = selectedObject();
   if (sel && !isVisibleChain(sel)) setSelection(null);
-  renderHud(); renderToolCol(); renderInspector(); renderViews();
+  renderHud(); refreshPane(); renderInspector(); renderViews();
   if (moved) touch();
 }
 function stepView(by) {
@@ -6656,11 +6598,10 @@ function renderViews() {
 
 // ---------- what is on the screen, and the left pane ----------
 // Every command of the model is in the left pane (tiksi-menu.js), in groups that fold to their
-// headers. The view bar, the compass, the saved-view tabs and the component list sit over the
-// model only while their group's eye in the pane has them on.
+// headers. The compass, the saved-view tabs and the component list sit over the model only
+// while their group's eye in the pane has them on.
 function applyScreen() {
-  if (!hud.modes) return;
-  hud.modes.hidden = !onScreen('model.modes', false);
+  if (!hud.views) return;
   if (hud.compassBox) hud.compassBox.hidden = !onScreen('model.compass', true);
   if (hud.views) hud.views.hidden = !onScreen('model.views', true);
   if (clientMode && clientControls && clientControls.viewsChanged && hud.views) clientControls.viewsChanged(activeViewId, !hud.views.hidden);
@@ -6697,27 +6638,30 @@ function menuGroups() {
       ...STANDARD_VIEWS.map(([id, label]) => ({ label, icon: id === 'top' || id === 'bottom' ? 'top' : id === 'iso' ? 'model' : 'target', act: id, title: label + ' view', run: orbitTo(id) })),
     ] },
     { title: 'Camera', items: [
-      { label: 'Orbit', key: 'O', icon: 'rotate', act: 'orbit', active: mode === 'orbit', run: () => setMode('orbit') },
-      { label: 'Walk through', key: 'W', icon: 'walk', act: 'walk', active: mode === 'walk', run: () => setMode(mode === 'walk' ? 'orbit' : 'walk') },
-      { label: 'Plan: top, north up', key: 'T', icon: 'north', act: 'top-mode', active: mode === 'top', title: 'Top, north up, in parallel projection (T)', run: () => setMode('top') },
-      { label: 'Parallel projection', key: 'Shift+P', icon: 'frame', act: 'parallel', active: parallel, pressed: parallel, title: 'No perspective, as at the far end of FIELD OF VIEW (Shift+P)', run: () => setParallel(!parallel) },
+      { label: 'Orbit', key: 'O', icon: 'rotate', act: 'orbit', active: mode === 'orbit', data: { mode: 'orbit' }, run: () => setMode('orbit') },
+      { label: 'Walk through', key: 'W', icon: 'walk', act: 'walk', active: mode === 'walk', data: { mode: 'walk' }, run: () => setMode(mode === 'walk' ? 'orbit' : 'walk') },
+      { label: 'Plan: top, north up', key: 'T', icon: 'north', act: 'top-mode', active: mode === 'top', data: { mode: 'top' }, title: 'Top, north up, in parallel projection (T)', run: () => setMode('top') },
+      { label: 'Parallel projection', key: 'Shift+P', icon: 'frame', act: 'parallel', active: parallel, pressed: parallel, data: { parallel: '1' }, disabled: mode === 'walk', title: 'No perspective, as at the far end of FIELD OF VIEW (Shift+P)', run: () => setParallel(!parallel) },
       ...LENSES.map(l => ({ label: 'iPhone ' + l.label + ' lens (' + Math.round(l.f35) + ' mm)', icon: 'camera', active: !parallel && lensPick === l.id, run: () => applyLens(l.id) })),
       { label: 'Default lens (' + DEFAULT_VFOV + '° tall)', icon: 'camera', active: !parallel && !lensPick && camera && Math.abs(camera.fov - DEFAULT_VFOV) < 0.05, run: () => applyLens(null) },
     ] },
-    { title: 'Display', screen: screen('model.modes', false, 'The ORBIT to NOTES bar over the model'), items: [
-      { label: 'Section cut', key: 'C', icon: 'section', act: 'section', active: section.on, run: toggleSection },
+    { title: 'Display', items: [
+      { label: 'Section cut', key: 'C', icon: 'section', act: 'section', active: section.on, pressed: section.on, data: { section: '1' }, run: toggleSection },
       ...(cut ? [section.done
         ? { label: 'Edit the section cuts', icon: 'edit', act: 'cut-edit', run: () => setSectionDone(false) }
         : { label: 'Done placing section cuts', icon: 'check', act: 'cut-done', run: () => setSectionDone(true) }] : []),
       ...SECTION_KINDS.map(k => ({ label: 'Add a cut: ' + SECTION_LABELS[k].toLowerCase(), icon: 'plus', data: { paneCut: k }, run: () => addSection(k) })),
       { label: 'Snap section cuts', icon: 'snap', active: sectionSnap, run: () => setSectionSnap(!sectionSnap) },
-      { label: 'X-ray', key: 'X', icon: 'xray', act: 'xray', active: xray, run: toggleXray },
-      { label: 'Lighting and sun', icon: 'sun', act: 'light', run: () => { hud.env.hidden = false; hud.env.classList.add('open'); renderEnvPanel(); } },
-      { label: 'Photo pins', icon: 'image', act: 'pins', active: markersShown('pins'), run: () => toggleMarkers('pins') },
-      { label: 'Notes', icon: 'note', act: 'notes', active: markersShown('notes'), run: () => toggleMarkers('notes') },
-      { label: 'Wall dimensions', icon: 'dims', act: 'dims', active: annotShown('dims'), pressed: annotShown('dims'), title: 'Each wall\'s length, measured on its centre line', run: () => toggleAnnot('dims') },
-      { label: 'Room names and areas', icon: 'home', act: 'rooms', active: annotShown('rooms'), pressed: annotShown('rooms'), run: () => toggleAnnot('rooms') },
-      { label: 'Door and window numbers', icon: 'door', act: 'numbers', active: annotShown('numbers'), pressed: annotShown('numbers'), title: 'D1, W1... as on the DOCUMENTS schedule', run: () => toggleAnnot('numbers') },
+      { label: 'X-ray', key: 'X', icon: 'xray', act: 'xray', active: xray, pressed: xray, data: { xray: '1' }, title: 'X-ray (X); how see-through it is is under Lighting and sun', run: toggleXray },
+      { label: 'Uncertainty', icon: 'eye', act: 'uncertainty', active: uncertaintyShown, pressed: uncertaintyShown, data: { uncertainty: '1' },
+        title: 'Shade the model by how well its geometry is known (measured, observed, inferred, unknown)', run: () => { uncertaintyShown = !uncertaintyShown; renderHud(); requestRender(2); keepSoon(); } },
+      { label: 'Lighting and sun', icon: 'sun', act: 'light', data: { environment: '1' }, active: !!hud.env && !hud.env.hidden, pressed: !!hud.env && !hud.env.hidden,
+        title: 'Lighting, sun, quality and how see-through X-ray is', run: () => { hud.env.hidden = !hud.env.hidden; hud.env.classList.add('open'); renderEnvPanel(); refreshPane(); } },
+      { label: 'Photo pins (' + prop.photos.filter(ph => ph.pin).length + ')', icon: 'image', act: 'pins', active: markersShown('pins'), pressed: markersShown('pins'), data: { show: 'pins' }, title: 'Photo pins', run: () => toggleMarkers('pins') },
+      { label: 'Notes (' + prop.notePins.length + ')', icon: 'note', act: 'notes', active: markersShown('notes'), pressed: markersShown('notes'), data: { show: 'notes' }, title: 'Notes; right-click the model to pin one', run: () => toggleMarkers('notes') },
+      { label: 'Wall dimensions', icon: 'dims', act: 'dims', active: annotShown('dims'), pressed: annotShown('dims'), data: { annot: 'dims' }, title: 'Each wall\'s length, measured on its centre line', run: () => toggleAnnot('dims') },
+      { label: 'Room names and areas', icon: 'home', act: 'rooms', active: annotShown('rooms'), pressed: annotShown('rooms'), data: { annot: 'rooms' }, run: () => toggleAnnot('rooms') },
+      { label: 'Door and window numbers', icon: 'door', act: 'numbers', active: annotShown('numbers'), pressed: annotShown('numbers'), data: { annot: 'numbers' }, title: 'D1, W1... as on the DOCUMENTS schedule', run: () => toggleAnnot('numbers') },
       { label: 'Compass', icon: 'compass', act: 'compass', active: onScreen('model.compass', true), run: () => setOnScreen('model.compass', !onScreen('model.compass', true)) },
       { label: allInteriorDoorsClosed() ? 'Open all doors' : 'Close all doors', icon: 'door', disabled: !interiorDoors().length, run: toggleAllDoors },
       { label: 'Render a still image', icon: 'image', act: 'render', run: openStillDialog },
@@ -6728,7 +6672,7 @@ function menuGroups() {
       // PAINT's finishes are in the inspector, which the phone layout does not have.
       ...(fieldLayout() ? [] : [{ label: 'Paint', key: 'B', icon: 'paint', act: 'paint', active: tool === 'paint', title: 'Paint: choose a finish, then click a wall, trim, a door, a window, a floor or a ceiling (B)', run: () => setTool(tool === 'paint' ? 'select' : 'paint') }]),
       { label: 'Field of view', key: 'Z', icon: 'zoom-in', act: 'fov', active: tool === 'fov', title: 'Field of view: drag up or down (Z)', run: () => setTool(tool === 'fov' ? 'select' : 'fov') },
-      ...(measures.length ? [{ label: 'Clear measures', icon: 'close', act: 'clearm', run: () => { clearMeasures(); renderToolCol(); } }] : []),
+      ...(measures.length ? [{ label: 'Clear measures', icon: 'close', act: 'clearm', run: () => { clearMeasures(); refreshPane(); } }] : []),
       { label: 'Pin a photo', key: 'P', icon: 'pin', act: 'pin', active: tool === 'pin', run: () => { if (tool === 'pin') setTool('select'); else startPinMode(null); } },
       { label: 'Note', key: 'N', icon: 'note', act: 'note', active: tool === 'note', run: () => { if (tool === 'note') setTool('select'); else startNoteMode(null); } },
       { label: 'Mark up', key: 'U', icon: 'edit', act: 'markup', active: !!markup && markup.isOn(), title: 'Mark up: draw and pin numbered notes (U)', run: toggleMarkup },
@@ -6768,18 +6712,10 @@ function compareDesignView(view) {
   if (chosen === 'design') delete prop.modelSourceId; else prop.modelSourceId = chosen;
   // Select the record immediately, including while its scene object is loading.
   // setScanState refreshes this inspector when the chosen object is ready.
-  rebuildModel(); setSelection(chosen === 'design' ? null : { kind: 'scan', id: chosen }); renderToolCol(); touch();
+  rebuildModel(); setSelection(chosen === 'design' ? null : { kind: 'scan', id: chosen }); refreshPane(); touch();
   keepSoon();
 }
 
-// ---------- tool column ----------
-// The model's tools moved to the left pane; the column stays empty and folded away, and every
-// caller that used to redraw it now redraws the pane.
-function renderToolCol() {
-  const tc = el && el.querySelector('.tool-col');
-  if (tc) { tc.innerHTML = ''; tc.closest('.v-layout')?.classList.add('v-no-tools'); }
-  refreshPane();
-}
 // ---------- field of view ----------
 // The camera the view is drawn with: the perspective camera, or the parallel one following it.
 const _orthoDir = new THREE.Vector3();
@@ -6906,7 +6842,7 @@ function setTool(next) {
   fovDrag = null;
   if (nav && nav.refresh) nav.refresh();
   placeLensFrame();
-  renderToolCol();
+  refreshPane();
   renderInspector();
   setHint('');
   requestRender(2);
@@ -6921,7 +6857,7 @@ function markupParts() {
   return {
     THREE, wrapEl, canvas: renderer.domElement, camera, viewCamera, controls, nav, markupRoot, prop: () => prop, alive: () => token === mountId && !!scene && !!modelGroup,
     rayAt: e => { camera.updateMatrixWorld(); raycaster.setFromCamera(ndcFromEvent(e), viewCamera()); return { o: raycaster.ray.origin.toArray(), d: raycaster.ray.direction.toArray() }; },
-    pick, anchorOf, viewState, showView, renderStillBlob, quality, toast, setHint, requestRender, setMode, setTool, endMatch, setSelection, renderToolCol, syncSectionHandles,
+    pick, anchorOf, viewState, showView, renderStillBlob, quality, toast, setHint, requestRender, setMode, setTool, endMatch, setSelection, renderToolCol: refreshPane, syncSectionHandles,
     get mode() { return mode; }, get tool() { return tool; }, get match() { return match; }, get selection() { return selection; },
     get tween() { return tween; }, set tween(v) { tween = v; }, set activeViewId(v) { if (v !== activeViewId) keepInView(); activeViewId = v; },
   };
@@ -6934,7 +6870,7 @@ function needMarkup() {
     const loading = markupLoading = import('./markup-model.js').then(async part => {
       await part.ready;
       if (token !== mountId || !wrapEl || !renderer) return null;   // MODEL was left meanwhile
-      if (!markup) { markupUsed = true; markup = part.attachModelMarkup(markupParts()); renderToolCol(); }
+      if (!markup) { markupUsed = true; markup = part.attachModelMarkup(markupParts()); refreshPane(); }
       return markup;
     }, e => {
       console.error('markup mode could not load', e);
@@ -7053,11 +6989,10 @@ function openModel(root) {
   applyTextureLimits();
   setTextureUse(texturesOnScreen);
   root.innerHTML = `
-    <div class="editor-layout v-layout">
-      <div class="tool-col"></div>
+    <div class="editor-layout v-layout v-no-tools">
       <div class="canvas-wrap v-wrap">
         <div class="v-views" role="tablist" aria-label="Saved views"></div>
-        <div class="v-modes"></div>
+        <div class="v-legend" hidden role="note" aria-label="Geometry uncertainty legend" style="position:absolute;left:50%;bottom:14px;transform:translateX(-50%);z-index:5;padding:5px 10px;border-radius:12px;background:rgba(14,17,21,.82);font:11px var(--mono);color:#dfe6ea;pointer-events:none"></div>
         <div class="v-sections" role="group" aria-label="Section cuts" hidden></div>
         <div class="v-compass" title="North"><div class="v-rose"><span class="n">N</span><span class="e">E</span><span class="s">S</span><span class="w">W</span><i></i></div></div>
         <div class="v-env"></div>
@@ -7071,7 +7006,7 @@ function openModel(root) {
   wrapEl = root.querySelector('.canvas-wrap');
   inspEl = root.querySelector('.inspector');
   hud = {
-    modes: wrapEl.querySelector('.v-modes'), sections: wrapEl.querySelector('.v-sections'), compass: wrapEl.querySelector('.v-rose'), env: wrapEl.querySelector('.v-env'),
+    legend: wrapEl.querySelector('.v-legend'), sections: wrapEl.querySelector('.v-sections'), compass: wrapEl.querySelector('.v-rose'), env: wrapEl.querySelector('.v-env'),
     progress: wrapEl.querySelector('.v-progress'), toast: wrapEl.querySelector('.v-toast'), hint: wrapEl.querySelector('.v-hint'),
     views: wrapEl.querySelector('.v-views'), compassBox: wrapEl.querySelector('.v-compass'), objects: wrapEl.querySelector('.v-objects'),
   };
@@ -7101,11 +7036,11 @@ function openModel(root) {
   renderHud();
   renderEnvPanel();
   hud.env.hidden=true;
-  renderToolCol();
+  refreshPane();
   renderInspector();
   renderViews();
   applyScreen();
-  offScreen = onScreenChange(() => { applyScreen(); renderToolCol(); renderObjects(); });
+  offScreen = onScreenChange(() => { applyScreen(); refreshPane(); renderObjects(); });
   offMenu = besideMode ? null : setMenuProvider(menuGroups);
   setHint('');
 
@@ -7163,7 +7098,7 @@ function openModel(root) {
     if (photoById(prop, decodeURIComponent(mm[1]))) startMatch(decodeURIComponent(mm[1]));
     history.replaceState(null, '', '#/model');
   }
-  // #/model?select=<room, wall or opening id> (a link on a PROJECTS scope item) selects it and
+  // #/model?select=<room, wall or opening id> (a link on a scope item in ESTIMATE) selects it and
   // brings it into view, showing its level if that was hidden.
   const ms = /[?&]select=([^&]+)/.exec(location.hash);
   if (ms) {
@@ -7175,7 +7110,7 @@ function selectFromLink(id) {
   if (!showElements([id], { frame: 'always' })) toast('That element is no longer in the model.', 'warn');
 }
 // Select these rooms, walls, openings, fixtures and imported models together and bring them
-// into view (PROJECTS and the other pages beside the model, a #/model?select= link). A level
+// into view (ESTIMATE and the other pages beside the model, a #/model?select= link). A level
 // that was hidden is shown. `frame`: true moves the camera only when part of them is out of the
 // picture or they are too small in it to read, 'always' always, false never. Returns how many were found; none clears the selection.
 export function showElements(ids, { frame = true } = {}) {
@@ -7554,7 +7489,7 @@ export function fieldAction(kind, id, value) {
     else if (id === 'note') startNoteMode(null);
   }
   else if (kind === 'load-scan') loadScanAnyway(id);
-  else if (kind === 'clear-measures') { clearMeasures(); renderToolCol(); requestRender(2); }
+  else if (kind === 'clear-measures') { clearMeasures(); refreshPane(); requestRender(2); }
   else if (kind === 'compare') { if (prop.designComparison && (id === 'before' || id === 'after')) compareDesignView(id); }
   else if (kind === 'tag') toggleTag(id || UNTAGGED);
   // The client page changed what is shown (prop.hidden, tags, scan.visible): show it.

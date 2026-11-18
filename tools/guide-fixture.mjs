@@ -198,6 +198,9 @@ export async function seedGuide(page) {
       product('guide-product-pendant', 'Brass pendant · sample', 'lighting', 195, 'ea', ['guide-item-light'], [], 'light', '#b99b60', 'Diameter: 14 in\nFinish: brushed brass\nFictional demo price'),
     ];
     store.touch(); store.save();
+    // With the Mac's project files, wait until the sample is on disk: a reload reads it back from there.
+    const disk = (await import('/js/disk-workspace.js')).diskWorkspace;
+    if (disk) await disk.sync();
     return {
       propertyId: p.id, levelId: level, roomIds: p.rooms.map(r => r.id), wallIds: p.walls.map(w => w.id), openingIds: p.openings.map(o => o.id),
       photoIds, projectIds: d.projects.map(pr => pr.id), itemIds: d.projects.flatMap(pr => pr.items.map(it => it.id)), productIds: d.products.map(pr => pr.id),

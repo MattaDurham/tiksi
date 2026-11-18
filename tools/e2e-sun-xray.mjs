@@ -97,7 +97,7 @@ try {
   assert.equal((await inspect()).transparent, false); assert.equal((await inspect()).castShadow, true);
   assert.ok(await page.evaluate(() => window.testScene.getObjectByName('Synthetic_roof').material.clippingPlanes?.length === 1), 'restored material retains the current section cut');
   await page.locator('[data-section]').click();
-  await page.locator('#rail a[data-view=materials]').click();   // away from MODEL and back: the settings come back from the store
+  await page.locator('#rail a[data-view=photos]').click();   // away from MODEL and back: the settings come back from the store
   await page.locator('#rail a[data-view=model]').click();
   await page.waitForFunction(() => window.testScene?.getObjectByName('Synthetic_roof'));
   const saved = await page.evaluate(async () => (await import('/js/store.js')).activeProperty().env);
@@ -109,8 +109,8 @@ try {
   await page.locator('[data-scale]').fill('1');
   await page.locator('[data-scale]').press('Tab');
   await page.setViewportSize({ width: 1024, height: 800 });
-  await page.locator('[data-xray]').click();
-  const wrap = await page.locator('.v-wrap').boundingBox(), control = await page.locator('.v-xray-control').boundingBox();
+  await page.locator('[data-environment]').click();   // how see-through x-ray is sits with the lighting
+  const wrap = await page.locator('.v-wrap').boundingBox(), control = await page.locator('.v-wrap > .v-env .v-xray-range').boundingBox();
   assert.ok(control.x >= wrap.x && control.x + control.width <= wrap.x + wrap.width, 'slider fits a narrow canvas');
   assert.deepEqual(errors, []);
   console.log('ok   solar location/date/time/north controls, seasonal shadows, neutral haze, imported roof X-ray, slider endpoints, restore, persistence, narrow layout');

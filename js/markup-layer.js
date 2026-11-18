@@ -1,6 +1,6 @@
-// Markup mode: draw over MODEL or PLAN with an Apple Pencil, a finger or a mouse, and pin
-// numbered notes. One layer serves both pages; the page hands it a `host` that knows its own
-// geometry. The records are markups.js.
+// Markup mode: draw over MODEL with an Apple Pencil, a finger or a mouse, and pin numbered
+// notes. MODEL hands the layer a `host` that knows its geometry. The records are markups.js
+// (a record from the old PLAN page, on: 'plan', is kept but not shown).
 //
 // Who draws and who moves the view:
 // - A pen (Apple Pencil, a tablet pen) always draws. While it is down, and for a moment after,
@@ -15,17 +15,16 @@
 // is not stopped: the page ignores a single finger while `fingerDraws()` and so still sees
 // both fingers of a pinch.
 //
-// host = { kind: 'model' | 'plan', wrap, surface (the page's canvas), prop(), changed(), hint(text),
+// host = { kind: 'model', wrap, surface (the page's canvas), prop(), changed(), hint(text),
 //   toast(text, kind), goTo(markup), picture(markup, marks) -> Promise<canvas>,
-//   model: camera() -> { position, target, fov }, viewNow() -> a saved view's state,
+//   camera() -> { position, target, fov }, viewNow() -> a saved view's state,
 //          hitAt(clientX, clientY) -> { anchor, kind, ref, p } | null, project(anchor) -> [x, y] | null,
 //          rayAt(clientX, clientY) -> { o, d }, surfaceAt(clientX, clientY) -> { p, n, kind, ref } | null,
 //          edgesNear(clientX, clientY, surface) -> [[a, b], ...], mPerPx(p), showSurfaces(markups)
 //
 // Over the model, ink goes onto the model's own surfaces (markup-surface.js) unless ON THE SCREEN
 // is chosen: it is then flat on the screen and belongs to the camera it was drawn from, as on a
-// photo. The LINE tool draws straight lines on a face, snapping as SketchUp does.
-//   plan:  levelId(), toDoc(x, y) -> metres, toPx(x, y) -> px, unit() -> px per metre, viewKey() }
+// photo. The LINE tool draws straight lines on a face, snapping as SketchUp does. }
 
 import { icon as appIcon } from './icons.js';
 import { touch, escapeHtml, fmtLen, parseLen } from './store.js';
@@ -81,14 +80,14 @@ const LINE_PX = [1.5, 2.5, 4];   // the line tool's widths, in px at any distanc
 const MAX_PRESS_SAMPLES = 12000;  // a bounded press; lift to continue after the limit
 const SAMPLE_PX = 4;             // a stroke onto the surfaces is read from the model this often along it
 const LINE_LIFT = 0.003;         // a line sits this far off its face, metres
-const TOOLS = [['pen', 'pen', 'Pen', 'P'], ['marker', 'marker', 'Highlighter', 'H'], ['line', 'line', 'Line', 'L', 'model'], ['eraser', 'eraser', 'Eraser', 'E'], ['note', 'note', 'Numbered note', 'N'], ['move', 'hand', 'Move the view', 'V']];
+const TOOLS = [['pen', 'pen', 'Pen', 'P'], ['marker', 'marker', 'Highlighter', 'H'], ['line', 'line', 'Line', 'L'], ['eraser', 'eraser', 'Eraser', 'E'], ['note', 'note', 'Numbered note', 'N'], ['move', 'hand', 'Move the view', 'V']];
 
-// What survives the page being rebuilt (a save merged from another device rebuilds PLAN): whether
+// What survives the page being rebuilt (a save merged from another device rebuilds MODEL): whether
 // markup mode is on, the tool, colour and size, and which markup is open. The mode itself only
 // comes back when the page is rebuilt straight away; leaving for another page ends it.
 const fresh = () => ({ on: false, tool: 'pen', color: MARKUP_COLORS[0], size: 1, activeId: null, finger: null, shown: true, list: false, leftAt: -Infinity, place: 'surface', surfaceLock: true, brush: false, widths: { pen: 5, marker: 22, line: 2.5 }, opacities: { pen: 1, marker: MARKER_ALPHA, line: 1 } });
 const REBUILD_MS = 1500;
-const kept = { model: fresh(), plan: fresh() };
+const kept = { model: fresh() };
 let penSeen = false;
 const now = () => performance.now();
 const clone = v => JSON.parse(JSON.stringify(v));
@@ -110,11 +109,11 @@ function textOn(hex) {
 }
 
 export function attachMarkup(host) {
-  const S = kept[host.kind], model = host.kind === 'model';
+  const S = kept.model;
   const wrap = host.wrap, surface = host.surface;
   const make = (tag, cls) => { const e = document.createElement(tag); e.className = cls; return e; };
   // The two ink canvases live in a closed shadow root: to the page, and to everything that
-  // looks for "the canvas" of MODEL or PLAN, the view still holds exactly one.
+  // looks for "the canvas" of MODEL, the view still holds exactly one.
   const layerEl = make('div', 'mk-layer'), ink = make('canvas', 'mk-ink'), live = make('canvas', 'mk-live');
   ink.style.cssText = live.style.cssText = 'position:absolute;left:0;top:0;display:block;pointer-events:none';
   layerEl.attachShadow({ mode: 'closed' }).append(ink, live);
@@ -146,20 +145,18 @@ export function attachMarkup(host) {
   const active = () => { const m = markupById(prop(), S.activeId); return m && m.on === host.kind ? m : null; };
 
   // ---------- geometry ----------
-  const toPx = model ? (u, v) => [size.w / 2 + u * size.h, size.h / 2 + v * size.h] : (u, v) => host.toPx(u, v);
-  const toDoc = model ? (x, y) => [(x - size.w / 2) / size.h, (y - size.h / 2) / size.h] : (x, y) => host.toDoc(x, y);
-  const unit = () => model ? size.h : host.unit();
+  const toPx = (u, v) => [size.w / 2 + u * size.h, size.h / 2 + v * size.h];
+  const toDoc = (x, y) => [(x - size.w / 2) / size.h, (y - size.h / 2) / size.h];
+  const unit = () => size.h;
   const local = e => { const r = surface.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
   // Is the camera where this markup was drawn? Ink on the screen over the model only shows from there.
-  const onView = m => !model || (!!m && sameCamera(m.view.camera, host.camera()));
-  const surfaceInk = () => model && S.place === 'surface' && !!host.surfaceAt;
+  const onView = m => !!m && sameCamera(m.view.camera, host.camera());
+  const surfaceInk = () => S.place === 'surface' && !!host.surfaceAt;
   const P3 = p => host.project({ x: p[0], y: p[1], z: p[2] });
   // The markups whose ink is on the screen now.
   function shownMarkups() {
     if (!S.shown) return [];
-    if (model) return (prop().markups || []).filter(m => m.on === 'model' && markupVisible(m) && onView(m));
-    const level = host.levelId();
-    return (prop().markups || []).filter(m => m.on === 'plan' && markupVisible(m) && m.levelId === level);
+    return (prop().markups || []).filter(m => m.on === 'model' && markupVisible(m) && onView(m));
   }
 
   // ---------- drawing ----------
@@ -183,7 +180,7 @@ export function attachMarkup(host) {
     const u = unit();
     for (const m of shownMarkups()) for (const s of m.strokes) drawStroke(ctx, s, toPx, u);
     // Ink on the surfaces is drawn in the model by the page, from any camera.
-    if (model && host.showSurfaces) host.showSurfaces(S.shown ? (prop().markups || []).filter(m => m.on === 'model' && markupVisible(m)) : []);
+    if (host.showSurfaces) host.showSurfaces(S.shown ? (prop().markups || []).filter(m => m.on === 'model' && markupVisible(m)) : []);
   }
   function paintLive() {
     liveDirty = false;
@@ -209,17 +206,15 @@ export function attachMarkup(host) {
 
   // ---------- notes on the screen ----------
   // Over the model a pinned note shows from any camera, at its point; one with no pin shows
-  // with its markup's ink. On the plan every visible note of the level shows.
+  // with its markup's ink.
   function shownNotes() {
     if (!S.shown) return [];
     const out = [], own = active();
     for (const m of prop().markups || []) {
       if (m.on !== host.kind || !markupVisible(m)) continue;
-      if (!model && m.levelId !== host.levelId()) continue;
       for (const n of m.notes) {
         let at = null;
-        if (!model) at = toPx(n.at[0], n.at[1]);
-        else if (n.anchor) at = host.project(n.anchor);
+        if (n.anchor) at = host.project(n.anchor);
         else if (onView(m)) at = toPx(n.at[0], n.at[1]);
         if (at) out.push({ m, n, at, own: m === own });
       }
@@ -248,7 +243,7 @@ export function attachMarkup(host) {
   function frame() {
     if (gone) return;
     fit();
-    const key = model ? JSON.stringify(host.camera()) : host.viewKey();
+    const key = JSON.stringify(host.camera());
     if (key !== viewKey) {
       viewKey = key; inkDirty = true; refreshChip();
       // The line being drawn and its snap follow the camera (the wheel zooms between clicks).
@@ -273,8 +268,8 @@ export function attachMarkup(host) {
   // Ink on the model's surfaces shows from any camera, so it joins the open markup from anywhere.
   function target(anyView = false) {
     let m = active();
-    if (m && markupVisible(m) && (model ? anyView || onView(m) : m.levelId === host.levelId())) return { m, made: null };
-    m = addMarkup(prop(), model ? { on: 'model', view: host.viewNow() } : { on: 'plan', levelId: host.levelId() });
+    if (m && markupVisible(m) && (anyView || onView(m))) return { m, made: null };
+    m = addMarkup(prop(), { on: 'model', view: host.viewNow() });
     S.activeId = m.id;
     return { m, made: { markup: clone(m), index: prop().markups.indexOf(m) } };
   }
@@ -387,11 +382,11 @@ export function attachMarkup(host) {
     try { t = target(); } catch (err) { host.toast(String(err.message || err), 'error'); return; }
     const items = [];
     for (const points of pointChunks(doc)) {
-      const part = roundPoints(simplifyPoints(points, 0.35 / u), model ? 5 : 4);
+      const part = roundPoints(simplifyPoints(points, 0.35 / u), 5);
       const s = addStroke(t.m, { tool: stroke.tool, color: stroke.color, opacity: stroke.opacity, width, pts: part });
       if (!s) { host.toast('This markup is full. Start a new one to keep drawing.', 'warn'); break; }
       items.push({ head: header(t.m), stroke: clone(s), index: t.m.strokes.length - 1 });
-      if (model) setTimeout(() => readSurfaces(t.m.id, s.id), 0);
+      setTimeout(() => readSurfaces(t.m.id, s.id), 0);
     }
     if (items.length) did({ t: 'ink+', items });
     saved();
@@ -473,7 +468,7 @@ export function attachMarkup(host) {
     };
     for (const m of shownMarkups()) for (const s of m.strokes.filter(k => !onSurfaces(k) && strokeHit(k, x, y, r))) take(m, s);
     // Ink on the surfaces is rubbed out where it is on the screen now.
-    if (model && S.shown) {
+    if (S.shown) {
       for (const m of (prop().markups || []).filter(k => k.on === 'model' && markupVisible(k))) {
         for (const s of m.strokes.filter(k => onSurfaces(k) && surfaceHit(k, at, ERASER_PX))) take(m, s);
       }
@@ -637,7 +632,7 @@ export function attachMarkup(host) {
 
   // ---------- notes ----------
   function placeNote(at, e) {
-    const hit = model ? host.hitAt(e.clientX, e.clientY) : null;
+    const hit = host.hitAt(e.clientX, e.clientY);
     let t;
     // A note pinned to a surface shows from any view, so it joins the open markup from anywhere
     // (unless ink is flat on the screen, where a markup is one view).
@@ -657,7 +652,7 @@ export function attachMarkup(host) {
     el.innerHTML = `<div class="mk-edit-head"><b>${escapeHtml(markupTitle(m))}, note ${n.n}</b></div>
       <textarea rows="3" placeholder="What should change here?" aria-label="Note ${n.n}"></textarea>
       <div class="mk-edit-row">
-        ${model && !sameCamera(m.view.camera, host.camera()) ? '<button type="button" class="btn" data-go>GO TO ITS VIEW</button>' : ''}
+        ${!sameCamera(m.view.camera, host.camera()) ? '<button type="button" class="btn" data-go>GO TO ITS VIEW</button>' : ''}
         <span class="mk-grow"></span>
         <button type="button" class="btn" data-del>DELETE</button>
         <button type="button" class="btn primary" data-ok>DONE</button>
@@ -871,9 +866,9 @@ export function attachMarkup(host) {
       return true;
     }
     if (e.key === ' ') { spaceDown = true; e.preventDefault(); wrap.classList.add('mk-space'); return true; }
-    const tool = { p: 'pen', h: 'marker', e: 'eraser', n: 'note', v: 'move', ...(model ? { l: 'line' } : {}) }[k];
+    const tool = { p: 'pen', h: 'marker', e: 'eraser', n: 'note', v: 'move', l: 'line' }[k];
     if (tool) { setTool(tool); return true; }
-    if (model && k === 's') { setPlace(S.place === 'surface' ? 'screen' : 'surface'); return true; }
+    if (k === 's') { setPlace(S.place === 'surface' ? 'screen' : 'surface'); return true; }
     if (k === '1' || k === '2' || k === '3') { setSize(Number(k) - 1); return true; }
     return false;
   }
@@ -908,7 +903,6 @@ export function attachMarkup(host) {
 
   // ---------- the bar ----------
   function setTool(tool) {
-    if (tool === 'line' && !model) return;
     if (S.tool === 'line' && tool !== 'line') { chain = null; snap = null; lineAt = null; lock = null; typed = ''; lineRef = null; }
     S.tool = tool; hoverAt = null; liveDirty = true;
     renderBar(); host.changed(S.on);
@@ -940,8 +934,8 @@ export function attachMarkup(host) {
     const touchy = matchMedia('(any-pointer: coarse)').matches;
     const b = (attrs, ic, label, on) => `<button type="button" class="mk-btn ${on ? 'active' : ''}" ${attrs} title="${label}" aria-label="${label}" ${on === undefined ? '' : `aria-pressed="${!!on}"`}>${icon(ic)}</button>`;
     bar.innerHTML =
-      TOOLS.filter(t => !t[4] || t[4] === host.kind).map(([id, ic, label, k]) => b(`data-tool="${id}"`, ic, `${label} (${k})`, S.tool === id)).join('') +
-      (model ? b('data-act="place"', S.place === 'surface' ? 'surface' : 'screen', S.place === 'surface' ? 'Ink goes on the model\'s surfaces. Click for ink flat on the screen (S)' : 'Ink is flat on the screen. Click for ink on the model\'s surfaces (S)') : '') +
+      TOOLS.map(([id, ic, label, k]) => b(`data-tool="${id}"`, ic, `${label} (${k})`, S.tool === id)).join('') +
+      b('data-act="place"', S.place === 'surface' ? 'surface' : 'screen', S.place === 'surface' ? 'Ink goes on the model\'s surfaces. Click for ink flat on the screen (S)' : 'Ink is flat on the screen. Click for ink on the model\'s surfaces (S)') +
       '<span class="mk-sep"></span>' +
       MARKUP_COLORS.slice(0, 6).map(c => `<button type="button" class="mk-dot ${S.color === c ? 'active' : ''}" data-color="${c}" style="--c:${c}" title="${MARKUP_COLOR_NAMES[c]}" aria-label="Colour ${c}" aria-pressed="${S.color === c}"></button>`).join('') +
       '<span class="mk-sep"></span>' +
@@ -962,7 +956,7 @@ export function attachMarkup(host) {
       lock: () => { S.surfaceLock = !S.surfaceLock; renderBar(); }, undo: () => step(true), redo: () => step(false), list: () => toggleList(), done: () => setOn(false),
       place: () => setPlace(S.place === 'surface' ? 'screen' : 'surface'),
       finger: () => { S.finger = !fingerOn(); renderBar(); host.changed(S.on); },
-      new: () => { S.activeId = null; refresh(); host.toast(model ? 'The next mark starts a new markup from this view.' : 'The next mark starts a new markup.', 'ok'); } };
+      new: () => { S.activeId = null; refresh(); host.toast('The next mark starts a new markup from this view.', 'ok'); } };
     bar.querySelectorAll('[data-act]').forEach(x => x.onclick = act[x.dataset.act]);
     renderBrush();
     host.hint(hintText());
@@ -1027,7 +1021,7 @@ export function attachMarkup(host) {
   }
   // Over the model: the open markup's ink is out of sight because the camera has moved.
   function refreshChip() {
-    const m = model && S.on ? active() : null;
+    const m = S.on ? active() : null;
     // Only what is flat on the screen needs its own view; ink on the surfaces shows from anywhere.
     const away = !!m && markupVisible(m) && !markupEmpty(m) && markupFlat(m) && !onView(m);
     chip.hidden = !away;
@@ -1050,11 +1044,10 @@ export function attachMarkup(host) {
     const all = (prop().markups || []).filter(m => m.on === host.kind);
     const row = m => {
       const parts = [m.strokes.length + (m.strokes.length === 1 ? ' stroke' : ' strokes'), m.notes.length ? m.notes.length + (m.notes.length === 1 ? ' note' : ' notes') : ''].filter(Boolean).join(', ');
-      const where = model ? '' : ((prop().levels.find(l => l.id === m.levelId) || {}).name || '');
       if (renaming === m.id) return `<div class="mk-row" data-id="${escapeHtml(m.id)}"><input class="mk-name" value="${escapeHtml(m.name)}" placeholder="${escapeHtml('Markup ' + m.number)}" maxlength="60" aria-label="Name"><button type="button" class="btn primary" data-save>SAVE</button></div>`;
       return `<div class="mk-row ${m.id === S.activeId ? 'active' : ''} ${m.status === 'done' ? 'done' : ''} ${m.hidden ? 'is-hidden' : ''}" data-id="${escapeHtml(m.id)}">
         <button type="button" class="mk-btn mk-visibility" data-visibility title="${m.hidden ? 'Show' : 'Hide'} ${escapeHtml(markupTitle(m))}" aria-label="${m.hidden ? 'Show' : 'Hide'} ${escapeHtml(markupTitle(m))}" aria-pressed="${!m.hidden}">${icon(m.hidden ? 'eye-off' : 'eye')}</button>
-        <button type="button" class="mk-open" data-open><b>${m.number}</b><span>${escapeHtml(markupTitle(m))}<small>${escapeHtml([m.hidden ? 'Hidden' : '', where, parts].filter(Boolean).join(' · '))}</small></span></button>
+        <button type="button" class="mk-open" data-open><b>${m.number}</b><span>${escapeHtml(markupTitle(m))}<small>${escapeHtml([m.hidden ? 'Hidden' : '', parts].filter(Boolean).join(' · '))}</small></span></button>
         ${confirmDelete === m.id
           ? '<button type="button" class="btn danger" data-really>DELETE IT</button><button type="button" class="btn" data-keep>KEEP</button>'
           : `<button type="button" class="mk-btn" data-status title="${m.status === 'done' ? 'Mark as open again' : 'Mark as done'}" aria-label="${m.status === 'done' ? 'Mark as open again' : 'Mark as done'}" aria-pressed="${m.status === 'done'}">${icon('check')}</button>
@@ -1064,10 +1057,10 @@ export function attachMarkup(host) {
       </div>`;
     };
     listEl.innerHTML = `<div class="mk-list-head"><b>MARKUPS</b>
-        <label class="mk-show"><input type="checkbox" ${S.shown ? 'checked' : ''} data-shown> SHOW ${model ? 'OVER THE MODEL' : 'ON THE PLAN'}</label>
+        <label class="mk-show"><input type="checkbox" ${S.shown ? 'checked' : ''} data-shown> SHOW OVER THE MODEL</label>
         <button type="button" class="mk-btn" data-close title="Close" aria-label="Close">${icon('close')}</button></div>
       <div class="mk-list-summary"><span>${S.shown ? all.filter(m => !m.hidden).length : 0} visible · ${S.shown ? all.filter(m => m.hidden).length : all.length} hidden</span><button type="button" data-show-all ${all.some(m => m.hidden) || !S.shown ? '' : 'disabled'}>Show all</button></div>
-      <div class="mk-rows">${all.length ? all.map(row).join('') : `<p class="mk-none">No markups yet. Draw ${model ? 'over the model' : 'on the plan'} and the first one appears here.</p>`}</div>`;
+      <div class="mk-rows">${all.length ? all.map(row).join('') : `<p class="mk-none">No markups yet. Draw over the model and the first one appears here.</p>`}</div>`;
     listEl.querySelector('[data-close]').onclick = () => toggleList(false);
     listEl.querySelector('[data-show-all]').onclick = () => { for (const m of all) setMarkupHidden(prop(), m.id, false); S.shown = true; touch(); refresh(); };
     listEl.querySelector('[data-shown]').onchange = e => { S.shown = e.target.checked; refresh(); };
@@ -1171,7 +1164,7 @@ export function attachMarkup(host) {
       for (const n of markup.notes) { const at = place(n); if (at) drawNoteDisc(ctx, at[0], at[1], n.n, color, r); }
     },
     state: () => ({ on: S.on, tool: S.tool, color: S.color, size: S.size, activeId: S.activeId, fingerDraws: fingerDraws(), penSeen, shown: S.shown, width: brushWidth(), opacity: brushOpacity(), surfaceLock: S.surfaceLock, hidden: (prop().markups || []).filter(m => m.on === host.kind && !markupVisible(m)).map(m => m.id), undo: undo.length, redo: redo.length,
-      ...(model ? { place: S.place, line: chain ? chain.pts.map(p => p.slice()) : null, snap: snap ? { kind: snap.kind, label: snap.label, p: snap.p.slice(), locked: !!snap.locked } : null, typed } : {}) }),
+      place: S.place, line: chain ? chain.pts.map(p => p.slice()) : null, snap: snap ? { kind: snap.kind, label: snap.label, p: snap.p.slice(), locked: !!snap.locked } : null, typed }),
     dispose() {
       if (gone) return;
       if (stroke) finish(false);    // the page is being rebuilt mid-press: what was drawn is kept
@@ -1193,6 +1186,3 @@ export function attachMarkup(host) {
     },
   };
 }
-
-// For tests: forget the kept mode and whether a pen has been seen.
-export function resetMarkupLayer() { Object.assign(kept.model, fresh()); Object.assign(kept.plan, fresh()); penSeen = false; }

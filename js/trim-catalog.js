@@ -1239,7 +1239,7 @@ export const TRIM_CATALOG = [
   "store": "Lowe's",
   "sku": "Lowe's Item #29005",
   "url": "https://www.lowes.com/pd/EverTrue-2-in-x-8-ft-Primed-Composite-Wall-Panel-Moulding/1000444581",
-  "price": 14.08,
+  "price": 15.02,
   "priceUnit": "each",
   "length": "8 ft piece",
   "material": "Composite (MDF-type)",
@@ -1249,7 +1249,7 @@ export const TRIM_CATALOG = [
   "size": "11/16 x 2 in",
   "profileText": "Wainscot cap: rounded front nose over a rabbet that caps the top edge of beadboard or panelling",
   "evidence": "Seen on the store page 2026-11-13: Lowe's page data: title, brand, model, item #, dims, material, finish, style, price; profile inferred",
-  "notes": "Lowe's type field = 'Wainscot panel cap' (documented). Rabbet inferred. Search-page network price was $15.02. Price: Lowe's default-store price."
+  "notes": "Lowe's type field = 'Wainscot panel cap' (documented). Rabbet inferred. Price $15.02 on the store page 2026-11-18 (it was $14.08 at the default store on 2026-11-13)."
  },
  {
   "id": "hd-6069244",
@@ -1388,7 +1388,7 @@ export const TRIM_STOCK = [
     "Lowe's Item #356473", 'https://www.lowes.com/pd/1-in-x-4-in-x-12-ft-Square-Primed-Pine-Board/5002021501', 16.98, 3.5,
     'Nominal 1x4, actual 23/32 x 3-1/2 in. Also sold 8 ft (item #333346, $10.58) and 16 ft (item #131203).'),
   fjBoard('lowes-l51844612', 'L51844612', '1x6 primed pine board', 'RELIABILT 1-in x 6-in x 12-ft Primed S4S Finger-Joint Pine Board',
-    "Lowe's Item #356475", 'https://www.lowes.com/search?searchTerm=356475', 25.55, 5.5,
+    "Lowe's Item #356475", 'https://www.lowes.com/pd/1-in-x-6-in-x-12-ft-Square-Primed-Pine-Board/5002011739', 25.55, 5.5,
     'Nominal 1x6, actual 23/32 x 5-1/2 in, the same family and thickness as the 1x4 at every length. Also sold 8 ft (item #333348, $16.37) and 16 ft (item #131206).'),
 ];
 const stockById = Object.fromEntries(TRIM_STOCK.map(p => [p.id, p]));

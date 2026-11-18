@@ -1,11 +1,11 @@
-// Tape readings taken from walk-through video frames (MEASURE). Pure data, no DOM, so the
+// Tape readings taken from walk-through video frames (VIDEOS, in PHOTOS). Pure data, no DOM, so the
 // rules are tested under Node. A reading is
 //   { id, videoId, seconds, frameAssetId, crop: [x, y, w, h] | null (normalised to the frame),
 //     value (m) | null, input (as typed), text (what was measured), direction, confidence,
 //     element: { kind: 'opening'|'wall', id, dim: 'width'|'height'|'slabWidth'|'length' } | null,
 //     status: 'unassigned'|'assigned'|'applied', applied: { previous, at } | null, note, createdAt }
 // Applying a reading edits the model through the same geometry history as a typed edit in
-// PLAN, so UNDO reverts it; the reading then reports that the model no longer matches.
+// MODEL, so UNDO reverts it; the reading then reports that the model no longer matches.
 import { uid, touch, units, readLength, fmtMm, fmtFeetInches, wallsOn, roomsOn, openingsOn, levelOfWall, fmtLen, wallHeightOf } from './store.js';
 import { openingDimensions, wallWidthFromSlab } from './opening-dimensions.js';
 import { setExplicitSlabWidth } from './opening-profile-edit.js';
@@ -102,8 +102,8 @@ function roomOfWall(prop, w) {
   return '';
 }
 
-// Every attachable dimension, labelled so an owner can tell them apart without the plan.
-// A wall's length is on its centre line, as PLAN draws it: a tape along the room-side face
+// Every attachable dimension, labelled so an owner can tell them apart without the model.
+// A wall's length is on its centre line, as MODEL draws it: a tape along the room-side face
 // reads shorter by half of each joining wall's thickness, so the label says which it is.
 export function elementTargets(prop) {
   const out = [], multi = (prop.levels || []).length > 1;
@@ -153,7 +153,7 @@ export function canApply(prop, m) {
     if (!w) return 'The opening has no host wall.';
     if (m.value < 0.05) return 'Too small for an opening.';
     const changes=m.element.dim === 'slabWidth' ? {width:wallWidthFromSlab(o,m.value,openingDimensions(prop,o).leaves)} : {[m.element.dim]:m.value};
-    // PLAN's rule for a typed size (the opening schedule's resize): try it on a copy, and refuse
+    // The rule for a typed size (the opening schedule's resize): try it on a copy, and refuse
     // a reading the rule would have to cut down rather than store a different number.
     const trial = structuredClone(o);
     if (m.element.dim === 'slabWidth') { trial.leaves=openingDimensions(prop,o).leaves; setExplicitSlabWidth(trial,m.value); }
@@ -174,7 +174,7 @@ export function applyMeasurement(prop, id) {
   const previous = currentValue(prop, m.element), e = m.element;
   beginGeometryEdit(prop, 'apply tape reading');
   if (e.kind === 'opening') {
-    // Through the same resize rule as a size typed in PLAN, so a wider opening stays on its wall.
+    // Through the same resize rule as a size typed in MODEL, so a wider opening stays on its wall.
     const o = prop.openings.find(x => x.id === e.id), w = prop.walls.find(x => x.id === o.wallId);
     const changes=e.dim === 'slabWidth' ? {width:wallWidthFromSlab(o,m.value,openingDimensions(prop,o).leaves)} : {[e.dim]:m.value};
     const leaves=openingDimensions(prop,o).leaves;
@@ -182,7 +182,7 @@ export function applyMeasurement(prop, id) {
     if(e.dim === 'slabWidth') { o.leaves=leaves; setExplicitSlabWidth(o,m.value); }
   }
   else {
-    // As PLAN's length field: the b end moves along the wall, joined walls and floors follow.
+    // As MODEL's wall length field: the b end moves along the wall, joined walls and floors follow.
     const w = prop.walls.find(x => x.id === e.id), L = wallLength(w), level = levelOfWall(prop, w).id;
     const ux = (w.bx - w.ax) / L, uy = (w.by - w.ay) / L, rnd = v => Math.round(v * 1e4) / 1e4;
     applyCornerMove(planCornerMove(w, 'b', wallsOn(prop, level), roomsOn(prop, level), openingsOn(prop, level)), rnd(w.ax + ux * m.value), rnd(w.ay + uy * m.value));

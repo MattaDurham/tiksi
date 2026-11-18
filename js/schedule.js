@@ -1,260 +1,225 @@
-// Schedule view: critical-path method (CPM) over each selected project's scope items,
-// rendered as an SVG Gantt. Forward/backward pass, slack, dependency arrows.
+// SCHEDULE: when the work happens, in working days (Monday to Friday).
+//
+// A job (a top-level project with its subprojects) is laid out by job.js: one carpenter does the
+// drawn trim room after room, in the order the subprojects are listed (move a room up or down
+// here); every scope item with days runs on its own unless it is set to start AFTER another line.
+// ALL PROJECTS lays the jobs in the program side by side from the program start, each from its own
+// start date, or after the job it is set to follow (program.js).
+//
+// One table: the work, who does it, its days and dates, what it waits for, and a chart of working
+// days beside it (weekends are left out, so a bar's length is its days). Tap or click a line for
+// its dates and slack.
 
-import {
-  ws, touch, escapeHtml, fmtDate, addDays, dayDiff, isoToday, projectLabel, propertyProjects,
-} from './store.js';
+import { ws, touch, onChange, activeProperty, propertyProjects, projectById, escapeHtml, fmtDate, isoToday } from './store.js';
+import { programSchedule, workday, workdaysBetween } from './program.js';
+import { jobOf, rootOf } from './job.js';
+import { restoreProjectEdit } from './project-history.js';
 import { icon } from './icons.js';
-import { programSchedule, lastWorkDay } from './program.js';
-import { SMALL, smallScreen } from './screen.js';
-import { touchDevice, TOUCH_DEVICE_QUERY } from './render-quality.js';
 
-let el = null;
-// Finger or mouse (an iPad that gains or loses a trackpad) and small or large (a phone turned)
-// can change while the page is open: redraw then, so the rows and tap targets follow.
-let watched = [];
-const redraw = () => render();
-export function mount(root) {
-  el = root; render();
-  try { watched = [TOUCH_DEVICE_QUERY, SMALL].map(q => window.matchMedia(q)); watched.forEach(m => m.addEventListener('change', redraw)); } catch (e) { watched = []; }
-}
-export function unmount() { el = null; watched.forEach(m => m.removeEventListener('change', redraw)); watched = []; }
+const esc = escapeHtml;
+// Whole dollars everywhere on the page, so a column reads alike; a single board's price keeps its cents.
+const fm = v => (v < 0 ? '-' : '') + '$' + Math.abs(Math.round(Number(v) || 0)).toLocaleString('en-US');
+const hrs = v => (Math.round((Number(v) || 0) * 10) / 10).toFixed(1);
+const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many || one + 's');
+let el = null, off = null, timer = null, picked = '';
+const opened = new Set();   // rooms shown with their tasks (double-click a room's line)
+let fitW = 0;   // the day width that fills the page, measured after the first draw
+const LAST = 'tiksi.schedule.last.';
 
 export { cpm } from './program.js';
 
-// ---------- render ----------
+function target() {
+  const q = new URLSearchParams(location.hash.split('?')[1] || '');
+  const id = q.get('project');
+  if (id && projectById(id)) return { id: rootOf(projectById(id)).id };
+  if (q.has('program')) return { program: true };
+  let last = '';
+  try { last = localStorage.getItem(LAST + (activeProperty() || {}).id) || ''; } catch { /* not kept */ }
+  const tops = propertyProjects().filter(p => !p.parentId);
+  if (last && tops.some(p => p.id === last)) return { id: last };
+  return { program: true };
+}
+function go(t) {
+  try { localStorage.setItem(LAST + (activeProperty() || {}).id, t.program ? 'program' : t.id); } catch { /* fine */ }
+  history.replaceState(null, '', t.program ? '#/schedule?program' : '#/schedule?project=' + encodeURIComponent(t.id));
+  picked = ''; fitW = 0; render();
+}
+
+export function mount(root) {
+  el = root;
+  off = onChange(() => { clearTimeout(timer); timer = setTimeout(() => { if (el && !el.querySelector('.sc :is(input,select):focus')) render(); }, 150); });
+  addEventListener('resize', onResize);
+  render();
+}
+export function unmount() { clearTimeout(timer); if (off) off(); off = null; removeEventListener('resize', onResize); el = null; }
+export function undo() { if (restoreProjectEdit('undo')) render(); }
+export function redo() { if (restoreProjectEdit('redo')) render(); }
+let rz = null;
+function onResize() { clearTimeout(rz); rz = setTimeout(() => { fitW = 0; render(); }, 120); }
+
 function render() {
   if (!el) return;
-  const d = ws.data;
-  const start = d.settings.programStart || isoToday();
-  const mine = propertyProjects();
-  // The same layout the one-pager reads: program.js.
-  const { plans, days, lastDay } = programSchedule(mine, start);
-  // A finger taps a bar for its details; a mouse keeps the hover tooltip, as before.
-  const finger = touchDevice();
-  // The chart needs a week of width; the headline figure is the program's own span.
-  const chartEnd = Math.max(7, days);
+  const t = target(), prop = activeProperty();
+  const tops = propertyProjects().filter(p => !p.parentId);
+  const scroll = el.querySelector('.sc-main')?.scrollTop || 0;
+  const nav = `<nav class="es-nav" aria-label="Jobs">
+    <a class="es-job ${t.program ? 'here' : ''}" href="#/schedule?program" data-program><span>All projects</span></a>
+    <div class="gl">Projects</div>
+    ${tops.map(p => { const j = jobOf(p); return `<a class="es-job ${t.id === p.id ? 'here' : ''}" href="#/schedule?project=${encodeURIComponent(p.id)}" data-job="${esc(p.id)}"><span>${esc(p.name || 'Project')}</span><span class="m">${j.schedule.days ? plural(j.schedule.days, 'day') : ''}</span></a>`; }).join('') || '<p class="note">No projects yet.</p>'}
+  </nav>`;
+  el.innerHTML = `<div class="sc">${nav}<main class="sc-main"><div class="sc-in" id="sc-in"></div></main></div>`;
+  el.querySelector('[data-program]').onclick = e => { e.preventDefault(); go({ program: true }); };
+  el.querySelectorAll('[data-job]').forEach(a => a.onclick = e => { e.preventDefault(); go({ id: a.dataset.job }); });
+  const inner = el.querySelector('#sc-in');
+  const view = t.program ? programView(prop) : jobView(projectById(t.id));
+  inner.innerHTML = view.html;
+  view.bind(inner);
+  el.querySelector('.sc-main').scrollTop = scroll;
+  // Days as wide as the page allows (9 to 56 pixels): measure where the chart starts and draw again.
+  const g = inner.querySelector('#gantt'), axis = g && g.querySelector('th.axis');
+  if (g && axis && !fitting) {
+    const n = Number(g.dataset.cols) || 1;
+    const want = Math.max(9, Math.min(56, Math.floor((g.clientWidth - axis.offsetLeft - 2) / n)));
+    if (want !== Number(g.dataset.dayw)) { fitting = true; fitW = want; try { render(); } finally { fitting = false; } }
+  }
+}
+let fitting = false;
 
-  el.innerHTML = `
-    <div class="view-scroll">
-      <div class="view-head">
-        <span class="view-title">SCHEDULE</span>
-        <span class="view-sub">critical path per selected project; items with 0 days are budget-only and not scheduled</span>
-      </div>
-      <div class="kpi-band">
-        <div class="kpi">
-          <div class="k-label">Program start</div>
-          <div class="k-value" style="font-size:15px"><input type="date" id="prog-start" value="${escapeHtml(start)}"
-            style="background:transparent;border:none;color:var(--ink);font:inherit;color-scheme:dark;border-bottom:1px dashed var(--line-2)"></div>
-          <div class="k-sub">click to change</div>
-        </div>
-        <div class="kpi accent">
-          <div class="k-label">Last day of work</div>
-          <div class="k-value" style="font-size:15px">${plans.length ? fmtDate(lastDay) : '-'}</div>
-          <div class="k-sub">${plans.length ? days + ' calendar day' + (days === 1 ? '' : 's') : 'nothing scheduled'}</div>
-        </div>
-        <div class="kpi">
-          <div class="k-label">Projects scheduled</div>
-          <div class="k-value">${plans.length}</div>
-          <div class="k-sub">of ${mine.filter(p => p.selected).length} selected</div>
-        </div>
-        <div class="kpi">
-          <div class="k-label">Critical items</div>
-          <div class="k-value">${plans.reduce((n, x) => n + Object.values(x.sched).filter(s => s.critical).length, 0)}</div>
-          <div class="k-sub">of ${plans.reduce((n, x) => n + Object.keys(x.sched).length, 0)} scheduled items</div>
-        </div>
-      </div>
-      <div class="legend" style="margin-bottom:10px">
-        <span><span class="sw" style="background:linear-gradient(180deg,#f4ad57,#d98a2c); box-shadow:0 0 6px rgba(232,151,58,.5)"></span>critical path</span>
-        <span><span class="sw" style="background:linear-gradient(180deg,#4a6478,#354b5c)"></span>float available</span>
-        <span><span class="sw" style="background:transparent;border-top:2px dashed var(--faint); height:0"></span>slack window</span>
-        <span><span class="sw" style="background:rgba(255,255,255,.06); border:1px solid var(--line-2)"></span>weekend</span>
-        <span><span class="sw" style="background:var(--red); width:2px"></span>today</span>
-      </div>
-      ${finger && plans.length ? '<div class="gantt-detail" id="gantt-detail" role="status">Tap a bar for its dates and slack.</div>' : ''}
-      <div class="gantt-wrap" id="gantt"></div>
-      ${plans.map(x => criticalPathLine(x)).join('')}
-      ${plans.length === 0 ? `<div class="empty-state" style="margin-top:14px"><span class="empty-ic">${icon('schedule')}</span><b>No schedulable work</b>
-        Select projects in BUDGET and give scope items durations and dependencies in PROJECTS.</div>` : ''}
-    </div>`;
-
-  el.querySelector('#prog-start').onchange = e => {
-    d.settings.programStart = e.target.value;
-    touch(); render();
+// ---------- the chart ----------
+// lines: [{ key, kind: 'job'|'trim'|'item', label, crew, days, es, ef, slack, critical, after (html), move (html), detail }]
+// with es/ef in working days from `origin`.
+function table(lines, origin, span) {
+  const today = workdaysBetween(origin, isoToday());
+  const avail = Math.max(320, (el.clientWidth || 1200) - 220 - 64 - 640);
+  const dayW = fitW || Math.max(9, Math.min(56, Math.floor(avail / (Math.max(span, 5) + 1))));
+  const cols = Math.max(span, 5) + 1, W = cols * dayW;
+  let axis = '', grid = '';
+  for (let n = 0; n < cols; n++) {
+    const iso = workday(origin, n), dt = new Date(iso + 'T00:00'), mon = dt.getDay() === 1 || n === 0;
+    if (mon) axis += `<span class="sc-wk" style="left:${n * dayW}px">${esc(dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase())}<small>${dt.toLocaleDateString('en-US', { weekday: 'short' })}</small></span>`;
+    grid += `<span class="sc-col ${mon ? 'wk' : ''}" style="left:${n * dayW}px"></span>`;
+  }
+  const todayLine = today >= 0 && today < cols ? `<span class="sc-today" style="left:${today * dayW}px" title="Today"></span>` : '';
+  const y0 = workday(origin, 0).slice(0, 4);
+  const date = n => { const iso = workday(origin, n), dt = new Date(iso + 'T00:00'); return dt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', ...(iso.slice(0, 4) !== y0 ? { year: 'numeric' } : {}) }); };
+  const row = l => {
+    const x0 = l.es * dayW, w = Math.max((l.ef - l.es) * dayW - 2, 3);
+    const bar = l.kind === 'job' ? `<span class="sc-bar job" style="left:${x0}px;width:${w}px"></span>`
+      : l.kind === 'task' ? `<span class="sc-bar task" style="left:${x0 + 1}px;width:${Math.max(l.w * dayW - 2, 3)}px"></span>`
+      : `<span class="sc-bar ${l.kind === 'trim' ? 'trim' : l.critical ? 'crit' : ''}" style="left:${x0 + 1}px;width:${w}px">${w >= 26 ? esc(l.days + 'd') : ''}</span>${l.slack > 0.001 ? `<span class="sc-slack" style="left:${x0 + w + 2}px;width:${l.slack * dayW - 2}px"></span>` : ''}`;
+    const tw = l.kind === 'trim' ? `<button type="button" class="sc-tw" data-open-room="${esc(l.key)}" aria-expanded="${opened.has(l.key)}" aria-label="${opened.has(l.key) ? 'Hide' : 'Show'} the tasks">${opened.has(l.key) ? '▾' : '▸'}</button>` : l.kind === 'job' ? '' : '<span class="sc-tw"></span>';
+    return `<tr class="${l.kind === 'job' ? 'job' : l.kind === 'task' ? 'g-item g-task' : 'g-item'} ${picked === l.key ? 'on' : ''}" data-key="${esc(l.key)}" data-detail="${esc(l.detail)}" tabindex="0" ${l.kind === 'trim' ? 'title="Double-click for its tasks"' : ''}>
+      <td class="sticky work" title="${esc(l.label)}">${tw}${esc(l.label)}</td><td class="num">${l.kind === 'task' ? hrs(l.hours) + ' h' : l.days}</td>
+      <td class="dim">${date(Math.floor(l.es + 1e-9))}</td><td class="dim">${date(Math.max(Math.floor(l.es + 1e-9), Math.ceil(l.ef - 1e-9) - 1))}</td><td>${l.after || ''}</td><td>${l.move || ''}</td>
+      <td class="bars">${grid}${todayLine}${bar}</td></tr>`;
   };
-
-  if (plans.length) {
-    const gantt = el.querySelector('#gantt');
-    gantt.innerHTML = ganttSvg(plans, start, chartEnd, smallScreen(), finger);
-    // A bar's dates and slack were a hover tooltip only: a tap (or Enter) shows them above the chart.
-    const pick = row => {
-      if (!row) return;
-      gantt.querySelector('.g-item.on')?.classList.remove('on');
-      row.classList.add('on');
-      el.querySelector('#gantt-detail').textContent = row.dataset.detail;
-    };
-    // On a computer the hover tooltip stays the way to read a bar, as before.
-    if (finger) gantt.onclick = e => pick(e.target.closest('[data-detail]'));
-    if (finger) gantt.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { const row = e.target.closest('[data-detail]'); if (row) { e.preventDefault(); pick(row); } } };
-  } else el.querySelector('#gantt').remove();
+  return `<div class="sc-grid" id="gantt" data-cols="${cols}" data-dayw="${dayW}" style="--chart-w:${W}px"><table class="sc-tab"><thead><tr><th class="sticky">Work</th><th class="num">Days</th><th>Starts</th><th>Ends</th><th>After</th><th></th><th class="axis">${axis}</th></tr></thead>
+    <tbody>${lines.map(row).join('')}</tbody></table></div>`;
 }
 
-function criticalPathLine(x) {
-  const names = x.p.items
-    .filter(i => x.sched[i.id] && x.sched[i.id].critical)
-    .sort((a, b) => x.sched[a.id].es - x.sched[b.id].es)
-    .map(i => escapeHtml(i.name));
-  if (!names.length) return '';
-  return `<div class="mono gantt-legend" style="margin-top:10px; color:var(--dim); line-height:1.7">
-    <span style="color:var(--accent); letter-spacing:0.08em">CRITICAL / ${escapeHtml(projectLabel(x.p)).toUpperCase()}:</span>
-    ${names.join(' <span style="color:var(--faint)">&rsaquo;</span> ')}
-    ${x.cyclic ? ' <span style="color:var(--red)">(dependency cycle detected; some links ignored)</span>' : ''}
-  </div>`;
+// A room's tasks in the order the carpenter does them, laid across the room's days by their hours.
+function taskLines(r, es, ef, origin) {
+  const labor = (r.room.trim || []).flatMap(x => x.labor || []);
+  const total = labor.reduce((n, l) => n + l.hours, 0) || 1, span = ef - es;
+  let at = 0;
+  return labor.map(l => {
+    const a = es + span * at / total; at += l.hours;
+    const b = es + span * at / total;
+    return { key: r.id + '|' + l.task, kind: 'task', label: l.label, days: '', hours: l.hours, es: a, ef: b, w: b - a, slack: 0, after: '', move: '',
+      detail: `${r.name}, ${l.label}: ${hrs(l.hours)} hours (${fmtQ(l.qty)} ${Math.abs(l.qty - 1) < 1e-9 ? l.unitOne || l.unit : l.unit} at ${+l.rate.toFixed(4)} hrs each), about ${fmtDate(workday(origin, Math.floor(a + 1e-9)))}${Math.ceil(b - 1e-9) - 1 > Math.floor(a + 1e-9) ? ' to ' + fmtDate(workday(origin, Math.ceil(b - 1e-9) - 1)) : ''}. Setup and cleanup happen each day; they are shown once.` };
+  });
+}
+const fmtQ = q => Math.abs(q - Math.round(q)) < 1e-9 ? String(Math.round(q)) : (Math.round(q * 10) / 10).toString();
+
+const detailOf = (label, days, origin, es, ef, extra, s) =>
+  `${label}: ${plural(days, 'working day')}, ${fmtDate(workday(origin, es))} to ${fmtDate(workday(origin, Math.max(es, Math.ceil(ef - 1e-9) - 1)))}, ${s && s.critical ? 'on the critical path' : 'slack ' + plural(Math.round((s ? s.slack : 0) * 10) / 10, 'day')}${extra ? '; ' + extra : ''}`;
+
+// The lines of one job, from `shift` working days after `origin`.
+function jobLines(job, sched, origin, shift, editable) {
+  const rows = sched.rows, S = sched.sched;
+  const options = (self, current) => `<option value="">Start</option>` + rows.filter(r => r.id !== self).map(r => `<option value="${esc(r.id)}" ${current === r.id ? 'selected' : ''}>${esc(r.kind === 'trim' ? r.name + ' trim' : r.name)}</option>`).join('');
+  const trims = rows.filter(r => r.kind === 'trim');
+  return rows.flatMap(r => {
+    const s = S[r.id], first = trims[0] === r;
+    let after = '';
+    if (editable && r.kind === 'item') after = `<select data-after="${esc(r.id)}" aria-label="${esc(r.name)} starts after">${options(r.id, (r.deps || [])[0] || '')}</select>`;
+    else if (editable && first) after = `<select data-trim-after aria-label="The trim starts after">${options(r.id, r.deps[0] || '').replace(/<option value="trim:[^"]*"[^>]*>[^<]*<\/option>/g, '')}</select>`;
+    else if (r.kind === 'trim') after = `<span class="dim">the room before</span>`;
+    const i = trims.indexOf(r), sub = r.kind === 'trim' && r.room.project !== job.root;
+    const move = editable && sub ? `<button class="sc-move" data-move="${esc(r.room.project.id)}" data-dir="-1" ${i <= 0 ? 'disabled' : ''} aria-label="Do ${esc(r.name)} sooner">↑</button><button class="sc-move" data-move="${esc(r.room.project.id)}" data-dir="1" ${i === trims.length - 1 ? 'disabled' : ''} aria-label="Do ${esc(r.name)} later">↓</button>` : '';
+    const label = r.kind === 'trim' ? r.name + ': trim' : (r.room ? r.room.name + ': ' : '') + r.name;
+    const line = { key: r.id, kind: r.kind, label, crew: r.crew || (r.kind === 'trim' ? 'Carpenter' : ''), days: r.durationDays, es: shift + s.es, ef: shift + s.ef, slack: s.slack, critical: s.critical, after, move,
+      detail: detailOf(label, r.durationDays, origin, shift + s.es, shift + s.ef, r.kind === 'trim' ? hrs(r.hours) + ' carpenter hours; double-click for its tasks' : '', s) };
+    return r.kind === 'trim' && opened.has(r.id) ? [line, ...taskLines(r, shift + s.es, shift + s.ef, origin)] : [line];
+  });
 }
 
-// narrow: a small screen, where the name column gives way to the chart. finger: a touch
-// device, where each item row is tall enough to tap.
-function ganttSvg(plans, startIso, programEnd, narrow = false, finger = false) {
-  const LABELW = narrow ? 128 : 236, AXISH = 46, ROWH = finger ? 44 : 26, PROJH = 30, GAP = 10, PAD = 8;
-  // On a touch device no chart text is under 12 points; the names are cut shorter to fit.
-  const fs = n => finger ? Math.max(12, n) : n;
-  const NAMECH = finger ? (narrow ? 12 : 27) : (narrow ? 15 : 30);
-  const span = programEnd + 7;
-  const dayW = span <= 45 ? 18 : span <= 90 ? 11 : span <= 180 ? 6.5 : span <= 365 ? 3.4 : 1.8;
-  const width = LABELW + span * dayW + 24;
+function jobView(root) {
+  const job = jobOf(root), sched = job.schedule;
+  const origin = root.startDate || ws.data.settings.programStart || isoToday();
+  const lines = jobLines(job, sched, origin, 0, true);
+  const html = `<header class="es-head"><div class="es-kicker">Schedule</div><h1>${esc(root.name || 'Project')}</h1>
+    <div class="es-acts"><label class="sc-start sc-inline"><span>Starts</span><input type="date" id="job-start" value="${esc(origin)}"></label><a class="btn small" href="#/estimate?project=${encodeURIComponent(root.id)}">${icon('budget')}ESTIMATE</a></div></header>
+    ${sched.rows.length ? table(lines, origin, sched.days) + `<div class="sc-detail" id="gantt-detail" role="status">Click a line for its dates and slack.</div>` : '<p class="note">Nothing to schedule yet.</p>'}
+    ${sched.cyclic ? '<p class="note">Some lines wait for each other in a loop; those links are left out.</p>' : ''}
+    <p class="note">Working days, Monday to Friday. The carpenter does the rooms one after another, in the order shown: move a room with the arrows, and double-click a room (or its ▸) for its tasks in order. A scope item starts with the job unless you choose what it starts AFTER. Days for scope items are typed in their room in ESTIMATE; a room's days come from its hours at 6 productive hours a day.</p>`;
+  return { html, bind: inner => {
+    inner.querySelector('#job-start').onchange = e => { root.startDate = e.target.value; touch(); render(); };
+    inner.querySelectorAll('[data-after]').forEach(s => s.onchange = () => {
+      const hit = job.tree.flatMap(x => x.items || []).find(it => it.id === s.dataset.after);
+      if (hit) { hit.deps = s.value ? [s.value] : []; touch(); render(); }
+    });
+    inner.querySelector('[data-trim-after]')?.addEventListener('change', e => { root.job = { ...(root.job || {}), trimAfter: e.target.value }; if (!e.target.value) delete root.job.trimAfter; if (!Object.keys(root.job).length) delete root.job; touch(); render(); });
+    inner.querySelectorAll('[data-move]').forEach(b => b.onclick = () => moveRoom(job, b.dataset.move, Number(b.dataset.dir)));
+    bindPick(inner);
+  } };
+}
 
-  let rows = [];
+// Swap a room's subproject with the next or previous subproject that has trim, in the project list.
+function moveRoom(job, id, dir) {
+  const order = job.schedule.rows.filter(r => r.kind === 'trim' && r.room.project !== job.root).map(r => r.room.project);
+  const i = order.findIndex(p => p.id === id), other = order[i + dir];
+  if (i < 0 || !other) return;
+  const list = ws.data.projects, a = list.indexOf(order[i]), b = list.indexOf(other);
+  [list[a], list[b]] = [list[b], list[a]];
+  touch(); render();
+}
+
+function programView(prop) {
+  const start = ws.data.settings.programStart || isoToday();
+  const { plans, days } = programSchedule(propertyProjects(), start);
+  const lines = [];
   for (const x of plans) {
-    rows.push({ kind: 'proj', x });
-    for (const it of x.p.items) {
-      if (x.sched[it.id]) rows.push({ kind: 'item', x, it });
-    }
+    const job = jobOf(x.p);
+    const others = plans.filter(y => y !== x).map(y => `<option value="${esc(y.p.id)}" ${x.p.after === y.p.id ? 'selected' : ''}>${esc(y.p.name)}</option>`).join('');
+    lines.push({ key: 'job:' + x.p.id, kind: 'job', label: x.p.name || 'Project', crew: '', days: Math.ceil(x.end - 1e-9), es: x.offset, ef: x.finish, slack: 0,
+      after: `<select data-job-after="${esc(x.p.id)}" aria-label="${esc(x.p.name)} starts after"><option value="">Its start date</option>${others}</select>`, move: '',
+      detail: detailOf(x.p.name || 'Project', Math.ceil(x.end - 1e-9), start, x.offset, x.finish, '', { critical: true }) });
+    lines.push(...jobLines(job, { rows: x.items, sched: x.sched }, start, x.offset, false));
   }
-  const height = AXISH + rows.reduce((h, r) => h + (r.kind === 'proj' ? PROJH + GAP : ROWH), 0) + PAD * 2;
-  const chartBottom = height - PAD;
+  const html = `<header class="es-head"><div class="es-kicker">Schedule</div><h1>All projects</h1>
+    <div class="es-acts"><label class="sc-start sc-inline"><span>Program start</span><input type="date" id="prog-start" value="${esc(start)}"></label></div></header>
+    ${plans.length ? table(lines, start, days) + `<div class="sc-detail" id="gantt-detail" role="status">Click a line for its dates and slack.</div>` : `<p class="note">Nothing to schedule: tick projects into the program in ESTIMATE, and give scope items days in ESTIMATE or draw trim.</p>`}
+    <p class="note">Working days, Monday to Friday. Projects run side by side, each from its own start date, unless one is set to start AFTER another. Open a project on the left to change the order of its rooms or what its lines wait for.</p>`;
+  return { html, bind: inner => {
+    inner.querySelector('#prog-start').onchange = e => { ws.data.settings.programStart = e.target.value; touch(); render(); };
+    inner.querySelectorAll('[data-job-after]').forEach(s => s.onchange = () => { const p = projectById(s.dataset.jobAfter); if (!p) return; if (s.value) p.after = s.value; else delete p.after; touch(); render(); });
+    bindPick(inner);
+  } };
+}
 
-  const X = day => LABELW + day * dayW;
-  let svg = `<svg class="gantt-svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" xmlns="http://www.w3.org/2000/svg">`;
-  svg += `<defs>
-    <linearGradient id="g-crit" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f6b45e"/><stop offset="1" stop-color="#d4842a"/></linearGradient>
-    <linearGradient id="g-float" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4d6a80"/><stop offset="1" stop-color="#34495a"/></linearGradient>
-    <linearGradient id="g-proj" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="rgba(232,151,58,0.45)"/><stop offset="1" stop-color="rgba(232,151,58,0.12)"/></linearGradient>
-    <filter id="g-glow" x="-10%" y="-60%" width="120%" height="220%"><feGaussianBlur stdDeviation="2.5" result="b"/><feComponentTransfer in="b" result="c"><feFuncA type="linear" slope="0.7"/></feComponentTransfer><feMerge><feMergeNode in="c"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-  </defs>`;
-  svg += `<rect width="${width}" height="${height}" fill="#0f1418"/>`;
-
-  // Month band: alternating shading with the month name, then a day/week row beneath it.
-  const MONTHH = 22;
-  svg += `<rect x="${LABELW}" y="0" width="${width - LABELW}" height="${AXISH}" fill="rgba(255,255,255,0.02)"/>`;
-  let monthStart = 0;
-  for (let day = 0; day <= span; day++) {
-    const dt = new Date(addDays(startIso, day) + 'T00:00');
-    const last = day === span;
-    if ((dt.getDate() === 1 && day > 0) || last) {
-      const x0 = X(monthStart), x1 = X(last ? span : day);
-      const mdt = new Date(addDays(startIso, monthStart) + 'T00:00');
-      const mi = mdt.getMonth();
-      if (mi % 2 === 0) svg += `<rect x="${x0}" y="0" width="${x1 - x0}" height="${MONTHH}" fill="rgba(255,255,255,0.03)"/>`;
-      const label = mdt.toLocaleDateString('en-US', { month: 'short' }) + (mi === 0 || monthStart === 0 ? ' ' + mdt.getFullYear() : '');
-      if (x1 - x0 > (finger ? label.length * 8.5 + 8 : 30)) svg += `<text x="${x0 + 6}" y="15" fill="#8f9ca8" font-size="${fs(10)}" font-weight="700" letter-spacing="0.1em">${label.toUpperCase()}</text>`;
-      svg += `<line x1="${x0}" y1="0" x2="${x0}" y2="${chartBottom}" stroke="rgba(255,255,255,0.09)" stroke-width="1"/>`;
-      monthStart = day;
-    }
-  }
-  svg += `<line x1="${LABELW}" y1="${MONTHH}" x2="${width}" y2="${MONTHH}" stroke="rgba(255,255,255,0.07)"/>`;
-
-  // Weekend shading + week grid + day-of-month labels.
-  for (let day = 0; day <= span; day++) {
-    const iso = addDays(startIso, day);
-    const dt = new Date(iso + 'T00:00');
-    const dow = dt.getDay();
-    if (dayW >= 6 && (dow === 0 || dow === 6) && day < span) {
-      svg += `<rect x="${X(day)}" y="${AXISH}" width="${dayW}" height="${chartBottom - AXISH}" fill="rgba(255,255,255,0.028)"/>`;
-    }
-    const isWeek = dow === 1;
-    if (dayW >= 6 ? isWeek : dt.getDate() === 1) {
-      svg += `<line x1="${X(day)}" y1="${AXISH}" x2="${X(day)}" y2="${chartBottom}" stroke="rgba(255,255,255,0.05)" stroke-width="1"/>`;
-      if (dayW >= 6) svg += `<text x="${X(day) + 3}" y="${AXISH - 8}" fill="#5d6a76" font-size="${fs(9)}">${dt.getDate()}</text>`;
-    }
-  }
-  svg += `<line x1="0" y1="${AXISH}" x2="${width}" y2="${AXISH}" stroke="rgba(255,255,255,0.12)"/>`;
-  svg += `<line x1="${LABELW - 10}" y1="0" x2="${LABELW - 10}" y2="${height}" stroke="rgba(255,255,255,0.1)"/>`;
-
-  // Rows.
-  let y = AXISH + PAD;
-  const barPos = {}; // itemId -> {x0,x1,yc} for arrows
-  let deps = '';
-  for (const r of rows) {
-    if (r.kind === 'proj') {
-      y += GAP;
-      const { p } = r.x;
-      const x0 = X(r.x.offset), x1 = X(r.x.finish);
-      svg += `<g class="g-rowg"><rect class="g-row" x="0" y="${y}" width="${width}" height="${PROJH}"/>`;
-      svg += `<text x="12" y="${y + 19}" fill="#e9eef3" font-size="${fs(11.5)}" font-weight="700" letter-spacing="0.08em">${escapeHtml(projectLabel(p)).toUpperCase()}</text>`;
-      svg += `<rect x="${x0}" y="${y + 10}" width="${Math.max(x1 - x0, 2)}" height="8" rx="4" fill="url(#g-proj)" stroke="rgba(232,151,58,0.45)"/>`;
-      svg += `<text x="${x1 + 8}" y="${y + 19}" fill="#5d6a76" font-size="${fs(9.5)}">${fmtDate(lastWorkDay(startIso, r.x.finish))}</text></g>`;
-      y += PROJH;
-    } else {
-      const s = r.x.sched[r.it.id];
-      const off = r.x.offset;
-      const x0 = X(off + s.es), x1 = X(off + s.ef);
-      const yc = y + ROWH / 2;
-      const name = r.it.name.length > NAMECH ? r.it.name.slice(0, NAMECH - 1) + '…' : r.it.name;
-      const detail = `${r.it.name}: ${r.it.durationDays} day${Number(r.it.durationDays) === 1 ? '' : 's'}, ${fmtDate(addDays(startIso, off + s.es))} to ${fmtDate(lastWorkDay(startIso, off + s.ef))}, ${s.critical ? 'on the critical path' : 'slack ' + Math.round(s.slack * 10) / 10 + ' day' + (Math.round(s.slack * 10) / 10 === 1 ? '' : 's')}`;
-      svg += `<g class="g-rowg${finger ? ' g-item" data-detail="' + escapeHtml(detail) + '" tabindex="0" role="button" aria-label="' + escapeHtml(detail) : ''}"><rect class="g-row" x="0" y="${y}" width="${width}" height="${ROWH}"/>`;
-      svg += `<text class="g-label" x="24" y="${yc + 3.5}" fill="#8f9ca8" font-size="${fs(10.5)}">${escapeHtml(name)}</text>`;
-      // Slack whisker.
-      if (s.slack > 0.001) {
-        const lx1 = X(off + s.lf);
-        svg += `<line x1="${x1}" y1="${yc}" x2="${lx1}" y2="${yc}" stroke="#5d6a76" stroke-width="1" stroke-dasharray="3,3"/>`;
-        svg += `<line x1="${lx1}" y1="${yc - 4}" x2="${lx1}" y2="${yc + 4}" stroke="#5d6a76" stroke-width="1.2"/>`;
-      }
-      const bw = Math.max(x1 - x0, 3);
-      const bh = Math.min(ROWH - 10, 18), by = yc - bh / 2;
-      const dur = escapeHtml(r.it.durationDays);
-      const title = `${escapeHtml(r.it.name)}: ${dur}d, ${fmtDate(addDays(startIso, off + s.es))} to ${fmtDate(lastWorkDay(startIso, off + s.ef))}${s.critical ? ' (CRITICAL)' : ', slack ' + s.slack + 'd'}`;
-      if (s.critical) {
-        svg += `<g class="g-bar"><title>${title}</title>` +
-          `<rect x="${x0}" y="${by}" width="${bw}" height="${bh}" rx="4" fill="url(#g-crit)" stroke="rgba(255,205,140,0.7)" stroke-width="1" filter="url(#g-glow)"/>` +
-          `<rect x="${x0 + 1}" y="${by + 1}" width="${Math.max(bw - 2, 1)}" height="${Math.max(bh / 2 - 1, 1)}" rx="3" fill="rgba(255,255,255,0.12)"/></g>`;
-      } else {
-        svg += `<g class="g-bar"><title>${title}</title>` +
-          `<rect x="${x0}" y="${by}" width="${bw}" height="${bh}" rx="4" fill="url(#g-float)" stroke="rgba(95,179,201,0.55)" stroke-width="1"/>` +
-          `<rect x="${x0 + 1}" y="${by + 1}" width="${Math.max(bw - 2, 1)}" height="${Math.max(bh / 2 - 1, 1)}" rx="3" fill="rgba(255,255,255,0.06)"/></g>`;
-      }
-      if (dayW >= 6) {
-        const inside = bw > (finger ? 40 : 34);
-        svg += `<text x="${inside ? x0 + bw / 2 : x1 + 6}" y="${yc + 3.5}" fill="${inside ? (s.critical ? '#2a1a08' : '#dfe8ef') : '#5d6a76'}" font-size="${fs(9)}" font-weight="${inside ? 700 : 400}" text-anchor="${inside ? 'middle' : 'start'}">${dur}d</text>`;
-      }
-      svg += '</g>';
-      barPos[r.it.id] = { x0, x1, yc, off, proj: r.x.p.id };
-      y += ROWH;
-    }
-  }
-
-  // Dependency arrows (within projects), drawn above rows so hover bands do not cover them.
-  for (const r of rows) {
-    if (r.kind !== 'item') continue;
-    for (const dep of (r.it.deps || [])) {
-      const a = barPos[dep], b = barPos[r.it.id];
-      if (!a || !b || a.proj !== b.proj) continue;
-      const kx = a.x1 + 5;
-      deps += `<path d="M ${a.x1} ${a.yc} L ${kx} ${a.yc} L ${kx} ${b.yc} L ${b.x0 - 4} ${b.yc}" fill="none" stroke="rgba(143,156,168,0.5)" stroke-width="1.2"/>`;
-      deps += `<path d="M ${b.x0 - 4} ${b.yc - 3} L ${b.x0 + 1} ${b.yc} L ${b.x0 - 4} ${b.yc + 3} Z" fill="#8f9ca8"/>`;
-    }
-  }
-  svg += deps;
-
-  // Today: marker line with a label pill in the axis band.
-  const today = dayDiff(startIso, isoToday());
-  if (today >= 0 && today <= span) {
-    const tx = X(today);
-    svg += `<line x1="${tx}" y1="${MONTHH}" x2="${tx}" y2="${chartBottom}" stroke="#e05252" stroke-width="1.5" stroke-dasharray="3,3"/>`;
-    const pw = finger ? 58 : 40, ph = finger ? 18 : 15;
-    svg += `<rect x="${tx - pw / 2}" y="${MONTHH + 3}" width="${pw}" height="${ph}" rx="${ph / 2}" fill="#e05252"/>`;
-    svg += `<text x="${tx}" y="${MONTHH + (finger ? 16.5 : 15)}" fill="#fff" font-size="${fs(8.5)}" font-weight="700" text-anchor="middle" letter-spacing="0.1em">TODAY</text>`;
-  }
-
-  svg += '</svg>';
-  return svg;
+function bindPick(inner) {
+  const pick = tr => {
+    if (!tr) return;
+    picked = tr.dataset.key;
+    inner.querySelectorAll('#gantt tr.on').forEach(x => x.classList.remove('on'));
+    tr.classList.add('on');
+    const d = inner.querySelector('#gantt-detail'); if (d) d.textContent = tr.dataset.detail;
+  };
+  const g = inner.querySelector('#gantt');
+  if (!g) return;
+  const toggle = key => { if (opened.has(key)) opened.delete(key); else opened.add(key); picked = key; render(); };
+  g.onclick = e => { const b = e.target.closest('[data-open-room]'); if (b) { toggle(b.dataset.openRoom); return; } if (e.target.closest('select,button')) return; pick(e.target.closest('tr[data-detail]')); };
+  g.ondblclick = e => { if (e.target.closest('select,button')) return; const tr = e.target.closest('tr[data-key^="trim:"]'); if (tr && !tr.classList.contains('g-task')) toggle(tr.dataset.key); };
+  g.onkeydown = e => { if ((e.key === 'Enter' || e.key === ' ') && !e.target.closest('select,button')) { const tr = e.target.closest('tr[data-detail]'); if (tr) { e.preventDefault(); pick(tr); } } };
 }

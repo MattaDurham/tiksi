@@ -193,7 +193,7 @@ function assertPlan(prop, tag) {
   void thick;
 }
 async function runDialog(link, opts) {
-  await page.click('#tiksi-menu').then(() => page.click('#btn-file'));await page.click('[data-new-property]');
+  await page.click('#btn-file');await page.click('[data-new-property]');
   await page.waitForSelector('#np-dialog [data-np-input]');
   if (opts && opts.relay === false) await page.uncheck('#np-dialog [data-np-relay]');
   else if (opts && opts.relay) {
@@ -224,8 +224,8 @@ try {
   let prop = findProp(ws);
   assertPlan(prop, 'open');
   check(prop && prop.photos.filter(p => p.kind === 'photo').length === 1, 'open: cover photo kept');
-  check(prop && prop.onePager && prop.onePager.versions.length === 1 && prop.photos.some(p => p.kind === 'document' && /one-pager v1/.test(p.name)), 'open: the first one-pager was made with the property (version 1, a PDF among its documents)');
-  check(ws.projects.some(p => prop && p.propertyId === prop.id && p.items.length >= 3), 'open: starter project seeded with takeoffs');
+  check(prop && !(prop.onePager && prop.onePager.versions.length) && !prop.photos.some(p => p.kind === 'document' && /one-pager/.test(p.name)), 'open: no one-pager version is saved before there is anything priced to send');
+  check(!ws.projects.some(p => prop && p.propertyId === prop.id && /scope from scan/i.test(p.name)), 'open: no $0 starter project is made from the scan (ESTIMATE prices rooms from the model)');
   check(!mock.hits.includes('/relay'), 'open: no relay used');
 
   // Screenshots of the result.
@@ -239,9 +239,9 @@ try {
   await page.waitForFunction(() => document.querySelector('.v-scan-row .key')?.textContent.trim() === 'MESH', null, { timeout: 60000 });
   await sleep(300);
   await page.screenshot({ path: resolve(outDir, 'e2e-model.png') });
-  await page.goto(APP + '#/projects');
+  await page.goto(APP + '#/estimate');
   await sleep(800);
-  await page.screenshot({ path: resolve(outDir, 'e2e-projects.png') });
+  await page.screenshot({ path: resolve(outDir, 'e2e-estimate.png') });
   await page.goto(APP + '#/sheets');
   await sleep(800);
   await page.screenshot({ path: resolve(outDir, 'e2e-sheets.png') });
@@ -326,7 +326,7 @@ try {
     const p = ws.data.properties.find(p => p.source?.captureId === captureId);
     return { levels: p.levels.length, walls: p.walls.length, scans: p.scans.length, name: p.name };
   }, CAPTURE_ID);
-  await page.click('#tiksi-menu').then(() => page.click('#btn-file'));await page.click('[data-file-tab=capture]');
+  await page.click('#btn-file');await page.click('[data-file-tab=capture]');
   await page.setInputFiles('[data-any-file]',glbPath);
   // File parsing and viewer attachment are separate async transitions. Match
   // the import budget above, then wait for the new mesh instead of clicking a

@@ -57,7 +57,7 @@ try {
   });
   await page.locator('#rail a[data-view="model"]').click({ noWaitAfter: true });
   await page.locator('canvas.v-canvas').waitFor();
-  await page.locator('.v-modes [data-mode=top]').click();
+  await page.locator('#side [data-mode=top]').click();
   await delay(900);   // the camera tween to the top view
   const box = await page.locator('canvas.v-canvas').boundingBox();
   const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
@@ -89,8 +89,8 @@ try {
   assert.equal((await state(page)).notes[0].text, 'Order 45 sq ft of tile (10% waste)');
 
   // NOTES hides the notes: the note no longer picks, the list says so, and the toggle is kept.
-  await page.locator('.v-modes [data-show=notes]').click();
-  assert.equal(await page.locator('.v-modes [data-show=notes]').getAttribute('aria-pressed'), 'false');
+  await page.locator('#side [data-show=notes]').click();
+  assert.equal(await page.locator('#side [data-show=notes]').getAttribute('aria-pressed'), 'false');
   assert.equal((await state(page)).showNotes, false);
   await page.mouse.click(cx, cy, { button: 'right' });
   await page.locator('.v-ctx').waitFor();
@@ -99,8 +99,8 @@ try {
   assert.equal((await state(page)).showNotes, true, 'the menu shows notes again');
 
   // PHOTOS hides photo pins the same way.
-  await page.locator('.v-modes [data-show=pins]').click();
-  assert.equal(await page.locator('.v-modes [data-show=pins]').getAttribute('aria-pressed'), 'false');
+  await page.locator('#side [data-show=pins]').click();
+  assert.equal(await page.locator('#side [data-show=pins]').getAttribute('aria-pressed'), 'false');
   assert.equal((await state(page)).showPins, false);
 
   // The NOTE tool (N) places a note with a click; then the tool hands back to SELECT.
@@ -200,7 +200,7 @@ try {
 
   // The path found is the next lookup's hint; a failure is reported as the server words it.
   openReply = { status: 404, json: { error: 'Could not find Notes check.skp on this Mac.' } };
-  await page.locator('.v-modes [data-mode=orbit]').click();
+  await page.locator('#side [data-mode=orbit]').click();
   await page.locator('#side [data-act=sketchup]').click();
   await waitUntil(async () => /Could not find Notes check\.skp on this Mac/.test(await page.locator('.toast.error').innerText().catch(() => '')), 'the failure toast');
   assert.equal(asked.length, 2);

@@ -5,7 +5,7 @@ import { showOfflineWorkspace } from './offline-view.js';
 import {
   ws, load, save, touch, onChange, activeProperty, replaceWorkspace, mergeWorkspace,
   exportBundle, importBundle, listAllFileIds, orphanFiles, deleteFiles, whenHydrated,
-  setSaveStatus, fmtBytes, escapeHtml, projectSlice, unreadableWorkspace, setAsideUnreadableWorkspace,
+  setSaveStatus, fmtBytes, escapeHtml, unreadableWorkspace, setAsideUnreadableWorkspace,
   units, fmtLen, INCH_PRECISIONS, MM_PRECISIONS, inchPrecision, mmPrecision, inchPrecisionLabel, mmPrecisionLabel, precisionLabel,
 } from './store.js';
 import { openExchangeDialog } from './exchange-dialog.js';
@@ -24,23 +24,22 @@ import { restartTiksi } from './restart.js';
 import { initField, fieldRouted } from './field.js';
 import * as viewer3d from './viewer3d.js';
 import { initBeside, syncBeside, closeBeside, besideSharedChange } from './model-beside.js';
-const materialsview = lazyView(() => import('./materialsview.js'));
-const photos = lazyView(() => import('./photos.js'));
-const measure = lazyView(() => import('./measure.js'));
+const photosHub = lazyView(() => import('./photos-hub.js'));
+const productsHub = lazyView(() => import('./products-hub.js'));
 import { isVideoFile, addVideoFromFile } from './videos.js';
 const reconstruction = lazyView(() => import('./reconstruction.js'));
-const research = lazyView(() => import('./research.js'));
-const projects = lazyView(() => import('./projects.js'));
-const products = lazyView(() => import('./products.js'));
-const budget = lazyView(() => import('./budget.js'));
+const estimate = lazyView(() => import('./estimate-view.js'));
 const schedule = lazyView(() => import('./schedule.js'));
-const cutsheets = lazyView(() => import('./cutsheets.js'));
-const documentcenter = lazyView(() => import('./documentcenter.js'));
+const documentsHub = lazyView(() => import('./documents-hub.js'));
+import { useJobRules } from './job.js';
+import { projectHistoryState, onProjectHistoryChange } from './project-history.js';
+// Pages whose UNDO and REDO are the projects' own (project-history.js); MODEL and VIDEOS undo geometry.
+const PROJECT_UNDO = ['estimate', 'schedule'];
 const guide = lazyView(() => import('./guide.js'));
 import { initNewProperty, openNewPropertyDialog, dialogOpen } from './newproperty.js';
-import { initOnePager, openOnePagerEditor, promptMode } from './one-pager-dialog.js';
-import { openLabDialog } from './lab-publish-dialog.js';
-import { draftOnePager, onePagerStatus, PROMPT_MODES } from './one-pager.js';
+import { initOnePager } from './one-pager-dialog.js';
+import { openRecovery } from './recovery.js';
+import { draftOnePager } from './one-pager.js';
 import { parseCaptureUrl } from './polycam.js';
 import {
   initFiles, bindFileIntake, saveProject, openProjectPicker, openFromFile, openFromUrl, linkFolder, unlinkFolder, reconnectFolder,
@@ -64,26 +63,37 @@ function lazyView(load) {
   };
 }
 
+// Six tabs. Each part of a tab keeps its own address, so links into a part still work:
+// PHOTOS holds photos and VIDEOS (#/measure); PRODUCTS holds products, MATERIALS (#/materials)
+// and FIND A PRODUCT (#/research); DOCUMENTS holds drawings, job documents, CUT SHEETS (#/sheets)
+// and SEND. PROJECTS and BUDGET are ESTIMATE now. PHOTO TO 3D (#/reconstruct, from FILE › Import)
+// is a page of its own, shown under PHOTOS.
 const VIEWS = {
   model: viewer3d,
-  materials: materialsview,
-  photos,
-  measure,
+  photos: photosHub,
+  measure: photosHub,
   reconstruct: reconstruction,
-  research,
-  projects,
-  products,
-  budget,
+  products: productsHub,
+  materials: productsHub,
+  research: productsHub,
+  estimate,
+  projects: estimate,
+  budget: estimate,
   schedule,
-  sheets: cutsheets,
-  documents: documentcenter,
+  documents: documentsHub,
+  sheets: documentsHub,
   guide,
 };
+
+// The tab an address belongs to.
+const TAB_OF = { measure: 'photos', reconstruct: 'photos', materials: 'products', research: 'products', projects: 'estimate', budget: 'estimate', sheets: 'documents' };
 
 let currentView = null;
 let currentName = '';
 
 async function boot() {
+  // Every page's project money and days come from the jobs (job.js): one rule for all.
+  useJobRules();
   if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('/service-worker.js').then(async registration => {
     await navigator.serviceWorker.ready;
     const urls = performance.getEntriesByType('resource').map(r => r.name);
@@ -209,7 +219,7 @@ function route() {
   if (head === 'open' && openFromHash()) { if (!currentView) route(); return; }
   const view = VIEWS[name] || VIEWS.model;
   unmountCurrent();
-  currentName = VIEWS[name] ? name : 'model';
+  currentName = VIEWS[name] ? TAB_OF[name] || name : 'model';
   currentView = view;
   const guideEntry = document.querySelector('.guide-entry');
   if (currentName === 'guide') guideEntry?.setAttribute('aria-current', 'page');
@@ -336,8 +346,8 @@ function showSharedChange() {
   const change = heldChange; heldChange = null;
   const active = activeProperty();
   const whole = change.all || change.other || change.materials;
-  // PROJECTS lists every property; the other pages show the open one.
-  const reaches = whole || (active && change.properties.has(active.id)) || (currentName === 'projects' && change.properties.size > 0);
+  // Every page shows the open property.
+  const reaches = whole || (active && change.properties.has(active.id));
   if (!reaches) return;
   if (change.all || change.materials) disposeMaterials();
   const keys = active && change.keys.get(active.id);
@@ -375,13 +385,15 @@ async function offerStorageCleanup(afterReplace) {
 function refreshHistoryControls() {
   const group = document.getElementById('edit-history');
   if (!group) return;
-  group.hidden = !['model', 'measure'].includes(currentName);
-  const state = editHistoryState(activeProperty());
+  const projectsPage = PROJECT_UNDO.includes(currentName);
+  const geometry = currentName === 'model' || /^#\/measure/.test(location.hash);
+  group.hidden = !geometry && !projectsPage;
+  const state = projectsPage ? projectHistoryState(activeProperty()) : editHistoryState(activeProperty());
   for (const direction of ['undo', 'redo']) {
     const button = document.getElementById('btn-' + direction), item = state[direction];
     button.disabled = !item.available;
     const name = direction === 'undo' ? 'Undo' : 'Redo';
-    button.title = item.blocked ? name + ' unavailable: this geometry changed elsewhere.'
+    button.title = item.blocked ? name + (projectsPage ? ' unavailable: the projects changed elsewhere.' : ' unavailable: this geometry changed elsewhere.')
       : item.available ? name + ' ' + item.label + (direction === 'undo' ? ' (Cmd/Ctrl+Z)' : ' (Cmd/Ctrl+Shift+Z or Ctrl+Y)')
       : 'Nothing to ' + direction;
   }
@@ -390,11 +402,14 @@ function bindHistoryControls() {
   for (const direction of ['undo', 'redo']) {
     const button = document.getElementById('btn-' + direction);
     button.innerHTML = icon(direction) + '<span>' + direction.toUpperCase() + '</span>';
+    button.title = direction === 'undo' ? 'Undo' : 'Redo';
     button.onclick = () => { currentView?.[direction]?.(); refreshHistoryControls(); };
   }
   onEditHistoryChange(refreshHistoryControls);
+  onProjectHistoryChange(refreshHistoryControls);
+  window.addEventListener('tiksi:part', refreshHistoryControls);
   window.addEventListener('keydown', e => {
-    if (!['model', 'measure'].includes(currentName) || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+    if (!(currentName === 'model' || /^#\/measure/.test(location.hash) || PROJECT_UNDO.includes(currentName)) || !(e.ctrlKey || e.metaKey) || e.altKey) return;
     if (e.target?.matches('input, textarea, select') || e.target?.isContentEditable || document.querySelector('dialog[open]')) return;
     const key = e.key.toLowerCase();
     if (key !== 'z' && !(e.ctrlKey && key === 'y')) return;
@@ -412,7 +427,6 @@ function bindTopbar() {
 
   document.addEventListener('tiksi:files',e=>openFileMenu(e.detail?.tab || 'project',e.detail?.selected));
   document.addEventListener('tiksi:edit-in-sketchup',()=>openInSketchUp());
-  document.addEventListener('tiksi:one-pager',()=>openOnePagerEditor(activeProperty()));
 
   const fileBtn = document.getElementById('btn-file');
   fileBtn.onclick = () => openFileMenu();
@@ -449,25 +463,15 @@ function openFileMenu(initialTab = 'project', selected) {
     <section data-file-panel="project"><h3>Save your project</h3><p>A .tiksi file keeps your plan, models, original captures, pinned photos, materials and project work together.</p>
       <div class="file-actions"><button class="btn primary" data-project-save>SAVE PROJECT</button><button class="btn" data-project-as>SAVE AS…</button><button class="btn" data-project-open>OPEN / IMPORT…</button></div><p data-file-target></p>
       <div class="file-actions"><button class="btn" data-new-property>NEW PROPERTY</button><button class="btn" data-new-folder>NEW PROPERTY FROM A FOLDER…</button></div>
-      <details data-agent-onboarding><summary>Onboard with a coding agent</summary>
-        <p>Open Claude or Codex with the Tiksi checkout and your site-visit folder. Paste this prompt and add what you want to produce.</p>
-        <textarea readonly rows="5" aria-label="Property onboarding prompt" data-agent-prompt></textarea>
-        <button class="btn" data-agent-copy>COPY PROMPT</button></details>
-      <h3>One-pager</h3><p>A one-page teaser of this property for its client: the picture, the pitch, the scope, the budget and the schedule. Every saved version is a PDF among the property's documents; the newest is the one to send.</p>
-      <p class="op-file-status" data-op-file-status></p><div class="file-actions"><button class="btn primary" data-one-pager>OPEN ONE-PAGER</button></div>
-      <h3>Client page in the lab</h3><p>A view-only copy of this property for its client on thedurham.nyc: the model to orbit or walk through, Existing and the projects you choose, and the saved views as pictures.</p>
-      <div class="file-actions"><button class="btn" data-lab-send-open>SEND TO THE LAB…</button></div></section>
+      <h3>Removed records</h3><p>Projects, rooms, scope items and products removed from this property, with what they held. RESTORE puts one back as it was.</p><div class="file-actions"><button class="btn" data-recovery ${prop ? '' : 'disabled'}>REMOVED RECORDS…</button></div>
+      <p class="note">What goes to the client (the one-pager, the proposal, the client page) is in DOCUMENTS › SEND.</p></section>
     <section data-file-panel="capture" hidden><h3>Bring your room into Tiksi</h3><p>Choose photos, a walk-through video, a scan, a 3D model or a saved project. Imported projects add or update properties here.</p><button class="btn primary" data-capture-open>CHOOSE FILES…</button><button class="btn" data-polycam>POLYCAM LINK</button><button class="btn" data-photo3d>PHOTOS → 3D</button></section>
     <section data-file-panel="exchange" hidden data-file-exchange></section>
-    <section data-file-panel="settings" hidden><h3>Display</h3><div class="file-units"><span id="file-units-label">Units</span><div class="seg" role="group" aria-labelledby="file-units-label"><button type="button" class="seg-btn" data-units-choice="imperial">INCHES</button><button type="button" class="seg-btn" data-units-choice="metric">MILLIMETRES</button></div></div><label>Precision <select data-file-precision></select></label><p data-units-example></p><details><summary>Model environment</summary><div data-file-env></div></details><div data-unavailable-list></div><h3>Where this project is kept</h3><p data-own-folder-label></p><div class="file-actions"><button class="btn primary" data-own-folder-link>CHOOSE FOLDER</button><button class="btn" data-folder-open>OPEN FROM FOLDER</button><button class="btn" data-own-folder-unlink>STOP KEEPING IT IN A FOLDER</button></div>
+    <section data-file-panel="settings" hidden><h3>Display</h3><div class="file-units"><span id="file-units-label">Units</span><div class="seg" role="group" aria-labelledby="file-units-label"><button type="button" class="seg-btn" data-units-choice="imperial">INCHES</button><button type="button" class="seg-btn" data-units-choice="metric">MILLIMETRES</button></div></div><label>Precision <select data-file-precision></select></label><p data-units-example></p><div data-unavailable-list></div><h3>Where this project is kept</h3><p data-own-folder-label></p><div class="file-actions"><button class="btn primary" data-own-folder-link>CHOOSE FOLDER</button><button class="btn" data-folder-open>OPEN FROM FOLDER</button><button class="btn" data-own-folder-unlink>STOP KEEPING IT IN A FOLDER</button></div>
       <label>Keep a SketchUp mirror (.skp) beside each project <input type="checkbox" data-mirror-on></label><p data-mirror-label></p>
-      <h3>One-pager</h3><label>Ask to update the one-pager when Tiksi closes <select data-op-prompt>${PROMPT_MODES.map(([id,label])=>`<option value="${id}">${escapeHtml(label)}</option>`).join('')}</select></label><p>Closing Tiksi first shows the browser's own Leave site? question. Choose Cancel to stay and Tiksi asks whether to save the next version; choose Leave to close without it.</p>
-      <details><summary>Workspace backup & maintenance</summary><h3>Projects without their own folder</h3><p data-folder-label></p><div class="file-actions"><button class="btn" data-folder-link>KEEP THEM IN ONE FOLDER</button><button class="btn" data-folder-unlink>UNLINK</button></div><p>Project saves are usually enough. A workspace backup carries every property.</p><button class="btn" data-workspace-save>SAVE WORKSPACE BACKUP</button><button class="btn" data-demo>ADD DEMO PROJECTS</button><button class="btn" data-storage>CLEAN UNUSED STORAGE</button><div data-mac-cleanup hidden><button class="btn" data-mac-cleanup-list>CLEAN UNUSED STORAGE ON THE MAC</button><p data-mac-cleanup-plan></p><button class="btn" data-mac-cleanup-remove hidden>REMOVE</button></div><p>Replace workspace is available only when you intentionally want to restore a full backup.</p><button class="btn" data-workspace-replace>REPLACE FROM BACKUP…</button></details></section>
+      <details><summary>Workspace backup & maintenance</summary><details data-agent-onboarding><summary>Onboard with a coding agent</summary><p>Open Claude or Codex with the Tiksi checkout and your site-visit folder. Paste this prompt and add what you want to produce.</p><textarea readonly rows="5" aria-label="Property onboarding prompt" data-agent-prompt></textarea><button class="btn" data-agent-copy>COPY PROMPT</button></details><h3>Projects without their own folder</h3><p data-folder-label></p><div class="file-actions"><button class="btn" data-folder-link>KEEP THEM IN ONE FOLDER</button><button class="btn" data-folder-unlink>UNLINK</button></div><p>Project saves are usually enough. A workspace backup carries every property.</p><button class="btn" data-workspace-save>SAVE WORKSPACE BACKUP</button><button class="btn" data-demo>ADD DEMO PROJECTS</button><button class="btn" data-storage>CLEAN UNUSED STORAGE</button><div data-mac-cleanup hidden><button class="btn" data-mac-cleanup-list>CLEAN UNUSED STORAGE ON THE MAC</button><p data-mac-cleanup-plan></p><button class="btn" data-mac-cleanup-remove hidden>REMOVE</button></div><p>Replace workspace is available only when you intentionally want to restore a full backup.</p><button class="btn" data-workspace-replace>REPLACE FROM BACKUP…</button></details></section>
     <p role="status" data-file-status></p><input type="file" data-any-file hidden multiple accept=".tiksi,.json,${SCAN_ACCEPT},.c4d,.max,.ma,.mb,.rfa,.dwf,.mtl,.bin,.tga,.jpg,.jpeg,.png,.webp,.heic,.heif,.tif,.tiff,.avif,.mp4,.mov,.m4v"><input type="file" data-replace-file hidden accept=".json,.zip,.tiksi">`;
   document.body.append(dialog);dialog.showModal();dialog.addEventListener('close',()=>dialog.remove());
-  const envHost=dialog.querySelector('[data-file-env]');
-  if(currentName==='model')viewer3d.mountEnvironmentSettings(envHost);
-  else {envHost.innerHTML='<button class="btn" data-open-model-settings>OPEN MODEL SETTINGS</button>';envHost.querySelector('button').onclick=()=>{dialog.close();history.replaceState(null,'','#/model');route();openFileMenu('settings');};}
   const status=dialog.querySelector('[data-file-status]'), on=(selector,fn)=>dialog.querySelector(selector).onclick=fn;
   const refresh=()=>{
     const st=filesState(),target=prop && saveTarget(prop.id);
@@ -491,7 +495,6 @@ function openFileMenu(initialTab = 'project', selected) {
     const sharedLink=dialog.querySelector('[data-folder-link]');sharedLink.textContent=st.folderNeedsPermission?'RECONNECT':'KEEP THEM IN ONE FOLDER';
     dialog.querySelector('[data-folder-link]').disabled=!FSA_DIR;dialog.querySelector('[data-folder-open]').disabled=!st.folder&&!(own&&own.permitted);dialog.querySelector('[data-folder-unlink]').disabled=!st.folder && !st.folderNeedsPermission;
     dialog.querySelector('[data-mirror-on]').checked=ws.data.settings.sketchupMirror!==false;dialog.querySelector('[data-mirror-label]').textContent=prop?mirrorStatus(prop.id):'';
-    const opStatus=dialog.querySelector('[data-op-file-status]');if(prop){const st=onePagerStatus(prop,projectSlice(prop.id));opStatus.textContent=st.text;opStatus.dataset.state=st.state;}else opStatus.textContent='Open a property to see its one-pager.';dialog.querySelector('[data-one-pager]').disabled=!prop;
     const goneHost = dialog.querySelector('[data-unavailable-list]'), gone = diskWorkspace ? diskWorkspace.unavailable : [];
     // Only a project whose file is missing can be taken off the list (the Mac refuses the
     // others: an unreadable file is still there). The Mac cannot tell a deleted file from one
@@ -517,7 +520,7 @@ function openFileMenu(initialTab = 'project', selected) {
   let busy=false;
   const run=async fn=>{if(busy)return;busy=true;const disabled=Array.from(dialog.querySelectorAll('button')).filter(b=>!b.disabled);disabled.forEach(b=>b.disabled=true);dialog.oncancel=e=>e.preventDefault();try {status.textContent='Working…';const said=await fn();status.textContent=typeof said==='string'?said:'Done.';refresh();}catch(e){status.textContent=e.message;}finally{busy=false;dialog.oncancel=null;disabled.forEach(b=>b.disabled=false);refresh();}};
   let exchangeMounted=false;
-  const mountExchange=()=>{if(exchangeMounted)return;exchangeMounted=true;if(currentName==='model'){const image=document.createElement('button');image.className='btn';image.textContent='SAVE VIEW IMAGE';image.dataset.saveView='';image.onclick=()=>{dialog.close();viewer3d.openStillDialog();};dialog.querySelector('[data-file-exchange]').append(image);}if(prop) openExchangeDialog(prop,{selected,host:dialog.querySelector('[data-file-exchange]'),close:()=>dialog.close(),imported:async scan=>{viewer3d.focusScanOnMount(scan.id);refreshTopbar();if(currentName==='model')remountView();else location.hash='#/model';},changed:remountView});};
+  const mountExchange=()=>{if(exchangeMounted)return;exchangeMounted=true;if(prop) openExchangeDialog(prop,{selected,host:dialog.querySelector('[data-file-exchange]'),close:()=>dialog.close(),imported:async scan=>{viewer3d.focusScanOnMount(scan.id);refreshTopbar();if(currentName==='model')remountView();else location.hash='#/model';},changed:remountView});};
   const tab=id=>{if(id==='exchange')mountExchange();dialog.querySelectorAll('[data-file-panel]').forEach(p=>p.hidden=p.dataset.filePanel!==id);dialog.querySelectorAll('[data-file-tab]').forEach(b=>{b.classList.toggle('active',b.dataset.fileTab===id);b.setAttribute('aria-current',b.dataset.fileTab===id?'true':'false');});};
   dialog.querySelectorAll('[data-file-tab]').forEach(b=>b.onclick=()=>tab(b.dataset.fileTab));tab(initialTab);refresh();
   on('[data-close-file]',()=>dialog.close());
@@ -545,11 +548,7 @@ function openFileMenu(initialTab = 'project', selected) {
   on('[data-new-property]',()=>{dialog.close();openNewPropertyDialog();});
   // The folder of a site visit: its scans, photos, videos and PDFs become a property in one go.
   on('[data-new-folder]',()=>{dialog.close();openNewPropertyDialog({folder:true});});
-  on('[data-one-pager]',()=>{dialog.close();openOnePagerEditor(prop);});
-  on('[data-lab-send-open]',()=>{dialog.close();openLabDialog(prop);});
-  dialog.querySelector('[data-lab-send-open]').disabled=!prop;
-  dialog.querySelector('[data-op-prompt]').value=promptMode();
-  dialog.querySelector('[data-op-prompt]').onchange=e=>{ws.data.settings.onePagerPrompt=e.target.value;touch();};
+  on('[data-recovery]',()=>{dialog.close();openRecovery(()=>remountView());});
   on('[data-polycam]',()=>{dialog.close();openNewPropertyDialog({into:prop?.id});});
   on('[data-photo3d]',()=>{dialog.close();location.hash='#/reconstruct';});
   // Units and precision: inches (feet and inches, to 1/16" unless changed) or millimetres.
@@ -760,8 +759,6 @@ function refreshTopbar() {
     || '<option value="">(no property)</option>')
     + gone.map(u => `<option value="" disabled data-unavailable="${escapeHtml(u.id)}" title="${escapeHtml(u.message || '')}">${escapeHtml(u.name || 'A project')} (${u.reason === 'missing' ? 'file missing' : 'file cannot be read'})</option>`).join('');
   sel.title = gone.length ? gone.map(u => u.message).join('\n') : '';
-  document.querySelectorAll('#units-seg .seg-btn').forEach(b =>
-    b.classList.toggle('active', b.dataset.units === d.settings.units));
   refreshSaveButton();
   refreshHistoryControls();
 }

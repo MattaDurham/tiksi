@@ -157,7 +157,7 @@ try {
   // person is still walking where they stood, and a drag still only turns them. (It used to
   // leave them in orbit, and the drag swung them out through the wall beside them.)
   await viewer(page, 'v.keepViewOnNextMount()');
-  await page.locator('#rail a[data-view="materials"]').click({ noWaitAfter: true });
+  await page.locator('#rail a[data-view="photos"]').click({ noWaitAfter: true });
   await page.locator('canvas.v-canvas').waitFor({ state: 'detached' });
   await page.locator('#rail a[data-view="model"]').click({ noWaitAfter: true });
   await page.locator('canvas.v-canvas').waitFor();

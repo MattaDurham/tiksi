@@ -146,7 +146,7 @@ try {
   await page.waitForTimeout(600);
   await page.reload();
   await page.waitForSelector('#btn-file', { state: 'attached' });
-  await page.click('#tiksi-menu').then(() => page.click('#btn-file')); await page.click('[data-file-tab=settings]');
+  await page.click('#btn-file'); await page.click('[data-file-tab=settings]');
   await page.waitForFunction(() => /moved/.test(document.querySelector('[data-own-folder-label]')?.textContent || ''));
   const label = await page.locator('[data-own-folder-label]').textContent();
   check(/Kept in moved\. Only this project is written there\./.test(label), 'the settings label names the folder (' + label + ')');

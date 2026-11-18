@@ -96,7 +96,7 @@ try {
   });
   checks.forEach(check=>console.log('PASS '+check));
   await page.locator('#rail a[data-view=model]').click();await page.locator('canvas.v-canvas').waitFor();
-  await page.locator('#tiksi-menu').click().then(() => page.locator('#btn-file').click());await page.locator('[data-file-tab=exchange]').click();await page.locator('dialog').waitFor();
+  await page.locator('#btn-file').click();await page.locator('[data-file-tab=exchange]').click();await page.locator('dialog').waitFor();
   await page.locator('[data-engines]').filter({hasText:'Local engines'}).waitFor();
   await page.locator('[data-format]').selectOption('glb');
   const downloadPromise=page.waitForEvent('download');await page.locator('[data-save-model]').click();const download=await downloadPromise;
@@ -119,7 +119,8 @@ try {
   // A slow scan load used to restore the mount's AFTER selection after the user
   // had already chosen BEFORE. Hold the actual GLB parser across a new mount so
   // this ordering is deterministic on machines both with and without native engines.
-  await page.locator('#rail a[data-view=materials]').click();
+  await page.locator('#rail a[data-view=products]').click();
+  await page.locator('[data-part=materials]').click();
   await page.locator('.mv-grid').waitFor();
   await page.evaluate(async()=>{
     const {GLTFLoader}=await import('three/addons/loaders/GLTFLoader.js');

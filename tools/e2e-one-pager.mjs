@@ -73,31 +73,33 @@ try {
   // ---- BUDGET and SCHEDULE show the figures the one-pager prints ----
   await page.goto(url + '/#/budget');
   await page.locator('#cap-input').waitFor();
-  check(/\$32,000/.test(await page.locator('.kpi.accent .k-value').textContent()), 'BUDGET totals the selected program at $32,000 likely');
+  check(/\$32,000/.test(await page.locator('[data-sel-total]').textContent()), 'ALL PROJECTS totals the selected program at $32,000 likely');
   await page.fill('#cap-input', '250k'); await page.press('#cap-input', 'Tab');
   await page.waitForFunction(() => document.querySelector('#cap-input')?.value === '$250,000');
   check(await prop('return s.ws.data.settings.budgetCap === 250000'), 'a cap typed as 250k is $250,000');
   await page.fill('#cap-input', '10x12'); await page.press('#cap-input', 'Tab');
   await page.waitForFunction(() => /is not an amount/.test(document.querySelector('#cap-note')?.textContent || ''));
   check(await prop('return s.ws.data.settings.budgetCap === 250000') && /The cap is still \$250,000/.test(await page.locator('#cap-note').textContent()), 'an amount BUDGET cannot read is refused with a reason and the cap stays');
-  await page.goto(url + '/#/schedule');
+  await page.goto(url + '/#/schedule?program');
   await page.locator('#prog-start').waitFor();
-  check((await page.locator('.kpi.accent .k-label').textContent()) === 'Last day of work' && (await page.locator('.kpi.accent .k-value').textContent()) === 'Nov 22, 2026' && /13 calendar days/.test(await page.locator('.kpi.accent .k-sub').textContent()), 'SCHEDULE\'s last day of work is Nov 22, 2026, the 13th calendar day');
+  const ends = await page.locator('#gantt tr.job td:nth-child(4)').allTextContents();
+  check(ends.some(e => /Nov 26/.test(e)) && !ends.some(e => /Nov 2[7-9]|Nov 30|Dec/.test(e)), 'SCHEDULE\'s last day of work is Nov 26, 2026, the 13th working day (' + ends.join(', ') + ')');
   await page.goto(url + '/#/model');
   await page.waitForSelector('#btn-file', { state: 'attached' });
 
   // ---- the editor ----
-  await page.click('#tiksi-menu').then(() => page.click('#btn-file'));
-  check(/No one-pager saved yet/.test(await page.locator('[data-op-file-status]').textContent()), 'FILE > Project says there is no one-pager yet');
-  await page.click('[data-one-pager]');
+  await page.goto(url + '/#/documents?send');
+  await page.locator('[data-op-open]').waitFor();
+  check(/No one-pager saved yet/.test(await page.locator('.send-card .send-state').first().textContent()), 'DOCUMENTS › SEND says there is no one-pager yet');
+  await page.click('[data-op-open]');
   await page.locator('.op-dialog .op-preview-page .op-page').waitFor();
   check(/No one-pager saved yet/.test(await page.locator('.op-dlg-status').textContent()), 'the editor opens and says no version is saved');
   check((await page.inputValue('[data-f="headline"]')) === 'Test House' && /2 modeled floor regions/.test(await page.inputValue('[data-f="tagline"]')), 'the headline and tagline describe the modeled floor regions');
   const summary = await page.inputValue('[data-f="summary"]');
-  check(/Kitchen refresh/.test(summary) && /\$32,000/.test(summary) && /13 calendar days, from Nov 10, 2026 to Nov 22, 2026\./.test(summary) && /Acme Shaker cabinets/.test(summary), 'the summary names the scope, the likely cost, the schedule and a product');
+  check(/Kitchen refresh/.test(summary) && /\$32,000/.test(summary) && /13 working days, from Nov 10, 2026 to Nov 26, 2026\./.test(summary) && /Acme Shaker cabinets/.test(summary), 'the summary names the scope, the likely cost, the schedule and a product');
   await page.waitForFunction(() => !!document.querySelector('.op-preview-page .op-hero img'));
   const pageText = await page.locator('.op-preview-page .op-page').innerText();
-  check(/Test House/.test(pageText) && /\$32,000/.test(pageText) && /\$25,000 to \$41,000/.test(pageText) && /13 calendar days/.test(pageText) && /2 modeled floor regions/.test(pageText) && /Shaker cabinets/.test(pageText) && /not independently verified site measurements/.test(pageText), 'the page shows the headline, budget range, schedule, modeled regions and products without implying verified site measurements');
+  check(/Test House/.test(pageText) && /\$32,000/.test(pageText) && /\$25,000 to \$41,000/.test(pageText) && /13 working days/.test(pageText) && /2 modeled floor regions/.test(pageText) && /Shaker cabinets/.test(pageText) && /not independently verified site measurements/.test(pageText), 'the page shows the headline, budget range, schedule, modeled regions and products without implying verified site measurements');
   check((await page.locator('.op-preview-page .op-plan svg polygon').count()) >= 2 && /LIVING ROOM/.test(await page.locator('.op-preview-page .op-plan').innerHTML()), 'the floor plan is drawn beside the text with its rooms named');
   check(/front\.jpg/.test(await page.locator('[data-op-hero] option').first().textContent()), 'the automatic picture is the site photo');
 
@@ -182,31 +184,36 @@ try {
   await page.click('[data-op-later]');
   await page.locator('.op-prompt').waitFor({ state: 'detached' });
   await prop("s.ws.data.settings.onePagerPrompt = 'changed'; s.touch();");
-  await page.click('#tiksi-menu').then(() => page.click('#btn-file'));
-  await page.click('[data-file-tab="settings"]');
-  check((await page.inputValue('[data-op-prompt]')) === 'changed', 'FILE > Settings shows the closing choice');
+  await page.goto(url + '/#/documents?send');
+  await page.locator('[data-op-prompt]').waitFor();
+  check((await page.inputValue('[data-op-prompt]')) === 'changed', 'SEND shows the closing reminder beside the one-pager');
   await page.selectOption('[data-op-prompt]', 'never');
-  check(await prop("return s.ws.data.settings.onePagerPrompt === 'never'"), 'changing it in Settings lands on the workspace');
+  check(await prop("return s.ws.data.settings.onePagerPrompt === 'never'"), 'changing it lands on the workspace');
   await page.selectOption('[data-op-prompt]', 'changed');
-  await page.click('[data-close-file]');
 
-  // ---- NEW PROPERTY makes version 1 by itself ----
-  await page.click('#tiksi-menu').then(() => page.click('#btn-file'));
+  // ---- NEW PROPERTY drafts the text, and saves no version until there is something to send ----
+  await page.click('#btn-file');
   await page.click('[data-new-property]');
   await page.fill('#np-dialog [data-np-input]', 'Second House');
   await page.click('#np-dialog [data-np-create]');
-  await until(() => prop("return p.name === 'Second House' && p.onePager.versions.length === 1"), 'the new property\'s first one-pager');
+  await until(() => prop("return p.name === 'Second House'"), 'the new property');
   d = await docs();
-  check(d.length === 1 && /Second House - one-pager v1/.test(d[0].name) && d[0].pages === 1, 'a property made by name starts with one-pager version 1 (' + (d[0] && d[0].name) + ')');
-  check(await prop("return /The modeled portion of Second House/.test(p.onePager.summary) && /not independently verified site measurements/.test(p.onePager.summary) && p.onePager.headline === 'Second House'"), 'its text identifies the modeled portion and unverified dimensions');
-  check((await state()) === 'current', 'and it is current');
+  check(d.length === 0 && await prop("return !(p.onePager.versions || []).length"), 'a property made by name has no one-pager version yet: there is nothing priced to send');
+  await page.goto(url + '/#/documents?send');
+  await page.click('[data-op-open]');
+  await page.locator('.op-dialog .op-preview-page .op-page').waitFor();
+  check(await prop("return /The modeled portion of Second House/.test(p.onePager.summary) && /not independently verified site measurements/.test(p.onePager.summary) && p.onePager.headline === 'Second House'"), 'opening it drafts its text identifies the modeled portion and unverified dimensions');
+  await page.keyboard.press('Escape');
+  check((await state()) === 'none', 'and SEND says none is saved');
 
   // ---- DOCUMENTS shows the newest version ----
   await page.evaluate(async () => { const s = await import('/js/store.js'); s.ws.data.settings.activePropertyId = s.ws.data.properties[0].id; s.touch(); });
+  await page.goto(url + '/#/documents?send');
+  await page.locator('[data-op-open]').waitFor();
+  check(/Version 2 saved/.test(await page.locator('.send-card .send-state').first().textContent()), 'SEND says version 2 is the newest');
   await page.goto(url + '/#/documents');
-  await page.locator('[data-onepager]').waitFor();
-  check(/Version 2 saved/.test(await page.locator('[data-onepager] .op-file-status').textContent()), 'DOCUMENTS says version 2 is the newest');
-  await page.click('[data-onepager-doc]');
+  await page.locator('[data-saved] [data-doc]').first().waitFor();
+  await page.locator('[data-saved] [data-doc]', { hasText: 'one-pager v2' }).click();
   await page.waitForFunction(() => { const i = document.querySelector('.dc-viewer-page img'); return i && i.src.startsWith('data:image/jpeg'); }, null, { timeout: 90000 });
   check(/one-pager v2/.test(await page.locator('.dc-inspector').textContent()), 'the newest version opens like any saved document');
 

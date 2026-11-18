@@ -24,9 +24,9 @@ await new Promise(r => server.listen(0, 'localhost', r));
 const url = `http://localhost:${server.address().port}`;
 const browser = await chromium.launch({ headless: true });
 const viewMarkers = {
-  model: 'canvas.v-canvas', materials: '.mv-grid',
-  photos: '.ph-grid', projects: '#new-project', products: '#new-prod',
-  budget: '#cap-input', schedule: '#prog-start', sheets: '#sheet-view',
+  model: 'canvas.v-canvas',
+  photos: '.ph-grid', products: '#new-prod',
+  estimate: '.es', schedule: '.sc', documents: '.doc-parts',
 };
 async function waitUntil(predicate, message, timeoutMs = 30_000) {
   const deadline = performance.now() + timeoutMs;
@@ -95,31 +95,38 @@ try {
   // The app opens on MODEL; there is no PLAN link.
   assert.equal(await page.evaluate(() => document.querySelector('#rail a.active')?.dataset.view), 'model', 'the desktop opens on MODEL');
   assert.equal(await page.locator('#rail a[data-view="plan"]').count(), 0, 'the rail has no PLAN link');
-  for (const view of ['model','materials','photos','projects','products','budget','schedule','sheets']) {
+  for (const view of ['model','photos','products','estimate','schedule','documents']) {
     await navigateToView(page, view);
     console.log('route checked:', view);
   }
-  assert.deepEqual(errors, [], 'all eight desktop routes mount without exceptions');
-  await navigateToView(page, 'projects'); await page.locator('#new-project').waitFor();
-  await page.locator('#new-project').click();
-  await page.locator('#proj-detail [data-f=name]').fill('Synthetic audit project'); await page.locator('#proj-detail [data-f=name]').press('Enter');
-  await page.locator('#add-item').click();
-  await page.locator('[data-if=qty]').fill('0'); await page.locator('[data-if=qty]').press('Tab');
-  await page.locator('[data-money=likely]').fill('100'); await page.locator('[data-money=likely]').press('Tab');
+  assert.deepEqual(errors, [], 'all six desktop tabs mount without exceptions');
+  assert.equal(await page.locator('#rail a[data-view]').count(), 6, 'the rail has six tabs');
+  assert.equal(await page.locator('#rail a[data-view="budget"], #rail a[data-view="sheets"]').count(), 0, 'BUDGET and CUT SHEETS are parts of ESTIMATE and DOCUMENTS now');
+  // A project is started, named and given a scope item in ESTIMATE.
+  await navigateToView(page, 'estimate'); await page.locator('[data-new-job]').click();
+  await page.locator('[data-jf=name]').fill('Synthetic audit project'); await page.locator('[data-jf=name]').press('Tab');
+  await waitUntil(() => page.evaluate(async () => (await import('/js/store.js')).ws.data.projects.at(-1).name === 'Synthetic audit project'), 'the project');
+  await page.locator('tr[data-room="other"] td:first-child').click();
+  await page.locator('[data-add-item]').click();
+  await page.locator('tr[data-si] [data-si-f=qty]').waitFor();
+  await page.locator('tr[data-si] [data-si-f=qty]').fill('0'); await page.locator('tr[data-si] [data-si-f=qty]').press('Tab');
+  await page.locator('tr[data-si] [data-si-money=likely]').fill('100'); await page.locator('tr[data-si] [data-si-money=likely]').press('Tab');
+  await waitUntil(() => page.evaluate(async () => (await import('/js/store.js')).ws.data.projects.at(-1).items[0]?.likely === 100), 'the project');
   // A price that cannot be read keeps the price it had and says why; it does not become $0.
-  await page.locator('[data-money=likely]').fill('10x12'); await page.locator('[data-money=likely]').press('Tab');
+  await page.locator('tr[data-si] [data-si-money=likely]').fill('10x12'); await page.locator('tr[data-si] [data-si-money=likely]').press('Tab');
+  await page.locator('[data-money-problem]').waitFor();
   assert.equal(await page.evaluate(async () => { const s = await import('/js/store.js'); return s.ws.data.projects.at(-1).items[0].likely; }), 100, 'an unreadable item price keeps the old price');
   assert.equal(await page.locator('[data-money-problem]').innerText(), '"10x12" is not an amount. Type it like 250000, $250,000, 250k or 1.2m. The likely price of New item is still $100.');
-  await page.locator('[data-money=likely]').fill('1200$'); await page.locator('[data-money=likely]').press('Tab');
+  await page.locator('tr[data-si] [data-si-money=likely]').fill('1200$'); await page.locator('tr[data-si] [data-si-money=likely]').press('Tab');
+  await waitUntil(() => page.evaluate(async () => (await import('/js/store.js')).ws.data.projects.at(-1).items[0].likely === 1200), 'the project');
   assert.equal(await page.evaluate(async () => { const s = await import('/js/store.js'); return s.ws.data.projects.at(-1).items[0].likely; }), 1200, 'a trailing dollar sign still reads');
   assert.equal(await page.locator('[data-money-problem]').count(), 0, 'and the message goes');
-  assert.equal(await page.locator('[data-if=qty]').inputValue(), '0');
+  assert.equal(await page.locator('tr[data-si] [data-si-f=qty]').inputValue(), '0');
   assert.equal(await page.evaluate(async () => { const s = await import('/js/store.js'); return s.projectTotals(s.ws.data.projects.at(-1)).likely; }), 0, 'zero quantity contributes zero to budget');
   await navigateToView(page, 'products'); await page.locator('#new-prod').waitFor(); await page.locator('#new-prod').click();
   await page.locator('#prod-form [data-f=name]').fill('Synthetic audit product'); await page.locator('#prod-form [data-f=name]').press('Tab');
   await page.setInputFiles('#prod-form [data-image-file]', { name: 'audit.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGMwnpkGRAwQCgAgugTJyID6aQAAAABJRU5ErkJggg==', 'base64') });
   await page.waitForFunction(() => !document.querySelector('#prod-add').disabled); await page.locator('#prod-add').click();
-  await page.locator('[data-items] fieldset', { hasText: 'Synthetic audit project' }).getByLabel('New item').check();
   await page.locator('#prod-form [data-money=price]').fill('$412.50'); await page.locator('#prod-form [data-money=price]').press('Tab');
   const pricesBefore = await page.evaluate(async () => { const s = await import('/js/store.js'); const p = s.projectSlice(s.activeProperty().id).products.find(p => p.name === 'Synthetic audit product'); return { price: p.price, history: (p.priceHistory || []).length }; });
   assert.equal(pricesBefore.price, 412.5);
@@ -128,13 +135,20 @@ try {
   assert.deepEqual(pricesAfter, pricesBefore, 'an unreadable product price keeps the old price and records no hand-entered $0');
   assert.equal(await page.locator('#prod-form [data-form-message]').innerText(), '"about 300" is not an amount. Type it like 250000, $250,000, 250k or 1.2m. The price is still $412.50.');
   await page.locator('#prod-done').click();
+  // The product is linked to the item from the item's record in ESTIMATE.
+  await navigateToView(page, 'estimate');
+  if (!await page.locator('tr[data-si]').count()) await page.locator('tr[data-room="other"] td:first-child').click();   // the room stays open from before
+  await page.locator('tr[data-si] .si-more').click();
+  const prodId = await page.evaluate(async () => { const s = await import('/js/store.js'); return s.ws.data.products.find(p => p.name === 'Synthetic audit product').id; });
+  await page.locator('#es-dbody [data-sid-prod]').selectOption(prodId);
+  await navigateToView(page, 'products');
   assert.ok(await page.evaluate(async () => { const s = await import('/js/store.js'); return s.projectSlice(s.activeProperty().id).products.some(p => p.name === 'Synthetic audit product' && p.itemIds.length === 1); }), 'the new product is linked to the work item and saved with this property');
   assert.ok((await page.locator('#view').innerText()).includes('Synthetic audit product'));
-  await navigateToView(page, 'budget'); await page.locator('#cap-input').waitFor(); await page.locator('#cap-input').fill('50000'); await page.locator('#cap-input').press('Tab');
+  await navigateToView(page, 'estimate'); await page.locator('[data-program]').click(); await page.locator('#cap-input').waitFor(); await page.locator('#cap-input').fill('50000'); await page.locator('#cap-input').press('Tab');
   await page.locator('#print-report').click(); assert.ok((await page.locator('#print-root').innerText()).includes('$50,000'));
-  await navigateToView(page, 'schedule'); await page.locator('#prog-start').waitFor(); await page.locator('#prog-start').fill('2026-10-15'); await page.locator('#prog-start').press('Tab');
-  assert.ok(await page.locator('.gantt-svg').count());
-  await navigateToView(page, 'sheets'); await page.locator('.sl-item').first().waitFor(); await page.getByRole('button', {name:'Synthetic audit product',exact:true}).click();
+  await navigateToView(page, 'schedule'); await page.locator('[data-program]').click(); await page.locator('#prog-start').waitFor(); await page.locator('#prog-start').fill('2026-10-15'); await page.locator('#prog-start').press('Tab');
+  await page.waitForFunction(() => document.querySelector('#prog-start')?.value === '2026-10-15');
+  await navigateToView(page, 'documents'); await page.locator('[data-part="sheets"]').click(); await page.locator('.sl-item').first().waitFor(); await page.getByRole('button', {name:'Synthetic audit product',exact:true}).click();
   assert.equal(await page.locator('#sheet-view h1').innerText(), 'Synthetic audit product'); await page.locator('#print-sheet').click();
   assert.ok((await page.locator('#print-root').innerText()).includes('Synthetic audit product'));
 
@@ -242,13 +256,13 @@ try {
   // A phone opens on the model.
   await mobile.goto(url); await mobile.locator('canvas.v-canvas').waitFor();
   // The phone already shows MODEL, so it is visited last, coming back from another page.
-  for(const view of ['materials','photos','projects','products','budget','schedule','sheets','model']) {
+  for(const view of ['photos','products','estimate','schedule','documents','model']) {
     await navigateToView(mobile, view);
     console.log('mobile route checked:', view);
     assert.equal(await mobile.evaluate(()=>document.body.scrollWidth),402,`${view} does not widen mobile viewport`);
     if(view==='model') assert.ok(await mobile.locator('canvas.v-canvas').isVisible(),`${view} has a visible mobile canvas`);
   }
-  assert.deepEqual(errors, [], 'all eight mobile routes mount without exceptions');
+  assert.deepEqual(errors, [], 'all six mobile tabs mount without exceptions');
   await mobile.close();
-  console.log('Browser audit passed: eight desktop/mobile routes; projects, products, budget/report, schedule, cut sheets; underlay isolation/replacement; portable scan/photo project roundtrip; JSON open; atomic file failure and edit-during-save; folder backup/conflict safety.');
+  console.log('Browser audit passed: six desktop/mobile tabs; a project and its scope item in ESTIMATE, products, budget/report, schedule, cut sheets; underlay isolation/replacement; portable scan/photo project roundtrip; JSON open; atomic file failure and edit-during-save; folder backup/conflict safety.');
 } finally { await browser.close(); await new Promise(r=>server.close(r)); }

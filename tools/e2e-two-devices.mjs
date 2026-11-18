@@ -142,7 +142,7 @@ async function eachDeviceKeepsItsOwnView() {
   const saves = []; for (const page of [one, two]) page.on('request', r => { if (r.method() === 'PUT' && new URL(r.url()).pathname === '/api/workspace') saves.push(page === one ? 'one' : 'two'); });
   assert.equal((await open(two)).property, first);
   // Device one looks at the other property, its upper level, and switches a tag off.
-  await one.click('#tiksi-menu'); await one.selectOption('#property-select', second);
+  await one.selectOption('#property-select', second);
   await one.evaluate(async () => { const s = await import('/js/store.js'), p = s.activeProperty(); p.activeLevelId = 'lvl-upper'; p.tags[0].visible = false; s.touch(); });
   await one.waitForFunction(SAVED);
   await one.waitForTimeout(6000);   // two of the other device's looks at the Mac
@@ -158,7 +158,7 @@ async function eachDeviceKeepsItsOwnView() {
   assert.equal(saved.activeLevelId, 'lvl-0'); assert.notEqual(saved.tags[0].visible, false, 'the level and tags one device looks at are not saved over the Mac\'s');
   // Both devices change what they look at before either hears from the Mac, then both edit:
   // looking at different things is not a conflict.
-  await two.click('#tiksi-menu'); await two.selectOption('#property-select', second);
+  await two.selectOption('#property-select', second);
   await two.evaluate(async () => { const s = await import('/js/store.js'); s.activeProperty().activeLevelId = 'lvl-upper'; s.touch(); });
   await one.evaluate(async () => { const s = await import('/js/store.js'); s.activeProperty().activeLevelId = 'lvl-0'; s.touch(); });
   await edit(one, first, { notes: 'From device one' }); await edit(two, second, { notes: 'From device two' });
@@ -400,7 +400,7 @@ async function aProjectWithAMissingFileIsShown() {
   assert.match(await row.getAttribute('title'), /Garden flat/);
   await until(page, async id => !(await import('/js/store.js')).ws.data.properties.some(p => p.id === id), second, 'the project leaving the open records');
   // FILE, Settings gives the Mac's message and the control to take it off the list.
-  await page.locator('#tiksi-menu').click().then(() => page.locator('#btn-file').click());
+  await page.locator('#btn-file').click();
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const line = page.locator('[data-file-dialog] p[data-unavailable]');
   assert.match(await line.textContent(), /Garden flat.*project file is not at/s);
@@ -430,7 +430,7 @@ async function aProjectWithAMissingFileIsShown() {
     return route.fulfill({ response: answer, json: body });
   });
   const second2 = await device({ context: other });
-  await second2.locator('#tiksi-menu').click().then(() => second2.locator('#btn-file').click());
+  await second2.locator('#btn-file').click();
   await second2.getByRole('button', { name: 'Settings', exact: true }).click();
   const unreadable = second2.locator('[data-file-dialog] p[data-unavailable]');
   assert.match(await unreadable.textContent(), /cannot be read/);
@@ -452,7 +452,7 @@ async function aProjectFileAsksBeforeItReplaces() {
   const asked = []; let answer = 'dismiss';
   page.on('dialog', d => { asked.push(d.message()); return answer === 'accept' ? d.accept() : d.dismiss(); });
   const openFile = async () => {
-    await page.locator('#tiksi-menu').click().then(() => page.locator('#btn-file').click());
+    await page.locator('#btn-file').click();
     await page.locator('[data-file-dialog] [data-any-file]').setInputFiles(file);
     await page.locator('[data-file-dialog]').waitFor({ state: 'detached', timeout: 20000 });
   };
@@ -482,7 +482,7 @@ async function aProjectFileAsksBeforeItReplaces() {
   assert.equal((await mac()).data.projects.find(p => p.id === 'proj-import').items[0].cost, 5500);
   // The demo, twice.
   const addDemo = async () => {
-    await page.locator('#tiksi-menu').click().then(() => page.locator('#btn-file').click());
+    await page.locator('#btn-file').click();
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.locator('[data-file-dialog] summary', { hasText: 'Workspace backup' }).click();
     await page.locator('[data-file-dialog] [data-demo]').click();
@@ -502,13 +502,13 @@ async function aProjectFileAsksBeforeItReplaces() {
 async function aPageThatFailsToOpenSaysSo() {
   step('error');
   const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
-  await context.route('**/js/budget.js*', async route => {
+  await context.route('**/js/estimate-view.js*', async route => {
     const answer = await route.fetch(), text = await answer.text();
     return route.fulfill({ response: answer, body: text.replace('export function mount(', 'export function mount() { throw new Error("Synthetic: this page cannot open"); }\nfunction mountAsWritten(') });
   });
   const page = await context.newPage();
   const thrown = []; page.on('pageerror', e => thrown.push(e.message));
-  await page.goto(url + '/#/budget');
+  await page.goto(url + '/#/estimate');
   const notice = page.locator('#view .page-open-failed');
   await notice.waitFor({ timeout: 60000 });
   assert.match(await notice.textContent(), /could not open \(Synthetic: this page cannot open\)\. The other pages still work/);
@@ -754,7 +754,7 @@ async function theOnePagerEditorKeepsWhatIsTyped() {
   const [first] = await makeProperties('onepager');
   const one = await device(), two = await device();
   await look(one, first); await look(two, first);
-  await two.evaluate(() => document.dispatchEvent(new CustomEvent('tiksi:one-pager')));
+  await two.evaluate(async () => (await import('/js/one-pager-dialog.js')).openOnePagerEditor((await import('/js/store.js')).activeProperty()));   // DOCUMENTS › SEND › OPEN ONE-PAGER
   const headline = two.locator('dialog[open] [data-f=headline]');
   await headline.click(); await headline.fill('A headline typed while the other device saved');
   await edit(one, first, { notes: 'Saved from the other device during the typing' }); await saveNow(one);
@@ -912,7 +912,7 @@ async function undoKeepsTheOtherDevicesChange() {
   await two.waitForTimeout(500);
   // UNDO on device two takes back its own floor.
   assert.equal(await two.locator('#btn-undo').isEnabled(), true, 'UNDO is still offered after the other device\'s change');
-  await two.click('#tiksi-menu'); await two.locator('.tk-menu #btn-undo').click(); await two.keyboard.press('Escape');   // UNDO is in the Tiksi menu
+  await two.locator('#btn-undo').click();   // UNDO is on the top bar
   await has(two, first, 'p.rooms[0].material === ' + JSON.stringify(was));
   await saveNow(two); await two.waitForFunction(SAVED);
   await two.waitForTimeout(500);

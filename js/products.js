@@ -1,4 +1,4 @@
-import { keepRemoved, openRecovery } from './recovery.js';
+import { keepRemoved } from './recovery.js';
 import { referencedProductIds } from './evidence.js';
 // Product registry: researched products with vendor and manufacturer links, specs, prices
 // and their sources, linked to scope items so the model becomes a true digital twin.
@@ -32,7 +32,7 @@ let pollTimer = null;
 
 export function mount(root) {
   el = root;
-  // Deep link from PROJECTS: #/products?select=<productId> opens that product's form.
+  // Deep link (ESTIMATE, MATERIALS, a cut sheet): #/products?select=<productId> opens that product's form.
   const m = /[?&]select=([^&]+)/.exec(location.hash);
   if (m) {
     const id = decodeURIComponent(m[1]);
@@ -210,12 +210,11 @@ function render() {
   el.innerHTML = `
     <div class="view-scroll">
       <div class="view-head">
-        <span class="view-title">PRODUCTS</span><button class="btn" data-recovery>REMOVED RECORDS</button>
-        <span class="view-sub">${mine ? `${mine.size} in ${escapeHtml(prop.name)}, ` : ''}${d.products.length} in registry - link products to scope items to build the digital twin</span>
+        <span class="view-title">PRODUCTS</span>
+        <span class="view-sub">${mine ? `${mine.size} in ${escapeHtml(prop.name)}, ` : ''}${d.products.length} in all · link one to work from its scope item in ESTIMATE</span>
       </div>
       <div class="toolbar prod-toolbar">
         <button class="btn primary" id="new-prod">${icon('plus')}NEW PRODUCT</button>
-        <button class="btn" id="research-prod">RESEARCH PRODUCTS</button>
         ${mine ? `<div class="seg" role="group" aria-label="Which products">
           <button class="seg-btn ${scope === 'property' ? 'active' : ''}" data-scope="property" aria-pressed="${scope === 'property'}" title="Products linked to ${escapeHtml(prop.name)}'s work, materials, or added while it was open">THIS PROPERTY <b>${mine.size}</b></button>
           <button class="seg-btn ${scope === 'all' ? 'active' : ''}" data-scope="all" aria-pressed="${scope === 'all'}">ALL <b>${d.products.length}</b></button>
@@ -244,8 +243,6 @@ function render() {
     render();
     el.querySelector('#prod-form [data-image-url]')?.focus();
   };
-  el.querySelector('[data-recovery]').onclick = () => openRecovery(render);
-  el.querySelector('#research-prod').onclick = () => openResearch({});
   el.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => { scope = b.dataset.scope; render(); });
   const q = el.querySelector('#prod-q');
   q.oninput = () => { query = q.value; render(); const i = el.querySelector('#prod-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); };
@@ -372,7 +369,6 @@ function renderForm() {
   const p = draft || ws.data.products.find(x => x.id === editingId);
   if (!p) { editingId = null; return; }
   const form = el.querySelector('#prod-form');
-  const items = allScopeItems();
   const { vendor, maker } = productLinks(p);
   const src = priceSource(p);
   const check = p.priceCheck || {};
@@ -380,11 +376,12 @@ function renderForm() {
   const home = homeProperty(p);
   const folderReady = !!(diskWorkspace && home && diskWorkspace.paths[home.id]);
   const specFolder = docs.map(doc => String(doc.path || '').split('/').slice(0, 2).join('/')).find(Boolean) || '';
-  const byProject = new Map();
-  for (const { project, item } of items) {
-    if (!byProject.has(project.id)) byProject.set(project.id, { project, items: [] });
-    byProject.get(project.id).items.push(item);
-  }
+  // The work items this product is linked to (linked from the item, in its room in ESTIMATE),
+  // each labelled Job › Room and opening that job's estimate.
+  const used = workLinks(p).map(({ project, item }) => {
+    const parent = project.parentId && ws.data.projects.find(x => x.id === project.parentId);
+    return { item, label: parent ? `${parent.name} › ${project.name}` : project.name, job: (parent || project).id };
+  });
   form.innerHTML = `
     <div class="prod-form-head"><h3 class="kicker">${isNew ? 'NEW PRODUCT' : 'EDIT PRODUCT'}</h3>
       <button class="btn small" id="prod-close" title="Close">${icon('close', { size: 11 })}</button></div>
@@ -432,10 +429,8 @@ function renderForm() {
     </div>`}
 
     <div class="field"><label class="prod-label">Used in work items</label>
-      <p class="prod-hint">Tick the PROJECTS line items this product is for. A ticked item lists the product on its cut sheet, and the product is saved in that property's project file.</p>
-      ${byProject.size ? `<div class="prod-work" data-items>${[...byProject.values()].map(({ project, items }) => `<fieldset><legend>${escapeHtml(project.name)}</legend>
-        ${items.map(item => `<label><input type="checkbox" value="${escapeHtml(item.id)}" ${(p.itemIds || []).includes(item.id) ? 'checked' : ''}> ${escapeHtml(item.name)}</label>`).join('')}</fieldset>`).join('')}</div>`
-        : '<p class="prod-hint">This property has no work items yet. Add them in PROJECTS.</p>'}</div>
+      ${used.length ? `<ul class="prod-used" data-used>${used.map(u => `<li><a href="#/estimate?project=${encodeURIComponent(u.job)}">${escapeHtml(u.label)}</a>: ${escapeHtml(u.item.name || 'Item')}</li>`).join('')}</ul>`
+        : '<p class="prod-hint">Not linked to any work yet. Link it from a scope item in ESTIMATE (open the item, then + Link a product).</p>'}</div>
     <div class="field"><label>Notes</label><textarea data-f="notes">${escapeHtml(p.notes || '')}</textarea></div>
     ${p.research ? provenance(p.research) : ''}
     ${message ? `<p class="prod-hint" role="status" data-form-message>${escapeHtml(message)}</p>` : ''}
@@ -481,10 +476,6 @@ function renderForm() {
     // Once edited, both links are kept as typed (productLinks stops guessing).
     p.url = values.vendor; p.manufacturerUrl = values.maker;
     changed();
-  });
-  form.querySelectorAll('[data-items] input').forEach(box => box.onchange = () => {
-    p.itemIds = [...form.querySelectorAll('[data-items] input:checked')].map(b => b.value);
-    if (!isNew) touch();
   });
   form.querySelector('#prod-close').onclick = () => { editingId = null; draft = null; message = ''; render(); };
   if (isNew) {

@@ -274,7 +274,6 @@ export function close() {
   document.removeEventListener('pointerdown', outside);
   document.removeEventListener('keydown', onKey);
 }
-export function isMenuOpen() { return !!menuEl; }
 
 // The top bar's logo becomes the menu button; the page tabs and the left pane start listening.
 // `client`: the client page in the lab (client-view.js). The logo stays a logo, with no menu

@@ -52,17 +52,18 @@ try {
   await page.waitForFunction(m => window.undoStore.activeProperty().walls[0].material === m, chosen);
   await page.waitForFunction(() => document.querySelector('#save-status').textContent === 'SAVED TO DISK');
   assert.equal(await page.locator('#btn-undo').isEnabled(), true, 'self-save keeps history');
-  // UNDO in the Tiksi menu (the keys go to the wall panel's material list, which has the focus).
-  await page.click('#tiksi-menu'); await page.locator('.tk-menu #btn-undo').click();
+  // UNDO on the top bar (the keys go to the wall panel's material list, which has the focus).
+  await page.locator('#btn-undo').click();
   assert.equal(await wallField(page, 'material'), 'mat-drywall');
   assert.equal(await page.locator('#btn-undo').isDisabled(), true, 'one change is one undo');
   await page.keyboard.press('Escape');
-  await page.locator('#rail [data-view=measure]').click();
-  await page.locator('.ms-layout').waitFor();   // MEASURE loads on first use; its REDO works once it is open
+  await page.locator('#rail [data-view=photos]').click();
+  await page.locator('[data-part=videos]').click();
+  await page.locator('.ms-layout').waitFor();   // VIDEOS loads on first use; its REDO works once it is open
   await page.keyboard.press('ControlOrMeta+Shift+z');
-  assert.equal(await wallField(page, 'material'), chosen, 'MEASURE redoes the MODEL change');
-  await page.click('#tiksi-menu'); await page.selectOption('#property-select', 'other-house'); assert.equal(await page.locator('#btn-undo').isDisabled(), true);
-  await page.click('#tiksi-menu'); await page.selectOption('#property-select', 'undo-house'); assert.equal(await page.locator('#btn-undo').isEnabled(), true);
+  assert.equal(await wallField(page, 'material'), chosen, 'VIDEOS redoes the MODEL change');
+  await page.selectOption('#property-select', 'other-house'); assert.equal(await page.locator('#btn-undo').isDisabled(), true);
+  await page.selectOption('#property-select', 'undo-house'); assert.equal(await page.locator('#btn-undo').isEnabled(), true);
   await page.locator('.ms-layout').waitFor();   // MEASURE opens again for the project
   await page.keyboard.press('ControlOrMeta+z');
   assert.equal(await wallField(page, 'material'), 'mat-drywall');
@@ -100,14 +101,14 @@ try {
   assert.equal(await wallField(page, 'material'), chosen);
   await page.evaluate(async () => { const s = window.undoStore; s.mergeWorkspace(JSON.parse(JSON.stringify(s.ws.data))); });
   assert.equal(await page.locator('#btn-undo').isDisabled(), true, 'opening/reimporting a project clears its previous session history');
-  // On the desktop UNDO and REDO are in the Tiksi menu, beside FILE, not on the top bar.
-  assert.equal(await page.locator('#btn-undo').isVisible(), false, 'no UNDO button on the top bar');
+  // UNDO and REDO sit on the top bar beside FILE, on the pages that have them.
+  await page.locator('#rail [data-view=products]').click();
+  await page.locator('#new-prod').waitFor();   // PRODUCTS is open, not just its address
+  assert.equal(await page.locator('#btn-undo').isVisible(), false, 'no UNDO on a page without one');
   await page.locator('#rail [data-view=model]').click();
   await page.locator('canvas.v-canvas').waitFor();
-  await page.click('#tiksi-menu');
-  assert.equal(await page.locator('.tk-menu #btn-undo').isVisible(), true, 'UNDO is in the Tiksi menu');
-  assert.equal(await page.locator('.tk-menu #btn-file').isVisible(), true, 'beside FILE');
-  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#tb-tools #btn-undo').isVisible(), true, 'UNDO is on the top bar on MODEL');
+  assert.equal(await page.locator('#tb-tools #btn-file').isVisible(), true, 'beside FILE');
   for (const width of [320, 800, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     assert.equal(await page.locator('#topbar').evaluate(el => el.scrollWidth <= el.clientWidth), true, 'the top bar fits at ' + width);

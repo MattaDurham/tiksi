@@ -73,6 +73,9 @@ export function mount(root) {
   window.addEventListener('keydown', onKey);
 
   renderGrid();
+  // #/materials?select=<id> opens that material (PHOTOS' MATERIAL makes one and opens it here).
+  const sel = /[?&]select=([^&]+)/.exec(location.hash);
+  if (sel) editingId = decodeURIComponent(sel[1]);
   if (editingId && ws.data.materials.some(m => m.id === editingId)) openEditor(editingId); else editingId = null;
 }
 
@@ -85,14 +88,11 @@ export function unmount() {
 }
 
 // ---------- library grid ----------
+// Uses by the same count the delete check makes (walls, paint marks, door and window trim, rooms,
+// the property), so a card that says 0 in use can be deleted.
 function usageCounts() {
   const counts = {};
-  for (const p of ws.data.properties) {
-    const bump = o => { for (const k of Object.keys(o)) if (/material/i.test(k) && typeof o[k] === 'string' && o[k]) counts[o[k]] = (counts[o[k]] || 0) + 1; };
-    (p.walls || []).forEach(bump);
-    (p.rooms || []).forEach(bump);
-    bump(p);
-  }
+  for (const m of ws.data.materials) { const n = materialUsage(m.id).length; if (n) counts[m.id] = n; }
   return counts;
 }
 
@@ -110,7 +110,7 @@ function renderGrid() {
   const counts = usageCounts();
   const list = filtered();
   const inUse = ws.data.materials.filter(m => counts[m.id]).length;
-  countEl.textContent = `${ws.data.materials.length} materials · ${inUse} in use · procedural PBR, nothing leaves this browser`;
+  countEl.textContent = `${ws.data.materials.length} materials · ${inUse} in use`;
   if (!list.length) {
     gridEl.innerHTML = `<div class="mv-empty">
       <div class="kicker">NO MATCHES</div>
@@ -256,6 +256,7 @@ function renderEditor() {
         <div class="field"><label>Separate proposed purchasable match</label><select data-proposed-product><option value="">None</option>${ws.data.products.map(p=>`<option value="${escapeHtml(p.id)}" ${m.proposedProduct?.productId===p.id?'selected':''}>${escapeHtml(p.name)}</option>`).join('')}</select></div>
         <div class="field"><label>From the products list</label>
           <select data-product-link><option value="">(none: type it below)</option>${ws.data.products.map(p => `<option value="${escapeHtml(p.id)}" ${m.product && m.product.productId === p.id ? 'selected' : ''}>${escapeHtml([p.name, p.model].filter(Boolean).join(' · '))}</option>`).join('')}</select></div>
+        ${m.product && m.product.productId ? '' : `<p class="empty">Not in the products list: type the maker and number, then ADD TO PRODUCTS.</p>
         <div class="field-row">
           <div class="field"><label>Maker</label><input type="text" data-p="brand" value="${escapeHtml(m.product?.brand || '')}" placeholder="e.g. Kohler"></div>
           <div class="field"><label>Product number</label><input type="text" data-p="model" value="${escapeHtml(m.product?.model || '')}" placeholder="e.g. K-14406-4-BN"></div>
@@ -263,7 +264,7 @@ function renderEditor() {
         <div class="field-row">
           <div class="field"><label>Product name</label><input type="text" data-p="name" value="${escapeHtml(m.product?.name || '')}"></div>
           <div class="field"><label>Link</label><input type="url" data-p="url" value="${escapeHtml(m.product?.url || '')}" placeholder="https://"></div>
-        </div>
+        </div>`}
         ${m.product && !m.product.productId && m.product.brand && m.product.model ? '<button type="button" class="btn" data-product-add>ADD TO PRODUCTS</button>' : ''}
         <div class="kicker mv-sub-kicker">COVERAGE <span class="faint">(for amounts estimated from area)</span></div>
         <div class="field-row">
@@ -414,7 +415,16 @@ function bindEditor(m) {
     m.product={...m.product, identityStatus:status,evidence:{...m.product?.evidence,identity:{source}}}; changed(true);
   };
   q('[data-identity-source]').onchange=()=>{ if(m.product){m.product.evidence={...m.product.evidence,identity:{source:q('[data-identity-source]').value.trim()}};if(!m.product.evidence.identity.source)m.product.identityStatus='unknown';changed(false);} };
-  q('[data-proposed-product]').onchange=()=>{const id=q('[data-proposed-product]').value;m.proposedProduct=id?{productId:id,identityStatus:'proposed'}:null;changed(false);};
+  // A proposed match is listed on its product, as a linked one is.
+  q('[data-proposed-product]').onchange = () => {
+    const id = q('[data-proposed-product]').value, was = m.proposedProduct && m.proposedProduct.productId;
+    const keepsOld = was && was !== id && !(m.product && m.product.productId === was);
+    if (keepsOld) { const old = ws.data.products.find(r => r.id === was); if (old) old.materialIds = (old.materialIds || []).filter(x => x !== m.id); }
+    m.proposedProduct = id ? { productId: id, identityStatus: 'proposed' } : null;
+    const rec = id && ws.data.products.find(r => r.id === id);
+    if (rec) { rec.materialIds = Array.isArray(rec.materialIds) ? rec.materialIds : []; if (!rec.materialIds.includes(m.id)) rec.materialIds.push(m.id); }
+    changed(false);
+  };
   const link = q('[data-product-link]');
   link.onchange = () => {
     if (link.value) linkMaterialProduct(ws.data, m, { productId: link.value }, uid);
