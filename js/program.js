@@ -5,7 +5,7 @@
 // Selected means pr.selected is set: a project without the flag is parked, as BUDGET shows
 // it. Subprojects are projects of their own (with a parentId) and count when selected.
 
-import { projectTotals, itemPriced, dayDiff, addDays } from './store.js';
+import { projectTotals, projectWork, itemPriced, dayDiff, addDays } from './store.js';
 
 // The projects of a property as BUDGET and SCHEDULE list them: the property's own, and any
 // whose property is missing from the workspace (they show under every property).
@@ -41,12 +41,13 @@ export const lastWorkDay = (start, span) => start && wholeDays(span) > 0 ? addDa
 // span in whole calendar days from start to the last finish (0 when nothing has a duration),
 // and `lastDay` the last calendar day with work on it.
 export function programSchedule(projects, start) {
-  const plans = selectedProjects(projects).filter(p => (p.items || []).some(i => (Number(i.durationDays) || 0) > 0)).map(p => {
-    const lag = p.startDate && start ? dayDiff(start, p.startDate) : 0;
-    const offset = lag > 0 ? lag : 0;
-    const { sched, end, cyclic } = cpm(p.items || []);
-    return { p, offset, sched, end, cyclic, finish: offset + end };
-  });
+  const plans = selectedProjects(projects).map(p => ({ p, items: projectWork(p) }))
+    .filter(x => x.items.some(i => (Number(i.durationDays) || 0) > 0)).map(({ p, items }) => {
+      const lag = p.startDate && start ? dayDiff(start, p.startDate) : 0;
+      const offset = lag > 0 ? lag : 0;
+      const { sched, end, cyclic } = cpm(items);
+      return { p, items, offset, sched, end, cyclic, finish: offset + end };
+    });
   const days = wholeDays(Math.max(0, ...plans.map(x => x.finish)));
   return { plans, days, lastDay: lastWorkDay(start, days) };
 }

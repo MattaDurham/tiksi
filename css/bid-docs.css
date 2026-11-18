@@ -1,0 +1,54 @@
+/* The bid package's documents (bid-documents.js): letter pages, ink on white, the same on screen
+   (DOCUMENTS > BID PACKAGE shows them as paper), in a downloaded file and on paper. */
+
+.bd-doc { color: #16181d; font: 10.5pt/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+.bd-page { background: #fff; width: 8.5in; min-height: 11in; margin: 0 auto 24px; padding: 0.6in 0.65in 0.7in; box-shadow: 0 2px 14px rgba(0, 0, 0, 0.45); position: relative; display: flex; flex-direction: column; gap: 8px; }
+.bd-page h2 { font-size: 12.5pt; margin: 12px 0 2px; padding-bottom: 3px; border-bottom: 1px solid #c9ccd3; break-after: avoid; }
+.bd-page h3 { font-size: 11pt; margin: 6px 0 0; }
+.bd-page p, .bd-page li { margin: 0; }
+.bd-page ul { margin: 2px 0 0; padding-left: 18px; }
+.bd-head { display: flex; justify-content: space-between; gap: 24px; padding-bottom: 10px; border-bottom: 2px solid #16181d; margin-bottom: 6px; }
+.bd-from, .bd-what { display: flex; flex-direction: column; font-size: 9pt; color: #444; }
+.bd-from b { font-size: 12pt; color: #16181d; }
+.bd-what { text-align: right; }
+.bd-what .bd-kind { font: 600 8pt ui-monospace, Menlo, monospace; letter-spacing: 0.12em; text-transform: uppercase; color: #8a5a14; }
+.bd-what b { font-size: 13pt; color: #16181d; }
+.bd-lede { font-size: 11pt; }
+.bd-note { font-size: 9pt; color: #6b4d12; background: #fbf4e6; border: 1px solid #ecd9b3; border-radius: 4px; padding: 6px 9px; }
+.bd-warn { color: #a3261d; }
+.bd-room { break-inside: avoid; }
+.bd-t { width: 100%; border-collapse: collapse; font-size: 9.5pt; }
+.bd-t th, .bd-t td { text-align: left; vertical-align: top; padding: 4px 6px; border-bottom: 1px solid #e1e3e8; }
+.bd-t th { font: 600 7.5pt ui-monospace, Menlo, monospace; text-transform: uppercase; letter-spacing: 0.06em; color: #555; background: #f2f3f5; }
+.bd-t .r { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.bd-t .c { text-align: center; }
+.bd-t .nw { white-space: nowrap; }
+.bd-t tr.g td { background: #f2f3f5; font-weight: 600; font-size: 9pt; }
+.bd-t tr.tot td { font-weight: 700; border-top: 1.5px solid #16181d; border-bottom: 0; }
+.bd-t td.bx { width: 0.9in; border-bottom: 1px solid #9aa0aa; }
+.bd-t tr { break-inside: avoid; }
+.bd-cut td { font-size: 9pt; }
+.sm, .bd-doc .sm { font-size: 8.5pt; color: #555; }
+.bd-sigs, .bd-fields { display: grid; grid-template-columns: 2fr 1fr; gap: 26px 24px; margin-top: 22px; break-inside: avoid; }
+.bd-fields { grid-template-columns: 1fr 1fr; margin: 8px 0 4px; gap: 18px 24px; }
+.bd-sigs > div, .bd-fields > div { display: flex; flex-direction: column; gap: 3px; font-size: 8.5pt; color: #555; }
+.bd-sigs .ln, .bd-fields .ln { display: block; border-bottom: 1px solid #16181d; height: 22px; }
+.bd-blank { display: inline-block; border-bottom: 1px solid #16181d; min-width: 2.2in; height: 1em; vertical-align: -2px; }
+.bd-blank.p { display: block; min-width: 0; height: 1.6in; border: 1px solid #9aa0aa; border-radius: 3px; }
+.bd-wall { break-inside: avoid; display: flex; flex-direction: column; gap: 4px; padding: 6px 0 10px; border-bottom: 1px solid #e1e3e8; }
+.bd-elev svg, .bd-cuts svg { max-width: 100%; height: auto; }
+.bd-foot { position: absolute; left: 0.65in; right: 0.65in; bottom: 0.3in; display: flex; justify-content: space-between; font: 7.5pt ui-monospace, Menlo, monospace; color: #888; }
+body.bd-file { padding: 24px 0; }
+
+@media print {
+  @page { size: letter; margin: 0; }
+  #print-root .bd-page { box-shadow: none; margin: 0; width: auto; min-height: 11in; break-after: page; }
+  #print-root .bd-page:last-child { break-after: auto; }
+  body.bd-file { padding: 0; background: #fff; }
+  body.bd-file .bd-page { box-shadow: none; margin: 0; break-after: page; }
+}
+@media (max-width: 760px) {
+  .bd-page { width: auto; min-height: 0; padding: 18px 16px 40px; }
+  .bd-head { flex-direction: column; }
+  .bd-what { text-align: left; }
+}

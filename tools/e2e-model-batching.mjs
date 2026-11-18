@@ -187,7 +187,7 @@ try {
     s.ws.data.properties.push(p); s.ws.data.settings.activePropertyId = p.id;
     s.touch();
   });
-  await page.locator('#rail a[data-view="budget"]').click({ noWaitAfter: true });
+  await page.locator('#rail a[data-view="estimate"]').click({ noWaitAfter: true });
   await page.locator('#rail a[data-view="model"]').click({ noWaitAfter: true });
   await page.locator('canvas.v-canvas').waitFor();
   const partsOf = 'return Object.keys(p.tagOf || {}).filter(k => k.startsWith("node:scan-components"))';

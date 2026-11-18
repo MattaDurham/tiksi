@@ -32,10 +32,13 @@ const reconstruction = lazyView(() => import('./reconstruction.js'));
 const research = lazyView(() => import('./research.js'));
 const projects = lazyView(() => import('./projects.js'));
 const products = lazyView(() => import('./products.js'));
-const budget = lazyView(() => import('./budget.js'));
+const estimate = lazyView(() => import('./estimate-view.js'));
 const schedule = lazyView(() => import('./schedule.js'));
-const cutsheets = lazyView(() => import('./cutsheets.js'));
-const documentcenter = lazyView(() => import('./documentcenter.js'));
+const documentsHub = lazyView(() => import('./documents-hub.js'));
+import { useEstimateRules } from './estimate.js';
+import { projectHistoryState, onProjectHistoryChange } from './project-history.js';
+// Pages whose undo and redo are the projects' own (project-history.js); MODEL and MEASURE undo geometry.
+const PROJECT_UNDO = ['projects', 'estimate'];
 const guide = lazyView(() => import('./guide.js'));
 import { initNewProperty, openNewPropertyDialog, dialogOpen } from './newproperty.js';
 import { initOnePager, openOnePagerEditor, promptMode } from './one-pager-dialog.js';
@@ -73,17 +76,25 @@ const VIEWS = {
   research,
   projects,
   products,
-  budget,
+  estimate,
+  // BUDGET is ESTIMATE's program page now, and CUT SHEETS a part of DOCUMENTS: their old
+  // addresses open them there (each page reads the address it was opened with).
+  budget: estimate,
   schedule,
-  sheets: cutsheets,
-  documents: documentcenter,
+  sheets: documentsHub,
+  documents: documentsHub,
   guide,
 };
+
+// The tab an old address belongs to now.
+const TAB_OF = { budget: 'estimate', sheets: 'documents' };
 
 let currentView = null;
 let currentName = '';
 
 async function boot() {
+  // Every page's project costs and work include the estimate (estimate.js): one rule for all.
+  useEstimateRules();
   if ('serviceWorker' in navigator && isSecureContext) navigator.serviceWorker.register('/service-worker.js').then(async registration => {
     await navigator.serviceWorker.ready;
     const urls = performance.getEntriesByType('resource').map(r => r.name);
@@ -209,7 +220,7 @@ function route() {
   if (head === 'open' && openFromHash()) { if (!currentView) route(); return; }
   const view = VIEWS[name] || VIEWS.model;
   unmountCurrent();
-  currentName = VIEWS[name] ? name : 'model';
+  currentName = VIEWS[name] ? TAB_OF[name] || name : 'model';
   currentView = view;
   const guideEntry = document.querySelector('.guide-entry');
   if (currentName === 'guide') guideEntry?.setAttribute('aria-current', 'page');
@@ -375,13 +386,14 @@ async function offerStorageCleanup(afterReplace) {
 function refreshHistoryControls() {
   const group = document.getElementById('edit-history');
   if (!group) return;
-  group.hidden = !['model', 'measure'].includes(currentName);
-  const state = editHistoryState(activeProperty());
+  const projectsPage = PROJECT_UNDO.includes(currentName);
+  group.hidden = !['model', 'measure'].includes(currentName) && !projectsPage;
+  const state = projectsPage ? projectHistoryState(activeProperty()) : editHistoryState(activeProperty());
   for (const direction of ['undo', 'redo']) {
     const button = document.getElementById('btn-' + direction), item = state[direction];
     button.disabled = !item.available;
     const name = direction === 'undo' ? 'Undo' : 'Redo';
-    button.title = item.blocked ? name + ' unavailable: this geometry changed elsewhere.'
+    button.title = item.blocked ? name + (projectsPage ? ' unavailable: the projects changed elsewhere.' : ' unavailable: this geometry changed elsewhere.')
       : item.available ? name + ' ' + item.label + (direction === 'undo' ? ' (Cmd/Ctrl+Z)' : ' (Cmd/Ctrl+Shift+Z or Ctrl+Y)')
       : 'Nothing to ' + direction;
   }
@@ -393,8 +405,9 @@ function bindHistoryControls() {
     button.onclick = () => { currentView?.[direction]?.(); refreshHistoryControls(); };
   }
   onEditHistoryChange(refreshHistoryControls);
+  onProjectHistoryChange(refreshHistoryControls);
   window.addEventListener('keydown', e => {
-    if (!['model', 'measure'].includes(currentName) || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+    if (!['model', 'measure', ...PROJECT_UNDO].includes(currentName) || !(e.ctrlKey || e.metaKey) || e.altKey) return;
     if (e.target?.matches('input, textarea, select') || e.target?.isContentEditable || document.querySelector('dialog[open]')) return;
     const key = e.key.toLowerCase();
     if (key !== 'z' && !(e.ctrlKey && key === 'y')) return;

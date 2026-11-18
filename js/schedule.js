@@ -100,7 +100,7 @@ function render() {
 }
 
 function criticalPathLine(x) {
-  const names = x.p.items
+  const names = (x.items || x.p.items)
     .filter(i => x.sched[i.id] && x.sched[i.id].critical)
     .sort((a, b) => x.sched[a.id].es - x.sched[b.id].es)
     .map(i => escapeHtml(i.name));
@@ -126,7 +126,7 @@ function ganttSvg(plans, startIso, programEnd, narrow = false, finger = false) {
   let rows = [];
   for (const x of plans) {
     rows.push({ kind: 'proj', x });
-    for (const it of x.p.items) {
+    for (const it of x.items || x.p.items) {
       if (x.sched[it.id]) rows.push({ kind: 'item', x, it });
     }
   }

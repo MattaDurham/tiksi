@@ -1,5 +1,7 @@
 import { keepRemoved, openRecovery } from './recovery.js';
 import { takeoffState } from './source-revision.js';
+import { projectEstimate } from './estimate.js';
+import { restoreProjectEdit } from './project-history.js';
 // Projects view: capture ideas, scope them into line items with budget ranges,
 // durations and dependencies. The budget and schedule views read from this data.
 // A project can hold subprojects (one level deep): small pieces of work such as a punch list,
@@ -69,6 +71,9 @@ export function mount(root) {
   document.addEventListener('pointerdown', onOutside);
   render();
 }
+// UNDO and REDO in the top bar (and Cmd/Ctrl+Z): the projects' own history (project-history.js).
+export function undo() { if (restoreProjectEdit('undo')) render(); }
+export function redo() { if (restoreProjectEdit('redo')) render(); }
 export function unmount() {
   setScopeTarget(null);
   window.removeEventListener('keydown', onKey);
@@ -302,8 +307,15 @@ function renderList() {
   bindList(list, v);
 }
 
+// The part of a project's estimate worked out from its drawn trim (ESTIMATE), or null.
+function trimPart(p) {
+  try { const e = projectEstimate(p), part = e && e.parts.get(p.id); return part && part.rooms.length ? { part, est: e } : null; }
+  catch (err) { console.error(err); return null; }
+}
+
 function cardSummary(p) {
   const t = projectTotals(p), g = projectProgress(p);
+  if (trimPart(p)) g.priced = Math.max(g.priced, 1);
   const days = p.items.reduce((n, i) => n + (i.durationDays || 0), 0);
   const subs = subprojectsOf(p), open = subs.filter(s => s.status !== 'done').length;
   const money = g.items && !g.priced ? 'no prices yet' : fmtMoney(t.likely) + ' likely';
@@ -427,6 +439,8 @@ function focusName() {
 // priced and done, work days, linked photos and products, open subprojects.
 function summaryHtml(p, subs) {
   const t = projectTotals(p), g = projectProgress(p);
+  const trim = trimPart(p);
+  if (trim) g.priced = Math.max(g.priced, 1);
   const days = p.items.reduce((n, i) => n + (i.durationDays || 0), 0);
   const photos = new Set(), prods = new Set();
   for (const it of p.items) {
@@ -442,7 +456,7 @@ function summaryHtml(p, subs) {
     ${stat(days, 'work days')}
     ${stat(photos.size + ' · ' + prods.size, 'photos · products linked')}
     ${subs.length ? stat(subs.filter(s => s.status !== 'done').length + ' of ' + subs.length, 'subprojects open') : ''}
-  </div>`;
+  </div>${trim ? `<p class="proj-estimate-note">The total includes the trim drawn for ${escapeHtml(trim.part.rooms.join(', '))}: ${fmtMoney(trim.part.trim.likely)} for boards, supplies and ${Math.round(trim.part.hours.likely * 10) / 10} carpenter hours, worked out from the drawing${trim.part.covered.length ? `, in place of ${trim.part.covered.length} ${trim.part.covered.length === 1 ? 'item' : 'items'} it already covers` : ''}. <a href="#/estimate?project=${encodeURIComponent(trim.est.root.id)}">OPEN THE ESTIMATE</a></p>` : ''}`;
 }
 
 // ---------- the model beside the page (MODEL BESIDE) ----------
@@ -897,7 +911,7 @@ function bindItemRows(p) {
       openResearch({ kind: 'scope-item', id: it.id, name: it.name, propertyId: p.propertyId, itemIds: [it.id] });
     };
   });
-  // PROJECTS has no undo, and on a phone the button sits where a thumb lands: ask first.
+  // On a phone the button sits where a thumb lands: ask first (UNDO also brings the item back).
   det.querySelectorAll('[data-del-item]').forEach(x => x.onclick = () => {
     const id = x.dataset.delItem, it = p.items.find(i => i.id === id);
     if (!it) return;

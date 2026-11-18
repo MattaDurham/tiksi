@@ -1,0 +1,68 @@
+/* Trim drawings (js/trim-drawings.js): wall elevations with piece marks, and the boards cut for them.
+   On screen they sit on Tiksi's dark panels; printed they are dark ink on white paper. */
+:root {
+  --td-wall: var(--panel-2, #151b21);
+  --td-wall-line: rgba(255, 255, 255, 0.22);
+  --td-case: var(--panel-3, #1b232b);
+  --td-open: var(--bg, #090c0f);
+  --td-piece: rgba(79, 143, 208, 0.28);
+  --td-piece-line: var(--sel, #4f8fd0);
+  --td-label: #cfe2f6;
+  --td-halo: var(--panel, #0f1418);
+  --td-ink: var(--ink, #e9eef3);
+  --td-ink2: var(--dim, #8f9ca8);
+  --td-muted: var(--faint, #5d6a76);
+  --td-board: var(--panel, #0f1418);
+  --td-board-line: rgba(255, 255, 255, 0.3);
+  --td-other: rgba(255, 255, 255, 0.07);
+  --td-wood: #c79a3c;
+  --td-off: rgba(199, 154, 60, 0.10);
+  --td-off-line: rgba(199, 154, 60, 0.45);
+  --td-hl: var(--accent, #e8973a);
+}
+
+.elev, .cutsvg { display: block; overflow: visible; max-width: 100%; height: auto; }
+.elev text, .cutsvg text { font-family: var(--sans, -apple-system, "Helvetica Neue", Arial, sans-serif); }
+.elev .ev-wall { fill: var(--td-wall); stroke: var(--td-wall-line); }
+.elev .ev-case { fill: var(--td-case); stroke: var(--td-wall-line); }
+.elev .ev-open { fill: var(--td-open); stroke: var(--td-wall-line); }
+.elev .ev-sash { stroke: var(--td-wall-line); }
+.elev .ev-pc { fill: var(--td-piece); stroke: var(--td-piece-line); cursor: pointer; }
+.elev .ev-pc:hover, .elev .ev-pc.td-on { fill: var(--td-hl); stroke: var(--td-hl); fill-opacity: .55; }
+.elev .ev-rk { fill: none; stroke: var(--td-piece-line); stroke-opacity: .55; }
+.elev .ev-dim { stroke: var(--td-ink2); }
+.elev .lb { font-family: var(--mono, ui-monospace, Menlo, monospace); font-weight: 700; fill: var(--td-label); paint-order: stroke; stroke: var(--td-halo); stroke-linejoin: round; pointer-events: none; }
+.elev .dm { fill: var(--td-ink2); }
+
+.cdg { break-inside: avoid; margin: 4px 0 2px; }
+.cdh { font-size: 12px; color: var(--td-ink2); margin: 0 0 2px; }
+.cdh b { color: var(--td-ink); }
+.cdh span { color: var(--td-muted); }
+.cutsvg .cd-board { fill: var(--td-board); stroke: var(--td-board-line); stroke-width: .25; stroke-dasharray: .8 .5; cursor: pointer; }
+.cutsvg .cd-cut { fill: var(--td-piece); stroke: var(--td-piece-line); stroke-width: .25; cursor: pointer; }
+.cutsvg .cd-cut:hover, .cutsvg .cd-cut.td-on { fill: var(--td-hl); stroke: var(--td-hl); fill-opacity: .55; }
+.cutsvg .cd-cut.oth { fill: var(--td-other); stroke: var(--td-board-line); }
+.cutsvg .cd-wedge, .cutsvg .cd-trim { stroke: var(--td-wood); stroke-width: .12; }
+.cutsvg .cd-hatch { stroke: var(--td-wood); stroke-width: .14; }
+.cutsvg .cd-off { fill: var(--td-off); stroke: var(--td-off-line); stroke-width: .18; }
+.cutsvg .cd-dim { stroke: var(--td-ink2); stroke-width: .14; }
+.cutsvg .cd-ext, .cutsvg .cd-lead { stroke: var(--td-muted); stroke-width: .14; }
+.cutsvg .cd-lead { stroke-dasharray: .5 .4; }
+.cutsvg .cd-tick { stroke: var(--td-ink); stroke-width: .3; }
+.cutsvg .cd-dt { fill: var(--td-ink); font-variant-numeric: tabular-nums; }
+.cutsvg .cd-dt.cd-wt { fill: var(--td-muted); font-style: italic; }
+.cutsvg .cd-all { font-weight: 700; }
+.cutsvg .cd-nm { fill: var(--td-label); font-weight: 600; pointer-events: none; }
+.cutsvg .cd-nm.oth { fill: var(--td-muted); }
+.cutsvg .cd-lb { fill: var(--td-ink2); font-weight: 700; cursor: pointer; }
+
+@media print {
+  :root {
+    --td-wall: #fbfbfa; --td-wall-line: #9aa0a8; --td-case: #eceef1; --td-open: #fff;
+    --td-piece: #d9e6f2; --td-piece-line: #1f5a8f; --td-label: #12395c; --td-halo: #fff;
+    --td-ink: #1f2329; --td-ink2: #3b414d; --td-muted: #7a7462;
+    --td-board: #fff; --td-board-line: #9aa0a8; --td-other: #eceef1;
+    --td-wood: #8a6a1f; --td-off: #f3f1ea; --td-off-line: #b9b2a0; --td-hl: #1f5a8f;
+  }
+  .cdh { font-size: 7pt; }
+}

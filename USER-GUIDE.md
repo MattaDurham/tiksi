@@ -21,10 +21,11 @@ Open **GUIDE** in the Tiksi menu (the logo at the top left) for chapter search, 
 - [Research real products and suppliers](#sourcing)
 - [Turn the design into scoped work](#projects)
 - [Keep specifications and ordering links](#products)
-- [Compare scope against the budget](#budget)
+- [Estimate a project from its design](#budget)
 - [Sequence the work](#schedule)
 - [Print a useful specification sheet](#sheets)
 - [Make a drawing set from the model](#documents)
+- [Send a bid package](#bid-package)
 - [Send the client a one-pager](#one-pager)
 - [Send the client a page in the lab](#lab)
 - [Settings, backups and storage](#settings)
@@ -54,10 +55,9 @@ The same sample property appears throughout this guide. The tabs across the top 
 | SOURCING | Research products and compare cited supplier evidence. |
 | PROJECTS | Turn the design into scoped work, quantities and dependencies. |
 | PRODUCTS | Keep specifications, vendor links and selected product prices. |
-| BUDGET | Compare low, likely and high costs against a budget cap. |
+| ESTIMATE | See what each project costs and why: drawn trim worked out into boards, hours and supplies, scope items, markups, bids and sign-off; the program against a budget cap. |
 | SCHEDULE | See durations, task dependencies and the critical path. |
-| CUT SHEETS | Print a specification sheet for a scope item or product. |
-| DOCUMENTS | Lay out live plans, sections, elevations, 3D views and schedules on drawing sheets; keep saved PDFs. |
+| DOCUMENTS | Drawing sets and saved PDFs; the bid package (proposal, scope of work, contract, bid form, buy list, cut list) written from the estimate; cut sheets for scope items and products. |
 
 ### A useful first session
 
@@ -66,7 +66,7 @@ The same sample property appears throughout this guide. The tabs across the top 
 3. In MODEL, check the walls, rooms, doors and windows with DIMENSIONS, ROOMS and NUMBERS. Change them in SketchUp with EDIT IN SKETCHUP; saves there come back to Tiksi.
 4. In PHOTOS, add reference images and pin them to the model. In MATERIALS, choose the proposed finishes.
 5. In PROJECTS, add scope items, quantities, costs and durations. Link products and model elements to the work.
-6. Review BUDGET, SCHEDULE and CUT SHEETS. Finish with FILE → Project → SAVE PROJECT so the work travels in a .tiksi file.
+6. Review ESTIMATE and SCHEDULE, then the bid package and cut sheets in DOCUMENTS. Finish with FILE → Project → SAVE PROJECT so the work travels in a .tiksi file.
 
 > **Good to know:** The screenshots and recordings use a synthetic sample renovation. Their drawings, images, products and prices illustrate the controls; they are not a surveyed room or a supplier quote.
 
@@ -578,33 +578,40 @@ Open a product card to edit its image, price and where that price came from, ven
 
 <a id="budget"></a>
 
-## Compare scope against the budget
+## Estimate a project from its design
 
-**Where:** BUDGET
+**Where:** ESTIMATE
 
-The current-budget report rolls up selected projects and scope items into low, likely and high estimates. Use it to compare the renovation program with a budget cap.
+ESTIMATE shows what each project costs and why, as a page to read: the contents on the left, the estimate in the middle, and on the right the full story of whatever you click. Trim drawn in MODEL is worked out the way a finish carpenter would: every piece with its ends, the boards to buy at the cheapest store length, the hours, the supplies. Move a section in MODEL and the estimate follows.
 
-![Budget totals follow the selected projects and their scope quantities and cost inputs. PRINT REPORT creates a shareable report.](js/guide-assets/budget.png)
+![The program page: every project against the budget cap, each at its estimate.](js/guide-assets/budget.png)
 
-Budget totals follow the selected projects and their scope quantities and cost inputs. PRINT REPORT creates a shareable report.
+The program page: every project against the budget cap, each at its estimate.
 
 ### Try it
 
-1. Enter or revise scope quantities and unit costs in PROJECTS first.
-2. Open BUDGET and set the program budget cap in the offered control.
-3. Compare low, likely and high totals, the category/project breakdown and the remaining budget.
-4. Check or uncheck projects directly in BUDGET, or use their PROJECTS checkboxes, to compare alternatives without deleting scope.
-5. Use PRINT REPORT to print or save a PDF through the browser print dialog.
+1. Draw the trim in MODEL and give each section a project, or a room's subproject (WALL TRIM, or right-click). Add the other work as scope items in PROJECTS.
+2. Open ESTIMATE and choose a project on the left. The summary gives the total with its range, carpenter hours, store pieces to order, pieces to cut and working days.
+3. In PRICE BUILD-UP set the hourly rate, contingency, overhead, profit, sales tax on materials and the spare boards. Every total in Tiksi follows: PROJECTS, the program, SCHEDULE and the one-pager.
+4. Open a room under ROOMS, WALLS AND CUTS: each wall is drawn with its pieces' marks, and under it the boards cut for that wall. Click a piece, a board, a labor task, a supply or a scope item to see everything about it on the right; SHOW IN THE MODEL selects it in the model beside the page.
+5. Record the bids carpenters return and the client's answer under BIDS AND SIGN-OFF. SAVE DEEP DIVE writes the whole estimate as one page to share.
+6. Choose PROGRAM AND BUDGET CAP to tick projects into the program and compare it with the cap; PRINT REPORT prints it.
 
 ### Other features here
 
-**Cost ranges.** The report preserves uncertainty as low/likely/high values instead of presenting one guessed price.
+**Pieces and ends.** Each run is cut to its long point: an inside corner is coped (the longer piece runs square into the corner), an outside corner mitred, a run longer than a board spliced with 45° scarfs. Each piece has a plain name: its wall, what it is and where it sits.
 
-**Program selection.** Only the selected projects of the active property contribute to the program totals.
+**Boards.** Each room is cut from its own boards so its cut list stands alone. Every board is bought at the cheapest length the store sells that holds its cuts, up to 12'-0" (13'-0" when that buys less), or cut to length by the foot where the store does that; a spare of each moulding is added.
 
-**Quantity changes.** Updating a scope item quantity or cost updates the report. Products provide specification context; scope costs still need review.
+**Hours and supplies.** Hours come from published production rates counted from the drawing: feet of base, chair rail and cap, frames, battens, copes, outside corners, scarfs, caulking, filling and painting, with setup and cleanup for each day in a room. Low and high hours come from the rates' own range. Nails, glue, caulk, filler, primer and paint are counted from the same measures.
 
-> **Good to know:** Budget totals are only as complete as the scope inputs. Include labor, waste, freight, tax and contingency where applicable to your estimate.
+**Counted once.** A scope item whose model elements are all drawn trim of the same project is already priced by the drawing: it is struck through and left out of the total, and REMOVE THE COVERED ITEMS takes it away (REMOVED RECORDS brings it back).
+
+**Options.** The same rooms priced other ways: a plainer or taller profile, another material, bare wood, another store.
+
+**Undo.** UNDO and REDO cover the projects, their scope, the estimate settings, bids and sign-off.
+
+> **Good to know:** Labor hours are the weakest numbers here: they come from estimating books, not from the carpenter who will do the work. Use the bid form in DOCUMENTS to get a carpenter's own hours, and confirm store prices before ordering. Trim imported as a model (not drawn as Tiksi trim sections) is not in the estimate.
 
 <a id="schedule"></a>
 
@@ -635,13 +642,15 @@ The Gantt view connects tasks with dependency arrows and distinguishes critical 
 
 **Calendar days.** Durations use calendar days, with weekends shaded. Items at zero days are budget-only and are omitted. Dependencies and critical paths are calculated within each selected project.
 
+**Trim from the estimate.** A project with drawn trim gets an install item for its rooms, its length the working days ESTIMATE works out for one carpenter (6 productive hours a day, at least a day a room). It moves when the drawing or the rates change.
+
 > **Good to know:** The schedule is calculated from the entered durations and dependencies. It does not automatically resolve crew capacity, delivery dates or permit constraints; include those in your planning.
 
 <a id="sheets"></a>
 
 ## Print a useful specification sheet
 
-**Where:** CUT SHEETS
+**Where:** DOCUMENTS → CUT SHEETS
 
 Cut sheets gather the information attached to a scope item or product into a printable handoff: dimensions, materials, photos, specified products and cost context.
 
@@ -652,7 +661,7 @@ Choose a scope item or product from the list, review its sheet, then PRINT.
 ### Try it
 
 1. Link the relevant model elements, materials, photos and products before printing.
-2. Open CUT SHEETS and select the scope item you want to communicate, or choose a product sheet.
+2. Open DOCUMENTS, choose CUT SHEETS and select the scope item you want to communicate, or choose a product sheet.
 3. Review the generated content. Missing information is best completed in PROJECTS, PRODUCTS or PHOTOS.
 4. Choose PRINT and use the browser print dialog to print or save a PDF.
 
@@ -697,6 +706,36 @@ A sheet with a floor plan cut at 3'-11", a section through the plan, a 3D view a
 **Revisions.** Each saved PDF becomes the next revision in the title block and a document of the property, so it travels in the project file.
 
 > **Good to know:** Views are rendered images of the model at the chosen scale; check dimensions on site before ordering or cutting. PDFs are printed at 150 dots per inch.
+
+<a id="bid-package"></a>
+
+## Send a bid package
+
+**Where:** DOCUMENTS → BID PACKAGE
+
+The bid package is every document a job needs, written from the project's estimate so they all say the same thing: a proposal for the client, the scope of work, a contract, a bid form for a carpenter to price, the buy list and the cut list with each wall's drawing and boards.
+
+![Choose the project and a document on the left; it shows as it prints. The right column holds what the estimate does not: the business, the client and the terms.](js/guide-assets/documents.png)
+
+Choose the project and a document on the left; it shows as it prints. The right column holds what the estimate does not: the business, the client and the terms.
+
+### Try it
+
+1. Open DOCUMENTS and choose BID PACKAGE (or BID PACKAGE on a project in ESTIMATE). Choose the project.
+2. Fill in the business sending it and the client once; set the start date, the deposit, midway and final payments, how long the proposal holds and the warranty. Edit what is included, not included, assumed and how changes are agreed.
+3. Choose a document. PRINT OR SAVE PDF opens the print dialog: Save as PDF makes a searchable text PDF. DOWNLOAD saves it as a page.
+4. For a carpenter: the INSTALLER BID FORM lists every task with its quantity and blank columns for their hours and price; tick SHOW OUR HOURS to print the estimate's hours beside them. Record what comes back under BIDS AND SIGN-OFF in ESTIMATE.
+5. ESTIMATE DEEP DIVE saves the estimate as one page anyone can open: contents, the reading column and a detail for everything in it.
+
+### Other features here
+
+**Proposal.** The work room by room in plain words, the price by subproject, priced options, the schedule in working days, the payments, what is and is not included, and a place to sign.
+
+**Contract.** Filled from the proposal: the parties, the work, the price, the payments, the dates, changes, warranty, insurance and ending the contract, with a space for the notice of the right to cancel.
+
+**Buy list and cut list.** Mouldings by store length with item numbers and the spares, then supplies; room by room, every piece with its wood size, length, ends and the board it comes from, and each wall drawn with its boards.
+
+> **Good to know:** The contract is a template filled from your estimate. Home improvement contracts often must carry set wording where the work is done (in New York, for example, the right to cancel and where deposits are held): have it reviewed before you first use it.
 
 <a id="one-pager"></a>
 

@@ -502,13 +502,13 @@ async function aProjectFileAsksBeforeItReplaces() {
 async function aPageThatFailsToOpenSaysSo() {
   step('error');
   const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1280, height: 900 } });
-  await context.route('**/js/budget.js*', async route => {
+  await context.route('**/js/estimate-view.js*', async route => {
     const answer = await route.fetch(), text = await answer.text();
     return route.fulfill({ response: answer, body: text.replace('export function mount(', 'export function mount() { throw new Error("Synthetic: this page cannot open"); }\nfunction mountAsWritten(') });
   });
   const page = await context.newPage();
   const thrown = []; page.on('pageerror', e => thrown.push(e.message));
-  await page.goto(url + '/#/budget');
+  await page.goto(url + '/#/estimate');
   const notice = page.locator('#view .page-open-failed');
   await notice.waitFor({ timeout: 60000 });
   assert.match(await notice.textContent(), /could not open \(Synthetic: this page cannot open\)\. The other pages still work/);

@@ -1160,13 +1160,37 @@ export function itemTotals(it) {
   return { low: (it.low || 0) * q, likely: (it.likely || 0) * q, high: (it.high || 0) * q };
 }
 
-export function projectTotals(pr) {
+// A project's own scope items, added up: the plain sum, with nothing worked out from the drawing.
+export function itemsTotals(pr) {
   const t = { low: 0, likely: 0, high: 0 };
-  for (const it of pr.items) {
+  for (const it of pr.items || []) {
     const x = itemTotals(it);
     t.low += x.low; t.likely += x.likely; t.high += x.high;
   }
   return t;
+}
+
+// What a project costs and what work it schedules, as every page shows them. Without rules these
+// are its scope items. ESTIMATE (estimate.js) sets its rules when the app starts: the trim worked
+// out from the drawn sections joins the items (in place of items it already covers), with the
+// project's contingency, overhead, profit and tax, and the trim's install days join the schedule.
+// One rule, so PROJECTS, ESTIMATE, SCHEDULE, the program and the one-pager agree.
+let costRule = null, workRule = null;
+export function setProjectRules({ cost = null, work = null } = {}) { costRule = cost; workRule = work; }
+export function projectTotals(pr) {
+  if (costRule) {
+    try { const t = costRule(pr); if (t) return t; }
+    catch (e) { console.error('project cost', e); }
+  }
+  return itemsTotals(pr);
+}
+// The work a project schedules: its scope items, and whatever the rules add (the trim install).
+export function projectWork(pr) {
+  if (workRule) {
+    try { const w = workRule(pr); if (w) return w; }
+    catch (e) { console.error('project work', e); }
+  }
+  return pr.items || [];
 }
 
 // How far a project's scope has got: items with any price, and items marked done. A $0
