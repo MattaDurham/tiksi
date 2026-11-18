@@ -416,3 +416,35 @@
 .phone .bs-head select {
   width: 100%;
 }
+
+.bs-links {display:flex;gap:18px;flex-wrap:wrap;margin:10px 0}
+.bs-links a,.bs-card a {color:#a2d9bf}
+.bs-gallery {display:grid;grid-template-columns:repeat(auto-fit,minmax(136px,1fr));gap:8px;margin:0 0 16px}
+.bs-gallery button {text-align:left;background:var(--panel);color:var(--ink);border:1px solid var(--line-2);padding:0 0 10px;cursor:pointer}
+.bs-gallery img {width:100%;aspect-ratio:1.9;object-fit:cover}
+.bs-gallery span,.bs-gallery small {display:block;margin:6px 8px 0}
+.bs-gallery span {font-weight:600}
+.bs-room-reference {display:inline-block;margin:8px 10px 14px 0;max-width:480px}
+.bs-room-reference img {width:100%;height:auto}
+.bs-room-reference figcaption {font-size:12px;color:var(--dim)}
+.bs-range {display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}
+.bs-range div {flex:1;min-width:120px;border-left:2px solid #557a69;padding:0 12px}
+.bs-range strong {display:block;font:24px Georgia,serif;margin:4px 0}
+
+.bs-workday .bs-section {flex-wrap:wrap}
+.bs-assignment {border-top:1px solid var(--line-2);padding:12px 0}
+.bs-assignment {display:flex;gap:18px;align-items:flex-start}
+.bs-assignment > div {flex:1;min-width:0}
+.bs-assignment header,.bs-assignment li {display:flex;justify-content:space-between;gap:10px}
+.bs-assignment ul {list-style:none;margin:5px 0 8px;padding:0;columns:2;column-gap:24px}
+.bs-assignment li {break-inside:avoid;font-size:12px;padding:4px 0;color:var(--dim)}
+.bs-assignment li b {white-space:nowrap;font-weight:500;color:var(--ink)}
+.bs-workview {width:min(22%,235px)}
+.bs-workview img {display:block;width:100%;aspect-ratio:1.55;object-fit:cover}
+@media(max-width:720px){.bs-assignment {display:block}.bs-workview {display:block;width:100%;max-width:320px;margin-bottom:10px}.bs-assignment ul {columns:1}}
+.bs-assignment p {margin:5px 0}
+.bs-sample {margin-top:16px}
+.bs-sample output {display:block;margin:10px 0}
+.bs-card td details {white-space:normal;min-width:12em}
+.bs-card td details p {max-width:42em}
+.bs-card td summary {cursor:pointer}

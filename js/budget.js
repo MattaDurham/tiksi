@@ -1,14 +1,17 @@
+import { money } from './bid-issue.js';
+import { pricedProgram, programStart } from './estimate-program.js';
 // Budget view: the "here is the current budget" report.
 // Select/deselect projects against a cap, roll up by project and category, print a report.
 
 import {
-  ws, touch, fmtMoney, readMoney, escapeHtml, projectTotals,
+  ws, activeProperty, touch, fmtMoney as roundedMoney, readMoney, escapeHtml, projectTotals,
   fmtDate, isoToday, projectLabel, propertyProjects,
 } from './store.js';
 import { programTotals } from './program.js';
 import { icon } from './icons.js';
 import { printSheet } from './print-sheet.js';
 
+const fmtMoney=n=>activeProperty()?.bidStudio?.program ? money(n) : roundedMoney(n);
 let el = null;
 let capProblem = '';   // the cap as typed when it could not be read, and why
 export function mount(root) { el = root; render(); }
@@ -17,12 +20,13 @@ export function unmount() { el = null; capProblem = ''; }
 function render() {
   if (!el) return;
   const d = ws.data;
-  const cap = d.settings.budgetCap || 0;
-  const sel = programTotals(propertyProjects());   // the totals the one-pager prints
+  const linked=activeProperty()?.bidStudio?.program;
+  const cap = linked ? linked.cap || 0 : d.settings.budgetCap || 0;
+  const projects = pricedProgram(activeProperty(),propertyProjects(),programStart(activeProperty(),d.settings));
+  const sel = programTotals(projects);   // the totals the one-pager prints
   const remaining = cap - sel.likely;
   const pct = cap > 0 ? Math.min(sel.likely / cap, 1.4) : 0;
 
-  const projects = propertyProjects();
   const byCat = Object.create(null);
   for (const p of projects) {
     if (!p.selected) continue;
@@ -42,14 +46,14 @@ function render() {
         <span class="view-title">BUDGET</span>
         <span class="view-sub">select and deselect projects to fit the cap; totals update live</span>
         <span style="flex:1"></span>
-        <a class="btn" href="#/bids">BID STUDIO</a>
+        <a class="btn" href="#/budget?section=estimate">ESTIMATE &amp; BIDS</a>
         <button class="btn primary" id="print-report">${icon('print')}PRINT REPORT</button>
       </div>
 
       <div class="kpi-band">
         <div class="kpi">
           <div class="k-label">Budget cap</div>
-          <div class="k-value"><input type="text" id="cap-input" value="${fmtMoney(cap)}"
+          <div class="k-value"><input type="text" id="cap-input" placeholder="Set a cap" value="${linked && !cap ? '' : fmtMoney(cap)}"
             style="background:transparent;border:none;color:var(--ink);font:inherit;width:130px;border-bottom:1px dashed var(--line-2)"></div>
           <div class="k-sub" id="cap-note" ${capProblem ? 'role="alert" style="color:var(--red)"' : ''}>${capProblem ? escapeHtml(capProblem) : 'click to edit'}</div>
         </div>
@@ -59,8 +63,8 @@ function render() {
           <div class="k-sub">${fmtMoney(sel.low)} low - ${fmtMoney(sel.high)} high</div>
         </div>
         <div class="kpi ${remaining < 0 ? 'over' : 'ok'}">
-          <div class="k-label">${remaining < 0 ? 'Over cap' : 'Remaining'}</div>
-          <div class="k-value">${fmtMoney(Math.abs(remaining))}</div>
+          <div class="k-label">${linked && !cap ? 'Cap not set' : remaining < 0 ? 'Over cap' : 'Remaining'}</div>
+          <div class="k-value">${linked && !cap ? '—' : fmtMoney(Math.abs(remaining))}</div>
           <div class="k-sub">${selectedProjects.length} of ${projects.length} projects selected</div>
         </div>
       </div>
@@ -106,7 +110,7 @@ function render() {
   capInput.onchange = () => {
     const r = readMoney(capInput.value);
     if (Number.isNaN(r.value)) { capProblem = r.error + ' The cap is still ' + fmtMoney(cap) + '.'; render(); return; }
-    capProblem = ''; d.settings.budgetCap = r.value; touch(); render();
+    capProblem = ''; if(linked) linked.cap=r.value; else d.settings.budgetCap = r.value; touch(); render();
   };
   el.querySelectorAll('[data-sel]').forEach(cb => cb.onchange = () => {
     const p = d.projects.find(p => p.id === cb.dataset.sel);
@@ -133,9 +137,10 @@ function projRow(p, maxLikely) {
 
 export function budgetReportHtml() {
   const d = ws.data;
-  const cap = d.settings.budgetCap || 0;
-  const sel = programTotals(propertyProjects());   // the totals the one-pager prints
-  const projects = propertyProjects();
+  const linked=activeProperty()?.bidStudio?.program;
+  const cap = linked ? linked.cap || 0 : d.settings.budgetCap || 0;
+  const projects = pricedProgram(activeProperty(),propertyProjects(),programStart(activeProperty(),d.settings));
+  const sel = programTotals(projects);   // the totals the one-pager prints
   const selectedProjects = projects.filter(p => p.selected);
   const parked = projects.filter(p => !p.selected);
   const byCat = Object.create(null);

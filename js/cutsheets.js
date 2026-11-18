@@ -37,7 +37,7 @@ function render() {
     <div class="sheet-layout">
       <div class="sheet-list">
         <div style="display:flex; justify-content:space-between; align-items:center">
-          <span class="kicker" style="margin:0">CUT SHEETS</span>
+          <span class="kicker" style="margin:0">CUT SHEETS</span><a href="#/sheets?section=shop" class="btn">SHOP CUT SHEETS</a>
           <button class="btn small primary" id="print-sheet">PRINT</button>
         </div>
         ${Object.entries(groups).map(([proj, its]) => `

@@ -1,3 +1,5 @@
+import { workday, laborReview } from './workday.js';
+import { rateRange } from './estimate-program.js';
 import {
   activeProperty,
   propertyProjects,
@@ -13,24 +15,21 @@ import { trimProduct } from './trims.js';
 import { estimate, projectTree } from './bid-estimate.js';
 import {
   facts,
+  productionBasis,
   esc,
   money,
   lens,
   boardDiagram,
-  DOCS,
-  documentBody,
   shareHtml,
   readResponse,
 } from './bid-issue.js';
 import { readProfile, INPUTS, checkNumber } from './bid-profile.js';
 import { sameJson, mergeShared } from './workspace-merge.js';
-import { printSheet } from './print-sheet.js';
 import { icon } from './icons.js';
 
 let root,
   tab = 'estimate',
   roomKey = '',
-  doc = 'report',
   issueId = '',
   notice = '',
   lastProp = '',
@@ -42,7 +41,7 @@ let alternateSource = '',
 const histories = new Map();
 const tabs = {
   estimate: 'Estimate',
-  shop: 'Cut room',
+  shop: 'Cut sheets',
   alternates: 'Alternates',
   documents: 'Documents',
   bids: 'Bid comparison',
@@ -136,28 +135,49 @@ function roomTable(e) {
   );
 }
 function scopeTable(e) {
-  return e.scope.length
-    ? '<details class="bs-card"><summary>Additional project scope <small>' +
-        e.scope.filter((s) => s.selected).length +
-        ' included</small></summary><p>Include items priced separately from the drawn trim. Parent packages can include their subprojects.</p>' +
-        e.scope
-          .map(
-            (s) =>
-              '<label class="bs-scope"><input type="checkbox" data-scope="' +
+  if (!e.scope.length) return '';
+  const binding = get().program,
+    covered = new Set(binding?.covered || []);
+  return (
+    '<details class="bs-card"><summary>Additional project scope <small>' +
+    e.scope.filter((x) => x.selected).length +
+    ' included</small></summary><p>Include separately priced work. Mark purchasing rows already covered by the drawing to reconcile the program budget.</p>' +
+    e.scope
+      .map(
+        (s) =>
+          '<div class="bs-scope-line"><label class="bs-scope"><input type="checkbox" data-scope="' +
+          esc(s.id) +
+          '" ' +
+          (s.selected ? 'checked ' : '') +
+          (covered.has(s.id) ? 'disabled' : '') +
+          '><span>' +
+          esc(s.name) +
+          '<small>' +
+          esc(s.project + ' · ' + s.qty + ' ' + s.unit) +
+          '</small></span><b>' +
+          money(s.likely) +
+          '</b></label>' +
+          (binding
+            ? '<label><input type="checkbox" data-covered="' +
               esc(s.id) +
               '" ' +
-              (s.selected ? 'checked' : '') +
-              '><span>' +
-              esc(s.name) +
-              '<small>' +
-              esc(s.project + ' · ' + s.qty + ' ' + s.unit) +
-              '</small></span><b>' +
-              money(s.likely) +
-              '</b></label>',
-          )
-          .join('') +
-        '</details>'
-    : '';
+              (covered.has(s.id) ? 'checked ' : '') +
+              (s.selected ? 'disabled' : '') +
+              '> Already in the drawing estimate</label>'
+            : '') +
+          (s.selected
+            ? input(
+                'scopeHours:' + s.id,
+                'Installation hours per ' + (s.unit || 'unit'),
+                s.installHours,
+                'type="number" min="0" step=".01"',
+              )
+            : '') +
+          '</div>',
+      )
+      .join('') +
+    '</details>'
+  );
 }
 function stockInputs(e) {
   const fields = Object.values(e.products).flatMap((product) => {
@@ -221,6 +241,12 @@ function options(e, d) {
     INPUTS.map((a) => f(...a)).join('') +
     lengths.map(([id, label]) => input('length:' + id, label, fmtLen(e.rules[id]))).join('') +
     input('start', 'Crew start', d.start || '', 'type="date"') +
+    input('closed', 'Days off · YYYY-MM-DD, separated by commas', (d.closed || []).join(', ')) +
+    input('lowRate', 'Low labor scenario · $ / h', d.lowRate ?? e.rules.rate, 'type="number" min="0"') +
+    input('highRate', 'High labor scenario · $ / h', d.highRate ?? e.rules.rate, 'type="number" min="0"') +
+    '<label><input type="checkbox" data-coats ' +
+    (d.twoCoats ? 'checked' : '') +
+    '>Split the paint task into two coats on separate days</label>' +
     '</div><h3>Labor production</h3><div class="bs-fields">' +
     e.tasks
       .map((t) =>
@@ -241,62 +267,130 @@ function options(e, d) {
           .join('') +
         '</div>'
       : '') +
+    '<div class="bs-fields">' +
+    input('title', 'Package title', d.title || 'Bid package', 'maxlength="140"') +
+    '<label>Terms, assumptions and exclusions<textarea data-field="terms" maxlength="5000">' +
+    esc(d.terms || '') +
+    '</textarea></label></div>' +
     '<div class="bs-actions">' +
     btn('profile', 'Import rate book…') +
     (d.profile ? btn('default-book', 'Use planning allowances') : '') +
     '</div></details>'
   );
 }
+function gallery(e) {
+  const refs = get().references || {};
+  const rooms = e.rooms.filter((r) => refs[r.key]?.length);
+  if (!rooms.length || rooms.length !== e.rooms.length) return '';
+  return (
+    '<div class="bs-gallery">' +
+    rooms
+      .map(
+        (r) =>
+          '<button data-room="' +
+          esc(r.key) +
+          '"><img alt="" src="' +
+          esc(refs[r.key][0].image) +
+          '"><span>' +
+          esc(r.name) +
+          '</span><small>' +
+          r.cuts.length +
+          ' pieces · ' +
+          num(r.hours) +
+          ' h · '+money(r.material)+' stock</small></button>',
+      )
+      .join('') +
+    '</div>'
+  );
+}
 function estimateView(e, d, f) {
   const parts = costParts(e);
+  const selectedDate = new URLSearchParams(location.hash.split('?')[1]).get('day');
   return (
-    '<div class="bs-grid"><section class="bs-card bs-cost"><div class="bs-section"><h2>Price build-up</h2><small>USD</small></div><div class="bs-bar">' +
-    parts
-      .map(
-        ([k, n], i) =>
-          '<span class="bs-t' +
-          i +
-          '" style="width:' +
-          (e.total > 0 ? Math.max(0, (n / e.total) * 100) : 0) +
-          '%" title="' +
-          esc(k + ' · ' + money(n)) +
-          '"></span>',
-      )
-      .join('') +
-    '</div>' +
-    parts
-      .map(
-        ([k, n], i) =>
-          '<div class="bs-cost-row"><span><i class="bs-t' +
-          i +
-          '"></i>' +
-          esc(k) +
-          '</span><b>' +
-          money(n) +
-          '</b></div>',
-      )
-      .join('') +
-    '<div class="bs-total"><span>Package price</span><b>' +
-    money(e.total) +
-    '</b></div></section>' +
-    '<section class="bs-card"><div class="bs-section"><h2>Room takeoff</h2><small>Drawn sections</small></div>' +
-    (e.rooms.length
-      ? roomTable(e)
-      : '<p>Draw wall trim in MODEL to plan boards here. Existing project items can be added under Additional project scope.</p><a href="#/model">Open model ↗</a>') +
-    '<div class="bs-foot">' +
-    esc(
-      f.finish ? 'Crew finish ' + f.finish : 'Set a crew start in Estimate inputs to calculate the finish.',
-    ) +
-    '</div></section></div>' +
-    options(e, d) +
-    scopeTable(e) +
-    (e.warnings.length
-      ? '<details class="bs-card"><summary>Open field checks <small>' +
-        e.warnings.length +
-        '</small></summary>' +
-        e.warnings.map((s) => '<p>' + esc(s) + '</p>').join('') +
-        '</details>'
-      : '')
+    workday(f, selectedDate, get().references) +
+    ('<div class="bs-grid"><section class="bs-card bs-cost"><div class="bs-section"><h2>Price build-up</h2><small>USD</small></div><div class="bs-bar">' +
+      parts
+        .map(
+          ([k, n], i) =>
+            '<span class="bs-t' +
+            i +
+            '" style="width:' +
+            (e.total > 0 ? Math.max(0, (n / e.total) * 100) : 0) +
+            '%" title="' +
+            esc(k + ' · ' + money(n)) +
+            '"></span>',
+        )
+        .join('') +
+      '</div>' +
+      parts
+        .map(
+          ([k, n], i) =>
+            '<div class="bs-cost-row"><span><i class="bs-t' +
+            i +
+            '"></i>' +
+            esc(k) +
+            '</span><b>' +
+            money(n) +
+            '</b></div>',
+        )
+        .join('') +
+      '<div class="bs-total"><span>Package price</span><b>' +
+      money(e.total) +
+      '</b></div></section>' +
+      '<section class="bs-card"><div class="bs-section"><h2>Room takeoff</h2><small>Drawn sections</small></div>' +
+      (e.rooms.length
+        ? gallery(e) || roomTable(e)
+        : '<p>Draw wall trim in MODEL to plan boards here. Existing project items can be added under Additional project scope.</p><a href="#/model">Open model ↗</a>') +
+      '<div class="bs-foot">' +
+      esc(
+        f.finish ? 'Crew finish ' + f.finish : 'Set a crew start in Estimate inputs to calculate the finish.',
+      ) +
+      '</div></section></div>' +
+      '<section class="bs-card"><h2>Estimate basis</h2><p>' +
+      esc(d.basis || e.bookName) +
+      '</p>' +
+      '<p>' +
+      esc(
+        e.rules.crew +
+          (e.rules.crew === 1 ? ' person × ' : ' people × ') +
+          e.rules.hoursDay +
+          ' hours per weekday · ' +
+          money(e.rules.rate) +
+          ' per person-hour · ' +
+          e.rules.contingency +
+          '% contingency',
+      ) +
+      '</p>' +
+      (d.lowRate != null || d.highRate != null
+        ? '<h3>Hourly-rate sensitivity</h3><div class="bs-range">' +
+          rateRange(e, d)
+            .map(
+              (row, i) =>
+                '<div><small>' +
+                ['Low', 'Working', 'High'][i] +
+                ' · ' +
+                money(row.rate) +
+                '/h</small><strong>' +
+                money(row.total) +
+                '</strong></div>',
+            )
+            .join('') +
+          '</div>'
+        : '') +
+      productionBasis(f) +
+      (d.project && !get().program ? btn('connect', 'Use this package in Budget and Schedule') : '') +
+      (get().program ? '<a href="#/schedule">View crew assignments ↗</a>' : '') +
+      '</section>' +
+      laborReview(e, d) +
+      options(e, d) +
+      scopeTable(e) +
+      (e.warnings.length
+        ? '<details class="bs-card"><summary>Open field checks <small>' +
+          e.warnings.length +
+          '</small></summary>' +
+          e.warnings.map((s) => '<p>' + esc(s) + '</p>').join('') +
+          '</details>'
+        : ''))
   );
 }
 function shopView(e, f) {
@@ -309,7 +403,7 @@ function shopView(e, f) {
     return '<section class="bs-card"><h2>No cut pieces yet</h2><p>Add a trim section to a wall in MODEL.</p><a href="#/model">Open model ↗</a></section>';
   const scale = Math.max(...r.boards.map((b) => b.length), 0.01);
   return (
-    '<section class="bs-card"><div class="bs-section"><label>Room <select data-room-picker>' +
+    '<div class="bs-links"><a href="#/sheets?section=products">Product and scope sheets</a><a href="#/documents?package=cut">Print shop cut sheets</a></div><section class="bs-card"><div class="bs-section"><label>Room <select data-room-picker>' +
     e.rooms.map((x, i) => choice(x.key, x.name, e.rooms[ix].key)).join('') +
     '</select></label>' +
     btn('csv', 'Download cut list') +
@@ -322,6 +416,23 @@ function shopView(e, f) {
     ' stock lengths · ' +
     num(r.hours) +
     ' labor hours</p>' +
+    (get().references?.[e.rooms[ix].key] || [])
+      .map(
+        (ref) =>
+          '<figure class="bs-room-reference"><img src="' +
+          esc(ref.image) +
+          '" alt="' +
+          esc(ref.label) +
+          '"><figcaption>' +
+          esc(ref.label) +
+          '</figcaption></figure>',
+      )
+      .join('') +
+    (e.rooms[ix].parts[0]?.wallId
+      ? '<a href="#/model?select=' +
+        encodeURIComponent(e.rooms[ix].parts[0].wallId) +
+        '">Locate wall in MODEL ↗</a>'
+      : '') +
     r.boards
       .map(
         (b) =>
@@ -429,24 +540,6 @@ function alternatesView(prop, projects, base, draftState) {
     '</section>'
   );
 }
-function docsView(f, d) {
-  return (
-    '<section class="bs-card"><div class="bs-section"><label>Document <select data-doc>' +
-    Object.entries(DOCS)
-      .map(([k, n]) => choice(k, n, doc))
-      .join('') +
-    '</select></label>' +
-    btn('print', 'Print / save PDF') +
-    '</div>' +
-    '<details><summary>Package title and terms</summary><div class="bs-fields">' +
-    input('title', 'Package title', f.title, 'maxlength="140"') +
-    '<label>Payment terms, inclusions and exclusions<textarea maxlength="5000" data-field="terms">' +
-    esc(d.terms || '') +
-    '</textarea></label></div></details>' +
-    documentBody(f, doc) +
-    '</section>'
-  );
-}
 function bidHours(issue, bids) {
   const priced = bids.filter((b) => b.hours);
   if (!priced.length) return '';
@@ -489,6 +582,40 @@ function changeBridge(before, after) {
       .join('') ||
       '<p>The price build-up is unchanged. Compare the issued documents with the current package for the revision.</p>') +
     '</details>'
+  );
+}
+function planningScenarios(prop, projects, draft, e) {
+  const cases = [['Working plan', draft, e]];
+  if (e.hours > 0 && e.rules.crew < 100) {
+    const faster = { ...draft, rules: { ...draft.rules, crew: e.rules.crew + 1 } };
+    cases.push(['Add one crew member', faster, estimate(prop, projects, faster)]);
+  }
+  if (draft.profile?.supplement?.some((p) => p.style === 'stair')) {
+    const omit = {
+      ...draft,
+      profile: { ...draft.profile, supplement: draft.profile.supplement.filter((p) => p.style !== 'stair') },
+    };
+    cases.push(['Leave the external stair trim in place', omit, estimate(prop, projects, omit)]);
+  }
+  return (
+    '<section class="bs-card"><h2>Planning scenarios</h2><div class="bs-table-scroll"><table><thead><tr><th>Scope and crew</th><th>People</th><th>Person-hours</th><th>Estimated price</th><th>Finish</th></tr></thead><tbody>' +
+    cases
+      .map(
+        ([name, state, model]) =>
+          '<tr><td>' +
+          esc(name) +
+          '</td><td>' +
+          model.rules.crew +
+          '</td><td>' +
+          num(model.hours) +
+          '</td><td>' +
+          money(model.total) +
+          '</td><td>' +
+          esc(facts(prop, projects, model, state).finish || 'Set start date') +
+          '</td></tr>',
+      )
+      .join('') +
+    '</tbody></table></div></section>'
   );
 }
 function bidsView(f, s) {
@@ -576,6 +703,7 @@ export function mount(el) {
     document.head.append(css);
   }
   root = el;
+  lastProp = ''; // Re-read the route after a property switch or back navigation.
   stopWatching = onChange(() => {
     if (!pendingRender) pendingRender = requestAnimationFrame(render);
   });
@@ -605,7 +733,15 @@ function render() {
     lastProp = prop.id;
     roomKey = '';
     issueId = '';
-    tab = 'estimate';
+    const q = new URLSearchParams(location.hash.split('?')[1]);
+    tab = location.hash.startsWith('#/sheets')
+      ? 'shop'
+      : q.has('package')
+        ? 'documents'
+        : Object.hasOwn(tabs, q.get('section'))
+          ? q.get('section')
+          : 'estimate';
+    if (q.has('room')) roomKey = q.get('room');
     notice = '';
     openRates = false;
     alternateSource = '';
@@ -620,7 +756,9 @@ function render() {
   root.innerHTML =
     '<div class="view-scroll bs-studio"><div class="bs-wrap"><header class="bs-head"><div><small>' +
     esc(prop.name) +
-    '</small><h1>Bid Studio</h1></div><label>Package scope<select data-project>' +
+    '</small><h1>' +
+    esc(tab === 'shop' ? 'Shop cut sheets' : d.title || 'Estimate & bids') +
+    '</h1><div class="bs-links"><a href="#/budget?section=program">Program budget</a><a href="#/schedule">Crew Gantt</a><a href="#/documents">Document library</a></div></div><label>Package scope<select data-project>' +
     choice('', 'Whole property', d.project || '') +
     projects.map((p) => choice(p.id, (p.parentId ? '↳ ' : '') + p.name, d.project)).join('') +
     '</select></label></header>' +
@@ -631,8 +769,10 @@ function render() {
     '</strong></div><div><small>Labor</small><b>' +
     num(e.hours) +
     ' h</b></div><div><small>Crew schedule</small><b>' +
-    num(e.days) +
-    ' days</b></div><div><small>Cut pieces</small><b>' +
+    num(f.days) +
+    ' days</b><small>' +
+    esc(f.finish ? 'Finish ' + f.finish : '') +
+    '</small></div><div><small>Cut pieces</small><b>' +
     e.rooms.reduce((n, r) => n + r.cuts.length, 0) +
     '</b></div></div>' +
     '<nav class="bs-tabs" aria-label="Bid workspace">' +
@@ -666,27 +806,87 @@ function render() {
         ? shopView(e, f)
         : tab === 'alternates'
           ? alternatesView(prop, projects, e, d)
-          : tab === 'documents'
-            ? docsView(f, d)
-            : bidsView(f, s)) +
+          : bidsView(f, s) + planningScenarios(prop, projects, d, e)) +
     '</div></div>';
   root.querySelector('.bs-studio').scrollTop = prev;
+  const sample = root.querySelector('[data-sample]');
+  if (sample) {
+    const output = sample.querySelector('output');
+    sample.oninput = () => output.replaceChildren();
+    sample.onsubmit = (event) => {
+      event.preventDefault();
+      const data = new FormData(sample),
+        id = data.get('task'),
+        units = Number(data.get('units')),
+        minutes = Number(data.get('minutes'));
+      const hours = minutes / (60 * units);
+      if (!(units > 0 && minutes > 0 && Number.isFinite(hours) && hours <= 10000)) return;
+      const task = e.tasks.find((t) => t.id === id);
+      const observation = minutes + ' person-minutes for ' + units + ' ' + (task.unit || task.per);
+      const next = {
+        ...d,
+        production: { ...d.production, [id]: hours },
+        observations: { ...d.observations, [id]: observation },
+      };
+      const model = estimate(prop, projects, next),
+        after = facts(prop, projects, model, next);
+      output.textContent =
+        num(e.hours) +
+        ' → ' +
+        num(model.hours) +
+        ' person-hours · ' +
+        money(e.total) +
+        ' → ' +
+        money(model.total) +
+        (after.finish ? ' · Finish ' + after.finish : '') +
+        ' ';
+      const apply = document.createElement('button');
+      apply.className = 'btn';
+      apply.type = 'button';
+      apply.textContent = 'Use this pace';
+      apply.onclick = () => {
+        if (current(prop.id).bidStudio?.draft !== d && !sameJson(d, draft())) {
+          render();
+          return;
+        }
+        saveDraft(prop, next, 'measured pace');
+        notice = 'Working estimate updated from the timed sample.';
+        render();
+      };
+      output.append(apply);
+    };
+  }
   const rates = root.querySelector('[data-rates]');
   if (rates)
     rates.ontoggle = () => {
       if (rates.isConnected) openRates = rates.open;
     };
-  root.onchange = (ev) => handle(() => change(ev.target, prop.id));
+  root.onchange = (ev) => {
+    if (ev.target.closest('[data-sample]')) return;
+    if (ev.target.matches('[data-workday]')) {
+      location.hash = '#/budget?section=estimate&day=' + ev.target.value;
+      return;
+    }
+    handle(() => change(ev.target, prop.id));
+  };
   root.onclick = (ev) => {
     const b = ev.target.closest('button');
-    if (!b) return;
+    if (!b || b.closest('[data-sample]')) return;
     handle(async () => {
       if (b.dataset.tab) {
+        const route =
+          b.dataset.tab === 'shop'
+            ? '#/sheets?section=shop'
+            : b.dataset.tab === 'documents'
+              ? '#/documents?package=report'
+              : '#/budget?section=' + b.dataset.tab;
+        if (location.hash !== route) location.hash = route;
         tab = b.dataset.tab;
         notice = '';
       } else if (b.dataset.room) {
         tab = 'shop';
         roomKey = b.dataset.room;
+        location.hash = '#/sheets?section=shop&room=' + encodeURIComponent(roomKey);
       } else if (b.dataset.act) await action(b.dataset.act, prop.id);
     });
   };
@@ -721,15 +921,21 @@ function change(t, id) {
     roomKey = t.value;
     return;
   }
-  if (t.matches('[data-doc]')) {
-    doc = t.value;
-    return;
-  }
   if (t.matches('[data-issue]')) {
     issueId = t.value;
     return;
   }
-  if (t.matches('[data-project]')) next.project = t.value;
+  if (t.matches('[data-covered]') && p.bidStudio?.program) {
+    const bind = p.bidStudio.program,
+      ids = new Set(bind.covered || []);
+    if (t.checked) ids.add(t.dataset.covered);
+    else ids.delete(t.dataset.covered);
+    p.bidStudio = { ...p.bidStudio, program: { ...bind, covered: [...ids] } };
+    touch();
+    return;
+  }
+  if (t.matches('[data-coats]')) next.twoCoats = t.checked;
+  else if (t.matches('[data-project]')) next.project = t.value;
   else if (t.matches('[data-scope]')) {
     const set = new Set(old.included || []);
     if (t.checked) set.add(t.dataset.scope);
@@ -738,6 +944,23 @@ function change(t, id) {
   } else if (t.dataset.field) {
     const [kind, k] = t.dataset.field.split(':');
     if (['terms', 'title', 'start'].includes(kind)) next[kind] = t.value;
+    else if (kind === 'closed') {
+      const dates = t.value
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (
+        dates.length > 366 ||
+        dates.some(
+          (v) =>
+            !/^\d{4}-\d{2}-\d{2}$/.test(v) ||
+            !Number.isFinite(Date.parse(v)) ||
+            new Date(v).toISOString().slice(0, 10) !== v,
+        )
+      )
+        throw new Error('Use valid dates in YYYY-MM-DD format, separated by commas.');
+      next.closed = [...new Set(dates)].sort();
+    } else if (kind === 'lowRate' || kind === 'highRate') next[kind] = checkNumber(Number(t.value), 0, 10000);
     else if (kind === 'length') {
       const v = readLength(t.value, 'inches').value;
       checkNumber(v, k === 'gap' || k === 'endTrim' ? 0 : 0.1, 30);
@@ -759,6 +982,7 @@ function change(t, id) {
         offer: 'offerPrices',
         supply: 'supplyPrices',
         production: 'production',
+        scopeHours: 'scopeHours',
       }[kind];
       next[group] = { ...old[group], [k]: v };
     }
@@ -788,11 +1012,22 @@ async function action(act, id) {
     f = facts(p, projects, e, d);
   const issues = s.issues || [],
     issued = issues.find((i) => i.id === issueId) || issues.at(-1);
+  if (act === 'connect' && d.project) {
+    const project = projects.find((row) => row.id === d.project);
+    project.selected = true;
+    p.bidStudio = {
+      ...s,
+      program: { project: project.id, covered: [] },
+      draft: { ...d, start: d.start || isoToday() },
+    };
+    touch();
+    notice =
+      'Linked to the project program. Other scope items remain in the program until included in this estimate.';
+  }
   if (act === 'undo' || act === 'redo') {
     restore(p, act);
     notice = act === 'undo' ? 'Input restored.' : 'Input reapplied.';
   }
-  if (act === 'print') await printSheet(documentBody(f, doc));
   if (act === 'issue') {
     const issue = { id: uid('bid'), number: issues.length + 1, date: isoToday(), facts: f };
     p.bidStudio = { ...s, issues: [...issues, issue] };

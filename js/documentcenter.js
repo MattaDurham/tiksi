@@ -1,3 +1,7 @@
+import { estimate } from './bid-estimate.js';
+import { DOCS, documentBody, facts as packageFacts, money } from './bid-issue.js';
+import { propertyProjects } from './store.js';
+import { printSheet } from './print-sheet.js';
 // DOCUMENTS: drawing sets laid out on sheets, like SketchUp's LayOut beside the model. A set has
 // sheets; a sheet has viewports (plans cut at a height, sections, elevations, 3D views, photos or
 // document pages, schedules and text) placed on paper at a drawing scale. Model views render from
@@ -65,13 +69,17 @@ export function mount(root) {
   prop = activeProperty();
   if (!prop) { el.innerHTML = '<div class="empty-state"><b>No property</b>Create or open a property first.</div>'; return; }
   prop.docSets = prop.docSets || [];
+  const kind=new URLSearchParams(location.hash.split('?')[1]).get('package');
+  if (kind && Object.hasOwn(DOCS,kind) || !kind && prop.bidStudio?.program && !prop.docSets.length)
+    viewing={kind:'estimate',id:kind || 'report',issue:new URLSearchParams(location.hash.split('?')[1]).get('issue') || ''};
+  else if(viewing?.kind==='estimate') viewing=null;
   if (!curSet()) { setId = prop.docSets[0]?.id || ''; sheetId = ''; selectedId = ''; }
   if (!curSheet()) sheetId = curSet()?.sheets[0]?.id || '';
   render();
   offChange = onChange(() => {
     if (!el) return;
     clearTimeout(redrawTimer);
-    redrawTimer = setTimeout(() => { if (el) { drawSheet(); renderLists(); } }, 120);
+    redrawTimer = setTimeout(() => { if (el) { if(viewing?.kind==='estimate') render(); else { drawSheet(); renderLists(); } } }, 120);
   });
   window.addEventListener('keydown', onKey);
 }
@@ -93,6 +101,7 @@ function render() {
     <aside class="dc-side">
       <div class="dc-side-scroll">
         <section><div class="dc-h"><span class="kicker">ONE-PAGER</span><button class="btn small" data-one-pager title="The one-page teaser for the client: edit it and save the next version">${icon('edit', { size: 11 })}OPEN</button></div><div class="dc-onepager" data-onepager></div></section>
+        ${prop.bidStudio || prop.trims?.length ? '<section><div class="dc-h"><span class="kicker">ESTIMATE DOCUMENTS</span></div>'+Object.entries(DOCS).map(([id,title])=>'<a class="dc-row" href="#/documents?package='+id+(viewing?.kind==='estimate' && viewing.issue?'&amp;issue='+encodeURIComponent(viewing.issue):'')+'">'+title+'</a>').join('')+'</section>' : ''}
         <section><div class="dc-h"><span class="kicker">DRAWING SETS</span><button class="btn small" data-new-set>${icon('plus', { size: 11 })}NEW SET</button></div><div data-sets></div></section>
         <section data-sheets-box><div class="dc-h"><span class="kicker">SHEETS</span><button class="btn small" data-new-sheet>${icon('plus', { size: 11 })}ADD SHEET</button></div><div data-sheets></div></section>
         <section><div class="dc-h"><span class="kicker">SAVED DOCUMENTS</span><label class="btn small" title="Add a PDF or an image to this property's documents">${icon('upload', { size: 11 })}ADD<input type="file" accept="application/pdf,image/*" data-add-doc hidden></label></div><div data-saved></div></section>
@@ -181,6 +190,13 @@ function renderOnePager() {
 function renderToolbar() {
   const bar = el.querySelector('[data-toolbar]');
   const set = curSet();
+  if (viewing?.kind==='estimate') {
+    const issues=prop.bidStudio?.issues || [];
+    bar.innerHTML='<label>Version <select data-package-version><option value="">Working estimate</option>'+issues.map(i=>'<option value="'+esc(i.id)+'" '+(viewing.issue===i.id?'selected':'')+'>Issue '+i.number+' · '+esc(i.date)+'</option>').join('')+'</select></label><span class="dc-sp"></span><button class="btn" data-print-package>Print / save PDF</button>';
+    bar.querySelector('[data-package-version]').onchange=e=>{viewing.issue=e.target.value;window.history.replaceState(null,'','#/documents?package='+viewing.id+(viewing.issue?'&issue='+encodeURIComponent(viewing.issue):''));render();};
+    bar.querySelector('[data-print-package]').onclick=()=>printSheet(documentBody(documentEstimate(),viewing.id));
+    return;
+  }
   if (viewing) {
     bar.innerHTML = `<button class="btn small" data-back>◀ BACK TO SHEETS</button><span class="dc-sp"></span>
       <button class="btn small" data-place ${curSheet() ? '' : 'disabled title="Open a drawing set first"'}>PLACE ON SHEET</button>
@@ -532,6 +548,11 @@ function renderInspector() {
   const host = el?.querySelector('[data-inspector]');
   if (!host) return;
   const set = curSet(), sheet = curSheet(), v = curVp();
+  if (viewing?.kind==='estimate') {
+    const f=documentEstimate();
+    host.innerHTML='<div class="kicker">PACKAGE</div><h3>'+esc(f.title)+'</h3><p>'+esc(f.property)+'</p><p>'+money(f.total)+' · '+f.hours.toFixed(1)+' labor hours</p><p>'+esc((f.start || '')+' – '+(f.finish || ''))+'</p><a class="btn" href="#/budget?section=bids">Bid comparison</a>';
+    return;
+  }
   if (viewing) { host.innerHTML = docInspector(); bindDocInspector(host); return; }
   if (!set) { host.innerHTML = `<div class="dc-insp-empty"><b>Documents</b><p>A drawing set is a stack of sheets. Each sheet holds views of the model at a drawing scale (plans, sections, elevations and 3D views), plus photos, document pages, schedules and notes.</p><p>The views stay live: change the model and they redraw. SAVE PDF TO PROJECT keeps a dated copy as the next revision.</p></div>`; return; }
   if (v) { host.innerHTML = vpInspector(v); bindVpInspector(host, v); return; }
@@ -744,7 +765,19 @@ function inside(pts, x, y) {
 
 // ---------- saved documents ----------
 
+function documentEstimate() {
+  const issue=prop.bidStudio?.issues?.find(i=>i.id===viewing.issue);
+  if(issue) return issue.facts;
+  const projects=propertyProjects(),draft=prop.bidStudio?.draft || {};
+  return packageFacts(prop,projects,estimate(prop,projects,draft),draft);
+}
 function renderViewer() {
+  if(viewing?.kind==='estimate') {
+    const stage=el.querySelector('[data-stage]');
+    stage.innerHTML='<div class="dc-package">'+documentBody(documentEstimate(),viewing.id)+'</div>';
+    return;
+  }
+
   const stage = el.querySelector('[data-stage]');
   const d = (prop.photos || []).find(p => p.id === viewing.id);
   if (!d) { viewing = null; render(); return; }

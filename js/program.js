@@ -47,6 +47,20 @@ export function programSchedule(projects, start) {
     const { sched, end, cyclic } = cpm(p.items || []);
     return { p, offset, sched, end, cyclic, finish: offset + end };
   });
+  for (const owner of selectedProjects(projects)) {
+    const phases = owner.crewPlan?.phases;
+    if (!phases?.length) continue;
+    const sched = Object.create(null), items = [];
+    for (const [index, phase] of phases.entries()) {
+      const id = owner.id + ':crew:' + index;
+      const es = phase.segments[0][0], ef = phase.segments.at(-1)[1];
+      sched[id] = {es, ef, ls:es, lf:ef, critical:true, slack:0, segments:phase.segments};
+      items.push({id, name:phase.name, durationDays: +(phase.hours/(owner.crewSize*owner.crewDay)).toFixed(2), deps:index?[items[index-1].id]:[]});
+    }
+    const end = phases.at(-1).segments.at(-1)[1];
+    const offset = start && owner.crewStart ? Math.max(0,dayDiff(start,owner.crewStart)) : 0;
+    plans.push({p:{...owner,name:owner.estimateLine.name,items},sched,end,offset,finish:offset+end,cyclic:false});
+  }
   const days = wholeDays(Math.max(0, ...plans.map(x => x.finish)));
   return { plans, days, lastDay: lastWorkDay(start, days) };
 }

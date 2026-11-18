@@ -62,6 +62,20 @@ export function readProfile(p, id) {
     text(t.label);
     checkNumber(t.hours, 0, 10000);
   }
+  for (const r of list(p.research ?? [], 50)) {
+    text(r.label);
+    text(r.url);
+    text(r.note);
+    if (!/^https?:\/\//i.test(r.url)) throw new Error('Choose a web address for the research source.');
+  }
+  for (const scenario of list(p.productionCases ?? [], 10)) {
+    text(scenario.name);
+    if (!obj(scenario.production)) throw new Error('Provide production rates for the scenario.');
+    for (const [id, hours] of Object.entries(scenario.production)) {
+      if (!p.tasks.some((t) => t.id === id)) throw new Error('Unknown task in production scenario.');
+      checkNumber(hours, 0, 10000);
+    }
+  }
   for (const s of list(p.supplies, 500)) {
     validKey(s.id);
     validKey(s.per);

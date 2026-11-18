@@ -127,12 +127,14 @@ opening and hidden framing still need a field check. Update the related
 schedule, takeoff and sheets when the measurement changes. Report which uses
 the evidence supports and which still depend on a missing source.
 
-For finish-carpentry estimates, use **Bid Studio** on the property's current
+For finish-carpentry estimates, use **Budget → Estimate & bids** on the property's current
 drawing. When an existing private trim package has supplier, production and
 external stair inputs, bring them in with the private rate-book workflow in
-[README.md](README.md#bid-studio). Reconcile the cut count, labor hours and total
+[README.md](README.md#estimates-schedules-and-bid-packages). Reconcile the cut count, labor hours and total
 against the last issued package. Review field checks and identify planning
-allowances. Issue a dated package before collecting bids or client approval.
+allowances. Issue a dated package before collecting bids or client approval. Link the package to its project,
+reconcile already-counted scope lines, and check the native Schedule Gantt,
+Documents and one-pager against the same working estimate. Open the first workday, follow its room to the drawing and cut marks, and check the labor assumptions against relevant trade sources. Preserve issued baselines when recalibrating a rate from a field sample.
 
 ## Working on Tiksi
 

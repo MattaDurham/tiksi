@@ -1,3 +1,5 @@
+import { productionScenarios } from './estimate-program.js';
+import { crewPlan } from './crew-plan.js';
 import { cents } from './bid-stock.js';
 import { fmtFeetInches } from './store.js';
 const money = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n);
@@ -34,15 +36,30 @@ export function crewSchedule(rooms, start, capacity) {
 }
 export function facts(prop, projects, e, state) {
   const label = (id) => e.products[id]?.short || id;
-  const finish = state.start && e.days ? lastWeekday(state.start, e.days) : '';
+  const calendar = crewPlan(
+    e.rooms,
+    state.start,
+    e.rules.crew * e.rules.hoursDay,
+    state.closed,
+    state.twoCoats,
+  );
+  const finish = calendar.finish;
   return {
     property: prop.name,
     project: projects.find((p) => p.id === state.project)?.name || 'Property package',
-    schedule: crewSchedule(e.rooms, state.start, e.rules.crew * e.rules.hoursDay),
+    schedule: state.start
+      ? calendar.rooms
+      : crewSchedule(e.rooms, state.start, e.rules.crew * e.rules.hoursDay),
+    shifts: calendar.days,
+    basis: state.basis || '',
+    research: (state.research ?? state.profile?.research ?? [])
+      .filter((row) => /^https?:\/\//i.test(row.url))
+      .map(({ label, url, note }) => ({ label, url, note })),
+    scenarios: productionScenarios(prop, projects, state, e),
     terms: state.terms || '',
     start: state.start || '',
     finish,
-    days: e.days,
+    days: state.start ? calendar.days.length : e.days,
     crew: e.rules.crew,
     hoursDay: e.rules.hoursDay,
     title: state.title || 'Bid package',
@@ -259,6 +276,39 @@ function overview(f) {
   );
 }
 
+export function productionBasis(f) {
+  const cases = f.scenarios?.length
+    ? [...f.scenarios, { name: 'Working estimate', hours: f.hours, total: f.total, finish: f.finish }].sort(
+        (a, b) => a.hours - b.hours,
+      )
+    : [];
+  return (
+    (cases.length
+      ? '<h3>Production scenarios</h3>' +
+        table(
+          ['At the same hourly rate', 'Person-hours', 'Price', 'Finish'],
+          cases.map((c) => [c.name, c.hours.toFixed(1), money(c.total), c.finish || 'Unscheduled']),
+        )
+      : '') +
+    (f.research?.length
+      ? '<details><summary>Sources and assumptions</summary><ul>' +
+        f.research
+          .map(
+            (r) =>
+              '<li><a rel="noreferrer" href="' +
+              esc(r.url) +
+              '">' +
+              esc(r.label) +
+              '</a><p>' +
+              esc(r.note) +
+              '</p></li>',
+          )
+          .join('') +
+        '</ul></details>'
+      : '')
+  );
+}
+
 export function documentBody(f, kind) {
   let body;
   if (kind === 'buy')
@@ -267,7 +317,13 @@ export function documentBody(f, kind) {
       table(
         ['Consumable', 'Packages', 'Price', 'Amount'],
         f.supplies.map((s) => [s.name, s.packs, money(s.price), money(s.total)]),
-      );
+      ) +
+      (f.scope.length
+        ? table(
+            ['Additional scope', 'Quantity', 'Amount'],
+            f.scope.map((x) => [x.name, x.qty + ' ' + x.unit, money(x.likely)]),
+          )
+        : '');
   else if (kind === 'cut') body = f.rooms.map(roomCuts).join('');
   else if (kind === 'bid')
     body =
@@ -286,15 +342,33 @@ export function documentBody(f, kind) {
         .join('') +
       '<p>Labor $________ · Materials $________ · Other $________</p><p>Exclusions and qualifications ________________________________________</p>';
   else if (kind === 'schedule')
-    body = table(
-      ['Room sequence', 'Crew hours', 'First workday', 'Last workday'],
-      (f.schedule || []).map((s) => [
-        s.room,
-        s.hours.toFixed(1),
-        s.from || 'Day ' + s.first,
-        s.to || 'Day ' + s.last,
-      ]),
-    );
+    body =
+      table(
+        ['Room sequence', 'Crew hours', 'First workday', 'Last workday'],
+        (f.schedule || []).map((s) => [
+          s.room,
+          s.hours.toFixed(1),
+          s.from || 'Day ' + s.first,
+          s.to || 'Day ' + s.last,
+        ]),
+      ) +
+      (f.shifts?.length
+        ? '<h3>Daily crew assignments</h3>' +
+          f.shifts
+            .map(
+              (day) =>
+                '<h4>' +
+                esc(day.date) +
+                ' · ' +
+                day.hours.toFixed(1) +
+                ' person-hours</h4>' +
+                table(
+                  ['Room', 'Phase', 'Task', 'Hours'],
+                  day.tasks.map((t) => [t.room, t.phase, t.task, t.hours.toFixed(2)]),
+                ),
+            )
+            .join('')
+        : '');
   else if (kind === 'scope') body = scopeBody(f);
   else if (kind === 'agreement')
     body =
@@ -304,7 +378,8 @@ export function documentBody(f, kind) {
       '<h3>Payment terms and exclusions</h3><p>' +
       esc(f.terms || 'Terms to be agreed.').replaceAll('\n', '<br>') +
       '</p><p>Owner ____________________ Date ________</p><p>Contractor ____________________ Date ________</p>';
-  else body = overview(f) + scopeBody(f);
+  else
+    body = overview(f) + productionBasis(f) + (f.basis ? '<p>' + esc(f.basis) + '</p>' : '') + scopeBody(f);
   const warnings = f.warnings.length
     ? '<h3>Open checks</h3><ul>' + f.warnings.map((s) => '<li>' + esc(s) + '</li>').join('') + '</ul>'
     : '';

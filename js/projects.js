@@ -1,3 +1,4 @@
+import { pricedProgram, programStart } from './estimate-program.js';
 import { keepRemoved, openRecovery } from './recovery.js';
 import { takeoffState } from './source-revision.js';
 // Projects view: capture ideas, scope them into line items with budget ranges,
@@ -159,7 +160,7 @@ function visibleEntries(mine, v) {
   const rank = {
     priority: p => p.priority ? PRIORITIES.indexOf(p.priority) : PRIORITIES.length,
     status: p => STATUSES.indexOf(p.status),
-    likely: p => -projectTotals(p).likely,
+    likely: p => -projectCost(p).likely,
   }[v.sort];
   if (v.sort === 'name') out.sort((a, b) => a.p.name.localeCompare(b.p.name) || a.order - b.order);
   else if (rank) out.sort((a, b) => rank(a.p) - rank(b.p) || a.order - b.order);
@@ -261,7 +262,11 @@ function render() {
 
 // The header counts, the status chips, the CLEAR button and the list or board: everything the
 // search and filters change. The search box itself is left alone so typing keeps its focus.
+let currentProgram=new Map();
+function projectCost(p) {return projectTotals(currentProgram.get(p.id) || p);}
 function renderList() {
+  const prop=activeProperty();
+  currentProgram=prop?.bidStudio?.program ? new Map(pricedProgram(prop,propertyProjects(),programStart(prop,ws.data.settings)).map(p=>[p.id,p])) : new Map();
   if (!el) return;
   const v = currentView();
   const mine = propertyProjects();
@@ -297,16 +302,17 @@ function renderList() {
     return;
   }
   list.innerHTML = v.layout === 'board' ? boardHtml(entries) : grouped(entries, v.group).map(g =>
-    (g.label ? `<div class="proj-group-head"><span>${escapeHtml(g.label)}</span><span class="faint">${g.entries.length} · ${fmtMoney(g.entries.reduce((n, e) => n + projectTotals(e.p).likely, 0))}</span></div>` : '') +
+    (g.label ? `<div class="proj-group-head"><span>${escapeHtml(g.label)}</span><span class="faint">${g.entries.length} · ${fmtMoney(g.entries.reduce((n, e) => n + projectCost(e.p).likely, 0))}</span></div>` : '') +
     g.entries.map(e => cardHtml(e) + subRowsHtml(e)).join('')).join('');
   bindList(list, v);
 }
 
 function cardSummary(p) {
-  const t = projectTotals(p), g = projectProgress(p);
-  const days = p.items.reduce((n, i) => n + (i.durationDays || 0), 0);
+  const t = projectCost(p), g = projectProgress(p);
+  const planned = currentProgram.get(p.id);
+  const days = planned?.crewPlan?.days.length ?? p.items.reduce((n, i) => n + (i.durationDays || 0), 0);
   const subs = subprojectsOf(p), open = subs.filter(s => s.status !== 'done').length;
-  const money = g.items && !g.priced ? 'no prices yet' : fmtMoney(t.likely) + ' likely';
+  const money = !planned?.estimateLine && g.items && !g.priced ? 'no prices yet' : fmtMoney(t.likely) + ' likely';
   return `${money}, ${g.items} items` + (g.priced && g.priced < g.items ? `, ${g.priced} priced` : '') + (g.done ? `, ${g.done} done` : '') +
     (days ? ', ' + days + 'd work' : '') + (subs.length ? `, ${subs.length} subprojects (${open} open)` : '');
 }
@@ -426,8 +432,12 @@ function focusName() {
 // The project's money and progress in one line: likely total and range, how many items are
 // priced and done, work days, linked photos and products, open subprojects.
 function summaryHtml(p, subs) {
-  const t = projectTotals(p), g = projectProgress(p);
-  const days = p.items.reduce((n, i) => n + (i.durationDays || 0), 0);
+  const prop=propOf(p);
+  const owner=currentProgram.get(prop?.bidStudio?.program?.project);
+  const linked=owner?.id===p.id?owner:null;
+  const room=owner?.estimatedRooms?.find(r=>r.id===p.id);
+  const t = projectTotals(linked || p), g = projectProgress(p);
+  const days = (linked?.crewPlan?.days.length || 0) + (linked || p).items.reduce((n, i) => n + (i.durationDays || 0), 0);
   const photos = new Set(), prods = new Set();
   for (const it of p.items) {
     for (const ph of sitePhotosFor(it)) photos.add(ph.id);
@@ -436,10 +446,10 @@ function summaryHtml(p, subs) {
   const pct = g.items ? Math.round(g.done / g.items * 100) : 0;
   const stat = (big, small) => `<div class="ps-stat"><b>${big}</b><span>${small}</span></div>`;
   return `<div class="proj-summary">
-    ${stat(g.priced ? fmtMoney(t.likely) : 'No prices', g.priced && (t.low || t.high) ? 'likely, ' + fmtMoney(t.low) + ' to ' + fmtMoney(t.high) : 'likely total')}
-    ${stat(g.priced + ' of ' + g.items, 'items priced')}
+    ${room?stat(fmtMoney(room.stock+room.labor),'room stock and labor'):stat(linked || g.priced ? fmtMoney(t.likely) : 'No prices', (linked || g.priced) && (t.low || t.high) ? 'likely, ' + fmtMoney(t.low) + ' to ' + fmtMoney(t.high) : 'likely total')}
+    ${linked?'<div class="ps-stat"><a href="#/budget?section=estimate">Working estimate ↗</a><a href="#/schedule">Crew schedule ↗</a></div>':stat(g.priced + ' of ' + g.items, 'items priced')}
     <div class="ps-stat"><b>${g.done} of ${g.items}</b><span>items done</span><i class="ps-bar"><i style="width:${pct}%"></i></i></div>
-    ${stat(days, 'work days')}
+    ${room?stat(room.hours.toFixed(1)+' h','room labor'):stat(days, 'work days')}
     ${stat(photos.size + ' · ' + prods.size, 'photos · products linked')}
     ${subs.length ? stat(subs.filter(s => s.status !== 'done').length + ' of ' + subs.length, 'subprojects open') : ''}
   </div>`;
@@ -515,6 +525,7 @@ function renderDetail(p) {
       ${takeoffState(p, activeProperty()) ? `<p role="status">Takeoff: ${escapeHtml(takeoffState(p, activeProperty()))}. Saved quantities and manual edits are retained.</p>` : ''}
       ${parent ? `<div class="sub-crumb">SUBPROJECT OF <button class="btn small ghost" data-open="${escapeHtml(parent.id)}">${escapeHtml(parent.name)}</button></div>` : ''}
       ${summaryHtml(p, subs)}
+      ${currentProgram.get(propOf(p)?.bidStudio?.program?.project)?.estimatedRooms?.some(r=>r.id===p.id)?'<a class="btn" href="#/sheets?section=shop&amp;room='+encodeURIComponent(p.id)+'">Room cut sheets</a>':''}
       <div class="field-row">
         <div class="field" style="flex:2"><label>Name</label><input type="text" data-f="name" value="${escapeHtml(p.name)}"></div>
         <div class="field"><label>Category</label>

@@ -205,11 +205,20 @@ function route() {
   // Every device opens on the model. PLAN is gone; an old #/plan address (a bookmark, a link
   // from a scope item) opens MODEL with the same query, so #/plan?select=<id> still selects.
   if (/^#\/plan(?=$|\?)/.test(location.hash)) history.replaceState(null, '', location.hash.replace(/^#\/plan/, '#/model'));
+  if (/^#\/bids(?:$|\?)/.test(location.hash)) history.replaceState(null, '', '#/budget?section=estimate');
+  const query = new URLSearchParams(location.hash.split('?')[1]);
+  const property = ws.data.properties.find(p => p.id === query.get('property'));
+  if (property && ws.data.settings.activePropertyId !== property.id) {
+    ws.data.settings.activePropertyId = property.id; touch(); refreshTopbar();
+  }
   const name = (location.hash.replace(/^#\//, '').split('?')[0] || 'model');
   const head = name.split('/')[0];
   if ((head === 'import' || head === 'new') && importFromHash()) { if (!currentView) route(); return; }
   if (head === 'open' && openFromHash()) { if (!currentView) route(); return; }
-  const view = VIEWS[name] || VIEWS.model;
+  const section = query.get('section');
+  const estimatePage = name === 'budget' && (section ? ['estimate','shop','alternates','bids'].includes(section) : !!activeProperty()?.bidStudio?.program);
+  const shopPage=name==='sheets' && (section==='shop' || (!section && !!activeProperty()?.bidStudio?.program));
+  const view = estimatePage || shopPage ? bids : VIEWS[name] || VIEWS.model;
   unmountCurrent();
   currentName = VIEWS[name] ? name : 'model';
   currentView = view;

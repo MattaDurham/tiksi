@@ -1,8 +1,9 @@
+import { pricedProgram, programStart } from './estimate-program.js';
 // Schedule view: critical-path method (CPM) over each selected project's scope items,
 // rendered as an SVG Gantt. Forward/backward pass, slack, dependency arrows.
 
 import {
-  ws, touch, escapeHtml, fmtDate, addDays, dayDiff, isoToday, projectLabel, propertyProjects,
+  ws, activeProperty, touch, escapeHtml, fmtDate, addDays, dayDiff, isoToday, projectLabel, propertyProjects,
 } from './store.js';
 import { icon } from './icons.js';
 import { programSchedule, lastWorkDay } from './program.js';
@@ -26,8 +27,9 @@ export { cpm } from './program.js';
 function render() {
   if (!el) return;
   const d = ws.data;
-  const start = d.settings.programStart || isoToday();
-  const mine = propertyProjects();
+  const prop=activeProperty(), start=programStart(prop,d.settings);
+  const mine=pricedProgram(prop,propertyProjects(),start);
+  const crew=mine.find(p=>p.selected && p.crewPlan?.days.length);
   // The same layout the one-pager reads: program.js.
   const { plans, days, lastDay } = programSchedule(mine, start);
   // A finger taps a bar for its details; a mouse keeps the hover tooltip, as before.
@@ -39,7 +41,7 @@ function render() {
     <div class="view-scroll">
       <div class="view-head">
         <span class="view-title">SCHEDULE</span>
-        <span class="view-sub">critical path per selected project; items with 0 days are budget-only and not scheduled</span>
+        <span class="view-sub">${crew?'Crew assignments and critical path from the working estimate':'critical path per selected project; items with 0 days are budget-only and not scheduled'}</span>
       </div>
       <div class="kpi-band">
         <div class="kpi">
@@ -71,21 +73,29 @@ function render() {
         <span><span class="sw" style="background:rgba(255,255,255,.06); border:1px solid var(--line-2)"></span>weekend</span>
         <span><span class="sw" style="background:var(--red); width:2px"></span>today</span>
       </div>
+      ${crew ? '<div class="crew-settings"><label>Crew <input data-crew-size type="number" min="1" max="100" value="'+crew.crewSize+'"></label><label>Hours per person <input data-crew-day type="number" min=".25" step=".25" max="24" value="'+crew.crewDay+'"></label><span>Weekdays'+(prop.bidStudio.draft.closed?.length?' · Site closed '+prop.bidStudio.draft.closed.map(fmtDate).map(escapeHtml).join(', '):'')+'</span><a href="#/budget?section=estimate">Estimate assumptions ↗</a></div>':''}
       ${finger && plans.length ? '<div class="gantt-detail" id="gantt-detail" role="status">Tap a bar for its dates and slack.</div>' : ''}
       <div class="gantt-wrap" id="gantt"></div>
+      ${crew ? crewLedger(crew) : ''}
       ${plans.map(x => criticalPathLine(x)).join('')}
       ${plans.length === 0 ? `<div class="empty-state" style="margin-top:14px"><span class="empty-ic">${icon('schedule')}</span><b>No schedulable work</b>
         Select projects in BUDGET and give scope items durations and dependencies in PROJECTS.</div>` : ''}
     </div>`;
 
   el.querySelector('#prog-start').onchange = e => {
-    d.settings.programStart = e.target.value;
+    if(!e.target.value) {render();return;}
+    if(prop?.bidStudio?.program) prop.bidStudio={...prop.bidStudio,draft:{...prop.bidStudio.draft,start:e.target.value}};
+    else d.settings.programStart = e.target.value;
     touch(); render();
   };
 
+  for(const [selector,key] of [['[data-crew-size]','crew'],['[data-crew-day]','hoursDay']]){
+    const field=el.querySelector(selector);
+    if(field) field.onchange=()=>{if(field.value && field.reportValidity()){const old=prop.bidStudio.draft;prop.bidStudio.draft={...old,rules:{...old.rules,[key]:Number(field.value)}};touch();render();}};
+  }
   if (plans.length) {
     const gantt = el.querySelector('#gantt');
-    gantt.innerHTML = ganttSvg(plans, start, chartEnd, smallScreen(), finger);
+    gantt.innerHTML = ganttSvg(plans, start, chartEnd, smallScreen(), finger,crew ? gantt.clientWidth : 0,prop?.bidStudio?.draft?.closed || []);
     // A bar's dates and slack were a hover tooltip only: a tap (or Enter) shows them above the chart.
     const pick = row => {
       if (!row) return;
@@ -99,6 +109,13 @@ function render() {
   } else el.querySelector('#gantt').remove();
 }
 
+function crewLedger(project) {
+  const focus=new URLSearchParams(location.hash.split('?')[1]).get('day');
+  const plan=project.crewPlan;
+  return '<section class="crew-ledger"><header><div class="kicker">FIELD SCHEDULE</div><h2>Daily crew assignments</h2><p>'+project.crewSize+(project.crewSize===1?' person · ':' people · ')+project.crewDay+' hours each per shift · '+plan.days.length+' working days</p></header>'+
+    plan.days.map((day,index)=>'<details'+((focus?day.date===focus:index===0)?' open':'')+'><summary><b>'+escapeHtml(fmtDate(day.date))+'</b><span>'+escapeHtml([...new Set(day.tasks.map(t=>t.room))].join(' / '))+'</span><strong>'+day.hours.toFixed(1)+' h</strong></summary><a href="#/budget?section=estimate&amp;day='+day.date+'">Open this workday ↗</a>'+
+      '<table class="grid"><thead><tr><th>Room</th><th>Assignment</th><th>Person-hours</th></tr></thead><tbody>'+day.tasks.map(t=>'<tr><td>'+escapeHtml(t.room)+'</td><td>'+escapeHtml(t.phase==='First coat'||t.phase==='Second coat'?t.phase:t.task)+'</td><td>'+t.hours.toFixed(2)+'</td></tr>').join('')+'</tbody></table></details>').join('')+'</section>';
+}
 function criticalPathLine(x) {
   const names = x.p.items
     .filter(i => x.sched[i.id] && x.sched[i.id].critical)
@@ -114,13 +131,14 @@ function criticalPathLine(x) {
 
 // narrow: a small screen, where the name column gives way to the chart. finger: a touch
 // device, where each item row is tall enough to tap.
-function ganttSvg(plans, startIso, programEnd, narrow = false, finger = false) {
-  const LABELW = narrow ? 128 : 236, AXISH = 46, ROWH = finger ? 44 : 26, PROJH = 30, GAP = 10, PAD = 8;
+function ganttSvg(plans, startIso, programEnd, narrow = false, finger = false, crewWidth=0, closed=[]) {
+  const LABELW = narrow ? 128 : 236, AXISH = 46, ROWH = finger || crewWidth ? 44 : 26, PROJH = 30, GAP = 10, PAD = 8;
   // On a touch device no chart text is under 12 points; the names are cut shorter to fit.
-  const fs = n => finger ? Math.max(12, n) : n;
+  const fs = n => finger || crewWidth ? Math.max(12, n) : n;
   const NAMECH = finger ? (narrow ? 12 : 27) : (narrow ? 15 : 30);
-  const span = programEnd + 7;
-  const dayW = span <= 45 ? 18 : span <= 90 ? 11 : span <= 180 ? 6.5 : span <= 365 ? 3.4 : 1.8;
+  const span = programEnd + (crewWidth ? 3 : 7);
+  const minDayW = span <= 45 ? 18 : span <= 90 ? 11 : span <= 180 ? 6.5 : span <= 365 ? 3.4 : 1.8;
+  const dayW=crewWidth?Math.max(minDayW,Math.min(90,(crewWidth-LABELW-24)/span)):minDayW;
   const width = LABELW + span * dayW + 24;
 
   let rows = [];
@@ -163,6 +181,7 @@ function ganttSvg(plans, startIso, programEnd, narrow = false, finger = false) {
   }
   svg += `<line x1="${LABELW}" y1="${MONTHH}" x2="${width}" y2="${MONTHH}" stroke="rgba(255,255,255,0.07)"/>`;
 
+  const focus=new URLSearchParams(location.hash.split('?')[1]).get('day');
   // Weekend shading + week grid + day-of-month labels.
   for (let day = 0; day <= span; day++) {
     const iso = addDays(startIso, day);
@@ -171,8 +190,11 @@ function ganttSvg(plans, startIso, programEnd, narrow = false, finger = false) {
     if (dayW >= 6 && (dow === 0 || dow === 6) && day < span) {
       svg += `<rect x="${X(day)}" y="${AXISH}" width="${dayW}" height="${chartBottom - AXISH}" fill="rgba(255,255,255,0.028)"/>`;
     }
+    if(crewWidth && iso===focus) svg+=`<rect x="${X(day)}" y="${MONTHH}" width="${dayW}" height="${chartBottom-MONTHH}" fill="rgba(125,197,170,.18)" stroke="#80bca6"><title>Selected workday</title></rect>`;
+    if(crewWidth && closed.includes(iso)) svg+='<rect x="'+X(day)+'" y="'+AXISH+'" width="'+dayW+'" height="'+(chartBottom-AXISH)+'" fill="rgba(210,141,77,.13)"><title>Site closed</title></rect>';
+    if(crewWidth && dayW>=34 && day<span) svg+='<text x="'+(X(day)+5)+'" y="'+(AXISH-7)+'" fill="#adbbc7" font-size="11">'+['Su','M','Tu','W','Th','F','Sa'][dow]+' '+dt.getDate()+'</text>';
     const isWeek = dow === 1;
-    if (dayW >= 6 ? isWeek : dt.getDate() === 1) {
+    if (!(crewWidth && dayW>=34) && (dayW >= 6 ? isWeek : dt.getDate() === 1)) {
       svg += `<line x1="${X(day)}" y1="${AXISH}" x2="${X(day)}" y2="${chartBottom}" stroke="rgba(255,255,255,0.05)" stroke-width="1"/>`;
       if (dayW >= 6) svg += `<text x="${X(day) + 3}" y="${AXISH - 8}" fill="#5d6a76" font-size="${fs(9)}">${dt.getDate()}</text>`;
     }
@@ -213,7 +235,9 @@ function ganttSvg(plans, startIso, programEnd, narrow = false, finger = false) {
       const bh = Math.min(ROWH - 10, 18), by = yc - bh / 2;
       const dur = escapeHtml(r.it.durationDays);
       const title = `${escapeHtml(r.it.name)}: ${dur}d, ${fmtDate(addDays(startIso, off + s.es))} to ${fmtDate(lastWorkDay(startIso, off + s.ef))}${s.critical ? ' (CRITICAL)' : ', slack ' + s.slack + 'd'}`;
-      if (s.critical) {
+      if (s.segments) {
+        svg += '<g class="g-bar"><title>'+title+'</title>'+s.segments.map(([a,b])=>'<rect x="'+X(off+a)+'" y="'+by+'" width="'+Math.max(1,X(off+b)-X(off+a))+'" height="'+bh+'" rx="3" fill="url(#g-crit)"/>').join('')+'</g>';
+      } else if (s.critical) {
         svg += `<g class="g-bar"><title>${title}</title>` +
           `<rect x="${x0}" y="${by}" width="${bw}" height="${bh}" rx="4" fill="url(#g-crit)" stroke="rgba(255,205,140,0.7)" stroke-width="1" filter="url(#g-glow)"/>` +
           `<rect x="${x0 + 1}" y="${by + 1}" width="${Math.max(bw - 2, 1)}" height="${Math.max(bh / 2 - 1, 1)}" rx="3" fill="rgba(255,255,255,0.12)"/></g>`;

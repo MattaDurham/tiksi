@@ -121,6 +121,38 @@ export function estimate(prop, projects, state = {}) {
     if (!roomGroups.has(key)) roomGroups.set(key, { key, name: p.room, parts: [] });
     roomGroups.get(key).parts.push(p);
   }
+  const included = new Set(state.included || []);
+  const scope = projects
+    .filter((p) => !allowed || allowed.has(p.id))
+    .flatMap((p) =>
+      (p.items || []).map((it) => ({
+        id: it.id,
+        name: it.name,
+        project: p.name,
+        projectId: p.id,
+        installHours: state.scopeHours?.[it.id] || 0,
+        qty: it.qty ?? 1,
+        unit: it.unit,
+        selected: included.has(it.id),
+        ...itemTotals(it),
+      })),
+    );
+  for (const item of scope.filter((it) => it.selected && it.installHours > 0 && it.qty > 0)) {
+    const room = [...roomGroups.values()].find(
+      (r) => r.key === item.projectId || r.parts.some((part) => part.project === item.projectId),
+    );
+    const key = room?.key || 'scope:' + item.projectId;
+    const target = roomGroups.get(key) || { key, name: item.project, parts: [] };
+    (target.additional ||= []).push({
+      id: item.id,
+      label: 'Install ' + item.name,
+      per: 'unit',
+      qty: item.qty,
+      hours: item.installHours,
+      extended: item.installHours * item.qty,
+    });
+    roomGroups.set(key, target);
+  }
   const boardOrder = new Map(),
     house = Object.create(null),
     rooms = [],
@@ -182,8 +214,9 @@ export function estimate(prop, projects, state = {}) {
     const tasks = allTasks.map((t) => ({ ...t, hours: state.production?.[t.id] ?? t.hours }));
     m.room_days = Math.max(1, Math.ceil(sum(tasks, (t) => (m[t.per] || 0) * t.hours) / 6 - 1e-9));
     const labor = tasks
-      .filter((t) => m[t.per] > 0)
+      .filter((t) => room.parts.length && m[t.per] > 0)
       .map((t) => ({ ...t, qty: m[t.per], extended: t.hours * m[t.per] }));
+    labor.push(...(room.additional || []));
     for (const [key, v] of Object.entries(m)) add(house, key, v);
     for (const r of Object.values(profile.nailing || {})) {
       const n = (m[r.per] || 0) * r.nails_per_lf + (r.per_corner || 0) * m.frame_corners;
@@ -212,20 +245,6 @@ export function estimate(prop, projects, state = {}) {
       return { ...s, need, packs, price, total: packs * price };
     })
     .filter((s) => s.packs);
-  const included = new Set(state.included || []);
-  const scope = projects
-    .filter((p) => !allowed || allowed.has(p.id))
-    .flatMap((p) =>
-      (p.items || []).map((it) => ({
-        id: it.id,
-        name: it.name,
-        project: p.name,
-        qty: it.qty ?? 1,
-        unit: it.unit,
-        selected: included.has(it.id),
-        ...itemTotals(it),
-      })),
-    );
   const hours = sum(rooms, (r) => r.hours),
     material = sum(orders, (o) => (o.qty + o.spare) * o.price),
     consumables = sum(supplies, (s) => s.total);

@@ -1,3 +1,4 @@
+import { pricedProgram } from './estimate-program.js';
 // The one-pager: a one-page teaser of a property for its client, kept on the property so it
 // travels in the project file. Every property has one. Its text is drafted from the project
 // (rooms, floor area, scope, budget, schedule, products) and can be edited by hand; every
@@ -50,7 +51,9 @@ export function onePagerFacts(prop, data) {
   const levels = (prop.levels || []).length || 1;
   // The projects, cost and span come from program.js, the calculation BUDGET and SCHEDULE
   // show, so the page a client sees agrees with both.
-  const own = programProjects(prop, d);
+  const entered = prop.bidStudio?.program && prop.bidStudio.draft?.start || d.settings?.programStart;
+  const start = ISO_DATE_RE.test(str(entered)) ? entered : '';
+  const own = pricedProgram(prop, programProjects(prop, d), start || isoToday());
   const top = own.filter(pr => !pr.parentId);
   const projects = top.map(pr => {
     const t = projectTotals(pr);
@@ -68,7 +71,6 @@ export function onePagerFacts(prop, data) {
   const photos = (prop.photos || []).filter(ph => ph && ph.kind === 'photo' && ph.source !== 'rendering' && ph.source !== 'polycam-keyframe');
   const renderings = (prop.photos || []).filter(ph => ph && ph.kind === 'photo' && ph.source === 'rendering');
   const scopeItems = own.reduce((n, pr) => n + (pr.items || []).length, 0);
-  const start = ISO_DATE_RE.test(str(d.settings && d.settings.programStart)) ? d.settings.programStart : '';
   // SCHEDULE lays the program out from its start (today when none is set) in calendar days.
   // lastDay is the last calendar day with work on it, the date SCHEDULE shows as its last day.
   const { days, lastDay } = programSchedule(own, start || isoToday());

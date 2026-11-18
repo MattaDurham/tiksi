@@ -88,3 +88,14 @@
 .dc-tag-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 8px; align-items: center; }
 .dc-tag-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dc-tag-row select { min-width: 0; width: 100%; }
+
+.dc-package {align-self:stretch;background:#f8f6ef;color:#1e322a;box-sizing:border-box;width:min(100%,1100px);margin:12px auto;padding:clamp(16px,3vw,38px);font:15px/1.5 system-ui}
+.dc-stage:has(.dc-package) {display:block;overflow:auto}
+.dc-package h2 {font:32px Georgia,serif}
+.dc-package table {width:100%;border-collapse:collapse;font-size:13px}
+.dc-package td,.dc-package th {text-align:left;border-bottom:1px solid #c4c8c0;padding:7px}
+.dc-package a {color:#275747}
+.bd-stick {break-inside:avoid}
+.dc-package .bd-board,#print-root .bd-board {position:relative;height:19px;background:#dedbcf}
+.dc-package .bd-board span,#print-root .bd-board span {position:absolute;overflow:hidden;height:100%;text-align:center;color:white;background:#477e69}
+.dc-package .bd-board span:nth-child(even),#print-root .bd-board span:nth-child(even){background:#315e4f}

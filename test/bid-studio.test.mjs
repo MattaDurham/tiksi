@@ -118,3 +118,68 @@ test('an unresolved drawing product marks its own package as partially priced', 
   assert.ok(whole.warnings.length > 0);
   assert.equal(estimate(p, w.projects, { project: 'reading' }).incomplete, false);
 });
+
+test('one linked estimate drives the program, respects covered lines, and leaves source rows intact', async () => {
+  const { pricedProgram } = await import('../js/estimate-program.js');
+  const { programTotals, programSchedule } = await import('../js/program.js');
+  const w = sampleWorkspace(),
+    p = w.properties[0],
+    draft = p.bidStudio.draft;
+  draft.project = 'finish';
+  draft.scopeHours = { protection: 0.5 };
+  draft.lowRate = 65;
+  draft.highRate = 115;
+  const child = w.projects[1];
+  child.items.push({ id: 'stock-copy', name: 'Previous stock list', qty: 1, likely: 380 });
+  p.bidStudio.program = { project: 'finish', covered: ['stock-copy'] };
+  const e = estimate(p, w.projects, draft);
+  const projected = pricedProgram(p, w.projects, draft.start);
+  const totals = programTotals(projected),
+    plan = programSchedule(projected, draft.start);
+  assert.equal(totals.likely, e.total);
+  assert.ok(totals.low < totals.likely && totals.likely < totals.high);
+  assert.equal(plan.lastDay, facts(p, w.projects, e, draft).finish);
+  assert.equal(child.items[0].likely, 380);
+  assert.ok(Math.abs(projected[0].crewPlan.days.reduce((n, d) => n + d.hours, 0) - e.hours) < 1e-8);
+  w.projects[0].selected = false;
+  assert.equal(programTotals(pricedProgram(p, w.projects, draft.start)).likely, 380);
+});
+test('crew assignments skip weekends and closed dates and separate finish coats in each room', async () => {
+  const { crewPlan } = await import('../js/crew-plan.js');
+  const r = {
+    key: 'r',
+    name: 'Room',
+    hours: 18,
+    labor: [
+      { id: 'layout', label: 'Layout', extended: 14 },
+      { id: 'paint', label: 'Paint', extended: 4 },
+    ],
+  };
+  const plan = crewPlan([r], '2027-02-05', 16, ['2027-02-08'], true);
+  assert.deepEqual(
+    plan.days.map((d) => d.date),
+    ['2027-02-05', '2027-02-09'],
+  );
+  assert.equal(plan.days[1].tasks[0].phase, 'Second coat');
+  assert.equal(plan.days[1].hours, 2);
+  assert.equal(plan.finish, plan.rooms[0].to);
+});
+
+test('a production case follows scope into the schedule, program bounds and issued overview', async () => {
+  const { pricedProgram } = await import('../js/estimate-program.js');
+  const { programTotals } = await import('../js/program.js');
+  const w = sampleWorkspace();
+  const p = w.properties[0], d = p.bidStudio.draft;
+  p.bidStudio.program = { project: 'finish', covered: [] };
+  d.project = 'reading';
+  d.productionCases = [{name:'Measured installation',production:{install:.015}}];
+  const e = estimate(p,w.projects,d), f = facts(p,w.projects,e,d);
+  const projected = pricedProgram(p,w.projects,d.start);
+  assert.equal(f.scenarios.length,1);
+  assert.ok(f.scenarios[0].hours < e.hours);
+  assert.equal(projected.find(x=>x.id==='finish').estimateLine.likely,e.total);
+  assert.equal(projected.find(x=>x.id==='finish').estimateLine.low,f.scenarios[0].total);
+  assert.ok(programTotals(projected).likely >= e.total);
+  assert.equal(f.shifts[0].tasks[0].roomKey,e.rooms[0].key);
+  assert.ok(shareHtml({id:'test',number:1,date:d.start,facts:f}).includes('Measured installation'));
+});
