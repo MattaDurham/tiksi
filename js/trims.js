@@ -115,8 +115,27 @@ export function normaliseTrim(t, prop) {
     ? t.colsAt.map(v => Number.isInteger(v) && v >= 0 && v <= 60 ? v : null) : null;
   t.material = typeof t.material === 'string' && t.material ? t.material : null;
   if (typeof t.name !== 'string') t.name = '';
+  const boards = normaliseBoards(t.boards);
+  if (boards) t.boards = boards; else delete t.boards;
   setFrameLayout(t, t.frameLayout);
   return t;
+}
+
+// t.boards from a file or another device: only well-formed entries, finite and within reach.
+function normaliseBoards(b) {
+  if (!b || typeof b !== 'object' || Array.isArray(b)) return null;
+  const out = {}, ok = v => Number.isFinite(v) && Math.abs(v) <= 100;
+  for (const [key, e] of Object.entries(b).slice(0, 4000)) {
+    if (typeof key !== 'string' || !key || key.length > 80 || !e || typeof e !== 'object') continue;
+    if (e.hide === true) { out[key] = { hide: true }; continue; }
+    if (!['x0', 'x1', 'y0', 'y1'].every(k => ok(e[k])) || e.x1 <= e.x0 || e.y1 <= e.y0) continue;
+    const box = { x0: e.x0, x1: e.x1, y0: e.y0, y1: e.y1 };
+    if (!e.add) { out[key] = box; continue; }
+    if (!key.startsWith('add:') || !BOARD_KINDS.has(e.kind) || typeof e.role !== 'string') continue;
+    out[key] = { add: true, role: e.role, kind: e.kind, dir: e.dir === 'h' ? 'h' : e.dir === 'v' ? 'v' : null, profile: typeof e.profile === 'string' ? e.profile : 'eased',
+      T: ok(e.T) && e.T > 0 ? e.T : .019, W: ok(e.W) && e.W > 0 ? e.W : null, ...(e.crown ? { crown: true } : {}), ...box };
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 export function setFrameLayout(t, id) {
@@ -423,6 +442,8 @@ export function trimLayout(t, wall, openings, face = {}) {
   const W = p.W, T = p.T;
   const push = part => { if (out.parts.length < MAX_PARTS) out.parts.push(part); };
 
+  out.start = x0; out.end = x1;
+
   if (style.kind === 'run' || style.kind === 'crown') {
     const crown = style.kind === 'crown' || isCrownProfile(p.profile);
     const yb = crown ? H - W : clamp(t.y, 0, Math.max(0, H - W)), yt = yb + W;
@@ -430,13 +451,170 @@ export function trimLayout(t, wall, openings, face = {}) {
     for (const piece of subtract(x0, x1, cuts, MIN_PIECE)) {
       push({ kind: 'run', x0: piece.x0, x1: piece.x1, y: yb, W, T, profile: p.profile, crown, mitreA: piece.a && atA, mitreB: piece.b && atB });
     }
+    nameParts(out);
+    applyBoardEdits(t, out);
     return out;
   }
 
   // Fields. Whatever board still crosses a device once the layout has gone round it is cut.
+  // Every part is named before the cut, so a batten cut round an outlet keeps its place in the count.
   layField(t, style, p, x0, x1, H, blocks, devices, out, push);
-  if (devices.length) out.parts = out.parts.flatMap(part => part.kind === 'board' ? cutBoard(part, devices) : [part]);
+  nameParts(out);
+  if (devices.length) out.parts = out.parts.flatMap(part => {
+    if (part.kind !== 'board') return [part];
+    const pieces = cutBoard(part, devices);
+    return pieces.length > 1 ? pieces.map((q, k) => ({ ...q, key: part.key + '/' + k })) : pieces;
+  });
+  applyBoardEdits(t, out);
   return out;
+}
+
+// ---------- boards one at a time ----------
+// Every part of a layout has a key that names its place in it: the stretch of the field it
+// stands in (rects, counted from wall end a; 'run' for a moulding along the wall), what it is,
+// and its place among the parts of that kind there, left to right and then bottom to top.
+// '0:v:2' is the third vertical board of the first stretch. A batten cut round an outlet is
+// '0:v:2/0' and '0:v:2/1'. The key holds when the layout is drawn again with the same count.
+//
+// t.boards keeps the boards changed by hand, by key:
+//   { hide: true }                 a board of the layout taken out
+//   { x0, x1, y0, y1 }             a board of the layout moved or resized: x from the
+//                                  section's start (so it follows the section along the wall),
+//                                  y above the floor, metres; a run keeps y0 as its height
+//   { add: true, role, kind, dir, profile, T, W, x0, x1, y0, y1 }   a board added by hand
+//                                  (key 'add:<id>'); its thickness and profile follow the
+//                                  layout's boards of the same role when there are any.
+// Everything else in the section still follows the automatic layout.
+export function partRole(part) {
+  if (part.role === 'backer') return 'backer';
+  if (part.kind === 'frame') return part.profile === 'raised-bevel' ? 'bevel' : 'frame';
+  if (part.kind === 'board') return part.dir + (part.profile === 'flat' ? '-panel' : '');
+  return part.kind;
+}
+function nameParts(out) {
+  const groups = new Map();
+  for (const part of out.parts) {
+    let rect = 'run';
+    if (part.kind !== 'run') {
+      const cx = (part.x0 + part.x1) / 2, cy = (part.y0 + part.y1) / 2;
+      const i = out.rects.findIndex(r => cx >= r.x0 - 1e-6 && cx <= r.x1 + 1e-6 && cy >= r.y0 - 1e-6 && cy <= r.y1 + 1e-6);
+      rect = i < 0 ? 'x' : String(i);
+    }
+    const g = rect + ':' + partRole(part);
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(part);
+  }
+  for (const [g, list] of groups) {
+    list.sort((a, b) => a.x0 - b.x0 || (a.y0 ?? a.y) - (b.y0 ?? b.y));
+    list.forEach((part, n) => { part.key = g + ':' + n; });
+  }
+}
+const BOARD_KINDS = new Set(['board', 'run', 'frame']);
+function applyBoardEdits(t, out) {
+  const edits = t.boards;
+  if (!edits || typeof edits !== 'object') return;
+  const s = out.start || 0;
+  const byRole = new Map();
+  for (const part of out.parts) if (!byRole.has(partRole(part))) byRole.set(partRole(part), part);
+  const parts = [];
+  for (const part of out.parts) {
+    const e = edits[part.key];
+    if (!e) { parts.push(part); continue; }
+    if (e.hide) continue;
+    const q = { ...part, edited: true };
+    if (Number.isFinite(e.x0) && Number.isFinite(e.x1)) {
+      q.x0 = s + e.x0; q.x1 = s + e.x1;
+      if (part.kind === 'run') { q.mitreA = part.mitreA && Math.abs(q.x0 - part.x0) < 1e-6; q.mitreB = part.mitreB && Math.abs(q.x1 - part.x1) < 1e-6; }
+    }
+    if (Number.isFinite(e.y0)) { if (part.kind === 'run') q.y = e.y0; else if (Number.isFinite(e.y1)) { q.y0 = e.y0; q.y1 = e.y1; } }
+    parts.push(q);
+  }
+  for (const [key, e] of Object.entries(edits)) {
+    if (!e || !e.add || !BOARD_KINDS.has(e.kind)) continue;
+    const like = byRole.get(e.role) || {};
+    const q = { kind: e.kind, key, added: true, edited: true, x0: s + e.x0, x1: s + e.x1, T: like.T ?? e.T, profile: like.profile ?? e.profile };
+    if (e.kind === 'run') Object.assign(q, { y: e.y0, W: like.W ?? e.W, crown: !!(like.crown ?? e.crown), mitreA: false, mitreB: false });
+    else Object.assign(q, { y0: e.y0, y1: e.y1 });
+    if (e.kind === 'board') { q.dir = e.dir === 'h' ? 'h' : 'v'; if (like.d) q.d = like.d; }
+    if (e.kind === 'frame') q.W = like.W ?? e.W;
+    if (e.role === 'backer') q.role = 'backer';
+    parts.push(q);
+  }
+  out.parts = parts;
+}
+// How many boards of a section were changed by hand.
+export function boardChanges(t) {
+  const out = { moved: 0, hidden: 0, added: 0, total: 0 };
+  for (const e of Object.values((t && t.boards) || {})) {
+    if (!e) continue;
+    if (e.add) out.added++; else if (e.hide) out.hidden++; else out.moved++;
+    out.total++;
+  }
+  return out;
+}
+// The part of a layout with this key.
+export function boardPart(lay, key) { return (lay && lay.parts.find(p => p.key === key)) || null; }
+// The board's place: x0, x1 (along the wall, from end a) and y0, y1 (above the floor), metres.
+export function boardBox(part) {
+  if (!part) return null;
+  if (part.kind === 'run') return { x0: part.x0, x1: part.x1, y0: part.y, y1: part.y + (part.W || 0) };
+  return { x0: part.x0, x1: part.x1, y0: part.y0, y1: part.y1 };
+}
+// Put a board at `box` (wall coordinates, as boardBox gives them), keeping its record in t.boards.
+export function placeBoard(t, lay, key, box) {
+  const part = boardPart(lay, key);
+  if (!part) return false;
+  const s = lay.start || 0, r = v => Math.round(v * 1e5) / 1e5;
+  const rel = { x0: r(box.x0 - s), x1: r(box.x1 - s), y0: r(box.y0), y1: r(box.y1) };
+  if (rel.x1 - rel.x0 < .003 || rel.y1 - rel.y0 < .003) return false;
+  t.boards = t.boards || {};
+  const was = t.boards[key];
+  if (was && was.add) t.boards[key] = { ...was, ...rel };
+  else t.boards[key] = rel;
+  return true;
+}
+// Take a board out: one added by hand goes, one of the layout is hidden.
+export function removeBoard(t, key) {
+  t.boards = t.boards || {};
+  if (t.boards[key] && t.boards[key].add) delete t.boards[key];
+  else t.boards[key] = { hide: true };
+  tidyBoards(t);
+}
+// A copy of a board at `box` (wall coordinates); returns the new board's key.
+export function copyBoard(t, lay, key, box, id) {
+  const part = boardPart(lay, key);
+  if (!part) return null;
+  const s = lay.start || 0, r = v => Math.round(v * 1e5) / 1e5, nk = 'add:' + id;
+  t.boards = t.boards || {};
+  t.boards[nk] = { add: true, role: partRole(part), kind: part.kind, dir: part.dir || null, profile: part.profile, T: part.T, W: part.W ?? null,
+    crown: part.crown || undefined, x0: r(box.x0 - s), x1: r(box.x1 - s), y0: r(box.y0), y1: r(box.y1) };
+  return nk;
+}
+// Put one board back as the layout has it (an added board goes), or every board.
+export function restoreBoard(t, key) { if (t.boards) delete t.boards[key]; tidyBoards(t); }
+export function restoreAllBoards(t) { delete t.boards; }
+function tidyBoards(t) { if (t.boards && !Object.keys(t.boards).length) delete t.boards; }
+// What a board is, in the words a carpenter uses for it.
+export function boardName(t, part) {
+  if (!part) return '';
+  const style = trimStyle(t) || {};
+  const role = partRole(part);
+  if (role === 'backer') return 'Backer panel';
+  if (role === 'run') return (style.label || 'Moulding') + ' piece';
+  if (role === 'frame') return 'Picture-frame box';
+  if (role === 'bevel') return 'Raised panel';
+  if (role.endsWith('-panel')) return 'Panel';
+  if (style.planks) return part.dir === 'h' ? 'Plank' : 'Board';
+  if (part.dir === 'h') return 'Rail';
+  return style.bays ? 'Batten' : 'Stile';
+}
+// Its number among the boards of its kind in its stretch: { n, of } (1-based), or null for one added by hand.
+export function boardPlace(lay, part) {
+  if (!part || part.added || !part.key) return null;
+  const m = /^(.*):(\d+)(?:\/\d+)?$/.exec(part.key);
+  if (!m) return null;
+  const same = new Set(lay.parts.filter(p => p.key && !p.added && p.key.startsWith(m[1] + ':')).map(p => p.key.replace(/\/\d+$/, '')));
+  return { n: +m[2] + 1, of: same.size };
 }
 
 function layField(t, style, p, x0, x1, H, blocks, devices, out, push) {
