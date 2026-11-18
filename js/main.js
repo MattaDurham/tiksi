@@ -64,8 +64,8 @@ function lazyView(load) {
 }
 
 // Six tabs. Each part of a tab keeps its own address, so links into a part still work:
-// PHOTOS holds photos and VIDEOS (#/measure); PRODUCTS holds products, MATERIALS (#/materials)
-// and FIND A PRODUCT (#/research); DOCUMENTS holds drawings, job documents, CUT SHEETS (#/sheets)
+// PHOTOS holds photos and VIDEOS (#/measure); PRODUCTS holds products, MATERIALS (#/materials),
+// TRIM CATALOG (#/trim-catalog) and FIND A PRODUCT (#/research); DOCUMENTS holds drawings, job documents, CUT SHEETS (#/sheets)
 // and SEND. PROJECTS and BUDGET are ESTIMATE now. PHOTO TO 3D (#/reconstruct, from FILE › Import)
 // is a page of its own, shown under PHOTOS.
 const VIEWS = {
@@ -76,6 +76,7 @@ const VIEWS = {
   products: productsHub,
   materials: productsHub,
   research: productsHub,
+  'trim-catalog': productsHub,
   estimate,
   projects: estimate,
   budget: estimate,
@@ -86,7 +87,7 @@ const VIEWS = {
 };
 
 // The tab an address belongs to.
-const TAB_OF = { measure: 'photos', reconstruct: 'photos', materials: 'products', research: 'products', projects: 'estimate', budget: 'estimate', sheets: 'documents' };
+const TAB_OF = { measure: 'photos', reconstruct: 'photos', materials: 'products', research: 'products', 'trim-catalog': 'products', projects: 'estimate', budget: 'estimate', sheets: 'documents' };
 
 let currentView = null;
 let currentName = '';

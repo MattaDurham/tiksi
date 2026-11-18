@@ -184,3 +184,23 @@
 .model-panel .mp-table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
 .model-panel .mp-table th, .model-panel .mp-table td { text-align: left; padding: 2px 4px; border-bottom: 1px solid var(--line); }
 .model-panel .mp-part { border: 1px solid var(--line-2); border-radius: 4px; padding: 4px 6px; margin: 4px 0 8px; }
+
+/* ---------- trim catalog (trim-catalog-view.js) ---------- */
+.tc-hint { margin: 10px 0 0; font-size: 11.5px; }
+.tc-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.tc-group-head { grid-column: 1 / -1; font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; color: var(--faint); text-transform: uppercase; margin: 6px 0 -4px; }
+.tc-group-head:first-child { margin-top: 0; }
+.tc-card { display: block; width: 100%; padding: 0; text-align: left; color: var(--ink); font: inherit; }
+.tc-card[draggable="true"] { cursor: grab; }
+.tc-card:active { cursor: grabbing; }
+.tc-thumb { position: relative; padding: 10px; background: #f3f0e9; }
+.tc-thumb .tp-prof { border-radius: 0; }
+.tc-used { position: absolute; top: 6px; right: 6px; min-width: 18px; padding: 1px 5px; border-radius: 9px; background: var(--accent); color: var(--accent-ink); font: 600 10px var(--mono); text-align: center; }
+.tc-name { font-size: 12.5px; font-weight: 600; line-height: 1.3; }
+.tc-line { margin-top: 3px; font-size: 11px; line-height: 1.3; color: var(--dim); }
+.tc-detail { padding: 16px; gap: 8px; overflow-y: auto; }
+.tc-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tc-detail-title { margin: 0; font-size: 15px; }
+.tc-drag { cursor: grab; }
+.tc-elev .tp-elevation { max-width: 320px; }
+.tc-detail .note { font-size: 12px; line-height: 1.5; color: var(--dim); margin: 0; }

@@ -12,8 +12,10 @@
 //                stretch and the baseboards stay on the floor; one UNDO takes it back
 //   right-click  ADD A PANEL HERE adds one box to that wall alone
 //   battens      a drag on a batten closes the spacing, and the wall gains bays
-//   moulding     the dropdown swaps the room's rails to another moulding; with PROJECT chosen
-//                it swaps the next room's too
+//   moulding     the dropdown, drawn like the catalog, swaps the room's rails to another
+//                moulding; with PROJECT chosen it swaps the next room's too; the arrows step it
+//   catalog      PRODUCTS > TRIM CATALOG floats over MODEL; a card dragged onto the dropdown
+//                swaps the rails; onto a wall it adds crown to that face or swaps its baseboard
 //
 // Synthetic project and temporary runtime only; never uses the owner's stores.
 // Run: node tools/e2e-trim-design.mjs (Playwright + Chromium installed).
@@ -236,20 +238,107 @@ try {
   // ---------- moulding ----------
   { const r = await trim(RAIL); const q = await at(RAIL, 2.5, r.y + 0.03); await page.mouse.click(q.x, q.y); }
   await waitUntil(async () => /Chair rail/.test(await page.locator('.inspector .stat-line').first().textContent()), 'the rail again');
-  const select = page.locator('.inspector [data-role-product="chair-rail"]');
-  const options = await select.locator('option').evaluateAll(list => list.map(o => o.value).filter(Boolean));
+  // The dropdown shows the rail's moulding drawn to size and opens into every chair rail so drawn.
+  const mould = page.locator('.inspector [data-mould="chair-rail"]');
+  assert.equal(await mould.locator('summary svg.tp-prof').count(), 1, 'the closed dropdown shows the moulding\'s section');
+  await mould.locator('summary').click();
+  const options = await page.locator('.inspector [data-mould="chair-rail"] [data-cat]').evaluateAll(list => list.map(b => b.dataset.cat));
   assert.ok(options.length >= 2, 'the dropdown lists the catalog\'s chair rails');
+  assert.equal(await page.locator('.inspector [data-mould="chair-rail"] [data-cat] svg.tp-prof').count(), options.length, 'every entry is drawn');
   const was = (await trim(RAIL)).product, next = options.find(v => v !== was);
-  await select.selectOption(next);
+  const choose = async id => {
+    const d = page.locator('.inspector [data-mould="chair-rail"]');
+    if (!await d.evaluate(x => x.open)) await d.locator('summary').click();
+    await page.locator(`.inspector [data-mould="chair-rail"] [data-cat="${id}"]`).click();
+  };
+  await choose(next);
   await each('rail-living', async t => assert.equal(t.product, next, t.id + ' swapped'));
   await each('rail-study', async t => assert.equal(t.product, was, 'the study\'s rail is not in the room'));
+  assert.equal(await page.locator('.inspector [data-mould="chair-rail"]').evaluate(x => x.open), false, 'a click on an entry closes the dropdown');
   await scope('project').click();
   await waitUntil(async () => (await scope('project').getAttribute('aria-checked')) === 'true', 'PROJECT chosen');
   const third = options.find(v => v !== was && v !== next) || was;
-  await page.locator('.inspector [data-role-product="chair-rail"]').selectOption(third);
+  await choose(third);
   await each('rail-', async t => assert.equal(t.product, third, t.id + ' swapped with the project'));
-  ok('the moulding dropdown swaps the room\'s rails; with PROJECT chosen it swaps both rooms\'');
+  ok('the moulding dropdown, drawn entries, swaps the room\'s rails; with PROJECT chosen it swaps both rooms\'');
+  // With the open list focused the arrows swap live and the list keeps the keys.
+  await page.locator('.inspector [data-mould="chair-rail"] summary').click();
+  await page.locator('.inspector [data-mould="chair-rail"] [data-mould-list]').focus();
+  const at3 = options.indexOf(third), step = at3 < options.length - 1 ? 'ArrowDown' : 'ArrowUp', fourth = options[at3 + (step === 'ArrowDown' ? 1 : -1)];
+  await page.keyboard.press(step);
+  await each('rail-', async t => assert.equal(t.product, fourth, t.id + ' stepped with the arrow key'));
+  assert.ok(await page.evaluate(() => document.activeElement?.matches('[data-mould="chair-rail"] [data-mould-list]') && document.activeElement.closest('details').open), 'the list stays open with the keys');
+  await shot('06a-moulding-open');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('.inspector [data-mould="chair-rail"]').evaluate(x => x.open), false, 'Esc closes the dropdown');
+  ok('the arrow keys step the rails through the list live; Esc closes it');
+  assert.equal(await page.locator('.inspector .tp-cat-list:not(details .tp-cat-list)').count(), 0, 'the panel no longer carries the whole catalog');
   await shot('06-moulding');
+
+  // ---------- trim catalog, floating ----------
+  await scope('room').click();
+  await page.evaluate(() => { location.hash = '#/trim-catalog'; });
+  await page.locator('.tc-card').first().waitFor();
+  assert.equal(await page.locator('.doc-parts [data-part="trim"].active').count(), 1, '#/trim-catalog opens TRIM CATALOG in PRODUCTS');
+  const cards = await page.locator('.tc-card').count();
+  assert.ok(cards >= 10 && await page.locator('.tc-card svg.tp-prof').count() === cards, 'every catalog entry is a card drawn to size');
+  await page.locator('.mv-chip-btn[data-group="Crown"]').click();
+  assert.ok(await page.locator('.tc-card').count() < cards, 'the group chips filter the cards');
+  await page.locator('.mv-chip-btn[data-group=""]').click();
+  // A small window at the bottom left, clear of the south wall in the view.
+  await page.evaluate(() => localStorage.setItem('tiksi.productsFloat', JSON.stringify({ x: 8, y: innerHeight - 420, w: 420, h: 410 })));
+  await page.locator('[data-hub-action="float"]').click();
+  await page.locator('.pf-win .tc-card').first().waitFor();
+  assert.match(await page.evaluate(() => location.hash), /^#\/model/, 'FLOAT goes to MODEL');
+  await canvas.waitFor(); await idle();
+  await page.evaluate(() => document.querySelector('[data-view-go="v-south"]').click());
+  await page.waitForTimeout(900); await idle();
+  ok('PRODUCTS > TRIM CATALOG shows ' + cards + ' drawn cards; FLOAT keeps it over MODEL');
+  // A rail card dropped on the chair rail dropdown swaps the room's rails.
+  { const r = await trim(RAIL); const q = await at(RAIL, 2.5, r.y + 0.03); await page.mouse.click(q.x, q.y); }
+  await waitUntil(async () => /Chair rail/.test(await page.locator('.inspector .stat-line').first().textContent()), 'the rail with the catalog floating');
+  const railNow = (await trim(RAIL)).product, railNext = options.find(v => v !== railNow);
+  await page.locator(`.pf-win .tc-card[data-id="${railNext}"]`).dragTo(page.locator('.inspector [data-drop-style="chair-rail"]'));
+  await each('rail-living', async t => assert.equal(t.product, railNext, t.id + ' swapped by the dropped card'));
+  ok('a rail card dragged onto the chair rail dropdown swaps the room\'s rails');
+  // A crown card dropped on a bare part of the south wall adds crown to that face; a baseboard
+  // card dropped there swaps that face's baseboard alone.
+  const crownId = await page.evaluate(async () => (await import('/js/trims.js')).catalogInOrder().find(p => p.style === 'crown').id);
+  const box = await canvas.boundingBox();
+  const wallAt = async y => { const q = await at(SOUTH, 2.5, y); return { x: q.x - box.x, y: q.y - box.y }; };
+  // A card's drag carried to a point on the model: the browser's own drag start on the card,
+  // then the drag over and the drop where the pointer lets go (Playwright's dragTo does not
+  // deliver a drop onto a WebGL canvas).
+  const dropOn = (card, to) => page.evaluate(([card, x, y]) => {
+    const dt = new DataTransfer(), src = document.querySelector(card);
+    src.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    const target = document.elementFromPoint(x, y), at = { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt };
+    const over = new DragEvent('dragover', at); target.dispatchEvent(over);
+    if (!over.defaultPrevented) throw new Error('the model did not take the drag at ' + x + ',' + y + ' (' + target.className + ')');
+    target.dispatchEvent(new DragEvent('drop', at));
+    src.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
+  }, [card, box.x + to.x, box.y + to.y]);
+  const crownsBefore = await page.evaluate(() => window.testStore.activeProperty().trims.filter(t => t.style === 'crown').length);
+  await dropOn(`.pf-win .tc-card[data-id="${crownId}"]`, await wallAt(1.7));
+  await waitUntil(() => page.evaluate(n => window.testStore.activeProperty().trims.filter(t => t.style === 'crown').length === n + 1, crownsBefore), 'a crown card dropped on the wall adds crown');
+  const added = await page.evaluate(() => { const t = window.testStore.activeProperty().trims.filter(t => t.style === 'crown').at(-1); return { wallId: t.wallId, side: t.side }; });
+  const south = await trim(SOUTH);
+  assert.deepEqual(added, { wallId: south.wallId, side: south.side }, 'on the face it was dropped on');
+  const baseId = 'base-living-s1', baseWas = (await trim(baseId)).product;
+  const baseNext = await page.evaluate(was => (async () => (await import('/js/trims.js')).catalogInOrder().find(p => p.style === 'baseboard' && p.id !== was).id)(), baseWas);
+  await dropOn(`.pf-win .tc-card[data-id="${baseNext}"]`, await wallAt(1.7));
+  await waitUntil(async () => (await trim(baseId)).product === baseNext, 'a baseboard card dropped on the wall swaps its baseboard');
+  assert.equal((await trim('base-living-w')).product, baseWas, 'the next wall\'s baseboard is left alone');
+  ok('cards dropped on a wall: crown is added to that face, the face\'s baseboard swaps');
+  await shot('06b-floating-catalog');
+  await page.locator('.pf-win [data-pf-dock]').click();
+  await page.locator('.doc-parts [data-part="trim"].active').waitFor();
+  assert.equal(await page.locator('.pf-win').count(), 0, 'DOCK puts PRODUCTS back in its tab');
+  await page.locator('#rail [data-view=model]').click();
+  await canvas.waitFor(); await idle();
+  await page.evaluate(() => document.querySelector('[data-view-go="v-south"]').click());
+  await page.waitForTimeout(900); await idle();
+  ok('DOCK puts PRODUCTS back in its tab at TRIM CATALOG');
 
   // ---------- battens ----------
   await page.keyboard.press('Escape');
@@ -301,7 +390,7 @@ try {
   await page.locator('.inspector [data-trim-add]').click();
   await idle();
   await pickStyle('crown', 'ekena-mld05x04x07ns');
-  assert.equal(await page.evaluate(() => window.testStore.activeProperty().trims.find(t => t.style === 'crown').product), 'ekena-mld05x04x07ns');
+  assert.equal(await page.evaluate(() => window.testStore.activeProperty().trims.find(t => t.style === 'crown' && t.wallId === 'e').product), 'ekena-mld05x04x07ns');
   const cut = page.locator('.inspector .tp-product .tp-prof');
   assert.match(await cut.getAttribute('aria-label'), /5 7\/8" drop × 4 3\/4" projection/);
   assert.ok(await cut.locator('.tp-prof-sides polygon').count() > 1);
