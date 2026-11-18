@@ -70,9 +70,12 @@ export function trimMeshParts(t, wall, view, openings) {
   const z = d => side * (h + d);
   const main = { P: [], N: [], UV: [] }, backer = { P: [], N: [], UV: [] };
   const OUT = [0, 0, side];
+  // Which triangles of each buffer belong to which part (trims.js keys), so a click can find one board.
+  const ranges = { main: [], backer: [] };
   for (const part of lay.parts) {
     const out = part.role === 'backer' ? backer : main;
     const lift = part.d || 0;
+    const first = out.P.length / 9;
     if (part.kind === 'run') {
       const sec = sectionOf(part.profile, part.W, part.T);
       const [o0, o1] = part.mitreA || part.mitreB ? faceEnds(part.T) : [part.x0, part.x1];
@@ -106,10 +109,12 @@ export function trimMeshParts(t, wall, view, openings) {
         sweepInto(out, sec, (k, end) => { const [a, d] = sec[k]; return [end ? x1 : x0, y0 + a, z(d + lift)]; }, [0, 1, 0], OUT, [-1, 0, 0], [1, 0, 0]);
       }
     }
+    const count = out.P.length / 9 - first;
+    if (count > 0 && part.key) ranges[out === backer ? 'backer' : 'main'].push({ key: part.key, start: first, count });
   }
   const parts = [];
   for (const [role, buf] of [['main', main], ['backer', backer]]) {
-    if (buf.P.length) parts.push({ role, positions: buf.P, normals: buf.N, uv: buf.UV });
+    if (buf.P.length) parts.push({ role, positions: buf.P, normals: buf.N, uv: buf.UV, ranges: ranges[role] });
   }
-  return { parts, layout: { rects: lay.rects, boxes: lay.boxes, cols: lay.cols, H, side, h } };
+  return { parts, layout: { rects: lay.rects, boxes: lay.boxes, cols: lay.cols, H, side, h, start: lay.start, end: lay.end } };
 }

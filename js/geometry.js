@@ -647,7 +647,8 @@ export function buildTrimGroup(t, wall, view, openings, ctx) {
       : record ? matFor(record, FALLBACK_TRIM, 0.55, ctx.matOpts) : trimMat(ctx.matOpts);
     const m = new THREE.Mesh(g, mat);
     m.castShadow = true; m.receiveShadow = true;
-    m.userData = { kind: 'trim', id: t.id, wallId: wall.id };
+    // ranges: which triangles are which board (trim-mesh.js), for a double-click on one board.
+    m.userData = { kind: 'trim', id: t.id, wallId: wall.id, ranges: part.ranges || [] };
     group.add(m);
   }
   group.userData.layout = layout;
