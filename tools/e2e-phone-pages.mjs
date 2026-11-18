@@ -32,7 +32,7 @@ import net from 'node:net';
 import { chromium, webkit, devices } from 'playwright';
 
 const W = 402, H = 874;
-const PAGES = ['photos', 'materials', 'measure', 'reconstruct', 'research', 'projects', 'products', 'budget', 'schedule', 'sheets', 'documents', 'guide'];
+const PAGES = ['photos', 'materials', 'measure', 'reconstruct', 'research', 'projects', 'products', 'bids', 'budget', 'schedule', 'sheets', 'documents', 'guide'];
 const failures = [];
 let passed = 0;
 const check = (ok, what) => { if (ok) { passed++; console.log('  ok   ' + what); } else { failures.push(what); console.log('  FAIL ' + what); } };
