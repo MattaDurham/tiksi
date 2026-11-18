@@ -33,12 +33,16 @@
 // wall-fixture clearances cut runs and fields; a run that reaches the wall's end is mitred to meet
 // the next wall's trim (geometry.js does the mitre, as it does for the wall itself).
 //
-// A wall's trimClearances are the things on its faces that trim must keep off. Most (radiators,
-// heater covers, anything wide) stop trim as a window does. A small device (an outlet, a switch
-// or a thermostat: kind 'device') does not break the field: the trim is laid out round it with
-// CLEAR to spare. Boxes, stiles and battens are placed so that it falls between them, and any
-// run or board that would still cross it is cut round it. MODEL fills these in by itself from
-// the wall-mounted pieces of the property's models (trim-obstacles.js); those carry auto: true.
+// A wall's trimClearances are the things on its faces that trim must keep off: small devices
+// (an outlet, a switch or a thermostat: kind 'device') and radiators, heater covers and anything
+// wide. Neither moves the layout: a field is laid out over the whole wall as if they were not
+// there (only doors and windows break it into stretches), so its boxes and battens stay
+// symmetrical. Then each board or box moulding that crosses a device is notched round it, with
+// DEVICE_CLEAR to spare, and stays one board. At a radiator the trim stops: battens, stiles,
+// planks and boxes end HEATER_CLEAR above its top, and a rail or baseboard behind it stops
+// HEATER_CLEAR short of each side. A run (baseboard, rail, crown) that crosses a device stops
+// either side of it. MODEL fills these in by itself from the wall-mounted pieces of the
+// property's models (trim-obstacles.js); those carry auto: true.
 
 import { sectionOf, isCrownProfile } from './trim-profiles.js';
 import { catalogItem, catalogFor, TRIM_CATALOG } from './trim-catalog.js';
@@ -230,69 +234,157 @@ export function openingBlocks(wall, openings, L, H) {
 
 // A surface-mounted or recessed fixture can reserve space on one wall face.
 // The horizontal limits follow the wall, and the heights are above its floor.
-// Trim keeps this far off a device (the moulding never touches the plate).
+// Trim keeps this far off a device (the moulding never touches the plate)...
 export const DEVICE_CLEAR = 0.0127;
+// ...and this far off a radiator or heater cover (kind 'heater'). A clearance drawn with no
+// kind is taken as it is.
+export const HEATER_CLEAR = 0.0127;
 function clearancesOn(wall, side, L, H, devices) {
   if (!Array.isArray(wall.trimClearances)) return [];
   return wall.trimClearances.flatMap(c => {
     if (!c || c.side !== side || ![c.f0, c.f1, c.y0, c.y1].every(Number.isFinite)) return [];
     if ((c.kind === 'device') !== devices) return [];
-    const m = devices ? DEVICE_CLEAR : 0;
+    const m = devices ? DEVICE_CLEAR : c.kind === 'heater' ? HEATER_CLEAR : 0;
     const x0 = clamp(c.f0, 0, 1) * L - m, x1 = clamp(c.f1, 0, 1) * L + m;
     const y0 = clamp(c.y0, 0, H) - m, y1 = clamp(c.y1, 0, H) + m;
     return x0 < x1 && y0 < y1 ? [{ x0, x1, y0, y1, ...(devices ? { device: true } : {}) }] : [];
   });
 }
-// What stops trim as an opening does: everything but small devices.
+// What trim stops at: radiators, heater covers and anything else that is not a small device.
 export function trimClearanceBlocks(wall, side, L, H) { return clearancesOn(wall, side, L, H, false); }
-// Small devices, each grown by DEVICE_CLEAR: the trim is laid out round them.
+// Small devices, each grown by DEVICE_CLEAR: boards and box mouldings are notched round them.
 export function trimDeviceBlocks(wall, side, L, H) { return clearancesOn(wall, side, L, H, true); }
 
-// The pieces of [a, b] left once each device's keep-out is taken out: the device and its
-// clearance, at least `least` wide and centred on it, so the boxes either side of an outlet are
-// never closer than the usual gap.
-export function spansAround(a, b, devices, least = 0) {
-  const outs = devices.map(d => { const c = (d.x0 + d.x1) / 2, w = Math.max(d.x1 - d.x0, least); return [c - w / 2, c + w / 2]; })
-    .sort((p, q) => p[0] - q[0]);
-  const spans = [];
-  let x = a;
-  for (const [lo, hi] of outs) {
-    if (hi <= x) continue;
-    if (lo > x) spans.push([x, Math.min(lo, b)]);
-    x = Math.max(x, hi);
-    if (x >= b) break;
+const EPS = 1e-6;
+const hits = (p, o) => o.x1 > p.x0 + EPS && o.x0 < p.x1 - EPS && o.y1 > p.y0 + EPS && o.y0 < p.y1 - EPS;
+// Trim stops at a radiator (`stops`). A board it covers the whole width of ends above it (or below
+// it, when it hangs higher than the board's foot); a board it covers the whole height of (a
+// rail, a plank of shiplap) stops either side of it. A box it reaches is shortened to start
+// above it, and the raised panel inside moves up with it. Anything left that it covers only
+// part of is notched (notchParts). Boards split here are named '<key>/0', '<key>/1'.
+function stopAtRadiators(out, stops) {
+  if (!stops.length) return;
+  const tooSmall = p => p.x1 - p.x0 < .003 || p.y1 - p.y0 < .003;
+  const moved = [];          // [old box, new y0, new y1]: what sits inside a shortened box follows it
+  const parts = [];
+  // Boxes first, so the panels inside them can follow.
+  const order = [...out.parts.filter(p => p.kind === 'frame'), ...out.parts.filter(p => p.kind !== 'frame')];
+  const keep = new Set();
+  for (const part of order) {
+    if (part.kind === 'run' || part.role === 'backer') { keep.add(part); continue; }
+    if (part.kind === 'frame') {
+      let q = { ...part };
+      for (const s of stops) {
+        if (!hits(q, s)) continue;
+        if (s.y0 <= q.y0 + EPS) q.y0 = s.y1; else if (s.y1 >= q.y1 - EPS) q.y1 = s.y0;
+      }
+      const W = q.W || 0;
+      if (q.y1 - q.y0 <= 2 * W + .01) continue;          // too low above the radiator to be a box
+      if (q.y0 !== part.y0 || q.y1 !== part.y1) moved.push([part, q.y0, q.y1]);
+      keep.add(q); parts.push(q); continue;
+    }
+    // Inside a box that moved: keep the same margin to its new edge.
+    let q = { ...part };
+    const host = moved.find(([b]) => q.x0 >= b.x0 - EPS && q.x1 <= b.x1 + EPS && q.y0 >= b.y0 - EPS && q.y1 <= b.y1 + EPS);
+    if (host) {
+      const [b, ny0, ny1] = host;
+      q.y0 = Math.max(q.y0, ny0 + (q.y0 - b.y0)); q.y1 = Math.min(q.y1, ny1 - (b.y1 - q.y1));
+      if (tooSmall(q)) continue;
+    }
+    let pieces = [q];
+    for (const s of stops) {
+      const next = [];
+      for (const p of pieces) {
+        if (!hits(p, s)) { next.push(p); continue; }
+        if (s.x0 <= p.x0 + EPS && s.x1 >= p.x1 - EPS) {
+          // Across the whole width: the board ends above (or below) it, or is cut in two round it.
+          if (s.y0 <= p.y0 + EPS) next.push({ ...p, y0: Math.min(p.y1, s.y1) });
+          else if (s.y1 >= p.y1 - EPS) next.push({ ...p, y1: Math.max(p.y0, s.y0) });
+          else next.push({ ...p, y1: s.y0 }, { ...p, y0: s.y1 });
+        } else if (s.y0 <= p.y0 + EPS && s.y1 >= p.y1 - EPS) {
+          // Up the whole height: the board stops either side of it.
+          next.push({ ...p, x1: Math.max(p.x0, s.x0) }, { ...p, x0: Math.min(p.x1, s.x1) });
+        } else next.push(p);
+      }
+      pieces = next.filter(p => !tooSmall(p));
+    }
+    if (pieces.length > 1) pieces = pieces.map((p, k) => ({ ...p, key: part.key + '/' + k }));
+    for (const p of pieces) { keep.add(p); parts.push(p); }
   }
-  if (x < b) spans.push([x, b]);
-  return spans.filter(([p, q]) => q - p > 1e-6);
+  // Back in the layout's own order.
+  const at = new Map(out.parts.map((p, i) => [p.key, i]));
+  out.parts = [...out.parts.filter(p => p.kind === 'run' || p.role === 'backer'), ...parts]
+    .sort((a, b) => (at.get(String(a.key).replace(/\/\d+$/, '')) ?? 1e9) - (at.get(String(b.key).replace(/\/\d+$/, '')) ?? 1e9));
+  // The box outlines the panel and the drag handles use follow the boxes.
+  out.boxes = out.boxes.flatMap(b => {
+    const q = { ...b };
+    for (const s of stops) {
+      if (!hits(q, s)) continue;
+      if (s.y0 <= q.y0 + EPS && s.x0 <= q.x1 && s.x1 >= q.x0) q.y0 = s.y1; else if (s.y1 >= q.y1 - EPS) q.y1 = s.y0;
+    }
+    return q.y1 - q.y0 > .03 ? [q] : [];
+  });
 }
-// `n` boxes shared among spans by width (largest remainder), none in a span too narrow to hold one.
-function shareCount(spans, n, least) {
-  const ok = spans.map(([a, b]) => b - a >= least);
-  const sum = spans.reduce((s, [a, b], i) => s + (ok[i] ? b - a : 0), 0);
-  if (!n || !sum) return spans.map(() => 0);
-  const raw = spans.map(([a, b], i) => ok[i] ? n * (b - a) / sum : 0);
-  const out = raw.map(Math.floor);
-  let left = n - out.reduce((s, v) => s + v, 0);
-  raw.map((v, i) => [v - out[i], i]).sort((p, q) => q[0] - p[0]).forEach(([, i]) => { if (left > 0 && ok[i]) { out[i]++; left--; } });
+// The keep-outs a board or box moulding crosses, clipped to it: `notches` on the part. A box's
+// moulding is notched only where a keep-out reaches its moulding, not where it sits inside the box.
+function notchParts(out, keepOuts) {
+  out.parts = out.parts.map(part => {
+    if (part.kind !== 'board' && part.kind !== 'frame') return part;
+    const { notches, ...q } = part;
+    if (!keepOuts.length || part.role === 'backer') return q;
+    const W = part.kind === 'frame' ? part.W || 0 : 0;
+    const inner = part.kind === 'frame' ? { x0: q.x0 + W, x1: q.x1 - W, y0: q.y0 + W, y1: q.y1 - W } : null;
+    const n = [];
+    for (const o of keepOuts) {
+      if (!hits(q, o)) continue;
+      if (inner && o.x0 >= inner.x0 && o.x1 <= inner.x1 && o.y0 >= inner.y0 && o.y1 <= inner.y1) continue;
+      n.push({ x0: Math.max(q.x0, o.x0), x1: Math.min(q.x1, o.x1), y0: Math.max(q.y0, o.y0), y1: Math.min(q.y1, o.y1) });
+    }
+    return n.length ? { ...q, notches: n } : q;
+  });
+}
+// A notched board as the solid rectangles left of it, in pieces along its length: the full-width
+// lengths (whole: true, with the board's own profile) and, where a notch is, what is left beside
+// it. An unnotched board is its own one piece.
+export function boardPieces(part) {
+  const r = { x0: part.x0, x1: part.x1, y0: part.y0, y1: part.y1 };
+  if (!part.notches || !part.notches.length) return [{ ...r, whole: true }];
+  const v = part.dir !== 'h';
+  // Along the board's length (y for an upright board, x for a level one), the lengths between notch ends.
+  const [a, b] = v ? [r.y0, r.y1] : [r.x0, r.x1];
+  const cuts = [...new Set([a, b, ...part.notches.flatMap(n => v ? [n.y0, n.y1] : [n.x0, n.x1]).filter(t => t > a && t < b)])].sort((p, q) => p - q);
+  const out = [];
+  for (let i = 1; i < cuts.length; i++) {
+    const s0 = cuts[i - 1], s1 = cuts[i], mid = (s0 + s1) / 2;
+    if (s1 - s0 < 1e-5) continue;
+    // Across it, the board minus the notches that cover this length.
+    const [c0, c1] = v ? [r.x0, r.x1] : [r.y0, r.y1];
+    let spans = [[c0, c1]];
+    for (const n of part.notches) {
+      const [l0, l1] = v ? [n.y0, n.y1] : [n.x0, n.x1], [m0, m1] = v ? [n.x0, n.x1] : [n.y0, n.y1];
+      if (!(l0 < mid && l1 > mid)) continue;
+      spans = spans.flatMap(([p, q]) => m1 <= p || m0 >= q ? [[p, q]] : [[p, Math.max(p, m0)], [Math.min(q, m1), q]]);
+    }
+    for (const [p, q] of spans) {
+      if (q - p < .002) continue;
+      const whole = Math.abs(p - c0) < 1e-9 && Math.abs(q - c1) < 1e-9;
+      out.push(v ? { x0: p, x1: q, y0: s0, y1: s1, whole } : { x0: s0, x1: s1, y0: p, y1: q, whole });
+    }
+  }
   return out;
 }
-// A straight board with each device it crosses cut out of it: the pieces either side, and the
-// pieces below and above the device where it sits inside the board's height.
-function cutBoard(part, devices) {
-  let pieces = [part];
-  for (const d of devices) {
-    const next = [];
-    for (const p of pieces) {
-      if (d.x1 <= p.x0 || d.x0 >= p.x1 || d.y1 <= p.y0 || d.y0 >= p.y1) { next.push(p); continue; }
-      const cx0 = Math.max(p.x0, d.x0), cx1 = Math.min(p.x1, d.x1);
-      for (const q of [{ x0: p.x0, x1: cx0, y0: p.y0, y1: p.y1 }, { x0: cx1, x1: p.x1, y0: p.y0, y1: p.y1 },
-        { x0: cx0, x1: cx1, y0: p.y0, y1: Math.max(p.y0, d.y0) }, { x0: cx0, x1: cx1, y0: Math.min(p.y1, d.y1), y1: p.y1 }]) {
-        if (q.x1 - q.x0 > .003 && q.y1 - q.y0 > .003) next.push({ ...p, ...q });
-      }
-    }
-    pieces = next;
+// Where a box's moulding is notched, side by side: { bottom, top, left, right } each a list of
+// [from, to] along that side (x for top and bottom, y for the sides) where the moulding is cut away.
+export function frameGaps(part) {
+  const out = { bottom: [], top: [], left: [], right: [] };
+  const W = part.W || 0;
+  for (const n of part.notches || []) {
+    if (n.y0 < part.y0 + W) out.bottom.push([n.x0, n.x1]);
+    if (n.y1 > part.y1 - W) out.top.push([n.x0, n.x1]);
+    if (n.x0 < part.x0 + W) out.left.push([n.y0, n.y1]);
+    if (n.x1 > part.x1 - W) out.right.push([n.y0, n.y1]);
   }
-  return pieces;
+  return out;
 }
 
 // [x0, x1] minus the intervals in `cuts`, pieces shorter than `min` dropped. Each piece says
@@ -367,7 +459,7 @@ function colsPerRect(rects, total) {
   return out;
 }
 
-function layPicturePreset(t, p, recipe, r, rect, out, push, devices = []) {
+function layPicturePreset(t, p, recipe, r, rect, out, push) {
   const gap = t.gap ?? .1, inset = t.inset ?? .09;
   const a = r.x0 + inset, b = r.x1 - inset;
   const c = r.y0 + (t.insetBottom ?? inset), d = r.y1 - (t.insetTop ?? inset);
@@ -385,12 +477,11 @@ function layPicturePreset(t, p, recipe, r, rect, out, push, devices = []) {
   };
   if (b - a <= p.W * 2 || d - c <= p.W * 2) return;
   const across = shares => splitSpan(a, b, shares.length, shares, gap);
-  const devs = devices.filter(v => v.x1 > a && v.x0 < b && v.y1 > c && v.y0 < d);
-  // Fit one ordinary band above/below an opening, round a device, or where the preset will not fit.
+  // Fit one ordinary band above/below an opening, or where the preset will not fit.
   const top = across(recipe.columns);
-  if (!r.full || devs.length || !top.length || top.some(([x, y]) => y - x <= Math.max(p.W * 2, t.minBox || 0))) {
+  if (!r.full || !top.length || top.some(([x, y]) => y - x <= Math.max(p.W * 2, t.minBox || 0))) {
     const fit = w => w <= p.W * 2 ? 0 : Math.max(1, Math.min(autoCount(t.style, w, d - c, null, t.target, gap), Math.floor((w + gap) / (p.W * 2 + gap))));
-    const boxes = spansAround(a, b, devs, gap).flatMap(([x, y]) => { const n = fit(y - x); return n ? splitSpan(x, y, n, null, gap) : []; });
+    const n = fit(b - a), boxes = n ? splitSpan(a, b, n, null, gap) : [];
     boxes.forEach(([x, y], i) => addBox(x, y, c, d, i, 0));
     if (r.full) out.cols = Math.max(out.cols, boxes.length);
     return;
@@ -437,7 +528,9 @@ export function trimLayout(t, wall, openings, face = {}) {
   const x0 = atA ? e0 : Math.max(e0, t.f0 * L), x1 = atB ? e1 : Math.min(e1, t.f1 * L);
   if (x1 - x0 < MIN_PIECE) return out;
   const side = t.side === -1 ? -1 : 1;
-  const blocks = [...openingBlocks(wall, openings, L, H), ...trimClearanceBlocks(wall, side, L, H)];
+  // Doors and windows break a field into stretches; radiators and devices do not (see the top).
+  const blocks = openingBlocks(wall, openings, L, H);
+  const stops = trimClearanceBlocks(wall, side, L, H).filter(d => d.x1 > x0 && d.x0 < x1);
   const devices = trimDeviceBlocks(wall, side, L, H).filter(d => d.x1 > x0 && d.x0 < x1);
   const W = p.W, T = p.T;
   const push = part => { if (out.parts.length < MAX_PARTS) out.parts.push(part); };
@@ -447,7 +540,7 @@ export function trimLayout(t, wall, openings, face = {}) {
   if (style.kind === 'run' || style.kind === 'crown') {
     const crown = style.kind === 'crown' || isCrownProfile(p.profile);
     const yb = crown ? H - W : clamp(t.y, 0, Math.max(0, H - W)), yt = yb + W;
-    const cuts = [...blocks, ...devices].filter(b => b.y1 > yb + 1e-6 && b.y0 < yt - 1e-6);
+    const cuts = [...blocks, ...stops, ...devices].filter(b => b.y1 > yb + 1e-6 && b.y0 < yt - 1e-6);
     for (const piece of subtract(x0, x1, cuts, MIN_PIECE)) {
       push({ kind: 'run', x0: piece.x0, x1: piece.x1, y: yb, W, T, profile: p.profile, crown, mitreA: piece.a && atA, mitreB: piece.b && atB });
     }
@@ -456,16 +549,14 @@ export function trimLayout(t, wall, openings, face = {}) {
     return out;
   }
 
-  // Fields. Whatever board still crosses a device once the layout has gone round it is cut.
-  // Every part is named before the cut, so a batten cut round an outlet keeps its place in the count.
-  layField(t, style, p, x0, x1, H, blocks, devices, out, push);
+  // Fields: laid out over the whole stretch, then stopped at radiators and notched round devices.
+  // Every part is named first, so a batten stopped or notched keeps its place in the count; boards
+  // moved by hand are notched where they now stand.
+  layField(t, style, p, x0, x1, H, blocks, out, push);
   nameParts(out);
-  if (devices.length) out.parts = out.parts.flatMap(part => {
-    if (part.kind !== 'board') return [part];
-    const pieces = cutBoard(part, devices);
-    return pieces.length > 1 ? pieces.map((q, k) => ({ ...q, key: part.key + '/' + k })) : pieces;
-  });
+  stopAtRadiators(out, stops);
   applyBoardEdits(t, out);
+  notchParts(out, [...devices, ...stops]);
   return out;
 }
 
@@ -473,8 +564,8 @@ export function trimLayout(t, wall, openings, face = {}) {
 // Every part of a layout has a key that names its place in it: the stretch of the field it
 // stands in (rects, counted from wall end a; 'run' for a moulding along the wall), what it is,
 // and its place among the parts of that kind there, left to right and then bottom to top.
-// '0:v:2' is the third vertical board of the first stretch. A batten cut round an outlet is
-// '0:v:2/0' and '0:v:2/1'. The key holds when the layout is drawn again with the same count.
+// '0:v:2' is the third vertical board of the first stretch. A batten notched round an outlet
+// keeps its key; a rail stopped either side of a radiator is '0:h:0/0' and '0:h:0/1'. The key holds when the layout is drawn again with the same count.
 //
 // t.boards keeps the boards changed by hand, by key:
 //   { hide: true }                 a board of the layout taken out
@@ -617,17 +708,15 @@ export function boardPlace(lay, part) {
   return { n: +m[2] + 1, of: same.size };
 }
 
-function layField(t, style, p, x0, x1, H, blocks, devices, out, push) {
+function layField(t, style, p, x0, x1, H, blocks, out, push) {
   const W = p.W, T = p.T;
   const y0 = clamp(t.y, 0, H - MIN_FIELD), y1 = clamp(t.y + (t.h || style.h), y0 + MIN_FIELD, H);
   const rects = fieldRects(x0, x1, y0, y1, blocks);
   out.rects = rects;
   const rows = Math.max(1, t.rows || 1);
-  // The devices standing in a band of a rectangle.
-  const devsIn = (r, lo, hi) => devices.filter(d => d.x1 > r.x0 && d.x0 < r.x1 && d.y1 > lo && d.y0 < hi);
   const recipe = t.style === 'picture-frame' && framePreset(t.frameLayout);
   if (recipe) {
-    rects.forEach((r, i) => layPicturePreset(t, p, recipe, r, i, out, push, devices));
+    rects.forEach((r, i) => layPicturePreset(t, p, recipe, r, i, out, push));
     return;
   }
   if (style.planks) {
@@ -680,21 +769,16 @@ function layField(t, style, p, x0, x1, H, blocks, devices, out, push) {
       const rowH = spans[0][1] - spans[0][0];
       // Framed panels count their clear widths between stiles once a target is set; without one they fit as before.
       const fit = w => frame || !t.target ? autoCount(t.style, w, rowH, null, t.target, gap) : autoCount(t.style, w - 2 * stile, rowH, null, t.target, stile);
-      // Each piece of the stretch between devices: its ends (stiles stand there) and its boxes.
-      // Boxes: inside the inset, a gap between. Framed panels: stiles at both ends and between bays.
-      // A piece set to no boxes, or whose boxes would be too narrow to read as boxes, stays plain wall.
-      const devs = devsIn(r, iy0, iy1);
-      const pieces = devs.length ? spansAround(ix0, ix1, devs, frame ? gap : 0).filter(([a, b]) => b - a >= (frame ? W * 2 + .03 : stile)) : [[ix0, ix1]];
+      // The stretch's ends (stiles stand there) and its boxes. Boxes: inside the inset, a gap
+      // between. Framed panels: stiles at both ends and between bays. A stretch set to no boxes,
+      // or whose boxes would be too narrow to read as boxes, stays plain wall.
       // A stretch set to no boxes stays plain only for picture-frame boxes; panels always get one.
       const given = set != null && (frame || set) ? set : null;
-      const counts = !devs.length ? [given != null ? given : fit(ix1 - ix0)]
-        : given != null ? shareCount(pieces, given, frame ? W * 2 + .03 : 2 * stile + .03)
-        : pieces.map(([a, b]) => (frame ? b - a < W * 2 + .03 : b - a < 2 * stile + .03) ? 0 : fit(b - a));
-      const n = counts.reduce((s, v) => s + v, 0);
-      if (r.full) out.cols = Math.max(out.cols, n);
+      const counts = [given != null ? given : fit(ix1 - ix0)];
+      if (r.full) out.cols = Math.max(out.cols, counts[0]);
       let col = 0;
-      pieces.forEach(([a, b], k) => {
-        let across = !counts[k] ? [] : frame ? splitSpan(a, b, counts[k], r.full && !devs.length ? t.widths : null, gap) : splitSpan(a + stile, b - stile, counts[k], r.full && !devs.length ? t.widths : null, stile);
+      [[ix0, ix1]].forEach(([a, b], k) => {
+        let across = !counts[k] ? [] : frame ? splitSpan(a, b, counts[k], r.full ? t.widths : null, gap) : splitSpan(a + stile, b - stile, counts[k], r.full ? t.widths : null, stile);
         if (frame && t.minBox && across.some(([p0, p1]) => p1 - p0 < t.minBox - 1e-9)) across = [];
         if (frame && !across.length) return;
         if (!frame) {
@@ -723,8 +807,6 @@ function layField(t, style, p, x0, x1, H, blocks, devices, out, push) {
 
   if (style.bays) {
     // Board and batten, square grid: a top rail, vertical battens, and (grid) rails between rows.
-    // A device in the field falls in a bay: the battens of each piece of wall either side of it
-    // stand clear of it.
     const spacing = t.spacing || p.spacing || .45;
     const rail = Math.max(W, p.rail || W);
     for (const r of rects) {
@@ -735,15 +817,13 @@ function layField(t, style, p, x0, x1, H, blocks, devices, out, push) {
       const spans = rowsHere > 1 ? splitSpan(r.y0, by1, rowsHere, t.heights, W) : [[r.y0, by1]];
       if (!spans.length) continue;
       const set = setCols(r);
-      const devs = devsIn(r, r.y0, by1);
       const fit = w => autoCount(t.style, w, spans[0][1] - spans[0][0], t.style === 'grid' ? t.spacing : spacing);
-      const pieces = devs.length ? spansAround(r.x0, r.x1, devs, 0).filter(([a, b]) => b - a >= Math.min(W, .01)) : [[r.x0, r.x1]];
-      const counts = !devs.length ? [set || fit(r.x1 - r.x0)] : set ? shareCount(pieces, set, W * 2 + .03).map(v => Math.max(1, v)) : pieces.map(([a, b]) => fit(b - a));
-      if (r.full) out.cols = Math.max(out.cols, counts.reduce((s, v) => s + v, 0));
+      const counts = [set || fit(r.x1 - r.x0)];
+      if (r.full) out.cols = Math.max(out.cols, counts[0]);
       let col = 0;
-      pieces.forEach(([a, b], k) => {
+      [[r.x0, r.x1]].forEach(([a, b], k) => {
         const batten = Math.min(W, b - a);
-        const bays = splitSpan(a + batten, b - batten, counts[k], r.full && !devs.length ? t.widths : null, batten);
+        const bays = splitSpan(a + batten, b - batten, counts[k], r.full ? t.widths : null, batten);
         const xs = b - a < W * 2 ? [(a + b - batten) / 2] : [a, ...bays.slice(0, -1).map(([, q]) => q), b - batten];
         for (const x of xs) push({ kind: 'board', dir: 'v', x0: x, x1: x + batten, y0: r.y0, y1: by1, T, profile: 'eased' });
         bays.forEach(([p0, p1]) => { const i = col++; spans.forEach(([c, d], j) => out.boxes.push({ x0: p0, x1: p1, y0: c, y1: d, col: i, row: j, rect: rects.indexOf(r) })); });
