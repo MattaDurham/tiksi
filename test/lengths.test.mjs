@@ -135,7 +135,7 @@ const BARE_UNIT_BEFORE = {
   'js/materialsview.js': ['feet'],
   'js/measurements.js': ['inches'],
   'js/markup-layer.js': ['feet'],
-  'js/trim-panel.js': ['inches', 'inches', 'inches', 'inches', 'inches'],   // trim layout numbers (new 2026-11-16), heights, raise-by, box widths and row heights (new 2026-11-13): trim is sized in inches   // the LINE tool's typed length (new 2026-11-12; feet like the other MODEL fields, as SketchUp's model units)
+  'js/trim-panel.js': ['inches', 'inches', 'inches', 'inches', 'inches', 'inches'],   // one board's edges (new 2026-11-18), trim layout numbers (new 2026-11-16), heights, raise-by, box widths and row heights (new 2026-11-13): trim is sized in inches   // the LINE tool's typed length (new 2026-11-12; feet like the other MODEL fields, as SketchUp's model units)
 };
 
 test('every length field reads a number on its own in the unit it always did', async () => {

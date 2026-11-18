@@ -26,7 +26,7 @@ export function projectBlockHtml(ctx) {
   const opts = choices.map(c => `<option value="${escapeHtml(c.id)}" ${c.id === current ? 'selected' : ''}>${escapeHtml(label(c))}</option>`).join('');
   return `<div class="tp-sub">PROJECT</div>
     ${group ? `<div class="stat-line"><span>Group: ${escapeHtml(group.name || 'Untitled')}</span><b>${n} ${escapeHtml(ctx.kindLabel)}${n === 1 ? '' : 's'}</b></div>
-      <div class="empty" style="margin:2px 0 6px">A click on any piece of this group selects the whole group. Alt-click picks one piece on its own.</div>` : ''}
+      <div class="empty" style="margin:2px 0 6px">A click on any piece of this group selects the whole group. Double-click to go one level in: the piece, then one board of it. Alt-click picks one piece on its own.</div>` : ''}
     <div class="field"><label>Project › room it is priced in (ESTIMATE)</label><select data-pp-project>${current === undefined ? '<option value="" selected disabled>(several)</option>' : ''}${opts}</select></div>
     <details class="pp-group"${ctx.openGroup ? ' open' : ''}><summary>GROUP ${escapeHtml(what.toUpperCase())} AS A ROOM OF A PROJECT</summary>
       <div class="field"><label>Room name</label><input type="text" data-pp-name placeholder="Entry and hall"></div>

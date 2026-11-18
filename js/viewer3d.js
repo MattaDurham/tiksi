@@ -76,9 +76,11 @@ import { componentKeyOf, isInstanceNode } from './model-components.js';
 import { obstacleKind, wallClearances, applyAutoClearances, dropAutoClearances } from './trim-obstacles.js';
 import { modelObjectTree, objectForClick, objectBelow, objectOffset, setObjectOffset, applyPartOffsets, objectBox, sameComponent } from './model-objects.js';
 import { renderObjectList, showListTab, revealInList, objectThing, hiddenState } from './object-list.js';
-import { TRIM_STYLES, trimTemplate, swapTrimProduct, swapWainscot, setFrameLayout, setTrimY, trimExtent, trimStyle, trimProduct, trimLabel, isField, roomFaces } from './trims.js';
+import { TRIM_STYLES, trimTemplate, swapTrimProduct, swapWainscot, setFrameLayout, setTrimY, trimExtent, trimStyle, trimProduct, trimLabel, isField, roomFaces,
+  boardPart, boardBox, placeBoard, removeBoard, copyBoard, restoreBoard, restoreAllBoards, boardName, boardPlace, boardChanges } from './trims.js';
 import { trimDesign, designValues, setDesignParam, stickySnap, SCOPE_LABELS } from './trim-design.js';
-import { trimPanelHtml, bindTrimPanel, addTrimHtml, bindAddTrim } from './trim-panel.js';
+import { trimPanelHtml, bindTrimPanel, addTrimHtml, bindAddTrim, boardPanelHtml, bindBoardPanel } from './trim-panel.js';
+import { boardDims, sectionDims, besideOf, nearestHold, roundStick } from './trim-dims.js';
 import { createPaintTool } from './paint-tool.js';
 import { paintFace, regionLabel, trimDivides, wallPartFinish } from './wall-regions.js';
 import { PIECE_KINDS, pieceRecord, clickGroupIds, assignProject } from './project-pieces.js';
@@ -105,6 +107,7 @@ let el = null, wrapEl = null, inspEl = null, hud = {};
 let scene = null, camera = null, controls = null, nav = null, walk = null, composer = null, passes = {};
 let sky = null, envSky = null, sun = null, hemi = null, envRT = null, skyScene = null, panoTex = null, panoId = null;
 let modelGroup = null, groundGroup = null, scanRoot = null, pinRoot = null, noteRoot = null, lightRoot = null, measureRoot = null, markupRoot = null;
+let dimRoot = null;               // the dimensions EDIT BY DRAGGING draws on trim (trim-dims.js)
 let annotRoot = null, annotLabels = [];   // DIMENSIONS, ROOMS and NUMBERS: lines in the scene, labels over the view
 let cameraRoot = null, positionRoot = null;   // photo cameras and numbered photo positions
 let prop = null;
@@ -473,6 +476,7 @@ function setupScene() {
   cameraRoot = new THREE.Group(); cameraRoot.name = 'photo cameras'; scene.add(cameraRoot);
   positionRoot = new THREE.Group(); positionRoot.name = 'photo positions'; scene.add(positionRoot);
   measureRoot = new THREE.Group(); measureRoot.name = 'measures'; scene.add(measureRoot);
+  dimRoot = new THREE.Group(); dimRoot.name = 'trim dimensions'; scene.add(dimRoot); dimSig = '';
   annotRoot = new THREE.Group(); annotRoot.name = 'annotations'; scene.add(annotRoot);
   markupRoot = new THREE.Group(); markupRoot.name = 'markup ink'; scene.add(markupRoot);
   sheetRoot = new THREE.Group(); sheetRoot.name = 'section planes'; scene.add(sheetRoot);
@@ -2043,6 +2047,7 @@ function renderFrame(still = false) {
   updateNotes();
   updateMatchMarkers();
   updateMeasureLabels();
+  updateDimLabels();
   updateAnnotLabels();
   updateCompass();
   // Fast frames while the camera moves: the passes are switched, never resized or reallocated.
@@ -2071,7 +2076,7 @@ function renderFrame(still = false) {
   const fog = cam.isOrthographicCamera && scene.fog && scene.fog.isFog ? scene.fog : null;
   if (fog) { fog.near += PARALLEL_BACK; fog.far += PARALLEL_BACK; }
   try {
-    mirrors.render(renderer, scene, cam, { exclude: [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, markupRoot, annotRoot,
+    mirrors.render(renderer, scene, cam, { exclude: [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, dimRoot, markupRoot, annotRoot,
       ...sectionOverlays()] });
     mirrors.draw(() => {
       if (uncertaintyShown) withUncertainty([modelGroup, scanRoot], uncertaintyRecord, () => composer.render()); else composer.render();
@@ -2238,7 +2243,7 @@ async function renderStillBlob(options) {
   const c = composer, r = renderer;
   const savedPasses = [passes.outline, passes.hover].map(p => [p, p.enabled]);
   const handles = new Set(sectionOverlays());   // never in the image
-  const roots = [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, markupRoot, annotRoot, ...handles].map(o => [o, o && o.visible]);
+  const roots = [pinRoot, noteRoot, cameraRoot, positionRoot, measureRoot, dimRoot, markupRoot, annotRoot, ...handles].map(o => [o, o && o.visible]);
   const oldAspect = camera.aspect, oldFov = camera.fov;
   const oldPos = camera.position.clone(), oldQuat = camera.quaternion.clone();
   // A still from a camera of its own (a numbered position, a photo) is a perspective picture.
@@ -2343,7 +2348,7 @@ function pick(e, opts) {
     if (opts.surfaceOnly && ['pin', 'note', 'camera', 'position'].includes(o.userData.kind)) continue;
     const n = h.face ? h.face.normal.clone().applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(h.object.matrixWorld)) : new THREE.Vector3(0, 1, 0);
     const part = o.userData.kind === 'scan' ? partKeyForObject(o, h.object) : null;
-    return { kind: o.userData.kind, id: o.userData.id, point: h.point, normal: n, object: o, wallId: o.userData.wallId, faceId: o.userData.faceId, cap: !!o.userData.cap, part, mesh: h.object };
+    return { kind: o.userData.kind, id: o.userData.id, point: h.point, normal: n, object: o, wallId: o.userData.wallId, faceId: o.userData.faceId, cap: !!o.userData.cap, part, mesh: h.object, face: h.faceIndex };
   }
   return null;
 }
@@ -2405,15 +2410,88 @@ function onPointerUp(e) {
   if (hit.kind === 'wall') wallFaceClicked = wallSideOfHit(hit);
   const thing = thingForHit(hit, again && !e.shiftKey);
   // A piece grouped in a subproject (project-pieces.js) brings the rest of its group with it;
-  // Alt-click picks the one piece.
+  // a double-click goes one level in (drillPiece); Alt-click picks the one piece.
   lastClickedPiece = thing.sel && PIECE_KINDS[thing.sel.kind] && thing.sel.kind !== 'scan' ? { kind: thing.sel.kind, id: thing.sel.id } : null;
-  if (lastClickedPiece && !e.shiftKey && !e.altKey) {
-    const ids = clickGroupIds(prop, ws.data.projects, lastClickedPiece.kind, lastClickedPiece.id);
-    if (ids.length > 1) { selectPieces(lastClickedPiece.kind, ids); return; }
-  }
+  if (lastClickedPiece && !e.shiftKey && drillPiece(hit, again, e.altKey)) return;
   pickThing(thing, e.shiftKey);
 }
 let lastClickedPiece = null;    // { kind, id } of the last piece clicked, for SELECT ONLY THE PIECE I CLICKED
+// The way in, as SketchUp's Select tool has it: a click picks the outermost thing in what is
+// open, and a double-click goes one level in. The levels here are a group (a room of a project,
+// project-pieces.js), one piece of it, and for trim one board of the piece (trims.js keys). A
+// click inside what is open stays at its level: on another board of the same section it picks
+// that board, on another piece of the same group that piece. A click anywhere else starts again
+// from the outside. Alt-click picks the piece itself. False: the click picks the piece as usual.
+function drillPiece(hit, again, alt) {
+  const { kind, id } = lastClickedPiece;
+  const group = clickGroupIds(prop, ws.data.projects, kind, id);
+  const board = kind === 'trim' ? boardOfHit(hit) : null;
+  const levels = [...(group.length > 1 ? ['group'] : []), 'piece', ...(board ? ['board'] : [])];
+  let level = 'piece';
+  if (!alt) {
+    const now = openLevel(kind, id, group);
+    let i = levels.indexOf(now === 'board' && !board ? 'piece' : now);
+    if (again) i = i < 0 ? 0 : Math.min(levels.length - 1, i + 1);
+    else if (i < 0) i = 0;
+    level = levels[i];
+  }
+  if (level === 'group') { selectPieces(kind, group); return true; }
+  if (level === 'board') { selectBoard(id, board); return true; }
+  return false;
+}
+// The level open now for a click on piece `id`: 'group' when its group is selected, 'piece' when
+// it or another piece of its group is, 'board' when a board of it is; null when none of them is.
+function openLevel(kind, id, group) {
+  if (!selection || selection.kind !== kind) return null;
+  const ids = picked.length ? picked.map(t => t.sel && t.sel.kind === kind ? t.sel.id : null) : [selection.id];
+  if (ids.some(x => x == null)) return null;
+  const inGroup = x => x === id || (group.length > 1 && group.includes(x));
+  if (selection.board && ids.length === 1) return ids[0] === id ? 'board' : inGroup(ids[0]) ? 'piece' : null;
+  if (group.length > 1 && ids.length === group.length && group.every(g => ids.includes(g))) return 'group';
+  if (ids.length === 1 && inGroup(ids[0])) return 'piece';
+  return null;
+}
+// The board of a trim section a hit landed on: the key of its part (trims.js), from the triangle hit.
+function boardOfHit(hit) {
+  if (!hit || hit.kind !== 'trim' || !hit.mesh || hit.face == null) return null;
+  const r = (hit.mesh.userData.ranges || []).find(r => hit.face >= r.start && hit.face < r.start + r.count);
+  return r ? r.key : null;
+}
+function selectBoard(id, key) {
+  const k = planKey('trim', id), sel = { kind: 'trim', id, board: key };
+  setSelection(sel, [k], [{ key: k + '#' + key, keys: [k], scanId: null, name: '', sel }]);
+}
+// The selected board (selection.board) and the one under the pointer while a board is open are
+// drawn by meshes of their own triangles, copied from the section's mesh, so the outline goes
+// round that one board. The selected one is tinted too.
+const boardMarks = { sel: null, hover: null };
+let boardMarkMats = null;
+function boardMark(slot, id, key) {
+  const m = boardMarks[slot];
+  const group = id && key ? findGroupFor('trim', id) : null;
+  if (m && group && m.parent === group && m.userData.boardKey === key) return m;
+  if (m) { if (m.parent) m.parent.remove(m); m.geometry.dispose(); boardMarks[slot] = null; }
+  if (!group) return null;
+  const P = [];
+  for (const o of group.children) {
+    if (!o.isMesh || !o.userData.ranges) continue;
+    const pos = o.geometry.attributes.position.array;
+    for (const r of o.userData.ranges) if (r.key === key) for (let i = r.start * 9; i < (r.start + r.count) * 9; i++) P.push(pos[i]);
+  }
+  if (!P.length) return null;
+  if (!boardMarkMats) boardMarkMats = {
+    sel: new THREE.MeshBasicMaterial({ color: SELECT_EDGE, transparent: true, opacity: 0.3, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }),
+    hover: new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }),
+  };
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+  const mesh = new THREE.Mesh(g, boardMarkMats[slot]);
+  mesh.userData = { helper: true, boardKey: key };
+  mesh.raycast = () => {};
+  mesh.renderOrder = 2;
+  group.add(mesh);
+  return boardMarks[slot] = mesh;
+}
 // Select these pieces of one kind together (a group, a wall's trim).
 function selectPieces(kind, ids) {
   if (kind === 'trim') return selectTrims(ids);
@@ -2495,8 +2573,24 @@ function onPointerMove(e) {
     if (!scene) return;
     if (tool === 'paint') { renderer.domElement.style.cursor = paintTool.move(e) ? 'crosshair' : 'default'; return; }
     const hit = pick(e, { scans: false, ground: false });
-    const next = hit && hit.faceId ? findGroupFor('face', hit.faceId) : hit && !hit.cap && ['wall', 'room', 'opening', 'ceiling', 'trim'].includes(hit.kind) ? hit.object : null;
-    const under = trimEdit && hit ? trimUnder(e, hit) : null;
+    // Inside an open section (a board of it selected), the board under the pointer.
+    const inBoard = hit && selection && selection.board && hit.kind === 'trim' && hit.id === selection.id ? boardOfHit(hit) : null;
+    const next = inBoard ? (inBoard === selection.board ? null : boardMark('hover', hit.id, inBoard))
+      : hit && hit.faceId ? findGroupFor('face', hit.faceId) : hit && !hit.cap && ['wall', 'room', 'opening', 'ceiling', 'trim'].includes(hit.kind) ? hit.object : null;
+    // Editing one board: the board itself shows it can be dragged; the section's own grips are off.
+    if (trimEdit && selection && selection.board) {
+      const b = hit && hit.kind === 'trim' && hit.id === selection.id && boardOfHit(hit) === selection.board ? selectedBoard() : null;
+      if (b) {
+        const at = trimFacePoint(e, b.t), box = boardBox(b.part), v = b.part.kind === 'board' && b.part.dir === 'v';
+        const len = v ? box.y1 - box.y0 : box.x1 - box.x0, grip = Math.min(.025, len / 5);
+        const end = at && b.part.kind !== 'frame' && (v ? at.y - box.y0 < grip || box.y1 - at.y < grip : at.x - box.x0 < grip || box.x1 - at.x < grip);
+        renderer.domElement.style.cursor = end ? (v ? 'ns-resize' : 'ew-resize') : 'move';
+        if (hoverTarget) { hoverTarget = null; updateOutlineTargets(); requestRender(2); }
+        return;
+      }
+    }
+    const under = trimEdit && hit && !(selection && selection.board) ? trimUnder(e, hit) : null;
+    if (trimEdit && under && under.id !== dimFocus) { dimFocus = under.id; refreshTrimDims(); requestRender(2); }
     if (under) {
       // What a press here would drag: the cursor, a line saying so, and an outline round every section it would change.
       const g = trimGrab(e, under);
@@ -2559,7 +2653,9 @@ function selectedObject() {
 function updateOutlineTargets() {
   const sel = selectedObject();
   const selMeshes = [];
-  if (sel && selection.kind !== 'scan') sel.traverse(o => { if (o.isMesh && !(o.userData && o.userData.glass)) selMeshes.push(o); });
+  const board = boardMark('sel', selection && selection.kind === 'trim' ? selection.id : null, selection && selection.board);
+  if (board) selMeshes.push(board);
+  else if (sel && selection.kind !== 'scan') sel.traverse(o => { if (o.isMesh && !(o.userData && o.userData.glass) && !(o.userData && o.userData.boardKey)) selMeshes.push(o); });
   for (const key of tagPicks) {
     const o = objectForKey(key);
     if (o && o !== sel) o.traverse(m => { if (m.isMesh && !(m.userData && m.userData.glass)) selMeshes.push(m); });
@@ -2575,6 +2671,7 @@ function updateOutlineTargets() {
   }
   passes.hover.selectedObjects = hovMeshes;
   passes.hover.enabled = hovMeshes.length > 0;
+  refreshTrimDims();
   for (const id of Object.keys(scanObjs)) {
     const box = scanObjs[id].userData.box;
     // The box around a whole model shows when the whole model is selected, not one object of it.
@@ -2786,11 +2883,14 @@ function moveTrimLine(t, edge, dy, label) {
   touch(); rebuildModel(); renderInspector();
   if (Math.abs(plan.dy - dy) > 5e-4) toast('Moved ' + fmtLen(Math.abs(plan.dy)) + ', not ' + fmtLen(Math.abs(dy)) + ': a section met the floor, the ceiling or its least height.', 'warn');
 }
-const TRIM_EDIT_HINT = 'EDIT TRIM: drag a rail or the inside of a box to move that height; a box\'s side to resize every box; the space between boxes for the gap; the space round them for the margins. Esc or E when done.';
+const TRIM_EDIT_HINT = 'EDIT TRIM: drag a rail or the inside of a box to move that height; a box\'s side to resize every box; the space between boxes for the gap; the space round them for the margins. Heights hold on round numbers. Esc or E when done.';
+const BOARD_EDIT_HINT = 'EDIT TRIM BOARD: drag the selected board to move it, or one of its ends to make it longer or shorter; Shift moves it any way. Esc or E when done.';
+function editHint() { return selection && selection.board ? BOARD_EDIT_HINT : TRIM_EDIT_HINT; }
 function toggleTrimEdit() {
   trimEdit = !trimEdit && trimIds().length > 0;
   if (!trimEdit) { trimReach = []; updateOutlineTargets(); requestRender(2); }
-  setHint(trimEdit ? TRIM_EDIT_HINT : '');
+  setHint(trimEdit ? editHint() : '');
+  refreshTrimDims(); requestRender(2);
   renderInspector();
 }
 // One more or one fewer box in the stretch of wall under x, on that section alone.
@@ -2804,6 +2904,7 @@ function stepTrimCols(t, x, delta) {
 function renderTrimPanel() {
   const list = trimIds().map(trimById).filter(Boolean);
   if (!list.length) { selection = null; tagPicks = []; picked = []; return renderInspectorBody(); }
+  if (selection && selection.board && list.length === 1 && renderBoardPanel(list[0], selection.board)) return;
   const design = designNow(), ids = list.map(t => t.id);
   const reach = design.members(ids, trimScope), pool = design.pool(ids, trimScope);
   const ctx = {
@@ -2844,11 +2945,213 @@ function renderTrimPanel() {
     set: (fn, label, reach) => editTrims(fn, label, reach),
     swap: productId => editTrims(t => swapTrimProduct(t, productId, trimWallHeight(t)), 'swap trim', true),
     toggleEdit: toggleTrimEdit, remove: () => deleteTrims(list.map(t => t.id)),
+    boardChanges, restoreBoards: t => editBoards(t, x => restoreAllBoards(x), 'put trim boards back'),
     selectWall: () => setSelection({ kind: 'wall', id: list[0].wallId }), rerender: renderInspector,
   };
   inspEl.innerHTML = trimPanelHtml(ctx);
   bindTrimPanel(inspEl, ctx);
 }
+// ---------- one board ----------
+// A board double-clicked into (selection.board, a trims.js key) is changed on its own: the
+// change is kept in its section's t.boards and overrides the automatic layout for that board.
+function editBoards(t, fn, label) {
+  beginGeometryEdit(prop, label);
+  fn(t);
+  touch(); rebuildModel(); renderInspector();
+}
+function selectedBoard() {
+  if (!selection || selection.kind !== 'trim' || !selection.board) return null;
+  const t = trimById(selection.id);
+  const lay = t && designNow().layout(t), part = boardPart(lay, selection.board);
+  return part ? { t, lay, part, key: selection.board } : null;
+}
+function renderBoardPanel(t, key) {
+  const lay = designNow().layout(t), part = boardPart(lay, key);
+  if (!part) { selection = { kind: 'trim', id: t.id }; picked = []; return false; }
+  const ctx = {
+    t, part, name: boardName(t, part), place: boardPlace(lay, part), box: boardBox(part), editing: trimEdit, changes: boardChanges(t),
+    faceName: (() => { const w = trimWall(t); if (!w) return ''; const n = wallFaceLabels(w, roomsOn(prop, levelOfWall(prop, w).id)); return t.side === -1 ? n.neg : n.pos; })(),
+    set: box => editBoards(t, x => placeBoard(x, lay, key, box), 'move trim board'),
+    copy: () => copyBoardBeside(),
+    remove: () => deleteBoard(),
+    restore: () => editBoards(t, x => restoreBoard(x, key), 'put trim board back'),
+    restoreAll: () => { editBoards(t, x => restoreAllBoards(x), 'put trim boards back'); },
+    up: () => selectTrims([t.id]),
+    toggleEdit: toggleTrimEdit, rerender: renderInspector,
+  };
+  inspEl.innerHTML = boardPanelHtml(ctx);
+  bindBoardPanel(inspEl, ctx);
+  return true;
+}
+function deleteBoard() {
+  const b = selectedBoard();
+  if (!b) return;
+  editBoards(b.t, x => removeBoard(x, b.key), 'delete trim board');
+  selectTrims([b.t.id]);
+  toast(boardName(b.t, b.part) + ' deleted. PUT EVERY BOARD BACK in the section brings it back.', 'ok');
+}
+// A copy beside the selected board: a board's width over for a batten or stile, up for a rail,
+// the other way when that would leave the section. The copy is selected, ready to drag.
+function copyBoardBeside(at) {
+  const b = selectedBoard();
+  if (!b) return;
+  const box = boardBox(b.part), w = box.x1 - box.x0, h = box.y1 - box.y0;
+  const sideways = b.part.kind === 'frame' || (b.part.kind === 'board' && b.part.dir === 'v');
+  let next;
+  if (at) next = sideways ? { ...box, x0: at.x - w / 2, x1: at.x + w / 2 } : { ...box, y0: at.y - h / 2, y1: at.y + h / 2 };
+  else if (sideways) {
+    const step = b.part.kind === 'frame' ? w + 3 * 0.0254 : 2 * w;
+    next = box.x1 + step <= (b.lay.end ?? Infinity) ? { ...box, x0: box.x0 + step, x1: box.x1 + step } : { ...box, x0: box.x0 - step, x1: box.x1 - step };
+  } else next = box.y1 + 2 * h <= b.lay.H ? { ...box, y0: box.y0 + 2 * h, y1: box.y1 + 2 * h } : { ...box, y0: box.y0 - 2 * h, y1: box.y1 - 2 * h };
+  const step = boardSnapStep(), snap = v => Math.round(v / step) * step;
+  const dx = snap(next.x0) - next.x0, dy = snap(next.y0) - next.y0;
+  next = { x0: next.x0 + dx, x1: next.x1 + dx, y0: next.y0 + dy, y1: next.y1 + dy };
+  let key = null;
+  editBoards(b.t, x => { key = copyBoard(x, b.lay, b.key, next, uid('b')); }, 'add trim board');
+  if (key) selectBoard(b.t.id, key);
+}
+function boardSnapStep() { return units() === 'metric' ? .001 : .0254 / 16; }
+// ---------- dimensions while editing ----------
+// While EDIT BY DRAGGING is on, the trim being edited carries its dimensions on the wall face
+// (trim-dims.js): one board's clear space either side and its height, or a section's spaces
+// between boards and its heights. They follow every drag. Drawn over the model, never in a picture.
+let dimFocus = null;              // the section under the pointer in EDIT BY DRAGGING
+let dimLabels = [];               // { el, at: Vector3 }
+let dimSig = '';
+let dimMat = null;
+function dimsNow() {
+  if (!trimEdit || !prop) return [];
+  if (selection && selection.board) { const b = selectedBoard(); return b ? [{ t: b.t, dims: boardDims(b.lay, b.key) }] : []; }
+  const id = trimDrag ? trimDrag.t.id : dimFocus || (trimIds().length === 1 ? trimIds()[0] : null);
+  const t = id && trimById(id);
+  return t ? [{ t, dims: sectionDims(designNow().layout(t)) }] : [];
+}
+function refreshTrimDims() {
+  if (!dimRoot) return;
+  const specs = dimsNow();
+  const sig = JSON.stringify(specs.map(s => [s.t.id, s.t.wallId, s.dims.map(d => [d.a, d.b])]));
+  if (sig === dimSig) return;
+  dimSig = sig;
+  for (const c of dimRoot.children.slice()) { dimRoot.remove(c); c.geometry.dispose(); }
+  for (const d of dimLabels) d.el.remove();
+  dimLabels = [];
+  if (!specs.length || !wrapEl) return;
+  if (!dimMat) dimMat = new LineMaterial({ color: 0xe8973a, linewidth: 1.5, depthTest: false, transparent: true });
+  dimMat.resolution.set(wrapEl.clientWidth * renderer.getPixelRatio(), wrapEl.clientHeight * renderer.getPixelRatio());
+  for (const { t, dims } of specs) {
+    const w = trimWall(t);
+    if (!w) continue;
+    const L = Math.hypot(w.bx - w.ax, w.by - w.ay) || 1, ux = (w.bx - w.ax) / L, uy = (w.by - w.ay) / L;
+    const p = trimProduct(t), off = t.side * ((w.thickness || 0.114) / 2 + (p ? p.T : .02) + .01);
+    const elev = levelOfWall(prop, w).elevation || 0;
+    const at = (x, y) => new THREE.Vector3(w.ax + ux * x - uy * off, elev + y, w.ay + uy * x + ux * off);
+    for (const d of dims) {
+      const a = at(...d.a), b = at(...d.b);
+      // The line, and a short tick across each end.
+      const along = b.clone().sub(a).normalize(), across = d.a[1] === d.b[1] ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(ux, 0, uy);
+      const tick = Math.min(.03, a.distanceTo(b) / 3);
+      if (!Number.isFinite(along.x)) continue;
+      const pts = [a, b];
+      for (const e of [a, b]) pts.push(e.clone().addScaledVector(across, -tick), e.clone().addScaledVector(across, tick));
+      for (const [p0, p1] of [[pts[0], pts[1]], [pts[2], pts[3]], [pts[4], pts[5]]]) {
+        const g = new LineGeometry(); g.setPositions([p0.x, p0.y, p0.z, p1.x, p1.y, p1.z]);
+        const line = new Line2(g, dimMat); line.renderOrder = 998; dimRoot.add(line);
+      }
+      const el = document.createElement('div');
+      el.className = 'v-mlabel v-dimlabel';
+      el.textContent = fmtLen(d.v) + (d.note === 'top' ? ' top' : d.note === 'bottom' ? ' bottom' : '');
+      wrapEl.appendChild(el);
+      dimLabels.push({ el, at: a.clone().add(b).multiplyScalar(.5) });
+    }
+  }
+  updateDimLabels();
+}
+function updateDimLabels() {
+  if (!dimLabels.length || !wrapEl) return;
+  const w = wrapEl.clientWidth, h = wrapEl.clientHeight;
+  for (const d of dimLabels) {
+    _v.copy(d.at).project(viewCamera());
+    const vis = _v.z < 1;
+    d.el.style.display = vis ? 'block' : 'none';
+    if (vis) d.el.style.transform = `translate(${((_v.x + 1) / 2 * w).toFixed(0)}px, ${((1 - _v.y) / 2 * h).toFixed(0)}px) translate(-50%, -50%)`;
+  }
+}
+// EDIT BY DRAGGING with a board selected: a press on that board moves it, a press near one of
+// its ends stretches that end. A batten or stile moves sideways, a rail or moulding up and down,
+// a box any way; Shift frees the move.
+let boardDrag = null;
+function startBoardDrag(e, hit) {
+  const b = selectedBoard();
+  if (!b || boardOfHit(hit) !== b.key) return false;
+  const at = trimFacePoint(e, b.t);
+  if (!at) return false;
+  const box = boardBox(b.part), v = b.part.kind === 'board' && b.part.dir === 'v', frame = b.part.kind === 'frame';
+  const len = v ? box.y1 - box.y0 : box.x1 - box.x0, grip = Math.min(.025, len / 5);
+  let mode = 'move';
+  if (!frame && v) { if (at.y - box.y0 < grip) mode = 'y0'; else if (box.y1 - at.y < grip) mode = 'y1'; }
+  else if (!frame) { if (at.x - box.x0 < grip) mode = 'x0'; else if (box.x1 - at.x < grip) mode = 'x1'; }
+  e.stopImmediatePropagation(); e.preventDefault();
+  try { renderer.domElement.setPointerCapture(e.pointerId); } catch (err) { /* moves still reach the window */ }
+  boardDrag = { ...b, at, box, mode, v, frame, x: e.clientX, y: e.clientY, moved: false, before: b.t.boards ? JSON.parse(JSON.stringify(b.t.boards)) : undefined };
+  window.addEventListener('pointermove', onBoardDragMove);
+  window.addEventListener('pointerup', onBoardDragEnd);
+  window.addEventListener('pointercancel', onBoardDragEnd);
+  return true;
+}
+function onBoardDragMove(e) {
+  const d = boardDrag;
+  if (!d) return;
+  if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 3) return;
+  if (!d.moved) { d.moved = true; beginGeometryEdit(prop, d.mode === 'move' ? 'move trim board' : 'resize trim board', { hold: true }); }
+  const t = trimById(d.t.id), at = trimFacePoint(e, d.t);
+  if (!t || !at) return;
+  const step = boardSnapStep(), snap = v => Math.round(v / step) * step;
+  let dx = at.x - d.at.x, dy = at.y - d.at.y;
+  const box = { ...d.box };
+  // A little stickiness at round numbers (trim-dims.js): sideways, the clear space to either
+  // neighbour, or the same space both sides; up and down, the edges' heights above the floor.
+  const metric = units() === 'metric';
+  if (d.mode === 'move') {
+    if (!e.shiftKey && !d.frame) { if (d.v) dy = 0; else dx = 0; }
+    let nx = snap(box.x0 + dx) - box.x0, ny = Math.max(0, snap(box.y0 + dy)) - box.y0;
+    if (nx) {
+      const n = besideOf(d.lay, d.key, { ...box, x0: box.x0 + nx, x1: box.x1 + nx });
+      const x0 = box.x0 + nx, x1 = box.x1 + nx, centre = (n.left + n.right - (x1 - x0)) / 2 - x0;
+      nx += Number.isFinite(centre) && Math.abs(centre) <= (metric ? .004 : .0254 / 4) ? centre
+        : nearestHold([{ v: x0 - n.left, sign: 1 }, { v: n.right - x1, sign: -1 }], metric);
+    }
+    if (ny) ny += nearestHold([{ v: box.y0 + ny, sign: 1 }, { v: box.y1 + ny, sign: 1 }], metric);
+    box.x0 += nx; box.x1 += nx; box.y0 += ny; box.y1 += ny;
+  } else if (d.mode === 'y0') box.y0 = Math.max(0, Math.min(box.y1 - .01, roundStick(snap(box.y0 + dy), metric)));
+  else if (d.mode === 'y1') box.y1 = Math.max(box.y0 + .01, roundStick(snap(box.y1 + dy), metric));
+  else if (d.mode === 'x0') box.x0 = Math.min(box.x1 - .01, box.x1 - roundStick(box.x1 - snap(box.x0 + dx), metric));
+  else if (d.mode === 'x1') box.x1 = Math.max(box.x0 + .01, box.x0 + roundStick(snap(box.x1 + dx) - box.x0, metric));
+  if (d.before === undefined) delete t.boards; else t.boards = JSON.parse(JSON.stringify(d.before));
+  placeBoard(t, d.lay, d.key, box);
+  d.last = box;
+  const v = d.v || d.frame;
+  setHint('EDIT TRIM: ' + boardName(t, d.part) + (d.mode === 'move'
+    ? (v ? ' from ' + fmtLen(box.x0) + ' to ' + fmtLen(box.x1) + ' along the wall' : ' at ' + fmtLen(box.y0) + ' to ' + fmtLen(box.y1) + ' above the floor') + (e.shiftKey || d.frame ? '' : '. Shift moves it any way')
+    : ' ' + fmtLen(d.v ? box.y1 - box.y0 : box.x1 - box.x0) + ' long'));
+  rebuildModel();
+}
+function onBoardDragEnd(e) {
+  const d = boardDrag;
+  boardDrag = null;
+  window.removeEventListener('pointermove', onBoardDragMove);
+  window.removeEventListener('pointerup', onBoardDragEnd);
+  window.removeEventListener('pointercancel', onBoardDragEnd);
+  if (!d || !d.moved) return;
+  setHint(editHint());
+  const t = trimById(d.t.id);
+  if (e.type === 'pointercancel') {
+    if (!revertGeometryEdit(prop, { trims: [{ id: d.t.id, boards: t ? t.boards : undefined }] })) toast('Trim changed on another device; cancellation kept the current values.', 'warn');
+    touch(); rebuildModel(); renderInspector(); return;
+  }
+  endGeometryHold(prop);
+  touch(); rebuildModel(); renderInspector();
+}
+
 // Where the pointer meets the plane of a section's wall face: x along the wall, y above its level's floor.
 const _plane = new THREE.Plane(), _hitV = new THREE.Vector3();
 function trimFacePoint(e, t) {
@@ -3025,6 +3328,8 @@ function trimGrabWords(grab, n) {
 function onTrimPointerDown(e) {
   if (!trimEdit || e.button !== 0 || e.ctrlKey || mode === 'walk' || tool !== 'select' || !scene) return;
   const hit = pick(e, { pins: false, notes: false, scans: false });
+  // With one board selected, a press on it drags that board; anywhere else the press orbits or clicks.
+  if (selection && selection.board) { if (hit) startBoardDrag(e, hit); return; }
   const ids = trimIds();
   const under = hit && trimUnder(e, hit);
   if (!under) return;
@@ -3069,6 +3374,8 @@ function onTrimDragMove(e) {
     const lines = d.mode === 'bottom' ? [b0.y] : d.mode === 'top' ? [b0.y + b0.h] : fieldLike ? [b0.y + b0.h, b0.y] : [b0.y + (p ? p.W : 0), b0.y];
     let onStool = false;
     for (const v of lines) { const stop = d.stops.find(s => Math.abs(v + dy - s) < .0127); if (stop != null) { move = stop - v; onStool = true; break; } }
+    // Otherwise a line holds on a round height above the floor (42", 3'-0"; trim-dims.js).
+    if (!onStool) move += nearestHold(lines.map(v => ({ v: v + move, sign: 1 })), units() === 'metric');
     const plan = d.design.planLine([...d.base.values()], d.t.id, d.mode, move, { scope: trimScope });
     for (const [id, patch] of plan.patches) { const t = trimById(id); if (t) Object.assign(t, patch); }
     n = plan.moved;
@@ -3076,7 +3383,7 @@ function onTrimDragMove(e) {
     note = (fieldLike ? 'Field ' + fmtLen(ext.y0) + ' to ' + fmtLen(ext.y1) + ' (' + fmtLen(ext.y1 - ext.y0) + ' tall)' : 'Bottom ' + fmtLen(ext.y0) + ', top ' + fmtLen(ext.y1))
       + (onStool && Math.abs(plan.dy - move) < 1e-6 ? ', on the window stool' : '') + (Math.abs(plan.dy - move) > 5e-4 ? ', held: a section is at its limit' : '');
   } else if (d.mode === 'aim') {
-    const v = d.last = stickySnap(Math.max(.1, d.v0 + d.dir * dx), d.last, snapStep() * 2);
+    const v = d.last = stickySnap(Math.max(.1, roundStick(d.v0 + d.dir * dx, units() === 'metric')), d.last, snapStep() * 2);
     for (const t of same) setDesignParam(t, 'aim', v);
     const row = d.design.layout(seed).boxes.filter(x => x.row === 0);
     const sum = d.design.summary(same);
@@ -3084,7 +3391,7 @@ function onTrimDragMove(e) {
       + (n > 1 ? '; ' + sum.boxes + ' boxes in all, ' + fmtLen(sum.min) + ' to ' + fmtLen(sum.max) : '');
   } else if (d.mode === 'gap' || d.mode === 'margin') {
     const delta = d.sign * (d.mode === 'gap' ? (d.axis === 'x' ? dx : dy) * 2 : d.side === 'sides' ? dx : dy);
-    const v = d.last = stickySnap(Math.max(0, d.v0 + delta), d.last, snapStep());
+    const v = d.last = stickySnap(Math.max(0, roundStick(d.v0 + delta, units() === 'metric')), d.last, snapStep());
     const key = e.shiftKey ? 'reveal' : d.mode === 'gap' ? 'gap' : d.side;
     for (const t of same) setDesignParam(t, key, v);
     const now = designValues(seed), row = d.design.layout(seed).boxes.filter(x => x.row === 0);
@@ -3138,7 +3445,7 @@ function onTrimDragEnd(e) {
 // The trim section under a right-click: the moulding itself, or a field the click is inside.
 function trimAtPointer(e, hit) {
   if (!hit) return null;
-  if (hit.kind === 'trim') { const t = trimById(hit.id); const at = t && trimFacePoint(e, t); return t && at ? { t, at } : null; }
+  if (hit.kind === 'trim') { const t = trimById(hit.id); const at = t && trimFacePoint(e, t); return t && at ? { t, at, board: boardOfHit(hit) } : null; }
   if (hit.kind !== 'wall' || hit.cap) return null;
   const side = wallSideOfHit(hit);
   // The smallest field under the pointer, a selected one first.
@@ -3182,6 +3489,13 @@ function trimMenuItems(found) {
   }
   items.push(null);
   for (const s of design.scopes(ids)) items.push(['trim-reach-' + s.id, (s.id === trimScope ? '✓ ' : '') + 'CHANGES REACH: ' + s.label + ' (' + s.count + ')', () => { pick(); setTrimScope(s.id); }]);
+  items.push(null);
+  // One board: the one under the pointer, and a copy of the selected board put here.
+  const sb = selectedBoard();
+  if (found.board && !(sb && sb.t.id === t.id && sb.key === found.board)) items.push(['trim-board', 'SELECT THIS BOARD ON ITS OWN', () => selectBoard(t.id, found.board)]);
+  if (found.board) items.push(['trim-board-del', 'DELETE THIS BOARD', () => { selectBoard(t.id, found.board); deleteBoard(); }]);
+  if (sb && sb.t.id === t.id) items.push(['trim-board-copy', 'ADD A COPY OF THE SELECTED BOARD HERE', () => copyBoardBeside(at)]);
+  if (boardChanges(t).total) items.push(['trim-boards-back', 'PUT EVERY BOARD BACK (' + boardChanges(t).total + ')', () => { if (!trimIds().includes(t.id)) selectTrims([t.id]); editBoards(t, x => restoreAllBoards(x), 'put trim boards back'); }]);
   items.push(null);
   items.push(['trim-edit', trimEdit ? 'DONE EDITING' : 'EDIT BY DRAGGING', () => { pick(); toggleTrimEdit(); }]);
   items.push(['trim-delete', 'DELETE THIS SECTION', () => deleteTrims([t.id])]);
@@ -5674,7 +5988,7 @@ function renderInspector() {
   if (!inspEl || tool === 'pin' || tool === 'paint' || match) return;
   addProjectBlock();
   // One object of a model, and several objects, draw their own tag line (object-panel.js).
-  if (!selection || picked.length > 1 || selectedModelObject() || selection.kind === 'face') return;
+  if (!selection || picked.length > 1 || selectedModelObject() || selection.kind === 'face' || selection.board) return;
   const sec = document.createElement('div');
   sec.className = 'v-tags';
   if (selection.kind === 'scan') { sec.innerHTML = tagPickHtml(); bindTagPick(sec); }
@@ -5697,6 +6011,8 @@ function selectedPieces() {
   return { refs, label: kinds.size === 1 ? refs[0].kind : 'piece' };
 }
 function addProjectBlock() {
+  // One board belongs to its section's project; its panel is about the board.
+  if (selection && selection.board) return;
   const sel = selectedPieces();
   if (!sel) return;
   const records = sel.refs.map(r => pieceRecord(prop, r.kind, r.id)).filter(Boolean);
@@ -6973,6 +7289,8 @@ function onKeyDown(e) {
     case 'KeyE': if (!trimIds().length) return; toggleTrimEdit(); break;
     case 'Escape':
       if (trimEdit) { toggleTrimEdit(); break; }
+      // Out of a board, to its whole section (SketchUp's Esc out of what is open).
+      if (selection && selection.kind === 'trim' && selection.board) { selectTrims([selection.id]); break; }
       if (match) endMatch();
       else if (tool !== 'select') setTool('select');
       else setSelection(null);
@@ -6982,6 +7300,7 @@ function onKeyDown(e) {
       else if (selection && selection.kind === 'opening') inspEl.querySelector('[data-del]') && inspEl.querySelector('[data-del]').click();
       else if (selection && selection.kind === 'pin') unpin(selection.id);
       else if (selection && selection.kind === 'note') deleteNote(selection.id);
+      else if (selection && selection.kind === 'trim' && selection.board) deleteBoard();
       else if (trimIds().length) deleteTrims(trimIds());
       break;
     default: return;
@@ -7452,6 +7771,7 @@ export function unmount() {
   scene = null; camera = null; skyScene = null; sun = null; hemi = null; cameraLight = null; detailLight = null;
   walkGlide = null; walkClick = null; solidNear = null;
   scanRoot = null; pinRoot = null; noteRoot = null; measureRoot = null; markupRoot = null; cameraRoot = null; positionRoot = null;
+  dimRoot = null; for (const d of dimLabels) d.el.remove(); dimLabels = []; dimSig = '';
   el = null; wrapEl = null; inspEl = null; hud = {};
   selection = null; hoverTarget = null; tween = null; pressed = null; dragLook = null; rightPress = null; movingNoteId = null;
 }

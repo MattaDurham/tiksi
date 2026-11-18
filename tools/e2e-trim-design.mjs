@@ -359,6 +359,98 @@ try {
   ok('a drag on a batten closes the spacing to ' + (spacing / IN).toFixed(2) + ' in; the wall goes from ' + bays.length + ' to ' + closer.length + ' bays');
   await shot('07-battens');
 
+  // ---------- one board at a time ----------
+  // The battens and the study's east chair rail are grouped as a room of a project. A click
+  // picks the group, a double-click the section, another double-click one batten. A click on
+  // another batten of the open section picks that batten; Delete takes it out; a drag in EDIT BY
+  // DRAGGING moves one batten and leaves the rest; ADD A COPY BESIDE IT adds one.
+  await page.keyboard.press('Escape');                    // done editing the battens
+  await page.keyboard.press('Escape');                    // nothing selected
+  await page.evaluate(() => {
+    const s = window.testStore, p = s.activeProperty();
+    s.ws.data.projects.push({ id: 'job', name: 'Trim', propertyId: p.id, parentId: '', items: [] }, { id: 'east', name: 'East wall', propertyId: p.id, parentId: 'job', items: [] });
+    for (const t of p.trims) if (t.id === 'batten-study-e' || t.id === 'rail-study-e') t.projectId = 'east';
+    s.touch();
+  });
+  await page.waitForTimeout(600); await idle();
+  await page.evaluate(() => document.querySelector('[data-view-go="v-east"]').click());
+  await page.waitForTimeout(900); await idle();
+  const partsOf = id => page.evaluate(async id => {
+    const s = window.testStore, p = s.activeProperty(), D = await import('/js/trim-design.js');
+    const L = p.levels[0].id;
+    const d = D.trimDesign({ prop: p, projects: [], levelOf: () => L, wallsOn: () => p.walls, roomsOn: () => p.rooms, openingsOn: () => p.openings, heightOf: w => s.wallHeightOf(p, w) });
+    return d.layout(p.trims.find(t => t.id === id)).parts.map(q => ({ key: q.key, kind: q.kind, dir: q.dir, x0: q.x0, x1: q.x1, y0: q.y0, y1: q.y1, added: !!q.added }));
+  }, id);
+  const vertical = async () => (await partsOf(BB)).filter(q => q.kind === 'board' && q.dir === 'v').sort((a, b) => a.x0 - b.x0);
+  const onBoard = q => at(BB, (q.x0 + q.x1) / 2, (q.y0 + q.y1) / 2);
+  const pause = () => page.waitForTimeout(600);           // so the next click is not taken as a double-click
+  const stat = () => page.locator('.inspector .stat-line').first().textContent();
+  let vs = await vertical();
+  assert.ok(vs.length >= 5, 'the closer battens give at least five');
+  const m = Math.floor(vs.length / 2) - 1;                 // battens in the middle of the wall, in view
+  let q = await onBoard(vs[m]);
+  await page.mouse.click(q.x, q.y);
+  await waitUntil(async () => (await heading.textContent()) === '2 TRIM SECTIONS', 'a click picks the group: the battens and the rail');
+  await pause();
+  await page.mouse.dblclick(q.x, q.y);
+  await waitUntil(async () => (await heading.textContent()) === 'WALL TRIM' && /Board and batten/.test(await page.locator('.inspector').textContent()), 'a double-click goes in to the section');
+  await pause();
+  await page.mouse.dblclick(q.x, q.y);
+  await waitUntil(async () => (await heading.textContent()) === 'TRIM BOARD', 'another double-click goes in to one batten');
+  assert.match(await stat(), new RegExp('^Batten ' + (m + 1) + ' of ' + vs.length));
+  await shot('07b-one-batten');
+  await pause();
+  q = await onBoard(vs[m + 2]);
+  await page.mouse.click(q.x, q.y);
+  await waitUntil(async () => new RegExp('^Batten ' + (m + 3) + ' of').test(await stat()), 'a click on another batten of the open section picks that batten');
+  ok('click: the group; double-click: the section; double-click: one batten; a click on the next batten picks it');
+
+  await page.keyboard.press('Delete');
+  await waitUntil(async () => (await heading.textContent()) === 'WALL TRIM', 'Delete takes the batten out and shows its section');
+  assert.equal((await vertical()).length, vs.length - 1, 'one batten fewer');
+  assert.deepEqual((await trim(BB)).boards, { [vs[m + 2].key]: { hide: true } });
+  assert.match(await page.locator('.inspector').textContent(), /Boards changed by hand\s*1 deleted/);
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+  await waitUntil(async () => (await vertical()).length === vs.length, 'one undo puts the batten back');
+  ok('Delete takes one batten out of the layout; UNDO puts it back');
+
+  await pause();
+  q = await onBoard(vs[m]);
+  // UNDO cleared the selection: a triple-click goes group, section, batten in one go.
+  await page.mouse.click(q.x, q.y, { clickCount: 3 });
+  await waitUntil(async () => (await heading.textContent()) === 'TRIM BOARD', 'a triple-click goes straight in to one batten');
+  await page.keyboard.press('e');
+  await waitUntil(async () => (await page.locator('.inspector [data-tb-edit]').textContent()).startsWith('DONE'), 'editing the batten');
+  const dimLabels = () => page.locator('.v-dimlabel').allTextContents();
+  await waitUntil(async () => (await dimLabels()).length === 3, 'the batten shows its space each side and its height');
+  const gapsBefore = (await dimLabels()).slice(0, 2);
+  await drag(q, await at(BB, (vs[m].x0 + vs[m].x1) / 2 + 3 * IN, (vs[m].y0 + vs[m].y1) / 2 + 0.2));
+  const movedBoards = (await trim(BB)).boards;
+  assert.deepEqual(Object.keys(movedBoards), [vs[m].key], 'only that batten is changed by hand');
+  const now = await vertical(), moved = now.find(x => x.key === vs[m].key);
+  assert.ok(Math.abs(moved.x0 - vs[m].x0 - 3 * IN) < 0.8 * IN, 'moved about 3" sideways: ' + ((moved.x0 - vs[m].x0) / IN).toFixed(2) + ' in');
+  const gapsAfter = (await dimLabels()).slice(0, 2);
+  assert.notDeepEqual(gapsAfter, gapsBefore, 'the spaces either side follow the drag: ' + gapsBefore.join(', ') + ' -> ' + gapsAfter.join(', '));
+  await shot('07c-batten-dimensions');
+  near(moved.y0, vs[m].y0, 'a batten moves sideways only, without Shift');
+  for (const k of [m - 1, m + 1]) near(now.find(x => x.key === vs[k].key).x0, vs[k].x0, 'batten ' + (k + 1) + ' stays');
+  assert.equal(await page.locator('.inspector [data-tb-status]').textContent(), 'Moved by hand');
+  ok('a drag moves one batten ' + ((moved.x0 - vs[m].x0) / IN).toFixed(2) + ' in; the others keep the layout; its dimensions read ' + gapsAfter.join(', '));
+
+  await page.locator('.inspector [data-tb-copy]').click();
+  await waitUntil(async () => (await page.locator('.inspector [data-tb-status]').textContent()) === 'Added by hand', 'the copy is selected');
+  assert.equal((await vertical()).length, vs.length + 1, 'one batten more');
+  await page.keyboard.press('Escape');                    // done editing
+  await waitUntil(async () => (await dimLabels()).length === 0, 'the dimensions go when editing ends');
+  await page.keyboard.press('Escape');                    // out to the section
+  await waitUntil(async () => (await heading.textContent()) === 'WALL TRIM', 'Esc goes back out to the section');
+  assert.match(await page.locator('.inspector').textContent(), /Boards changed by hand\s*1 moved, 1 added/);
+  await page.locator('.inspector [data-tp-boards-back]').click();
+  await waitUntil(async () => (await trim(BB)).boards === undefined, 'PUT EVERY BOARD BACK');
+  assert.equal((await vertical()).length, vs.length, 'the layout as it was');
+  ok('ADD A COPY BESIDE IT adds a batten; Esc goes out to the section; PUT EVERY BOARD BACK restores the layout');
+  await page.evaluate(() => { for (const t of window.testStore.activeProperty().trims) delete t.projectId; window.testStore.touch(); });
+
   // ---------- visual style pickers ----------
   const picker = kind => page.locator(`.inspector [data-picker="${kind}"]`);
   const pickStyle = async (kind, id) => {
