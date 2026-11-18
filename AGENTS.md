@@ -143,7 +143,9 @@ Instructions live in these AGENTS files; do not add model-specific rule files.
   synthetic projects and temporary directories, never the owner's stores.
 - Requests to develop branches authorize commits and draft PRs for that work.
   Landing on main, pushing main, and discarding unmerged work require the
-  owner's explicit instruction. Local/private instructions can narrow this.
+  owner's explicit instruction; a branch already in main is removed without
+  asking (`scripts/branch.sh tidy`, after each merge and at the end of a
+  session). Local/private instructions can narrow this.
 - Hand over a running preview, a PR, the CI status (finished or still running),
   and a clear account of private state touched. Watch CI and fix failures
   yourself. "Merge it" never waits for checks still running; it stops only on a

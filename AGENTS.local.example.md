@@ -44,8 +44,9 @@ timed out) refuses the merge; a check still running or not yet started only
 warns, and so does one GitHub cancelled before any runner took it (it never ran),
 with the summary check when that is its only failure. It runs the quick local preflight (`preflight.sh --merge`: syntax,
 private-state and unit tests, about two minutes; the browser checks run in
-main's online checks), merges, pushes main, then cleans up if GitHub reads
-Merged. Then watch main's checks for the merge in the background and fix main if
+main's online checks), merges, pushes main, waits for GitHub to read the PR
+Merged (about a minute at most) and then removes the branch, its worktree and
+its GitHub copy. Then watch main's checks for the merge in the background and fix main if
 they fail: with the branch's checks possibly unfinished, main's run is the one
 that grades the merge. When the owner says the checks are not needed (a change
 to text only, say), add `--skip-checks`: it ignores the online checks and runs
@@ -53,8 +54,14 @@ only the seconds-long syntax and private-state pass. Use it only on the owner's
 word.
 It never restarts the live service. If a step fails, report the actual state and
 finish the authorized remaining steps when safe. Never close a PR whose head is
-already in main. `discard <slug> --owner-approved` refuses dirty worktrees and
-stops only the authenticated preview belonging to that branch.
+already in main. `discard <slug>` removes a branch whose work is all in main
+without asking; work not in main needs the owner's word and `--owner-approved`
+(its commits are kept under refs/tiksi-discarded/). It refuses dirty worktrees
+and stops only the authenticated preview belonging to that branch.
+`scripts/branch.sh tidy` removes every codex/ branch already in main (worktree,
+local branch, GitHub copy) and lists the ones that are not, with their last
+commit; run it after each merge and before ending a session, and report what it
+kept. `tidy --dry-run` only lists.
 
 ## Privacy and quality
 
