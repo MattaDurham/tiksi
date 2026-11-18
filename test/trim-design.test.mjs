@@ -160,10 +160,26 @@ test('raising the chair rail carries the room: the field under it stretches, the
   // The group is the ring of rails alone.
   const group = d.planLine(copy(d.pool([seed.id], 'group')), seed.id, 'move', 0.1);
   assert.equal(group.moved, 4, 'four rails and nothing else');
-  // The whole project: the study's rails, 2 in higher, move by the same amount in parallel.
+  // Moved as before, without a reach: the study's rails, 2 in higher, move the same distance.
   const all = d.planLine(copy(d.pool([seed.id], 'project')), seed.id, 'move', 0.1);
   for (const t of study.rail) near(all.patches.get(t.id).y, 1.05, 'the study rail rises the same distance', 1e-4);
   for (const t of study.boxes) near(all.patches.get(t.id).h, t.h + 0.1, 'and its field follows', 1e-4);
+  // At the project's reach every rail comes onto the line in hand: the study's too, and the
+  // study's fields stretch by their own rail's distance.
+  const one = d.planLine(copy(d.pool([seed.id], 'project')), seed.id, 'move', 0.1, { scope: 'project' });
+  near(one.dy, 0.1, 'the line moved the whole way');
+  for (const t of [...living.rail, ...study.rail]) near(one.patches.get(t.id).y, 1.0, 'every rail of the project is on one line', 1e-4);
+  for (const t of study.boxes) near(t.y + one.patches.get(t.id).h, 1.0, 'each study field reaches the one line', 1e-4);
+  for (const t of living.boxes) near(t.y + one.patches.get(t.id).h, 1.0, 'and each living field', 1e-4);
+  // A wainscot cap in the study, 1 in off the line, is the same line across the project.
+  const cap = h.add('wainscot-cap', 'e', h.sideOf('e', 'study'), { y: 0.925 });
+  const d2 = D.trimDesign(h.env);
+  const fam = d2.planLine(copy(d2.pool([seed.id], 'project')), seed.id, 'move', 0.1, { scope: 'project' });
+  near(fam.patches.get(cap.id).y, 1.0, 'the study\'s cap comes onto the rail line', 1e-4);
+  assert.ok(!d2.planLine(copy(d2.pool([seed.id], 'room')), seed.id, 'move', 0.1, { scope: 'room' }).patches.has(cap.id), 'a room reach leaves the next room alone');
+  // Not moved at all, the drag already shows where everything goes: a grab is a snap.
+  const snap = d.planLine(copy(d.pool([seed.id], 'project')), seed.id, 'move', 0, { scope: 'project' });
+  for (const t of study.rail) near(snap.patches.get(t.id).y, 0.9, 'a grab brings the study rail to the living line', 1e-4);
   // A field is never crushed: lowering stops while the boxes still have a field.
   const down = d.planLine(copy(d.pool([seed.id], 'room')), seed.id, 'move', -2);
   const least = Math.min(...living.boxes.map(t => down.patches.get(t.id).h));

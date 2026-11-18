@@ -72,7 +72,8 @@ import { attachSketchupNavigation } from './sketchup-nav.js';
 import { diskWorkspace } from './disk-workspace.js';
 import { ModelBatches } from './model-batch.js';
 import { ModelMirrors } from './model-mirrors.js';
-import { componentKeyOf } from './model-components.js';
+import { componentKeyOf, isInstanceNode } from './model-components.js';
+import { obstacleKind, wallClearances, applyAutoClearances, dropAutoClearances } from './trim-obstacles.js';
 import { modelObjectTree, objectForClick, objectBelow, objectOffset, setObjectOffset, applyPartOffsets, objectBox, sameComponent } from './model-objects.js';
 import { renderObjectList, showListTab, revealInList, objectThing, hiddenState } from './object-list.js';
 import { trimTemplate, swapTrimProduct, swapWainscot, setFrameLayout, setTrimY, trimExtent, trimStyle, trimProduct, trimLabel, isField, roomFaces } from './trims.js';
@@ -747,6 +748,7 @@ function regionSig() {
 function rebuildModel() {
   paintHover = [];
   trimDesignMemo = null;
+  refreshTrimObstacles();
   const structure = JSON.stringify([prop.id, quality(), memoryLimits().textureQuality, prop.levels, prop.walls, prop.openings, prop.rooms, prop.tags, prop.tagOf, prop.hidden, prop.modelSourceId, xray, prop.env.xrayOpacity, [...hiddenLevels()], ws.data.materials, regionSig()]);
   const records = new Map(prop.fixtures.map(f => [f.id, JSON.stringify(f)]));
   const trimRecords = new Map((prop.trims || []).map(t => [t.id, JSON.stringify(t)]));
@@ -899,6 +901,75 @@ function findScanFixtures(scan, obj) {
     obj.updateMatrixWorld(true);
   }
   scanFixtures[scan.id] = groupFixtures(parts);
+}
+
+// The wall-mounted pieces of a model that trim keeps off (trim-obstacles.js): outlets, plates,
+// thermostats, radiators and heater covers. Found once per load (the outermost matching piece
+// of a component), measured again from the scene whenever the walls or the model move.
+const trimObstacleNodes = {};   // scan id -> [{ node, key, name, kind }]
+let trimObstacleSig = '';
+function findTrimObstacles(scan, obj) {
+  const list = [], hit = new Set(), seen = new Map();
+  const inner = obj.userData && obj.userData.inner;
+  const instances = [];
+  if (inner) inner.traverse(o => { if (isInstanceNode(o)) instances.push(o); });
+  const inside = o => { for (let q = o.parent; q && q !== obj; q = q.parent) if (hit.has(q)) return true; return false; };
+  if (instances.length) {
+    for (const o of instances) {
+      const key = componentKeyOf(o), n = seen.get(key) || 0;
+      seen.set(key, n + 1);
+      const link = scan.componentProducts && scan.componentProducts[key];
+      const name = o.userData.sketchupComponent || '';
+      const kind = obstacleKind(name) || obstacleKind(link && link.name);
+      if (!kind || inside(o)) continue;
+      hit.add(o);
+      list.push({ node: o, key: key + '#' + n, name: (link && link.name) || name, kind });
+    }
+  } else {
+    // A model without components: its named parts.
+    for (const part of modelParts(obj)) {
+      const name = partName(part), kind = obstacleKind(name);
+      if (kind) list.push({ node: part.object, key: 'part:' + part.path, name, kind });
+    }
+  }
+  trimObstacleNodes[scan.id] = list;
+  trimObstacleSig = '';
+}
+const _corner = new THREE.Vector3();
+function trimObstaclePieces(obj, list) {
+  obj.updateMatrixWorld(true);
+  return list.map(({ node, key, name, kind }) => {
+    const pts = [];
+    node.traverse(m => {
+      if (!m.isMesh || !m.geometry) return;
+      if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
+      const b = m.geometry.boundingBox;
+      if (!b || b.isEmpty()) return;
+      for (let i = 0; i < 8; i++) {
+        _corner.set(i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z).applyMatrix4(m.matrixWorld);
+        pts.push([_corner.x, _corner.z, _corner.y]);
+      }
+    });
+    return { key, name, kind, pts };
+  });
+}
+// Bring every wall's automatic trim clearances up to date with the models loaded now. A model
+// not loaded keeps the entries it had; a model deleted loses them. True when any changed.
+function refreshTrimObstacles() {
+  if (!prop || !Array.isArray(prop.walls)) return false;
+  const loaded = (prop.scans || []).filter(s => scanObjs[s.id] && trimObstacleNodes[s.id]);
+  const sig = JSON.stringify([prop.id, (prop.walls || []).map(w => [w.id, w.ax, w.ay, w.bx, w.by, w.thickness, w.level, w.height]), prop.levels,
+    loaded.map(s => [s.id, s.pos, s.rot, s.rotY, s.scale, s.flip, s.partOffsets, trimObstacleNodes[s.id].length]), (prop.scans || []).map(s => s.id)]);
+  if (sig === trimObstacleSig) return false;
+  trimObstacleSig = sig;
+  let changed = dropAutoClearances(prop.walls, new Set((prop.scans || []).map(s => s.id)));
+  for (const scan of loaded) {
+    const pieces = trimObstaclePieces(scanObjs[scan.id], trimObstacleNodes[scan.id]);
+    const byWall = wallClearances(prop.walls, pieces, { elevationOf: w => levelOfWall(prop, w).elevation || 0, heightOf: w => wallHeightOf(prop, w) });
+    if (applyAutoClearances(prop.walls, scan.id, byWall)) changed = true;
+  }
+  if (changed) touch();
+  return changed;
 }
 
 // Every light source in the view, in world space.
@@ -2691,11 +2762,13 @@ function deleteTrims(ids) {
   setSelection(null); touch(); rebuildModel();
 }
 // Change every selected section with fn(t), as one undoable edit. `reach`: the change goes to
-// every section of the same kind that CHANGES REACH covers ('style' narrows that to one kind).
+// every section of the same kind that CHANGES REACH covers ('style' narrows that to one kind);
+// reach 'all' takes every section it covers, of any kind, and `style` may then be a test.
 function editTrims(fn, label, reach, style) {
   const ids = trimIds();
-  let list = reach ? designNow().members(ids, trimScope) : ids.map(trimById).filter(Boolean);
-  if (style) list = list.filter(t => t.style === style);
+  let list = reach === 'all' ? designNow().pool(ids, trimScope) : reach ? designNow().members(ids, trimScope) : ids.map(trimById).filter(Boolean);
+  if (typeof style === 'function') list = list.filter(style);
+  else if (style) list = list.filter(t => t.style === style);
   if (!list.length) return 0;
   beginGeometryEdit(prop, label || 'edit trim');
   for (const t of list) fn(t);
@@ -2706,7 +2779,7 @@ function editTrims(fn, label, reach, style) {
 function moveTrimLine(t, edge, dy, label) {
   const design = designNow();
   const pool = design.pool(trimIds().includes(t.id) ? trimIds() : [t.id], trimScope);
-  const plan = design.planLine(pool.map(x => JSON.parse(JSON.stringify(x))), t.id, edge, dy, { all: trimScope === 'selected' && edge === 'move' });
+  const plan = design.planLine(pool.map(x => JSON.parse(JSON.stringify(x))), t.id, edge, dy, { scope: trimScope });
   if (!plan.moved) return;
   beginGeometryEdit(prop, label || 'move trim');
   for (const [id, patch] of plan.patches) { const x = trimById(id); if (x) Object.assign(x, patch); }
@@ -2732,23 +2805,25 @@ function renderTrimPanel() {
   const list = trimIds().map(trimById).filter(Boolean);
   if (!list.length) { selection = null; tagPicks = []; picked = []; return renderInspectorBody(); }
   const design = designNow(), ids = list.map(t => t.id);
-  const reach = design.members(ids, trimScope);
+  const reach = design.members(ids, trimScope), pool = design.pool(ids, trimScope);
   const ctx = {
     trims: list, editing: trimEdit, focusList: trimFocusList,
-    scope: trimScope, scopes: design.scopes(ids), setScope: setTrimScope, reach, poolCount: design.pool(ids, trimScope).length,
+    scope: trimScope, scopes: design.scopes(ids), setScope: setTrimScope, reach, pool, poolCount: pool.length,
     values: designValues, summary: design.summary(reach), notes: design.notes(reach, fmtLen),
     // A layout number for every section of this kind the scope reaches.
     design: (key, value, label) => editTrims(t => setDesignParam(t, key, value), label || 'trim layout', true),
     line: (t, edge, dy, label) => moveTrimLine(t, edge, dy, label),
     swapStyle: (style, productId) => editTrims(t => swapTrimProduct(t, productId, trimWallHeight(t)), 'swap trim', true, style),
+    // A style chosen here goes to every section of its kind the reach covers, whatever style
+    // each is now: every field becomes this wainscoting, every crown this crown.
     preset: (kind, id) => {
-      if (kind === 'frame') return editTrims(t => setFrameLayout(t, id), 'picture-frame layout', true, 'picture-frame');
-      if (kind === 'crown') return ctx.swapStyle('crown', id);
+      if (kind === 'frame') return editTrims(t => setFrameLayout(t, id), 'picture-frame layout', 'all', 'picture-frame');
+      if (kind === 'crown') return editTrims(t => swapTrimProduct(t, id, trimWallHeight(t)), 'crown style', 'all', 'crown');
       const target = catalogItem(id)?.style;
       editTrims(t => {
-        if (!isField(t) || t.style === target) return;
+        if (t.style === target) { if (t.product !== id) swapTrimProduct(t, id, trimWallHeight(t)); return; }
         if (swapWainscot(t, id, trimWallHeight(t)) && trimStyle(t).fullHeight) fitFullHeightPanel(t);
-      }, 'wainscoting style', true);
+      }, 'wainscoting style', 'all', isField);
     },
     stretches: t => { const lay = design.layout(t); return lay.rects.map((r, k) => r.full ? { x: (r.x0 + r.x1) / 2, w: r.x1 - r.x0, n: lay.boxes.filter(b => b.rect === k && b.row === 0).length } : null).filter(Boolean); },
     setStretch: (t, i, n) => editTrims(x => {
@@ -2884,7 +2959,7 @@ function trimGrabReach(grab, design) {
   if (grab.mode === 'divider') return [grab.t];
   const pool = design.pool(ids, trimScope);
   if (['move', 'top', 'bottom'].includes(grab.mode)) {
-    const plan = design.planLine(pool, grab.t.id, grab.mode, 0, { all: trimScope === 'selected' && grab.mode === 'move' });
+    const plan = design.planLine(pool, grab.t.id, grab.mode, 0, { scope: trimScope });
     return [...plan.patches.keys()].map(trimById).filter(Boolean);
   }
   return pool.filter(t => t.style === grab.t.style);
@@ -2949,7 +3024,7 @@ function onTrimDragMove(e) {
     const lines = d.mode === 'bottom' ? [b0.y] : d.mode === 'top' ? [b0.y + b0.h] : fieldLike ? [b0.y + b0.h, b0.y] : [b0.y + (p ? p.W : 0), b0.y];
     let onStool = false;
     for (const v of lines) { const stop = d.stops.find(s => Math.abs(v + dy - s) < .0127); if (stop != null) { move = stop - v; onStool = true; break; } }
-    const plan = d.design.planLine([...d.base.values()], d.t.id, d.mode, move, { all: trimScope === 'selected' && d.mode === 'move' });
+    const plan = d.design.planLine([...d.base.values()], d.t.id, d.mode, move, { scope: trimScope });
     for (const [id, patch] of plan.patches) { const t = trimById(id); if (t) Object.assign(t, patch); }
     n = plan.moved;
     const ext = trimExtent(seed, trimWallHeight(seed));
@@ -4780,6 +4855,7 @@ async function addScanToScene(scan) {
   const tagged = detectModelTags(prop, scan, obj);
   applyModelTagVisibility(prop, scan, obj);
   findScanFixtures(scan, obj);
+  findTrimObstacles(scan, obj);
   scanRoot.add(obj);
   // Large meshes and point clouds are tested through a tree of boxes (pick-index.js), built in
   // a background helper. Its files are fetched the first time a scan is large enough to need
@@ -4799,6 +4875,8 @@ async function addScanToScene(scan) {
   // New tags and counts show in the lists straight away.
   if (tagged || views) { touch(); renderToolCol(); if (!selection) renderInspector(); }
   if (views && views.added) toast(scan.name + ': ' + views.added + ' SketchUp scene' + (views.added === 1 ? ' is' : 's are') + ' now saved views, in the tabs over the model.' + (views.skipped ? ' ' + views.skipped + ' did not fit: a property keeps 100 views.' : ''), 'ok');
+  // Trim on the walls this model's outlets and radiators stand on is laid out round them.
+  if (refreshTrimObstacles()) rebuildModel();
   renderObjects();
   requestRender(scan.kind === 'splat' ? 8 : 3);
   return obj;
