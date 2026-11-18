@@ -161,3 +161,20 @@ test('the deep dive file opens a detail for everything it lets you click', async
   assert.match(html, /<title>Trim estimate<\/title>/);
   assert.ok(!/<script[^>]+src=/.test(html), 'one file: nothing loaded from elsewhere');
 });
+
+test('one carpenter: the rooms\' trim installs run one after another, in subproject order', () => {
+  setup();
+  store.setProjectRules({});   // plain items: the install items are written here
+  const room = (id, days, extra = []) => ({ id, name: id, selected: true, items: [
+    { id: id + '-install', name: 'Install trim', durationDays: days, deps: [], crew: 'trim:p' }, ...extra] });
+  const a = room('a', 3), b = room('b', 2, [{ id: 'b-other', name: 'Other work', durationDays: 1, deps: [] }]), c = room('c', 4);
+  const other = { id: 'roof', name: 'Roof', selected: true, items: [{ id: 'r', name: 'Roof', durationDays: 5, deps: [] }] };
+  const plan = programSchedule([a, other, b, c], '2026-12-07');
+  const at = id => plan.plans.find(x => x.p.id === id);
+  assert.equal(at('a').offset, 0);
+  assert.equal(at('roof').offset, 0, 'work with no shared crew still runs alongside');
+  assert.equal(at('b').offset, 3, 'the second room starts when the first room ends');
+  assert.equal(at('c').offset, 5, 'the third room after the second');
+  assert.equal(plan.days, 9, 'the trim takes 3 + 2 + 4 working days');
+  est.useEstimateRules();
+});

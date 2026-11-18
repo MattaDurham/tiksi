@@ -37,7 +37,8 @@ export const wholeDays = span => span > 0 ? Math.ceil(span - 1e-9) : 0;
 export const lastWorkDay = (start, span) => start && wholeDays(span) > 0 ? addDays(start, wholeDays(span) - 1) : '';
 
 // The selected projects laid out from `start` (ISO date): each project's critical path,
-// starting on its own start date when that is later, side by side. `days` is the program's
+// starting on its own start date when that is later, side by side, except that work done by one
+// crew (an item's `crew`) waits its turn. `days` is the program's
 // span in whole calendar days from start to the last finish (0 when nothing has a duration),
 // and `lastDay` the last calendar day with work on it.
 export function programSchedule(projects, start) {
@@ -48,6 +49,19 @@ export function programSchedule(projects, start) {
       const { sched, end, cyclic } = cpm(items);
       return { p, items, offset, sched, end, cyclic, finish: offset + end };
     });
+  // Work done by one crew (the carpenter installing a project's trim, room by room): each item
+  // with a `crew` waits for that crew's previous item to finish, moving its whole project later.
+  // Projects are taken in list order, so rooms follow their subprojects' order.
+  const free = Object.create(null);
+  for (const x of plans) {
+    for (const it of x.items) {
+      const s = it.crew && x.sched[it.id];
+      if (!s) continue;
+      const wait = (free[it.crew] || 0) - (x.offset + s.es);
+      if (wait > 0) { x.offset += wait; x.finish += wait; }
+      free[it.crew] = x.offset + s.ef;
+    }
+  }
   const days = wholeDays(Math.max(0, ...plans.map(x => x.finish)));
   return { plans, days, lastDay: lastWorkDay(start, days) };
 }

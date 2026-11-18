@@ -642,7 +642,7 @@ The Gantt view connects tasks with dependency arrows and distinguishes critical 
 
 **Calendar days.** Durations use calendar days, with weekends shaded. Items at zero days are budget-only and are omitted. Dependencies and critical paths are calculated within each selected project.
 
-**Trim from the estimate.** A project with drawn trim gets an install item for its rooms, its length the working days ESTIMATE works out for one carpenter (6 productive hours a day, at least a day a room). It moves when the drawing or the rates change.
+**Trim from the estimate.** A project with drawn trim gets an install item for each room's subproject, its length the working days ESTIMATE works out for one carpenter (6 productive hours a day, at least a day a room). One carpenter does them all, so the rooms run one after another in the order the subprojects are listed. They move when the drawing or the rates change.
 
 > **Good to know:** The schedule is calculated from the entered durations and dependencies. It does not automatically resolve crew capacity, delivery dates or permit constraints; include those in your planning.
 

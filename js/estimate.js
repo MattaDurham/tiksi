@@ -218,7 +218,8 @@ export function projectCost(p) {
 }
 
 // The work a project schedules: its scope items, and an install item for the trim of its rooms
-// (working days, one carpenter, from the estimate's hours).
+// (working days, one carpenter, from the estimate's hours). The install items of one project's
+// rooms share that carpenter, so SCHEDULE runs them one after another, in subproject order.
 export function projectWorkWithTrim(p) {
   const items = p.items || [];
   const est = projectEstimate(p);
@@ -229,6 +230,8 @@ export function projectWorkWithTrim(p) {
   return [...kept, {
     id: 'estimate-trim-' + p.id, name: `Install trim (${part.rooms.join(', ')}): ${Math.round(part.hours.likely * 10) / 10} hrs from the estimate`,
     durationDays: part.days, deps: [], estimate: true,
+    // One carpenter for the project's trim: the rooms' installs follow one another (program.js).
+    crew: 'trim:' + est.root.id,
   }];
 }
 
