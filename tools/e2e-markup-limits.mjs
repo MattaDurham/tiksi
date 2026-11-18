@@ -26,9 +26,9 @@ const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 640, height: 400 } });
   const errors = []; page.on('pageerror', e => errors.push(e.message));
-  const setup = async kind => {
+  const setup = async screen => {
     await page.goto(`http://127.0.0.1:${server.address().port}`);
-    await page.evaluate(async kind => {
+    await page.evaluate(async screen => {
       const { attachMarkup, ready } = await import('/js/markup-layer.js');
       const store = await import('/js/store.js');
       store.ws.data = store.emptyWorkspace();
@@ -39,11 +39,11 @@ try {
       const view = { camera, mode: 'orbit', section: { on: false, height: 1.2 }, xray: false, hiddenLevels: [], tags: {} };
       const notices = [], hits = [];
       const layer = attachMarkup({
-        kind, wrap, surface, prop: () => prop, changed() {}, hint() {}, toast: text => notices.push(text), goTo() {},
-        levelId: () => prop.levels[0].id, toDoc: (x, y) => [x / 100, y / 100], toPx: (x, y) => [x * 100, y * 100], unit: () => 100, viewKey: () => 'fixed',
-        camera: () => camera, viewNow: () => view,
+        kind: 'model', wrap, surface, prop: () => prop, changed() {}, hint() {}, toast: text => notices.push(text), goTo() {},
+        camera: () => camera, viewNow: () => view, hitAt: () => null,
         rayAt: (x, y) => ({ o: [x / 100, y / 100, 1], d: [0, 0, -1] }),
-        surfaceAt(x, y) { const hit = { p: [x / 100, y / 100, 0], n: [0, 0, 1], kind: 'wall', ref: 'synthetic-face' }; hits.push(hit.p); return hit; },
+        // Without surfaceAt the ink is flat on the screen, as with ON THE SCREEN chosen.
+        surfaceAt: screen ? undefined : (x, y) => { const hit = { p: [x / 100, y / 100, 0], n: [0, 0, 1], kind: 'wall', ref: 'synthetic-face' }; hits.push(hit.p); return hit; },
         project: p => [p.x * 100, p.y * 100], mPerPx: () => 0.01, showSurfaces() {},
       });
       await ready;
@@ -53,10 +53,11 @@ try {
         button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX: x, clientY: y, pressure,
       }));
       window.inkCheck = { prop, layer, notices, hits, emit };
-    }, kind);
+    }, screen);
   };
 
-  await setup('plan');
+  // Ink flat on the screen: a long press is kept whole across records.
+  await setup(true);
   const plan = await page.evaluate(() => {
     const h = window.inkCheck;
     h.emit('pointerdown', 20, 100, 0.1);
@@ -68,19 +69,22 @@ try {
     const state = h.layer.state();
     h.layer.undo(); const undone = h.prop.markups.length;
     h.layer.redo(); const redone = JSON.parse(JSON.stringify(h.prop.markups));
-    return { before, state, undone, redone, notices: h.notices };
+    const r = document.querySelector('#surface').getBoundingClientRect();
+    const tail = [(560 - r.width / 2) / r.height, (180 - r.height / 2) / r.height].map(v => Math.round(v * 1e5) / 1e5);
+    return { before, state, undone, redone, notices: h.notices, tail };
   });
   assert.equal(plan.before.length, 1);
   const planStrokes = plan.before[0].strokes;
   assert.ok(planStrokes.length > 1, 'a long press is saved across records');
   assert.ok(planStrokes.every(s => s.pts.length <= 3000 * 3 && s.pts.length >= 3));
   assert.ok(planStrokes.reduce((n, s) => n + s.pts.length / 3, 0) > 4000, 'meaningful pressure detail survives');
-  assert.deepEqual(planStrokes.at(-1).pts.slice(-3), [5.6, 1.8, 0.4], 'the final tail is not silently truncated');
+  assert.deepEqual(planStrokes.at(-1).pts.slice(-3), [...plan.tail, 0.4], 'the final tail is not silently truncated');
   assert.equal(plan.state.undo, 1); assert.equal(plan.undone, 0, 'one undo removes every chunk from the press');
   assert.deepEqual(plan.redone, plan.before, 'one redo restores the complete mark in order');
   assert.deepEqual(plan.notices, [], 'an ordinary long press below the cap does not warn');
 
-  await setup('model');
+  // Ink on the model's surfaces.
+  await setup(false);
   const limited = await page.evaluate(() => {
     const h = window.inkCheck;
     h.emit('pointerdown', 20, 100);

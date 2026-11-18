@@ -1164,11 +1164,12 @@ const parts = { view: eachDeviceKeepsItsOwnView, typing: aSaveElsewhereLeavesThe
 try {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(url)).ok) break; } catch {} await new Promise(r => setTimeout(r, 50)); }
   browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
-  // The run is stopped after ten minutes, naming the part it was in.
+  // The run is stopped after fifteen minutes, naming the part it was in (the online Mac needed
+  // 9 min 46 s for the whole run, so ten minutes left it no room).
   let timer;
   for (const key of (process.env.E2E_STEP || '').split(',').filter(Boolean)) assert.ok(parts[key], 'E2E_STEP names a part that does not exist: ' + key);
   await Promise.race([(async () => { for (const [key, part] of Object.entries(parts)) if (!process.env.E2E_STEP || process.env.E2E_STEP.split(',').includes(key)) await part(); })(),
-    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('The run did not finish; it was in part ' + lastStep)), 600000); })]).finally(() => clearTimeout(timer));
+    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('The run did not finish; it was in part ' + lastStep)), 900000); })]).finally(() => clearTimeout(timer));
   assert.deepEqual(errors, []);
   console.log('ok   two devices: own view each; a save elsewhere updates in place; the copies-differ question names what differs; an older tab cannot save over a newer copy; drafts do not conflict; a missing project file is shown; a project file asks before replacing; a failed page says so; a kept copy the Mac has is not sent again; originals are cached and not held for ever; the first screen does not wait for every picture; an unreadable stored workspace is left as it is; MODEL keeps its camera');
 } catch (error) {
