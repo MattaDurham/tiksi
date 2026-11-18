@@ -41,7 +41,8 @@ online checks that are still running: update/retest branch, then
 itself. The command requires a clean live main, clean branch, exact PR head and
 latest main included. A check that finished without passing (failed, cancelled,
 timed out) refuses the merge; a check still running or not yet started only
-warns. It runs the quick local preflight (`preflight.sh --merge`: syntax,
+warns, and so does one GitHub cancelled before any runner took it (it never ran),
+with the summary check when that is its only failure. It runs the quick local preflight (`preflight.sh --merge`: syntax,
 private-state and unit tests, about two minutes; the browser checks run in
 main's online checks), merges, pushes main, then cleans up if GitHub reads
 Merged. Then watch main's checks for the merge in the background and fix main if

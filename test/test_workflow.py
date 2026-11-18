@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 from unittest.mock import patch
 import urllib.error
 import urllib.request
@@ -171,6 +172,22 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.workflow.verdict(running), ['Regression', 'Regression (macos-latest, group 2 of 4)'])
         self.assertEqual(self.workflow.verdict([]), list(branch.Workflow.REQUIRED_CHECKS))
         self.assertEqual(self.workflow.verdict(info['statusCheckRollup']), [])
+        # A group GitHub cancelled before any runner took it never ran: no verdict. So is the
+        # summary check failing only because of it. A cancelled group that did run still refuses.
+        url = 'https://github.com/o/r/actions/runs/1/job/'
+        unrun = [{'name': 'Regression (macos-latest, group 2 of 4)', 'status': 'COMPLETED', 'conclusion': 'CANCELLED', 'detailsUrl': url + '7'},
+                 {'name': 'Regression', 'status': 'COMPLETED', 'conclusion': 'FAILURE', 'detailsUrl': url + '8'},
+                 {'name': 'Quick checks (ubuntu-latest)', 'status': 'COMPLETED', 'conclusion': 'SUCCESS'}]
+        jobs = {'7': {'runner_name': '', 'steps': []}, '8': {'runner_name': 'GitHub Actions 2', 'steps': [{'name': 'Run'}]}, '9': {'runner_name': 'GitHub Actions 3', 'steps': [{'name': 'Run'}]}}
+        with mock.patch.object(self.workflow, 'job', side_effect=lambda i: jobs.get(i)):
+            self.assertEqual(self.workflow.gate('feature', {**info, 'statusCheckRollup': unrun}), target)
+            self.assertEqual(self.workflow.verdict(unrun), ['Regression (macos-latest, group 2 of 4) (never ran)', 'Regression (never ran)'])
+            ran = [dict(unrun[0], detailsUrl=url + '9'), unrun[1]]
+            with self.assertRaisesRegex(branch.WorkflowError, 'cancelled'):
+                self.workflow.gate('feature', {**info, 'statusCheckRollup': ran})
+            broken = unrun + [{'name': 'Regression (macos-latest, group 3 of 4)', 'status': 'COMPLETED', 'conclusion': 'FAILURE', 'detailsUrl': url + '9'}]
+            with self.assertRaisesRegex(branch.WorkflowError, 'group 3'):
+                self.workflow.gate('feature', {**info, 'statusCheckRollup': broken})
         # The owner can skip the checks altogether, even a failed one.
         failed = [{'name': 'Regression', 'status': 'COMPLETED', 'conclusion': 'FAILURE'}]
         self.assertEqual(self.workflow.gate('feature', {**info, 'statusCheckRollup': failed}, skip_checks=True), target)
