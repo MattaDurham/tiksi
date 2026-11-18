@@ -24,7 +24,7 @@
 .es-figs b { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .es-figs .big b { font-size: 28px; color: var(--accent); }
 .es-figs span { font-size: 11.5px; color: var(--dim); line-height: 1.35; }
-.es-figs .over b { color: var(--red); }
+.es-figs .over b, .es-figs span.bad { color: var(--red); }
 .es-figs input { width: 100%; background: transparent; border: 0; border-bottom: 1px dashed var(--line-2); color: var(--ink); font: inherit; font-variant-numeric: tabular-nums; }
 .es-figs [data-d] { cursor: pointer; }
 .es-figs [data-d]:hover { background: var(--panel-2); }

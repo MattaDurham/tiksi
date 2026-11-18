@@ -33,6 +33,7 @@ const range = t => t.low === t.high ? '' : `${fm(t.low)} to ${fm(t.high)}`;
 const lenIn = inches => fmtLen(inches * IN);
 
 let el = null, off = null, timer = null;
+let capProblem = '';   // a cap typed that could not be read, and why; kept until a good one is typed
 let hist = [], hpos = -1;
 const open = new Set();          // rooms opened in the table
 const LAST = 'tiksi.estimate.last.';
@@ -61,7 +62,7 @@ export function mount(root) {
   off = onChange(() => { clearTimeout(timer); timer = setTimeout(() => { if (el && !el.querySelector('.es :is(input,select,textarea):focus')) render(true); }, 150); });
   render();
 }
-export function unmount() { clearTimeout(timer); if (off) off(); off = null; el = null; }
+export function unmount() { clearTimeout(timer); if (off) off(); off = null; el = null; capProblem = ''; }
 export function undo() { if (restoreProjectEdit('undo')) render(true); }
 export function redo() { if (restoreProjectEdit('redo')) render(true); }
 
@@ -94,7 +95,7 @@ function renderJob(inner, job, prop) {
   const start = root.startDate || ws.data.settings.programStart || isoToday();
   const days = job.schedule.days;
   const order = trim ? trim.buy.reduce((n, b) => n + b.order, 0) : 0;
-  const rows = job.rooms.filter(r => r.trim.length || r.items.length);
+  const rows = job.rooms;   // every subproject is a row, priced or not yet
   const head = `<header class="es-head"><div class="es-kicker">${esc(prop ? prop.name || '' : '')}</div><h1>${esc(root.name || 'Project')}</h1>
     <div class="es-figs">
       <div class="big" data-d="cost:price"><b>${fm(job.price.likely)}</b><span>price${range(job.price) ? ', ' + range(job.price) : ''}</span></div>
@@ -292,7 +293,7 @@ function renderProgram(inner) {
   const left = cap - sel.likely;
   inner.innerHTML = `<header class="es-head"><div class="es-kicker">All projects</div><h1>The program</h1>
     <div class="es-figs"><div class="big"><b>${fm(sel.likely)}</b><span>in the program${range(sel) ? ', ' + range(sel) : ''}</span></div>
-      <div><b><input type="text" id="cap-input" value="${fm(cap)}" aria-label="Budget cap"></b><span id="cap-note">budget cap</span></div>
+      <div><b><input type="text" id="cap-input" value="${fm(cap)}" aria-label="Budget cap"></b><span id="cap-note" ${capProblem ? 'role="alert" class="bad"' : ''}>${capProblem ? esc(capProblem) : 'budget cap'}</span></div>
       <div class="${left < 0 ? 'over' : ''}"><b>${fm(Math.abs(left))}</b><span>${left < 0 ? 'over the cap' : 'left under the cap'}</span></div></div>
     <div class="es-acts"><button class="btn small" id="print-report">${icon('print')}PRINT REPORT</button></div></header>
     <section class="es-sec"><div class="es-tbl"><table class="es-t"><thead><tr><th></th><th>Project</th><th>Status</th><th class="num">Low</th><th class="num">Likely</th><th class="num">High</th><th class="num">Days</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="note">No projects.</td></tr>'}</tbody></table></div>
@@ -300,8 +301,8 @@ function renderProgram(inner) {
   const capIn = inner.querySelector('#cap-input');
   capIn.onchange = () => {
     const r = readMoney(capIn.value);
-    if (Number.isNaN(r.value)) { inner.querySelector('#cap-note').textContent = r.error + ' The cap is still ' + fm(cap) + '.'; inner.querySelector('#cap-note').setAttribute('role', 'alert'); return; }
-    d.settings.budgetCap = r.value; touch(); render(true);
+    if (Number.isNaN(r.value)) { capProblem = r.error + ' The cap is still ' + fm(cap) + '.'; render(true); return; }
+    capProblem = ''; d.settings.budgetCap = r.value; touch(); render(true);
   };
   inner.querySelectorAll('[data-sel]').forEach(c => c.onchange = () => {
     for (const x of ws.data.projects) if (x.id === c.dataset.sel || x.parentId === c.dataset.sel) x.selected = c.checked;
