@@ -153,6 +153,8 @@ try {
     const again = await activeProperty(page);
     check(again.id === prop.id && again.scans.length === 1 && again.walls.length === prop.walls.length, 'after a reload the property comes back from that file');
     await page.click('#btn-file');
+    await page.click('[data-file-tab="settings"]');
+    await page.locator('details:has([data-agent-onboarding]) > summary').click();
     await page.locator('[data-agent-onboarding] summary').click();
     const prompt = await page.locator('[data-agent-prompt]').inputValue();
     check(prompt.includes('AGENTS.local.md') && prompt.includes(prop.id) && prompt.includes(saved),
@@ -193,6 +195,8 @@ try {
     check(JSON.stringify(await fingerprint(visit)) === JSON.stringify(before) && !existsSync(join(visit, 'Tiksi')), 'the picked folder is untouched');
     await page.click('[data-np-cancel]', { noWaitAfter: true, timeout: 90000 });
     await page.click('#btn-file');
+    await page.click('[data-file-tab="settings"]');
+    await page.locator('details:has([data-agent-onboarding]) > summary').click();
     await page.locator('[data-agent-onboarding] summary').click();
     const prompt = await page.locator('[data-agent-prompt]').inputValue();
     const prop = await activeProperty(page);
