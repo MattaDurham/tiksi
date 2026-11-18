@@ -76,7 +76,7 @@ import { componentKeyOf, isInstanceNode } from './model-components.js';
 import { obstacleKind, wallClearances, applyAutoClearances, dropAutoClearances } from './trim-obstacles.js';
 import { modelObjectTree, objectForClick, objectBelow, objectOffset, setObjectOffset, applyPartOffsets, objectBox, sameComponent } from './model-objects.js';
 import { renderObjectList, showListTab, revealInList, objectThing, hiddenState } from './object-list.js';
-import { trimTemplate, swapTrimProduct, swapWainscot, setFrameLayout, setTrimY, trimExtent, trimStyle, trimProduct, trimLabel, isField, roomFaces,
+import { TRIM_STYLES, trimTemplate, swapTrimProduct, swapWainscot, setFrameLayout, setTrimY, trimExtent, trimStyle, trimProduct, trimLabel, isField, roomFaces,
   boardPart, boardBox, placeBoard, removeBoard, copyBoard, restoreBoard, restoreAllBoards, boardName, boardPlace, boardChanges } from './trims.js';
 import { trimDesign, designValues, setDesignParam, stickySnap, SCOPE_LABELS } from './trim-design.js';
 import { trimPanelHtml, bindTrimPanel, addTrimHtml, bindAddTrim, boardPanelHtml, bindBoardPanel } from './trim-panel.js';
@@ -88,6 +88,7 @@ import { walkTarget, glideMs } from './walk-hops.js';
 import { walkStep, settle, isClear, findClear, glideEnd } from './walk-collide.js';
 import { projectBlockHtml, bindProjectBlock, newProjectRecord } from './project-pieces-ui.js';
 import { catalogItem } from './trim-catalog.js';
+import { carriesTrim, droppedTrim, endTrimDrag } from './product-drag.js';
 import { objectPanelHtml, bindObjectPanel, multiPanelHtml, bindMultiPanel, planTagHtml, bindPlanTag } from './object-panel.js';
 import { ensureCanonTag, nameTag } from './tags.js';
 import { CANON, UNTAGGED, UNTAGGED_LABEL, tagById, tagIdOf, tagCounts, assignTag, addTag, renameTag, setTagColor, setTagShown, deleteTag, keysOnTag, planKey, forgetScanTags, tagShown, setHidden, hiddenKeys, showAllHidden, PHASES, PHASE_LABEL, phaseCounts, phaseShown, setPhaseShown, phaseOfKey, setPhase } from './tags.js';
@@ -2768,7 +2769,6 @@ function setTrimScope(id) {
 }
 let trimDrag = null;           // { mode, start: {x, y}, base: Map(id -> record copy), ... } while dragging
 let wallFaceClicked = 1;       // the face of the last wall clicked, for ADD TRIM TO THIS FACE
-let trimFocusList = false;     // the catalog list keeps the keyboard after a swap
 function trimIds() {
   const ids = [];
   for (const t of picked) if (t.sel && t.sel.kind === 'trim') ids.push(t.sel.id); else return [];
@@ -2908,7 +2908,7 @@ function renderTrimPanel() {
   const design = designNow(), ids = list.map(t => t.id);
   const reach = design.members(ids, trimScope), pool = design.pool(ids, trimScope);
   const ctx = {
-    trims: list, editing: trimEdit, focusList: trimFocusList,
+    trims: list, editing: trimEdit,
     scope: trimScope, scopes: design.scopes(ids), setScope: setTrimScope, reach, pool, poolCount: pool.length,
     values: designValues, summary: design.summary(reach), notes: design.notes(reach, fmtLen),
     // A layout number for every section of this kind the scope reaches.
@@ -2943,7 +2943,7 @@ function renderTrimPanel() {
     setY: (t, v) => setTrimY(t, v, trimWallHeight(t)),
     raise: d => editTrims(t => { if (trimStyle(t) && trimStyle(t).kind !== 'crown') setTrimY(t, t.y + d, trimWallHeight(t)); }, d >= 0 ? 'raise trim' : 'lower trim'),
     set: (fn, label, reach) => editTrims(fn, label, reach),
-    swap: (productId, keepFocus) => { trimFocusList = !!keepFocus; editTrims(t => swapTrimProduct(t, productId, trimWallHeight(t)), 'swap trim', true); trimFocusList = false; },
+    swap: productId => editTrims(t => swapTrimProduct(t, productId, trimWallHeight(t)), 'swap trim', true),
     toggleEdit: toggleTrimEdit, remove: () => deleteTrims(list.map(t => t.id)),
     boardChanges, restoreBoards: t => editBoards(t, x => restoreAllBoards(x), 'put trim boards back'),
     selectWall: () => setSelection({ kind: 'wall', id: list[0].wallId }), rerender: renderInspector,
@@ -3164,6 +3164,49 @@ function trimFacePoint(e, t) {
   raycaster.setFromCamera(ndcFromEvent(e), viewCamera());
   if (!raycaster.ray.intersectPlane(_plane, _hitV)) return null;
   return { x: (_hitV.x - w.ax) * ux + (_hitV.z - w.ay) * uy, y: _hitV.y - elev };
+}
+// A trim catalog card dropped on the model (product-drag.js, from PRODUCTS > TRIM CATALOG).
+// On trim it swaps that trim: the whole selection, as far as CHANGES REACH goes, when the trim
+// is selected; that section alone when not. On a wall face it swaps the face's trim of the same
+// kind (base, crown, wainscoting...) when there is some, and otherwise adds the trim to the face.
+// The view's own lists and panels over the model are not the model.
+const overModel = e => !(e.target && e.target.closest && e.target.closest('.v-env, .v-objects, .v-views, .v-sections, .v-ctx'));
+function onTrimDragOver(e) {
+  if (!carriesTrim(e) || clientMode || !prop || mode === 'walk' || !overModel(e)) return;
+  e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+}
+function onTrimDrop(e) {
+  const id = droppedTrim(e);
+  if (!id || !overModel(e)) return;
+  e.preventDefault(); e.stopPropagation(); endTrimDrag();
+  if (clientMode || !prop || mode === 'walk') return;
+  const p = catalogItem(id);
+  if (!p) return;
+  const swapOn = (ids, reach) => editTrims(t => swapTrimProduct(t, id, trimWallHeight(t)), 'swap trim', reach || ids.map(trimById).filter(Boolean));
+  const hit = pick(e, { pins: false, notes: false, scans: false });
+  if (hit && hit.kind === 'trim' && trimById(hit.id)) {
+    if (trimIds().includes(hit.id)) swapOn(trimIds(), true);
+    else { selectTrims([hit.id]); swapOn([hit.id]); }
+    toast('Trim swapped to ' + (p.short || p.title) + '.', 'ok');
+    return;
+  }
+  const wall = hit && !hit.cap && hit.kind === 'wall' ? prop.walls.find(w => w.id === hit.id) : null;
+  if (!wall) { toast('Drop trim on a wall face to add it there, or on trim to swap it.', 'warn'); return; }
+  const side = wallSideOfHit(hit), group = s => (TRIM_STYLES[s] || {}).group;
+  const kin = (prop.trims || []).filter(t => t.wallId === wall.id && t.side === side && group(t.style) === group(p.style));
+  if (kin.length) {
+    selectTrims(kin.map(t => t.id)); swapOn(kin.map(t => t.id));
+    toast((kin.length === 1 ? 'This face\'s ' + (TRIM_STYLES[kin[0].style] || {}).label : kin.length + ' sections on this face') + ' swapped to ' + (p.short || p.title) + '.', 'ok');
+    return;
+  }
+  addTrims(id, [{ wall, side }]);
+}
+// USE ON THE SELECTED TRIM in the floating trim catalog: the same as a drop on the panel.
+function onUseTrim(e) {
+  const id = e.detail && e.detail.id, p = catalogItem(id);
+  if (!p || clientMode) return;
+  if (!trimIds().length) { toast('Select trim in the model first, then use ' + (p.short || p.title) + ' on it.', 'warn'); return; }
+  editTrims(t => swapTrimProduct(t, id, trimWallHeight(t)), 'swap trim', true);
 }
 // The selected section under the pointer: one hit itself, or the wall face a selected section
 // covers, inside its area (a box field is mostly wall between thin mouldings) give or take 4 cm.
@@ -7371,6 +7414,10 @@ function openModel(root) {
   c.addEventListener('pointerleave', onPointerLeave);
   c.addEventListener('contextmenu', onContextMenu);
   c.addEventListener('wheel', closeContextMenu, { passive: true });
+  // Drops land on whatever is drawn over the canvas (labels, the hint), so the view takes them.
+  wrapEl.addEventListener('dragover', onTrimDragOver);
+  wrapEl.addEventListener('drop', onTrimDrop);
+  window.addEventListener('tiksi:use-trim', onUseTrim);
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('keyup', onKeyUp);
   if (markupUsed || hasMarkups()) needMarkup();
@@ -7670,6 +7717,8 @@ export function unmount() {
     c.removeEventListener('contextmenu', onContextMenu);
     c.removeEventListener('wheel', closeContextMenu);
   }
+  if (wrapEl) { wrapEl.removeEventListener('dragover', onTrimDragOver); wrapEl.removeEventListener('drop', onTrimDrop); }
+  window.removeEventListener('tiksi:use-trim', onUseTrim);
   closeContextMenu();
   closeNoteEditor();
   if (markup) { markup.dispose(); markup = null; }

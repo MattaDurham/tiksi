@@ -2,20 +2,23 @@
 // CHANGES REACH says how far a change here goes (trim-design.js): the sections selected, their
 // group, the whole room or the whole project. Under it: the moulding of each kind of trim in
 // the selection as a dropdown, the heights, the panel layout (the box width aimed for, the gap,
-// the margins, rows), and the trim catalog (trim-catalog.js) as a list to scroll through: a
-// click on an entry, or the arrow keys while the list has focus, swaps the trim to that entry.
+// the margins, rows). Each moulding dropdown opens into the catalog entries of its kind drawn to
+// size: a click, or the arrow keys while the open list has focus, swaps the trim to that entry.
+// The whole catalog is PRODUCTS > TRIM CATALOG; its cards drop onto a dropdown or this panel.
 // HTML builders and a binder; the viewer passes a context of callbacks (viewer3d.js).
 
 import { escapeHtml, fmtLen, parseLen, fmtMoney } from './store.js';
 import { materialSelectHtml } from './materials.js';
-import { TRIM_STYLES, STYLE_GROUPS, trimStyle, trimProduct, trimLabel, isField, catalogInOrder } from './trims.js';
+import { TRIM_STYLES, trimStyle, trimProduct, trimLabel, isField, catalogInOrder } from './trims.js';
 import { CROWN_PRESETS, WAINSCOT_PRESETS, FRAME_PRESETS } from './trim-presets.js';
 import { trimCutaway, trimElevation } from './trim-previews.js';
 import { catalogFor, catalogItem } from './trim-catalog.js';
+import { takesTrim } from './product-drag.js';
+import { openProductsFloat } from './products-float.js';
 
 const IN = 0.0254;
-let groupFilter = '';            // the catalog's group filter, kept between selections
-let listScroll = 0;              // and where the list was scrolled to
+let openMoulding = '';           // the kind of trim whose moulding dropdown is open, kept between redraws
+let focusMoulding = '';          // and whether its list had the keys (stepping with the arrows)
 
 function inches(m) { return Math.round(m / IN * 16) / 16; }
 function frac(v) {
@@ -32,7 +35,7 @@ export function sizeLabel(p) {
   return frac(inches(p.T)) + ' x ' + frac(inches(p.W)) + ' in';
 }
 
-function productCardHtml(p, opts = {}) {
+export function productCardHtml(p, opts = {}) {
   if (!p) return '<div class="empty">No catalog entry.</div>';
   const price = p.price ? `${fmtMoney(p.price)}${p.priceUnit ? ' / ' + escapeHtml(p.priceUnit) : ''}` : '';
   return `<div class="tp-product">
@@ -49,24 +52,11 @@ function productCardHtml(p, opts = {}) {
   </div>`;
 }
 
-function catalogHtml(current) {
-  const items = catalogInOrder().filter(p => !groupFilter || (TRIM_STYLES[p.style] || {}).group === groupFilter);
-  let lastStyle = '';
-  const rows = items.map(p => {
-    const head = p.style !== lastStyle ? `<div class="tp-cat-head">${escapeHtml((TRIM_STYLES[p.style] || {}).label || p.style)}</div>` : '';
-    lastStyle = p.style;
-    const on = current.has(p.id);
-    return `${head}<button type="button" class="tp-cat-item${on ? ' active' : ''}" data-cat="${escapeHtml(p.id)}" title="${escapeHtml(p.title)}">
-      ${trimCutaway(p)}
+// One catalog entry as a row: its section drawn to size, its name, maker, size, store and price.
+function entryInner(p) {
+  return `${trimCutaway(p)}
       <span class="tp-cat-text"><b>${escapeHtml(p.short || p.title)}</b><span>${escapeHtml(p.brand)} ${escapeHtml(p.model || '')} &middot; ${escapeHtml(sizeLabel(p))}</span>
-      <span>${escapeHtml(p.store || '')}${p.price ? ' &middot; ' + fmtMoney(p.price) + (p.priceUnit ? '/' + escapeHtml(p.priceUnit) : '') : ''}</span></span>
-    </button>`;
-  }).join('');
-  return `<div class="tp-cat">
-    <div class="tp-cat-filter">${['', ...STYLE_GROUPS].map(g => `<button type="button" class="tp-chip${g === groupFilter ? ' active' : ''}" data-group="${escapeHtml(g)}">${escapeHtml(g || 'All')}</button>`).join('')}</div>
-    <div class="tp-cat-list" tabindex="0" data-cat-list aria-label="Trim catalog: arrow keys swap the selected trim">${rows || '<div class="empty">Nothing in this group.</div>'}</div>
-    <div class="empty" style="margin:4px 0 0">Click an entry to swap the selected trim to it. With the list focused, the up and down arrows step through it live.</div>
-  </div>`;
+      <span>${escapeHtml(p.store || '')}${p.price ? ' &middot; ' + fmtMoney(p.price) + (p.priceUnit ? '/' + escapeHtml(p.priceUnit) : '') : ''}</span></span>`;
 }
 
 const same = (list, f) => { const v = list.map(f); return v.every(x => x === v[0]) ? v[0] : undefined; };
@@ -104,17 +94,25 @@ function scopeHtml(ctx) {
     <div class="tp-scope" role="radiogroup" aria-label="How far a change to this trim reaches">${ctx.scopes.map(x => `<button type="button" role="radio" aria-checked="${x.id === ctx.scope}" class="tp-scope-btn${x.id === ctx.scope ? ' active' : ''}" data-scope="${x.id}" title="${escapeHtml(x.title)}">${escapeHtml(x.label)}<span>${x.count}</span></button>`).join('')}</div>
     <div class="empty tp-scope-note">${escapeHtml(now.title)}</div>`;
 }
-// One dropdown for each kind of trim in the selection: the moulding it is made of.
+// One dropdown for each kind of trim in the selection: the moulding it is made of, shown drawn
+// to size, opening into every catalog entry of that kind drawn the same way.
 function mouldingsHtml(ctx) {
   const styles = Object.keys(TRIM_STYLES).filter(k => ctx.trims.some(t => t.style === k));
   return `<div class="tp-sub">MOULDINGS</div>` + styles.map(k => {
     const mine = ctx.mouldingReach ? ctx.mouldingReach(k) : ctx.reach.filter(t => t.style === k);
     const ids = new Set(mine.map(t => t.product));
     const cur = ids.size === 1 ? [...ids][0] : '';
+    const curP = cur ? catalogItem(cur) : null;
     const items = catalogFor(k);
-    const options = (cur ? '' : '<option value="" selected>(several)</option>') + items.map(p => `<option value="${escapeHtml(p.id)}" ${p.id === cur ? 'selected' : ''}>${escapeHtml(p.short || p.title)} (${escapeHtml(p.brand)} ${escapeHtml(p.model || '')}, ${escapeHtml(sizeLabel(p))})</option>`).join('')
-      + (cur && !items.some(p => p.id === cur) ? `<option value="${escapeHtml(cur)}" selected>${escapeHtml(cur)}</option>` : '');
-    return `<div class="field"><label>${escapeHtml(TRIM_STYLES[k].label)} (${mine.length} ${mine.length === 1 ? 'section' : 'sections'})</label><select data-role-product="${k}">${options}</select></div>`;
+    if (curP && !items.some(p => p.id === cur)) items.push(curP);
+    const label = `${TRIM_STYLES[k].label} (${mine.length} ${mine.length === 1 ? 'section' : 'sections'})`;
+    return `<div class="field tp-mould" data-drop-style="${k}"><label>${escapeHtml(label)}</label>
+      <details class="tp-mould-pick" data-mould="${k}"${openMoulding === k ? ' open' : ''}>
+        <summary aria-label="${escapeHtml(label)}: ${escapeHtml(curP ? curP.short || curP.title : cur || 'several mouldings')}">${curP ? entryInner(curP)
+          : `<span class="tp-cat-text"><b>${cur ? escapeHtml(cur) : 'Several mouldings'}</b><span>${cur ? 'Not in the catalog' : 'Pick one to make them all the same'}</span></span>`}</summary>
+        <div class="tp-cat-list" tabindex="0" data-mould-list aria-label="${escapeHtml(TRIM_STYLES[k].label)} mouldings: arrow keys swap the trim">${items.map(p =>
+          `<button type="button" class="tp-cat-item${p.id === cur ? ' active' : ''}" data-cat="${escapeHtml(p.id)}" title="${escapeHtml(p.title)}">${entryInner(p)}</button>`).join('')}</div>
+      </details></div>`;
   }).join('');
 }
 // The layout numbers of boxes, panels and bays: one set for every section the change reaches.
@@ -210,10 +208,12 @@ export function trimPanelHtml(ctx) {
   }
   const mat = same(list, t => t.material || '');
   html += `<div class="field"><label>Finish</label>${materialSelectHtml('trim', mat === undefined ? '' : mat, 'data-tp-mat').replace('(none)', mat === undefined ? '(several)' : 'Trim paint (automatic)')}</div>`;
-  html += `<div class="tp-sub">TRIM CATALOG</div>${catalogHtml(current)}`;
+  html += `<div class="tp-sub">TRIM CATALOG</div>
+    <div class="empty" style="margin:0 0 6px">Every moulding, board and panel is in PRODUCTS &gt; TRIM CATALOG. Open it floating over the model and drag an entry onto a moulding above, onto this panel, onto trim in the model or onto a wall.</div>
+    <button class="btn" data-tp-catalog>OPEN THE TRIM CATALOG</button>`;
   html += `${one ? '<button class="btn" data-tp-wall>SELECT WALL</button>' : ''}
     <button class="btn danger" data-tp-del>DELETE ${one ? 'THIS TRIM' : list.length + ' SECTIONS'}</button>`;
-  return html;
+  return `<div class="tp-drop" data-tp-drop>${html}</div>`;
 }
 
 export function bindTrimPanel(root, ctx) {
@@ -227,7 +227,6 @@ export function bindTrimPanel(root, ctx) {
   });
   root.querySelectorAll('[data-scope]').forEach(b => b.onclick = () => ctx.setScope(b.dataset.scope));
   const reachBtn = q('[data-select-reach]'); if (reachBtn) reachBtn.onclick = () => ctx.selectReach(ctx.scope);
-  root.querySelectorAll('[data-role-product]').forEach(sel => sel.onchange = () => { if (sel.value) ctx.swapStyle(sel.dataset.roleProduct, sel.value); });
   // Layout numbers go to every section the change reaches.
   root.querySelectorAll('[data-design]').forEach(inp => inp.onchange = () => {
     const key = inp.dataset.design, raw = inp.value.trim();
@@ -285,24 +284,10 @@ export function bindTrimPanel(root, ctx) {
   const even = q('[data-even]'); if (even) even.onclick = () => ctx.set(t => { t.widths = null; }, 'even box widths');
   const evenRows = q('[data-even-rows]'); if (evenRows) evenRows.onclick = () => ctx.set(t => { t.heights = null; }, 'even row heights');
   const mat = q('[data-tp-mat]'); if (mat) mat.onchange = () => ctx.set(t => { t.material = mat.value || null; }, 'trim finish', true);
-  root.querySelectorAll('[data-group]').forEach(b => b.onclick = () => { groupFilter = b.dataset.group; listScroll = 0; ctx.rerender(); });
-  const listEl = q('[data-cat-list]');
-  if (listEl) {
-    listEl.scrollTop = listScroll;
-    listEl.onscroll = () => { listScroll = listEl.scrollTop; };
-    listEl.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { listScroll = listEl.scrollTop; ctx.swap(b.dataset.cat, true); });
-    listEl.onkeydown = e => {
-      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-      e.preventDefault();
-      const items = [...listEl.querySelectorAll('[data-cat]')];
-      const at = items.findIndex(b => b.classList.contains('active'));
-      const next = items[Math.max(0, Math.min(items.length - 1, at < 0 ? 0 : at + (e.key === 'ArrowDown' ? 1 : -1)))];
-      if (!next) return;
-      listScroll = Math.max(0, next.offsetTop - listEl.clientHeight / 2);
-      ctx.swap(next.dataset.cat, true);
-    };
-    if (ctx.focusList) { listEl.focus({ preventScroll: true }); const a = listEl.querySelector('.active'); if (a && (a.offsetTop < listEl.scrollTop || a.offsetTop > listEl.scrollTop + listEl.clientHeight - 30)) listEl.scrollTop = listScroll = Math.max(0, a.offsetTop - listEl.clientHeight / 2); }
-  }
+  bindMouldings(root, ctx);
+  const cat = q('[data-tp-catalog]'); if (cat) cat.onclick = () => openProductsFloat('trim');
+  // A catalog card dropped anywhere on the panel swaps the selection, as far as the change reaches.
+  takesTrim(q('[data-tp-drop]'), id => ctx.swap(id));
   const wallBtn = q('[data-tp-wall]'); if (wallBtn) wallBtn.onclick = () => ctx.selectWall();
   q('[data-tp-del]').onclick = () => ctx.remove();
   const boardsBack = q('[data-tp-boards-back]'); if (boardsBack && one) boardsBack.onclick = () => ctx.restoreBoards(one);
@@ -369,6 +354,40 @@ export function boardChangesHtml(c) {
   const what = [c.moved && c.moved + ' moved', c.hidden && c.hidden + ' deleted', c.added && c.added + ' added'].filter(Boolean).join(', ');
   return `<div class="stat-line"><span>Boards changed by hand</span><b>${escapeHtml(what)}</b></div>
     <button class="btn" data-tp-boards-back>PUT EVERY BOARD BACK (${c.total})</button>`;
+}
+
+// The moulding dropdowns: one open at a time; a click on an entry swaps and closes it; with
+// its list focused the up and down arrows swap live and keep it open; Esc closes it.
+function bindMouldings(root, ctx) {
+  const all = [...root.querySelectorAll('[data-mould]')];
+  for (const d of all) {
+    const k = d.dataset.mould, listEl = d.querySelector('[data-mould-list]');
+    const centre = () => { const a = listEl.querySelector('.active'); if (a) listEl.scrollTop = Math.max(0, a.offsetTop - listEl.clientHeight / 2 + a.offsetHeight / 2); };
+    d.addEventListener('toggle', () => {
+      if (d.open) { openMoulding = k; all.forEach(o => { if (o !== d) o.open = false; }); centre(); }
+      else if (openMoulding === k) openMoulding = '';
+    });
+    listEl.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { openMoulding = ''; ctx.swapStyle(k, b.dataset.cat); });
+    listEl.onkeydown = e => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); d.open = false; d.querySelector('summary').focus(); return; }
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      e.preventDefault();
+      const items = [...listEl.querySelectorAll('[data-cat]')];
+      const at = items.findIndex(b => b.classList.contains('active'));
+      const next = items[Math.max(0, Math.min(items.length - 1, at < 0 ? 0 : at + (e.key === 'ArrowDown' ? 1 : -1)))];
+      if (!next || next.classList.contains('active')) return;
+      openMoulding = k; focusMoulding = k;
+      ctx.swapStyle(k, next.dataset.cat);
+    };
+    if (d.open) centre();
+    // A catalog card dropped on this dropdown swaps this kind of trim only.
+    takesTrim(d.closest('[data-drop-style]'), id => { openMoulding = ''; ctx.swapStyle(k, id); });
+  }
+  if (focusMoulding) {
+    const listEl = root.querySelector(`[data-mould="${focusMoulding}"] [data-mould-list]`);
+    focusMoulding = '';
+    if (listEl) listEl.focus({ preventScroll: true });
+  }
 }
 
 // The ADD TRIM block of the wall and room panels: a style and catalog entry, and where.
