@@ -58,7 +58,9 @@ try {
     if (prepare) await prepare(page);
     await page.goto(url);
     await page.waitForFunction(() => document.querySelector('#save-status')?.textContent === 'SAVED TO DISK', null, { timeout: 120000 });
-    await page.evaluate(() => document.dispatchEvent(new CustomEvent('tiksi:files', { detail: { tab: 'settings' } })));
+    // SAVED TO DISK can show before the page listens for FILE (it waits for the photos first), so
+    // ask again until FILE is open.
+    await page.waitForFunction(() => document.querySelector('[data-file-dialog]') || void document.dispatchEvent(new CustomEvent('tiksi:files', { detail: { tab: 'settings' } })), null, { timeout: 60000, polling: 500 });
     await page.locator('[data-file-dialog] details summary', { hasText: 'Workspace backup' }).click();
     return { context, page };
   };
