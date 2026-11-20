@@ -319,3 +319,27 @@ html.touch #view .es-items .row-del { min-width: 44px; min-height: 44px; }
 .es-dbody .d-eq { font-variant-numeric: tabular-nums; line-height: 1.7; }
 .es-dbody .d-sum { width: 100%; margin: 6px 0 10px; }
 .es-dbody ul { padding-left: 18px; } .es-dbody li { margin: 3px 0; }
+/* SCHEDULE: a detail column on the right where a line's numbers change; a calendar that stretches. */
+.sc .sc-det { display: none; }
+.sc.det-open { grid-template-columns: 220px minmax(0, 1fr) 320px; } .sc.det-open .sc-det { display: flex; }
+.sc-det .es-dbody { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.sc-det .sc-detail { color: var(--dim); font-size: 12.5px; line-height: 1.5; }
+.sc-field { border-top: 1px solid var(--line); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.sc-field label { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--dim); }
+.sc-field .sc-in { display: inline-flex; align-items: center; gap: 6px; }
+.sc-field input { width: 90px; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--radius); padding: 5px 8px; color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; }
+.sc-field i { font-style: normal; font-size: 11px; color: var(--faint); }
+.sc-apply { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.sc-tasks { padding-left: 18px; margin: 0; font-size: 12.5px; } .sc-tasks li { margin: 3px 0; } .sc-tasks a { cursor: pointer; }
+.sc-tab td.lk { cursor: pointer; } .sc-tab td.lk:hover { color: var(--accent); }
+.sc-set { font-style: normal; color: var(--accent); margin-left: 3px; }
+.sc-bar[data-bar] { cursor: ew-resize; } .sc-bar.dragging { outline: 2px solid var(--accent); }
+.sc-tab td.bars, .sc-tab th.axis { cursor: col-resize; }
+.sc-bar.task { color: #dfe8ef; font: 500 10px var(--mono); line-height: 16px; padding: 0 5px; }
+.sc-wk.day { border-left-color: var(--line); } .sc-wk.day { color: var(--faint); }
+.sc-grid.hours td.bars { background-image: repeating-linear-gradient(to right, transparent 0 calc(var(--hour-w) - 1px), color-mix(in srgb, var(--line) 60%, transparent) calc(var(--hour-w) - 1px) var(--hour-w)); }
+@media (max-width: 1199px) { .sc.det-open { grid-template-columns: 200px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; } .sc.det-open .sc-det { grid-column: 2; max-height: 42vh; border-left: 0; border-top: 1px solid var(--line); } }
+.sc a.dl { color: var(--cyan); cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+@media (max-width: 760px) { .sc.det-open { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; } .sc.det-open .sc-det { grid-column: 1; } }
+/* The picked line's tint over a solid cell, so a stretched chart scrolled under the sticky name stays hidden. */
+.sc-tab tr.on td.sticky { background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--panel); }

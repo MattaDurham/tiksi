@@ -246,3 +246,22 @@ test('the boards bought are PRODUCTS records with their store pages, and a recor
   near(J.jobOf(root).boards - j0.boards, 10 * line.order, 'ten dollars more for each of those boards');
   assert.equal(JP.feetInches(94.5), '7\'-10 1/2"'); assert.equal(JP.feetInches(144), '12\'-0"');
 });
+
+test('a room\'s days set by hand scale its tasks to fit, the labor follows, and reset', () => {
+  const { root } = setup();
+  const j0 = J.jobOf(root), room = j0.rooms[0], d0 = room.days, h0 = room.hours.likely;
+  const want = d0 + 2;
+  assert.ok(J.setRoomDays(root, room.key, want)); store.touch();
+  const j1 = J.jobOf(root), r1 = j1.rooms[0], lines = r1.trim.flatMap(x => x.labor);
+  assert.equal(r1.days, want, 'the room takes the days set');
+  const work = lines.filter(l => l.per !== 'room_days').reduce((n, l) => n + l.hours, 0);
+  near(work, want * 6, 'its working hours fill the days at 6 hours a day');
+  assert.ok(lines.filter(l => l.per !== 'room_days' && l.own > 0).every(l => l.scaled && Math.abs(l.rate / l.own - lines.find(x => x.per !== 'room_days' && x.own > 0).rate / lines.find(x => x.per !== 'room_days' && x.own > 0).own) < 1e-9), 'every task is scaled by the same factor');
+  assert.ok(r1.hours.likely > h0 && Math.abs(r1.labor.likely - r1.hours.likely * j1.settings.laborRate) < 1e-6, 'more days, more hours, and the labor follows');
+  assert.ok(J.setRoomLabor(root, room.key, 'each', 'base', 0.05)); store.touch();
+  assert.equal(J.jobOf(root).rooms[0].days, want, 'a task typed in a room whose days are set keeps the days');
+  assert.equal(J.setRoomDays(root, room.key, 0), false, 'less than a day is refused');
+  assert.ok(J.setRoomDays(root, room.key, null)); store.touch();
+  assert.ok(J.jobOf(root).rooms[0].trim.every(x => !x.daysSet), 'reset: the days are counted again');
+  assert.ok(root.job.labor[room.key].each.base === 0.05, 'and the typed time stays');
+});
