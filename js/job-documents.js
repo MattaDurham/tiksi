@@ -161,9 +161,10 @@ export function summaryHtml(job, prop) {
       ${job.discount.likely ? line(`Discount (${pctOf(s.discount)} off labor)`, -job.discount.likely) : ''}
       ${line(`Tax (${pctOf(s.taxRate)} on materials)`, job.tax)}
       ${line('Total', job.price.likely, 'tot')}</tbody></table>
+    ${scheduleHtml(job)}
     <p class="sm-note">Materials are the trim boards and the supplies to install and finish them (nails, adhesive, caulk, filler, primer, paint, protection). Labor is each room's hours at ${cents(s.laborRate).replace(/\.00$/, '')} an hour.${items ? ' Other work is priced per item in the room.' : ''}</p>
   </section></div>`;
-  const css = `@page { size: letter; margin: 0.8in; }
+  const css = `@page { size: letter; margin: 0.6in 0.7in; }
 .sm { font: 11pt/1.45 -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1a1a1a; background: #fff; }
 .sm-page { max-width: 7in; margin: 0 auto; padding: 0.4in 0; }
 .sm-biz { font-weight: 600; margin-bottom: 14px; } .sm-k { font-size: 9pt; letter-spacing: .12em; text-transform: uppercase; color: #8a5a1c; }
@@ -173,6 +174,43 @@ export function summaryHtml(job, prop) {
 .sm-t .r { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; } .sm-t tfoot td { font-weight: 600; border-top: 1.5px solid #1a1a1a; border-bottom: 0; }
 .sm h2 { font-size: 12pt; margin: 34px 0 8px; color: #1a1a1a; } .sm-sum { width: 55%; margin-left: auto; } .sm-sum td { border-bottom: 1px solid #eee; }
 .sm-sum tr.tot td { font-weight: 700; font-size: 12.5pt; border-top: 1.5px solid #1a1a1a; border-bottom: 0; }
-.sm-note { color: #666; font-size: 9pt; margin-top: 28px; }`;
+.sm-note { color: #666; font-size: 9pt; margin-top: 28px; }
+@media print { .sm-page { padding: 0; } .sm-t th, .sm-t td { padding: 5px 8px; } .sm h2 { margin: 22px 0 6px; } .sm-sub { margin-bottom: 16px; } .sm-sched { margin-top: 22px; } .sm-note { margin-top: 16px; } }
+.sm-sched { margin-top: 34px; break-inside: avoid; } .sm-sched .sm-when { color: #555; margin: -2px 0 10px; }
+.sm-g { display: grid; grid-template-columns: 1.9in 0.45in minmax(0, 1fr); align-items: center; font-size: 9.5pt; }
+.sm-g > div { padding: 5px 0; border-bottom: 1px solid #eee; } .sm-g .sm-gh { border-bottom: 1.5px solid #1a1a1a; font-size: 8pt; text-transform: uppercase; letter-spacing: .06em; color: #555; }
+.sm-g .r { text-align: right; padding-right: 10px; font-variant-numeric: tabular-nums; }
+.sm-track { position: relative; height: 16px; padding: 0 !important; margin: 5px 0; }
+.sm-axis { position: relative; height: 26px; }
+.sm-axis span { position: absolute; top: 0; font-size: 7.5pt; line-height: 1.15; color: #555; padding-left: 3px; border-left: 1px solid #ccc; height: 100%; white-space: nowrap; }
+.sm-axis span.wk { border-left-color: #1a1a1a; color: #1a1a1a; font-weight: 600; }
+.sm-col { position: absolute; top: -5px; bottom: -5px; border-left: 1px solid #eee; } .sm-col.wk { border-left-color: #bbb; }
+.sm-bar { position: absolute; top: 0; height: 100%; background: #c98a2e; border-radius: 3px; color: #fff; font-size: 7.5pt; font-weight: 600; line-height: 16px; padding-left: 4px; overflow: hidden; white-space: nowrap; box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.sm-bar.item { background: #4a6478; }`;
   return { html, css };
+}
+
+// The schedule at a glance, for the summary: each line of the job (a room's trim, a scope item with
+// days) across its working days, Monday to Friday, from the project's start date, as SCHEDULE has it.
+function scheduleHtml(job) {
+  const sched = job.schedule, rows = sched.rows.filter(r => sched.sched[r.id]);
+  if (!rows.length || !sched.days) return '';
+  const root = job.root, origin = root.startDate || ws.data.settings.programStart || isoToday();
+  const cols = Math.max(sched.days, 1), pctOf = n => (n / cols * 100).toFixed(3) + '%';
+  const day = n => new Date(workday(origin, n) + 'T12:00:00');
+  const short = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const every = cols <= 15 ? 1 : 0;   // a label on every day while they fit, else on Mondays
+  let axis = '', grid = '';
+  for (let n = 0; n < cols; n++) {
+    const d = day(n), mon = d.getDay() === 1 || n === 0;
+    if (every || mon) axis += `<span class="${mon ? 'wk' : ''}" style="left:${pctOf(n)}">${esc(short(d))}<br>${esc(d.toLocaleDateString('en-US', { weekday: 'short' }))}</span>`;
+    grid += `<span class="sm-col ${mon ? 'wk' : ''}" style="left:${pctOf(n)}"></span>`;
+  }
+  const line = r => {
+    const s = sched.sched[r.id], label = r.kind === 'trim' ? r.name : (r.room ? r.room.name + ': ' : '') + r.name;
+    return `<div>${esc(label)}</div><div class="r">${r.durationDays}</div><div class="sm-track">${grid}<span class="sm-bar ${r.kind === 'trim' ? '' : 'item'}" style="left:${pctOf(s.es)};width:${pctOf(s.ef - s.es)}">${esc(short(day(Math.floor(s.es + 1e-9))))}</span></div>`;
+  };
+  const fmtLong = d => d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  return `<section class="sm-sched"><h2>Schedule</h2><p class="sm-when">${esc(fmtLong(day(0)))} to ${esc(fmtLong(day(cols - 1)))} · ${plural(cols, 'working day')}, Monday to Friday</p>
+    <div class="sm-g"><div class="sm-gh">Work</div><div class="sm-gh r">Days</div><div class="sm-gh sm-axis">${axis}</div>${rows.map(line).join('')}</div></section>`;
 }

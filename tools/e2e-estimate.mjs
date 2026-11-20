@@ -295,6 +295,8 @@ try {
   await page.waitForSelector('.sm');
   const sum = await page.locator('.sm').textContent(), jd = await job();
   check(!/Discount/.test(sum) && /Tax \(/.test(sum) && sum.includes(jd.cents), `the summary gives each room, the tax and the estimate's total ${jd.cents}, and no discount line without a discount`);
+  const gantt = await page.evaluate(async () => { const j = (await import('/js/job.js')).jobOf((await import('/js/store.js')).projectById('p-trim')); return { rows: j.schedule.rows.length, days: j.schedule.days, bars: document.querySelectorAll('.sm-sched .sm-bar').length, text: document.querySelector('.sm-sched')?.textContent || '' }; });
+  check(gantt.bars === gantt.rows && gantt.text.includes(`${gantt.days} working day`), `the summary ends with the schedule: ${gantt.bars} bars over ${gantt.days} working days`);
   await page.click('[data-doc="package"]');
   await page.waitForSelector('.tpkg');
   const marks = await page.evaluate(async () => (await import('/js/job.js')).jobOf((await import('/js/store.js')).projectById('p-trim')).trim.groups.map(g => g.mark));
