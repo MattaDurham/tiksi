@@ -178,7 +178,7 @@ function renderJob(inner, job, prop) {
     <div class="es-tbl"><table class="es-t es-rooms"><thead><tr><th>Room</th><th class="num">Trim LF</th><th class="num">Pieces</th><th class="num">Boards</th><th class="num">Supplies</th><th class="num">Hours</th><th class="num">Labor</th><th class="num">Scope items</th><th class="num">Days</th><th class="num">Price</th><th></th></tr></thead>
     <tbody>${rows.map(roomRow).join('')}${otherRow}${rows.length || otherRow ? '' : '<tr><td colspan="11" class="note">No rooms yet: add one below, then draw its trim in MODEL or add its scope items here.</td></tr>'}</tbody>
     <tfoot><tr><td>Total</td>${cell('*', 'lf', trim ? Math.round(job.rooms.reduce((n, r) => n + r.trimLf, 0)) : '')}${cell('*', 'pieces', trim ? job.rooms.reduce((n, r) => n + r.pieces, 0) : '')}${cell('*', 'boards', trim ? fm(job.boards) : '')}${cell('*', 'supplies', trim ? fm(job.supplies) : '')}${cell('*', 'hours', trim ? hrs(job.hours.likely) : '')}${cell('*', 'labor', trim ? fm(job.labor.likely) : '')}${cell('*', 'items', fm(job.itemCost.likely))}${cell('*', 'days', days || '')}${cell('*', 'price', fm(job.price.likely))}<td></td></tr></tfoot></table></div>
-    ${addRoomHtml(job, prop)}
+    ${addRoomHtml(job, prop)}${job.other.items.length ? '' : `<p class="es-itemacts"><button type="button" class="btn small" data-add-item="${esc(root.id)}">+ PROJECT-WIDE ITEM</button> <span class="note">work for the whole project rather than one room: permits, protection, a dumpster</span></p>`}
     <p class="note">Each room is cut from its own boards, so its cut list stands alone. Boards are bought at the cheapest store length that holds their cuts, at the prices in PRODUCTS; the buy list adds ${plural(s.sparePerMoulding, 'spare board')} of each moulding. Hours are each task's quantity, counted from the drawing, times ${s.who ? esc(s.who.name) + "'s" : 'the published'} time; open a room to type over either. Click a room to see its walls, boards, cut list and labor; click any number for how it is worked out.</p></section>`;
   const set = (key, label, value, unit, step) => `<label class="es-set"><span>${esc(label)}</span><span><input type="number" min="0" step="${step}" inputmode="decimal" data-set="${key}" value="${value}">${unit ? `<i>${unit}</i>` : ''}</span></label>`;
   const line = (label, v, k, sub, cls = '') => `<tr data-d="cost:${k}" class="lk ${cls}"><td>${esc(label)}${sub ? `<span class="note"> ${esc(sub)}</span>` : ''}</td><td class="num">${fm(v)}</td></tr>`;
@@ -325,7 +325,7 @@ function bindJob(inner, job) {
   });
   inner.querySelectorAll('[data-add-item]').forEach(b => b.onclick = () => {
     const project = projectById(b.dataset.addItem), it = newItem();
-    project.items = [...(project.items || []), it]; touch(); render(true);
+    project.items = [...(project.items || []), it]; if (project === root) open.add('other'); touch(); render(true);
     const n = el && el.querySelector(`tr[data-si="${CSS.escape(it.id)}"] [data-si-f="name"]`); if (n) { n.focus(); n.select(); }
   });
   inner.querySelectorAll('[data-si-del]').forEach(b => b.onclick = () => {
