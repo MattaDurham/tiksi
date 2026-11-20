@@ -12,7 +12,7 @@
 import {
   ws, touch, onChange, activeProperty, propertyProjects, projectById, escapeHtml, fmtLen, readMoney, uid, isoToday, fmtDate, subprojectsOf,
 } from './store.js';
-import { jobOf, rootOf, setJobSetting, JOB_DEFAULTS, installers, installerById, addInstaller, removeInstaller, setInstallerTime, setJobWho, setRoomLabor } from './job.js';
+import { jobOf, rootOf, setJobSetting, JOB_DEFAULTS, installers, installerById, addInstaller, removeInstaller, setInstallerTime, setJobWho, setRoomLabor, removeSupply, restoreSupply, setSupply, addSupply, renameSupply } from './job.js';
 import { ensureBoardProducts, storeItems, productForKey, productForBoard, feetInches } from './job-products.js';
 import { ESTIMATE_DATA } from './estimate-data.js';
 import { newItem, itemRowHtml, ITEM_HEAD, bindItemRow, removeItem, addMeasured, itemDetailHtml, bindItemDetail } from './scope-items.js';
@@ -93,7 +93,7 @@ export function mount(root) {
   off = onChange(() => { clearTimeout(timer); timer = setTimeout(() => { if (el && !el.querySelector('.es :is(input,select,textarea):focus')) render(true); }, 150); });
   render();
 }
-export function unmount() { clearTimeout(timer); if (off) off(); off = null; if (offBeside) offBeside(); offBeside = null; el = null; capProblem = ''; itemProblem = null; outlined = ''; shownJob = ''; paintedKey = ''; setScopeTarget(null); }
+export function unmount() { closeMenu(); clearTimeout(timer); if (off) off(); off = null; if (offBeside) offBeside(); offBeside = null; el = null; capProblem = ''; itemProblem = null; outlined = ''; shownJob = ''; paintedKey = ''; setScopeTarget(null); }
 export function undo() { if (restoreProjectEdit('undo')) render(true); }
 export function redo() { if (restoreProjectEdit('redo')) render(true); }
 
@@ -164,20 +164,20 @@ function renderJob(inner, job, prop) {
   const cell = (key, col, v) => v === '' ? '<td class="num"></td>' : `<td class="num lk" data-d="cell:${esc(key)}|${col}">${v}</td>`;
   const roomRow = r => {
     const has = r.trim.length > 0;
-    return `<tr class="es-room ${open.has(r.key) ? 'open' : ''}" data-room="${esc(r.key)}" tabindex="0" aria-expanded="${open.has(r.key)}">
+    return `<tr data-ctx="room|${esc(r.key)}" class="es-room ${open.has(r.key) ? 'open' : ''}" data-room="${esc(r.key)}" tabindex="0" aria-expanded="${open.has(r.key)}">
       <td><span class="tw">${open.has(r.key) ? '▾' : '▸'}</span><b>${esc(r.name)}</b>${r.project === root && !has ? '' : ''}</td>
       ${cell(r.key, 'lf', has ? Math.round(r.trimLf) : '')}${cell(r.key, 'pieces', has ? r.pieces : '')}${cell(r.key, 'boards', has ? fm(r.boards) : '')}${cell(r.key, 'supplies', has ? fm(r.supplies) : '')}
       ${cell(r.key, 'hours', has ? hrs(r.hours.likely) : '')}${cell(r.key, 'labor', has ? fm(r.labor.likely) : '')}${cell(r.key, 'items', r.itemCost.high ? fm(r.itemCost.likely) : '')}
-      ${cell(r.key, 'days', r.days || '')}${cell(r.key, 'price', `<b>${fm(r.price.likely)}</b>`)}</tr>
-      ${open.has(r.key) ? `<tr class="es-open"><td colspan="10">${roomBody(job, r)}</td></tr>` : ''}`;
+      ${cell(r.key, 'days', r.days || '')}${cell(r.key, 'price', `<b>${fm(r.price.likely)}</b>`)}<td>${r.project !== root ? `<button type="button" class="row-del" data-del-room="${esc(r.project.id)}" title="Remove ${esc(r.name)}" aria-label="Remove ${esc(r.name)}">×</button>` : ''}</td></tr>
+      ${open.has(r.key) ? `<tr class="es-open"><td colspan="11">${roomBody(job, r)}</td></tr>` : ''}`;
   };
   const unpriced = job.other.items.filter(it => !it.likely).length;
-  const otherRow = !job.other.items.length ? '' : `<tr class="es-room ${open.has('other') ? 'open' : ''}" data-room="other" tabindex="0"><td><span class="tw">${open.has('other') ? '▾' : '▸'}</span><b>Project-wide items</b></td><td colspan="6" class="note">${job.other.items.length ? (unpriced ? plural(unpriced, 'item') + ' without a price' : '') : 'none yet'}</td>${cell('other', 'items', job.other.itemCost.high ? fm(job.other.itemCost.likely) : '')}<td></td>${cell('other', 'price', `<b>${fm(job.other.price.likely)}</b>`)}</tr>
-      ${open.has('other') ? `<tr class="es-open"><td colspan="10"><div class="es-roombody"><p class="note">Work for the whole project rather than one room: permits, protection, a dumpster, measuring and ordering.</p>${itemsTable(root, job.other.items)}</div></td></tr>` : ''}`;
+  const otherRow = !job.other.items.length ? '' : `<tr class="es-room ${open.has('other') ? 'open' : ''}" data-room="other" tabindex="0"><td><span class="tw">${open.has('other') ? '▾' : '▸'}</span><b>Project-wide items</b></td><td colspan="6" class="note">${job.other.items.length ? (unpriced ? plural(unpriced, 'item') + ' without a price' : '') : 'none yet'}</td>${cell('other', 'items', job.other.itemCost.high ? fm(job.other.itemCost.likely) : '')}<td></td>${cell('other', 'price', `<b>${fm(job.other.price.likely)}</b>`)}<td></td></tr>
+      ${open.has('other') ? `<tr class="es-open"><td colspan="11"><div class="es-roombody"><p class="note">Work for the whole project rather than one room: permits, protection, a dumpster, measuring and ordering.</p>${itemsTable(root, job.other.items)}</div></td></tr>` : ''}`;
   const table = `<section class="es-sec"><h2>Rooms</h2>
-    <div class="es-tbl"><table class="es-t es-rooms"><thead><tr><th>Room</th><th class="num">Trim LF</th><th class="num">Pieces</th><th class="num">Boards</th><th class="num">Supplies</th><th class="num">Hours</th><th class="num">Labor</th><th class="num">Scope items</th><th class="num">Days</th><th class="num">Price</th></tr></thead>
-    <tbody>${rows.map(roomRow).join('')}${otherRow}${rows.length || otherRow ? '' : '<tr><td colspan="10" class="note">No rooms yet: add one below, then draw its trim in MODEL or add its scope items here.</td></tr>'}</tbody>
-    <tfoot><tr><td>Total</td>${cell('*', 'lf', trim ? Math.round(job.rooms.reduce((n, r) => n + r.trimLf, 0)) : '')}${cell('*', 'pieces', trim ? job.rooms.reduce((n, r) => n + r.pieces, 0) : '')}${cell('*', 'boards', trim ? fm(job.boards) : '')}${cell('*', 'supplies', trim ? fm(job.supplies) : '')}${cell('*', 'hours', trim ? hrs(job.hours.likely) : '')}${cell('*', 'labor', trim ? fm(job.labor.likely) : '')}${cell('*', 'items', fm(job.itemCost.likely))}${cell('*', 'days', days || '')}${cell('*', 'price', fm(job.price.likely))}</tr></tfoot></table></div>
+    <div class="es-tbl"><table class="es-t es-rooms"><thead><tr><th>Room</th><th class="num">Trim LF</th><th class="num">Pieces</th><th class="num">Boards</th><th class="num">Supplies</th><th class="num">Hours</th><th class="num">Labor</th><th class="num">Scope items</th><th class="num">Days</th><th class="num">Price</th><th></th></tr></thead>
+    <tbody>${rows.map(roomRow).join('')}${otherRow}${rows.length || otherRow ? '' : '<tr><td colspan="11" class="note">No rooms yet: add one below, then draw its trim in MODEL or add its scope items here.</td></tr>'}</tbody>
+    <tfoot><tr><td>Total</td>${cell('*', 'lf', trim ? Math.round(job.rooms.reduce((n, r) => n + r.trimLf, 0)) : '')}${cell('*', 'pieces', trim ? job.rooms.reduce((n, r) => n + r.pieces, 0) : '')}${cell('*', 'boards', trim ? fm(job.boards) : '')}${cell('*', 'supplies', trim ? fm(job.supplies) : '')}${cell('*', 'hours', trim ? hrs(job.hours.likely) : '')}${cell('*', 'labor', trim ? fm(job.labor.likely) : '')}${cell('*', 'items', fm(job.itemCost.likely))}${cell('*', 'days', days || '')}${cell('*', 'price', fm(job.price.likely))}<td></td></tr></tfoot></table></div>
     ${addRoomHtml(job, prop)}
     <p class="note">Each room is cut from its own boards, so its cut list stands alone. Boards are bought at the cheapest store length that holds their cuts, at the prices in PRODUCTS; the buy list adds ${plural(s.sparePerMoulding, 'spare board')} of each moulding. Hours are each task's quantity, counted from the drawing, times ${s.who ? esc(s.who.name) + "'s" : 'the published'} time; open a room to type over either. Click a room to see its walls, boards, cut list and labor; click any number for how it is worked out.</p></section>`;
   const set = (key, label, value, unit, step) => `<label class="es-set"><span>${esc(label)}</span><span><input type="number" min="0" step="${step}" inputmode="decimal" data-set="${key}" value="${value}">${unit ? `<i>${unit}</i>` : ''}</span></label>`;
@@ -189,10 +189,10 @@ function renderJob(inner, job, prop) {
       ${job.itemCost.high ? line('Scope items', job.itemCost.likely, 'items', 'priced in the rooms') : ''}
       ${s.contingency ? line(`Contingency ${pct(s.contingency)}`, job.contingency.likely, 'contingency') : ''}
       ${s.markup ? line(`Overhead and profit ${pct(s.markup)}`, job.markup.likely, 'markup') : ''}
-      ${line(`Discount ${pct(s.discount)}`, -job.discount.likely, 'discount')}
+      ${line(`Discount ${pct(s.discount)} off labor`, -job.discount.likely, 'discount')}
       ${line(`Tax ${pct(s.taxRate)} on materials`, job.tax, 'tax')}
       ${line('Total', job.price.likely, 'price', '', 'tot')}</tbody></table></div></section>`;
-  inner.innerHTML = head + warn + table + build + bidsHtml(job);
+  inner.innerHTML = head + warn + table + suppliesHtml(job) + build + bidsHtml(job);
   bindJob(inner, job);
   // Opening a project with the model beside the page outlines everything it is linked to.
   if (shownJob !== root.id) { shownJob = root.id; outline('job:' + root.id, linkedIds(job.tree)); }
@@ -227,10 +227,10 @@ function roomBody(job, r) {
   const shown = new Set(labor.map(l => l.task));
   const more = r.trim.length ? (ESTIMATE_DATA.labor.tasks || []).filter(x => !shown.has(x.id)) : [];
   const laborHtml = labor.length ? `<h3>Labor <span class="note">${who ? `${esc(who.name)}'s times` : 'published times'}; type over a quantity or a time to change it for this room</span></h3><div class="es-tbl"><table class="es-t es-labor"><thead><tr><th>Task</th><th class="num">Quantity</th><th></th><th class="num">Hrs each</th><th class="num">Hours</th><th></th></tr></thead><tbody>
-    ${labor.map(l => { const set = l.qtySet || l.eachSet === 'room'; return `<tr data-lt="${esc(r.key)}|${esc(l.task)}" class="${set ? 'typed' : ''}"><td data-d="task:${esc(l.task)}" class="lk">${esc(l.label)}</td>
+    ${labor.map(l => { const set = l.qtySet || l.eachSet === 'room', off = l.qtySet && !(l.qty > 0); return `<tr data-lt="${esc(r.key)}|${esc(l.task)}" data-ctx="task|${esc(r.key)}|${esc(l.task)}" class="${set ? 'typed' : ''} ${off ? 'off' : ''}"><td data-d="task:${esc(l.task)}" class="lk">${esc(l.label)}</td>
       <td class="num"><input class="es-cell ${l.qtySet ? 'set' : ''}" type="number" min="0" step="any" inputmode="decimal" data-lq="${k}|${esc(l.task)}" value="${fmtQ(l.qty)}" aria-label="${esc(l.label)}: quantity" title="${l.qtySet ? 'Typed; the drawing counts ' + fmtQ(l.counted) : 'Counted from the drawing'}"></td><td class="unit">${esc(Math.abs(l.qty - 1) < 1e-9 ? l.unitOne || l.unit : l.unit)}</td>
       <td class="num"><input class="es-cell ${l.eachSet === 'room' ? 'set' : ''}" type="number" min="0" step="any" inputmode="decimal" data-le="${k}|${esc(l.task)}" value="${+(l.own ?? l.rate).toFixed(4)}" aria-label="${esc(l.label)}: hours each" title="${l.eachSet === 'room' ? 'Typed for this room; ' + (who && who.each && who.each[l.task] != null ? esc(who.name) + "'s time is " + who.each[l.task] : 'the published time is ' + l.published) : l.eachSet === 'who' ? esc(who.name) + "'s time (published " + l.published + ')' : 'Published time'}"></td>
-      <td class="num">${hrs(l.hours)}</td><td>${set ? `<button type="button" class="btn small ghost" data-lr="${k}|${esc(l.task)}" title="Back to the drawing's count and ${who ? esc(who.name) + "'s" : 'the published'} time">RESET</button>` : ''}</td></tr>`; }).join('')}</tbody></table></div>
+      <td class="num">${hrs(l.hours)}</td><td class="nw">${set ? `<button type="button" class="btn small ghost" data-lr="${k}|${esc(l.task)}" title="Back to the drawing's count and ${who ? esc(who.name) + "'s" : 'the published'} time">${off ? 'PUT BACK' : 'RESET'}</button>` : ''}${off ? '' : `<button type="button" class="row-del" data-task-del="${k}|${esc(l.task)}" title="Take ${esc(l.label)} out of this room" aria-label="Take ${esc(l.label)} out of this room">×</button>`}</td></tr>`; }).join('')}</tbody></table></div>
     ${more.length ? `<select class="es-addtask" data-addtask="${k}" aria-label="Add a task to this room"><option value="">+ Add a task the drawing does not count</option>${more.map(x => `<option value="${esc(x.id)}">${esc(x.label)} (${esc(x.unit)})</option>`).join('')}</select>` : ''}` : '';
   // Items belong to the room's subproject; a room whose trim the project holds directly has none
   // of its own (its items are the project-wide ones).
@@ -251,7 +251,7 @@ function bidsHtml(job) {
   return `<section class="es-sec"><h2>Bids received</h2>
     <p class="note">What carpenters quote for the labor on the installer bid form (DOCUMENTS), beside the estimate's ${fm(labor)} for ${hrs(job.hours.likely)} hours.</p>
     ${bids.length ? `<div class="es-tbl"><table class="es-t"><thead><tr><th>Bidder</th><th>Date</th><th class="num">Hours</th><th class="num">Amount</th><th class="num">Against the estimate</th><th></th></tr></thead><tbody>
-      ${bids.map(b => { const d = (Number(b.amount) || 0) - labor; return `<tr><td><b>${esc(b.who)}</b>${b.scope ? `<span class="note"> ${esc(b.scope)}</span>` : ''}</td><td>${esc(b.date ? fmtDate(b.date) : '')}</td><td class="num">${b.hours ? hrs(b.hours) : ''}</td><td class="num">${fm(Number(b.amount) || 0)}</td><td class="num ${d > 0 ? 'over' : 'under'}">${labor ? (d >= 0 ? '+' : '−') + fm(Math.abs(d)) : ''}</td><td><button class="btn small ghost" data-del-bid="${esc(b.id)}">REMOVE</button></td></tr>`; }).join('')}</tbody></table></div>` : ''}
+      ${bids.map(b => { const d = (Number(b.amount) || 0) - labor; return `<tr data-bid="${esc(b.id)}"><td><b>${esc(b.who)}</b>${b.scope ? `<span class="note"> ${esc(b.scope)}</span>` : ''}</td><td>${esc(b.date ? fmtDate(b.date) : '')}</td><td class="num">${b.hours ? hrs(b.hours) : ''}</td><td class="num">${fm(Number(b.amount) || 0)}</td><td class="num ${d > 0 ? 'over' : 'under'}">${labor ? (d >= 0 ? '+' : '−') + fm(Math.abs(d)) : ''}</td><td><button class="btn small ghost" data-del-bid="${esc(b.id)}">REMOVE</button></td></tr>`; }).join('')}</tbody></table></div>` : ''}
     <form class="es-bid" data-add-bid><input name="who" placeholder="Bidder" required aria-label="Bidder"><input name="hours" type="number" min="0" step="0.5" placeholder="Hours" aria-label="Hours"><input name="amount" placeholder="Amount" required aria-label="Amount"><input name="scope" placeholder="What it covers" aria-label="What it covers"><button class="btn small" type="submit">ADD BID</button></form></section>`;
 }
 
@@ -339,6 +339,9 @@ function bindJob(inner, job) {
     setRoomLabor(root, key, f, task, i.value === '' ? null : i.value); touch(); soon();
   });
   lab('[data-lq]', 'qty'); lab('[data-le]', 'each');
+  inner.querySelectorAll('[data-task-del]').forEach(b => b.onclick = () => { const [key, task] = b.dataset.taskDel.split('|'); setRoomLabor(root, key, 'qty', task, 0); touch(); render(true); });
+  bindSupplies(inner, job);
+  bindMenu(inner, job);
   inner.querySelectorAll('[data-lr]').forEach(b => b.onclick = () => { const [key, task] = b.dataset.lr.split('|'); setRoomLabor(root, key, 'qty', task, null); setRoomLabor(root, key, 'each', task, null); touch(); render(true); });
   inner.querySelectorAll('[data-addtask]').forEach(sel => sel.onchange = () => { if (!sel.value) return; setRoomLabor(root, sel.dataset.addtask, 'qty', sel.value, 1); touch(); render(true); });
   inner.querySelector('[data-job-who]')?.addEventListener('change', e => { setJobWho(root, e.target.value); touch(); render(true); });
@@ -510,6 +513,80 @@ function detail(key, job) {
   return null;
 }
 
+// ---------- the supplies: the job's list, to change ----------
+// Counted for the whole job from the drawing's measures (rule and evidence in the detail column),
+// then changed here: a count or a price typed over the rule's, a supply taken off (put back under
+// Removed), or one added by hand.
+function suppliesHtml(job) {
+  const t = job.trim && !job.trim.error ? job.trim : null;
+  if (!t) return '';
+  const rows = t.supplies.map(x => `<tr data-sup="${esc(x.id)}" data-ctx="supply|${esc(x.id)}" class="${x.packagesSet || x.priceSet ? 'typed' : ''}">
+      <td>${x.added ? `<input class="es-cell text" data-sup-name="${esc(x.id)}" value="${esc(x.product || '')}" aria-label="Supply name">` : link('supply:' + x.id, esc(x.product || x.id))}${x.package ? `<span class="note"> ${esc(x.package)}</span>` : ''}</td>
+      <td class="note">${esc(x.added ? 'added' : x.category)}</td>
+      <td class="num"><input class="es-cell ${x.packagesSet ? 'set' : ''}" type="number" min="0" step="1" inputmode="decimal" data-sup-f="packages" value="${x.packages}" aria-label="${esc(x.product)}: how many" title="${x.added ? 'How many' : x.packagesSet ? 'Typed; the rule counts ' + x.counted : 'Counted by its rule'}"></td>
+      <td class="num"><input class="es-cell ${x.priceSet ? 'set' : ''}" type="number" min="0" step="0.01" inputmode="decimal" data-sup-f="price" value="${(+x.price).toFixed(2)}" aria-label="${esc(x.product)}: price each" title="${x.priceSet ? 'Typed; the store price was ' + m2(x.listPrice) : 'Store price'}"></td>
+      <td class="num">${m2(x.ext)}</td>
+      <td class="nw">${x.packagesSet || x.priceSet ? `<button type="button" class="btn small ghost" data-sup-reset="${esc(x.id)}">RESET</button>` : ''}<button type="button" class="row-del" data-sup-del="${esc(x.id)}" title="Remove ${esc(x.product)}" aria-label="Remove ${esc(x.product)}">×</button></td></tr>`).join('');
+  const gone = t.removedSupplies || [];
+  return `<section class="es-sec"><h2>Supplies <span class="note">${fm(t.totals.supplies)}, shared out to the rooms by feet of trim</span></h2>
+    <div class="es-tbl"><table class="es-t es-sup"><thead><tr><th>Supply</th><th>Group</th><th class="num">How many</th><th class="num">Price each</th><th class="num">Total</th><th></th></tr></thead><tbody>${rows}</tbody>
+      <tfoot><tr><td colspan="4">Total</td><td class="num">${m2(t.totals.supplies)}</td><td></td></tr></tfoot></table></div>
+    <form class="es-itemacts es-supadd" data-sup-add><input name="product" placeholder="+ Add a supply" aria-label="New supply" required><input name="packages" type="number" min="0" step="1" value="1" aria-label="How many"><input name="price" type="number" min="0" step="0.01" placeholder="Price each" aria-label="Price each"><button type="submit" class="btn small">ADD</button></form>
+    ${gone.length ? `<p class="note">Removed: ${gone.map(x => `${esc(x.product)} <button type="button" class="btn small ghost" data-sup-restore="${esc(x.id)}">PUT BACK</button>`).join(' · ')}</p>` : ''}
+    <p class="note">Click a supply for the rule that counts it, its store page and why. Type over how many or the price; × takes it off the job.</p></section>`;
+}
+function bindSupplies(inner, job) {
+  const root = job.root;
+  inner.querySelectorAll('tr[data-sup]').forEach(tr => {
+    const id = tr.dataset.sup;
+    tr.querySelectorAll('[data-sup-f]').forEach(i => i.onchange = () => { if (setSupply(root, id, i.dataset.supF, i.value)) { touch(); soon(); } else render(true); });
+  });
+  inner.querySelectorAll('[data-sup-name]').forEach(i => i.onchange = () => { renameSupply(root, i.dataset.supName, i.value); touch(); soon(); });
+  inner.querySelectorAll('[data-sup-del]').forEach(b => b.onclick = () => { removeSupply(root, b.dataset.supDel); touch(); render(true); });
+  inner.querySelectorAll('[data-sup-reset]').forEach(b => b.onclick = () => { setSupply(root, b.dataset.supReset, 'packages', null); setSupply(root, b.dataset.supReset, 'price', null); touch(); render(true); });
+  inner.querySelectorAll('[data-sup-restore]').forEach(b => b.onclick = () => { restoreSupply(root, b.dataset.supRestore); touch(); render(true); });
+  const form = inner.querySelector('[data-sup-add]');
+  if (form) form.onsubmit = e => { e.preventDefault(); const f = new FormData(form); addSupply(root, { product: f.get('product'), packages: f.get('packages'), price: f.get('price') }); touch(); render(true); };
+}
+
+// ---------- right-click: remove (or put back) what the row is ----------
+let menuEl = null;
+function closeMenu() { if (menuEl) { menuEl.remove(); menuEl = null; } }
+function bindMenu(inner, job) {
+  const root = job.root;
+  inner.oncontextmenu = e => {
+    const row = e.target.closest('[data-ctx], tr[data-si], tr[data-bid]');
+    if (!row || e.target.closest('input,textarea,select')) return;
+    const [kind, a, b] = (row.dataset.ctx || (row.dataset.si ? 'item|' + row.dataset.si : '')).split('|');
+    const items = [];
+    if (kind === 'room') {
+      const r = job.rooms.find(x => x.key === a);
+      if (r && r.project !== root) items.push([`Remove ${r.name}`, () => inner.querySelector(`[data-del-room="${CSS.escape(r.project.id)}"]`)?.click()]);
+      if (r) items.push([open.has(a) ? 'Close' : 'Open', () => { if (open.has(a)) open.delete(a); else open.add(a); render(true); }]);
+    } else if (kind === 'task') {
+      const rooms = job.rooms.filter(r => r.trim.some(x => (x.labor || []).some(l => l.task === b)));
+      items.push(['Take out of this room', () => { setRoomLabor(root, a, 'qty', b, 0); touch(); render(true); }]);
+      if (rooms.length > 1) items.push(['Take out of every room', () => { for (const r of rooms) setRoomLabor(root, r.key, 'qty', b, 0); touch(); render(true); }]);
+      items.push(['Back to the count and time', () => { setRoomLabor(root, a, 'qty', b, null); setRoomLabor(root, a, 'each', b, null); touch(); render(true); }]);
+    } else if (kind === 'supply') {
+      items.push(['Remove from the job', () => { removeSupply(root, a); touch(); render(true); }]);
+      items.push(['Back to its count and price', () => { setSupply(root, a, 'packages', null); setSupply(root, a, 'price', null); touch(); render(true); }]);
+    } else if (kind === 'item') items.push(['Remove this item', () => row.querySelector('[data-si-del]')?.click()]);
+    else if (row.dataset.bid) items.push(['Remove this bid', () => row.querySelector('[data-del-bid]')?.click()]);
+    if (!items.length) return;
+    e.preventDefault(); closeMenu();
+    menuEl = document.createElement('div');
+    menuEl.className = 'es-menu'; menuEl.setAttribute('role', 'menu');
+    menuEl.innerHTML = items.map(([t], i) => `<button type="button" role="menuitem" data-i="${i}">${esc(t)}</button>`).join('');
+    document.body.append(menuEl);
+    const w = menuEl.offsetWidth, h = menuEl.offsetHeight;
+    menuEl.style.left = Math.min(e.clientX, innerWidth - w - 8) + 'px'; menuEl.style.top = Math.min(e.clientY, innerHeight - h - 8) + 'px';
+    menuEl.querySelectorAll('button').forEach(btn => btn.onclick = () => { const f = items[Number(btn.dataset.i)][1]; closeMenu(); f(); });
+    menuEl.querySelector('button').focus();
+    setTimeout(() => { addEventListener('pointerdown', ev => { if (menuEl && !menuEl.contains(ev.target)) closeMenu(); }, { once: true }); addEventListener('keydown', ev => { if (ev.key === 'Escape') closeMenu(); }, { once: true }); }, 0);
+  };
+}
+
 // ---------- how each number is worked out ----------
 // Every figure on the page opens here, and each answer links on down: a room's price to its boards,
 // supplies, hours and labor; the supplies to each product, its rule and the measure of the drawing it
@@ -620,7 +697,7 @@ function cellDetail(job, t, s, key, col) {
       x.itemCost && x.itemCost.likely ? [link(`cell:${key}|items`, 'Scope items'), x.itemCost.likely] : null,
       x.contingency && x.contingency.likely ? [link('cost:contingency', `Contingency ${pct(s.contingency)}`), x.contingency.likely] : null,
       x.markup && x.markup.likely ? [link('cost:markup', `Overhead and profit ${pct(s.markup)}`), x.markup.likely] : null,
-      x.discount && x.discount.likely ? [link('cost:discount', `Discount ${pct(s.discount)}`), -x.discount.likely] : null,
+      x.discount && x.discount.likely ? [link('cost:discount', `Discount ${pct(s.discount)} off labor`), -x.discount.likely] : null,
       x.tax ? [link('cost:tax', `Tax ${pct(s.taxRate)} on materials`), x.tax] : null,
     ].filter(Boolean);
     return { kind, title: fm(x.price.likely), sub: where, html: `<table class="es-t d-sum"><tbody>${rows.map(([l, v]) => `<tr><td>${l}</td><td class="num">${fm(v)}</td></tr>`).join('')}<tr class="tot"><td>${all ? 'Total' : 'Room total'}</td><td class="num">${fm(x.price.likely)}</td></tr></tbody></table>` };
@@ -630,7 +707,7 @@ function cellDetail(job, t, s, key, col) {
 function suppliesDetail(t) {
   const S = ESTIMATE_DATA.supplies || {}, cats = [...new Set(t.supplies.map(x => x.category))];
   return { kind: 'Supplies', title: fm(t.totals.supplies) + ' of supplies', sub: `${t.supplies.length} products${S.seen ? ', prices seen ' + esc(fmtDate(S.seen)) : ''}`,
-    html: `<p>Each product's need is counted from a measure of the drawing for the whole job, then bought in whole packages. ${esc(S.note || '')}</p>`
+    html: `<p>Each product's need is counted from a measure of the drawing for the whole job, then bought in whole packages; change a count or a price, or remove a supply, under Supplies on the page. ${esc(S.note || '')}</p>`
       + cats.map(c => `<h4>${esc(c.replace(/^[a-z]/, x => x.toUpperCase()))} <span class="note">${fm(t.suppliesByCategory[c] || 0)}</span></h4><ul>${t.supplies.filter(x => x.category === c).map(x => `<li>${link('supply:' + x.id, esc(supplyName(x)))}: ${x.packages} × ${m2(x.price)} = ${m2(x.ext)}</li>`).join('')}</ul>`).join('') };
 }
 function supplyDetail(t, id) {
@@ -654,7 +731,6 @@ function measureDetail(job, t, key) {
       + (uses.length ? `<h4>Supplies counted from it</h4><ul>${uses.map(x => `<li>${link('supply:' + x.id, esc(supplyName(x)))}</li>`).join('')}</ul>` : '') };
 }
 function costDetail(job, t, s, id) {
-  const base = job.cost.likely + job.contingency.likely + job.markup.likely;
   const order = t ? t.buy.reduce((n, b) => n + b.order, 0) : 0;
   const d = {
     materials: () => ({ title: fm(job.materials) + ' of materials', html: eq([link('cell:*|boards', fm(job.boards) + ' boards'), '+', link('cell:*|supplies', fm(job.supplies) + ' supplies')], fm(job.materials)) + `<p class="note">${order} boards at the store prices in PRODUCTS, and the supplies to put them up and finish them.</p>` }),
@@ -662,7 +738,7 @@ function costDetail(job, t, s, id) {
     items: () => ({ title: fm(job.itemCost.likely) + ' of scope items', html: `<p>${link('cell:*|items', 'Every scope item, room by room')}</p>` }),
     contingency: () => ({ title: fm(job.contingency.likely), html: eq([fm(job.cost.likely) + ' cost', '×', pct(s.contingency)], fm(job.contingency.likely)) + '<p class="note">For what the drawing cannot show: out-of-square walls, hidden conditions, a re-cut.</p>' }),
     markup: () => ({ title: fm(job.markup.likely), html: eq([fm(job.cost.likely + job.contingency.likely) + ' cost and contingency', '×', pct(s.markup)], fm(job.markup.likely)) }),
-    discount: () => ({ title: fm(-job.discount.likely), html: eq([fm(base), '×', pct(s.discount)], fm(job.discount.likely)) + `<p>Taken off the ${link('cost:materials', 'materials')}, ${link('cost:labor', 'labor')}${job.itemCost.likely ? `, ${link('cost:items', 'scope items')}` : ''}${job.contingency.likely || job.markup.likely ? ', contingency and overhead' : ''} before tax. Set it under Discount above.</p>` }),
+    discount: () => ({ title: fm(-job.discount.likely), html: eq([link('cost:labor', fm(job.labor.likely) + ' of labor'), '×', pct(s.discount)], fm(job.discount.likely)) + '<p>Taken off the labor only; materials, scope items and tax are not discounted. Set it under Discount above.</p>' }),
     tax: () => ({ title: fm(job.tax), html: eq([link('cost:materials', fm(job.materials) + ' of materials'), '×', pct(s.taxRate)], fm(job.tax)) + '<p class="note">Sales tax on the boards and supplies as bought; the store charges it on the full price, whatever the discount. Scope items are installed prices with their tax in them.</p>' }),
     price: () => ({ title: fm(job.price.likely), html: cellDetail(job, t, s, '*', 'price').html }),
     hours: () => ({ title: hrs(job.hours.likely) + ' hrs', html: `<p>${link('cell:*|hours', 'Room by room')}</p>` }),

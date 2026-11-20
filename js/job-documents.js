@@ -158,7 +158,7 @@ export function summaryHtml(job, prop) {
       ${job.itemCost.likely ? line('Other work', job.itemCost.likely) : ''}
       ${job.contingency.likely ? line(`Contingency (${pctOf(s.contingency)})`, job.contingency.likely) : ''}
       ${job.markup.likely ? line(`Overhead and profit (${pctOf(s.markup)})`, job.markup.likely) : ''}
-      ${line(`Discount (${pctOf(s.discount)})`, -job.discount.likely)}
+      ${job.discount.likely ? line(`Discount (${pctOf(s.discount)} off labor)`, -job.discount.likely) : ''}
       ${line(`Tax (${pctOf(s.taxRate)} on materials)`, job.tax)}
       ${line('Total', job.price.likely, 'tot')}</tbody></table>
     <p class="sm-note">Materials are the trim boards and the supplies to install and finish them (nails, adhesive, caulk, filler, primer, paint, protection). Labor is each room's hours at ${cents(s.laborRate).replace(/\.00$/, '')} an hour.${items ? ' Other work is priced per item in the room.' : ''}</p>

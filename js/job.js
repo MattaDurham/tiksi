@@ -28,7 +28,7 @@ export const JOB_DEFAULTS = Object.freeze({
   contingency: 0,         // fraction of the cost, for what the drawing cannot show
   markup: 0,              // overhead and profit, a fraction of cost + contingency
   taxRate: 0,             // sales tax on the trim boards and supplies bought
-  discount: 0,            // fraction off the price before tax
+  discount: 0,            // fraction off the labor
   sparePerMoulding: 1,    // spare boards of each moulding for the house
 });
 const LIMITS = { laborRate: [0, 1000], contingency: [0, 1], markup: [0, 3], taxRate: [0, 0.25], discount: [0, 1], sparePerMoulding: [0, 10] };
@@ -174,7 +174,7 @@ export function trimOf(p) {
         const inputs = { pieces, faces, rooms: names.map(name => ({ name })) };
         const stock = boardPrices();
         value = estimateTrim({ ...inputs, settings: { laborRate: s.laborRate, contingency: 0, sparePerMoulding: s.sparePerMoulding,
-          labor: { each: (s.who && s.who.each) || {}, rooms }, stock: stock.stock, priceOverrides: stock.priceOverrides } });
+          labor: { each: (s.who && s.who.each) || {}, rooms }, stock: stock.stock, priceOverrides: stock.priceOverrides, supplies: (root.job && root.job.supplies) || null } });
         value.labor.who = s.who;
         value.inputs = inputs;
         value.sectionIds = sections.map(t => t.id);
@@ -210,12 +210,12 @@ const zero3 = () => ({ low: 0, likely: 0, high: 0 });
 const one3 = v => ({ low: v, likely: v, high: v });
 const mul3 = (a, f) => ({ low: a.low * f, likely: a.likely * f, high: a.high * f });
 
-// A cost and its markups: contingency on the cost, markup on cost + contingency, the discount off
-// all of that, then tax on the materials as bought (the store charges it whatever the discount).
-function priced(cost, materials, s) {
+// A cost and its markups: contingency on the cost, markup on cost + contingency, the discount off the
+// labor only, then tax on the materials as bought.
+function priced(cost, materials, s, labor = zero3()) {
   const contingency = mul3(cost, s.contingency);
   const markup = mul3(add3(cost, contingency), s.markup);
-  const discount = mul3(add3(add3(cost, contingency), markup), s.discount);
+  const discount = mul3(labor, s.discount);
   const tax = materials * s.taxRate;
   return { cost, contingency, markup, discount, tax, price: add3(add3(add3(cost, contingency), markup), add3(mul3(discount, -1), one3(tax))) };
 }
@@ -277,7 +277,7 @@ export function jobOf(p) {
     room.pieces = room.trim.reduce((n, r) => n + (r.pieces || 0), 0);
     room.trimLf = room.trim.reduce((n, r) => n + (r.trimLf || 0), 0);
     room.storePieces = room.trim.reduce((n, r) => n + Object.values(r.sticks || {}).reduce((a, b) => a + b, 0), 0);
-    Object.assign(room, priced(add3(add3(one3(room.materials), room.labor), room.itemCost), room.materials, s));
+    Object.assign(room, priced(add3(add3(one3(room.materials), room.labor), room.itemCost), room.materials, s, room.labor));
   }
   const other = { items: otherItems, itemCost: otherItems.reduce((t, it) => add3(t, itemTotals(it)), zero3()) };
   Object.assign(other, priced(other.itemCost, 0, s));
@@ -349,3 +349,38 @@ export function useJobRules() {
     },
   });
 }
+
+// ---------- the job's supplies ----------
+// Changes to the supplies counted for the job, kept on the top-level project as job.supplies:
+// { removed: [id], packages: { id: n }, price: { id: $ }, added: [{ id, product, category, package, packages, price }] }.
+function editSupplies(p, change) {
+  const root = rootOf(p); if (!root) return false;
+  const cur = (root.job && root.job.supplies) || {};
+  const next = { removed: [...(cur.removed || [])], packages: { ...(cur.packages || {}) }, price: { ...(cur.price || {}) }, added: (cur.added || []).map(a => ({ ...a })) };
+  if (change(next) === false) return false;
+  for (const k of ['packages', 'price']) if (!Object.keys(next[k]).length) delete next[k];
+  for (const k of ['removed', 'added']) if (!next[k].length) delete next[k];
+  const job = { ...(root.job || {}) };
+  if (Object.keys(next).length) job.supplies = next; else delete job.supplies;
+  if (Object.keys(job).length) root.job = job; else delete root.job;
+  return true;
+}
+const amount = v => { if (v == null || v === '') return null; const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : NaN; };
+// Take a supply off the job (an added one is deleted; a counted one is kept to put back).
+export const removeSupply = (p, id) => editSupplies(p, x => {
+  if (x.added.some(a => a.id === id)) { x.added = x.added.filter(a => a.id !== id); return; }
+  if (!x.removed.includes(id)) x.removed.push(id);
+});
+export const restoreSupply = (p, id) => editSupplies(p, x => { x.removed = x.removed.filter(r => r !== id); });
+// A supply's packages or price each ('packages' | 'price'); null or '' goes back to the rule's.
+export const setSupply = (p, id, field, value) => editSupplies(p, x => {
+  const v = amount(value); if (Number.isNaN(v) || !['packages', 'price'].includes(field)) return false;
+  const a = x.added.find(y => y.id === id);
+  if (a) { a[field] = v ?? (field === 'packages' ? 1 : 0); return; }
+  if (v == null) delete x[field][id]; else x[field][id] = v;
+});
+export const addSupply = (p, fields = {}) => {
+  const id = 'sup-' + Math.random().toString(36).slice(2, 9);
+  return editSupplies(p, x => { x.added.push({ id, product: String(fields.product || 'New supply').slice(0, 200), category: 'added', package: String(fields.package || ''), packages: amount(fields.packages) ?? 1, price: amount(fields.price) ?? 0 }); }) ? id : null;
+};
+export const renameSupply = (p, id, product) => editSupplies(p, x => { const a = x.added.find(y => y.id === id); if (!a) return false; a.product = String(product || '').trim().slice(0, 200) || 'Supply'; });
