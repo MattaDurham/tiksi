@@ -35,7 +35,9 @@ async function until(fn, what, ms = 20000) {
 }
 const job = () => page.evaluate(async () => {
   const j = (await import('/js/job.js')).jobOf((await import('/js/store.js')).projectById('p-trim'));
-  return { price: j.price.likely, cost: j.cost.likely, covered: j.covered.length, hours: j.hours.likely, pieces: j.rooms.reduce((n, r) => n + r.pieces, 0), days: j.schedule.days };
+  const cents = '$' + j.price.likely.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return { price: j.price.likely, cost: j.cost.likely, covered: j.covered.length, hours: j.hours.likely, pieces: j.rooms.reduce((n, r) => n + r.pieces, 0), days: j.schedule.days,
+    discount: j.discount.likely, tax: j.tax, before: j.cost.likely + j.contingency.likely + j.markup.likely, cents };
 });
 const money = v => page.evaluate(v => import('/js/store.js').then(s => s.fmtMoney(v)), v);
 
@@ -163,6 +165,33 @@ try {
   await until(async () => Math.abs((await job()).price - j0.price * 1.1) < 0.01, 'redo');
   check(true, 'REDO sets it again');
 
+  console.log('\n[details] every number opens how it is worked out, on down to its parts');
+  await page.locator('[data-set="discount"]').fill('50');
+  await page.locator('[data-set="discount"]').press('Tab');
+  await until(async () => (await job()).discount > 0, 'the discount');
+  const jx = await job();
+  check(Math.abs(jx.price - (jx.before - jx.discount + jx.tax)) < 0.01 && Math.abs(jx.discount - jx.before / 2) < 0.01, 'a 50% discount comes off materials, labor, items and markups, before tax');
+  const lines = (await page.locator('.es-build tr td:first-child').allTextContents()).map(t => t.trim().split(/\s/)[0]).filter(w => !['Contingency', 'Scope'].includes(w)).join();
+  check(await page.locator('.es-build thead').count() === 0 && lines === 'Materials,Labor,Discount,Tax,Total', `the price is one column: materials, labor, discount, tax, total (${lines})`);
+  const firstRoom = await page.locator('.es-rooms tr.es-room').first().getAttribute('data-room');
+  await page.click(`td[data-d="cell:${firstRoom}|supplies"]`);
+  await until(async () => /share by feet of trim/.test(await page.locator('#es-dbody').textContent()), 'a room\'s supplies');
+  await page.click('#es-dbody a[data-d="supplies:all"]');
+  await until(async () => (await page.locator('#es-dbody a[data-d^="supply:"]').count()) > 3, 'the supplies list');
+  await page.locator('#es-dbody a[data-d^="supply:"]').first().click();
+  await until(async () => /How many/.test(await page.locator('#es-dbody').textContent()), 'one supply');
+  await page.locator('#es-dbody a[data-d^="measure:"]').first().click();
+  await until(async () => /Counted from the drawing/.test(await page.locator('#es-dbody').textContent()), 'its measure');
+  check(true, 'a room\'s supplies open the list, a product, and the measure of the drawing it is counted from');
+  for (const col of ['lf', 'pieces', 'boards', 'hours', 'labor', 'days', 'price']) {
+    await page.click(`td[data-d="cell:${firstRoom}|${col}"]`);
+    await until(async () => (await page.locator('#es-dbody .d-title').count()) === 1 && (await page.locator('#es-crumb').textContent()) !== 'Details', col);
+  }
+  check(true, 'every number of a room opens its working');
+  await page.locator('[data-set="discount"]').fill('0');
+  await page.locator('[data-set="discount"]').press('Tab');
+  await until(async () => (await job()).discount === 0, 'no discount');
+
   console.log('\n[bids and covered items]');
   await page.fill('[data-add-bid] [name=who]', 'Synthetic Carpentry');
   await page.fill('[data-add-bid] [name=amount]', '1,200');
@@ -199,8 +228,12 @@ try {
   await page.locator('.sheet-layout').waitFor();
   check(await page.locator('.doc-parts [data-part="sheets"].active').count() === 1, '#/sheets opens CUT SHEETS in DOCUMENTS');
 
-  console.log('\n[documents] the trim package and the proposal');
+  console.log('\n[documents] the summary, the trim package and the proposal');
   await page.goto(url + '/#/documents?job=p-trim');
+  await page.waitForSelector('.sm');
+  const sum = await page.locator('.sm').textContent(), jd = await job();
+  check(/Discount \(\d/.test(sum) && /Tax \(/.test(sum) && sum.includes(jd.cents), `the summary gives each room, the discount, the tax and the estimate's total ${jd.cents}`);
+  await page.click('[data-doc="package"]');
   await page.waitForSelector('.tpkg');
   const marks = await page.evaluate(async () => (await import('/js/job.js')).jobOf((await import('/js/store.js')).projectById('p-trim')).trim.groups.map(g => g.mark));
   const book = await page.locator('.tpkg').textContent();
