@@ -725,7 +725,7 @@ export function estimateTrim({ pieces: piecesIn, faces: facesIn, catalog: catalo
   const LAB = data.labor || { tasks: [] };
   const taskById = Object.fromEntries([...(LAB.tasks || []), ...(LAB.tasks_extra || [])].map(t => [t.id, t]));
   // Typed over the counts and the rates: S.labor = { each: { task: hrs each } (who does the work),
-  // rooms: { room: { qty: { task: n }, each: { task: hrs each }, days } } }. A typed number wins over the
+  // rooms: { room: { qty: { task: n }, each: { task: hrs each } } } }. A typed number wins over the
   // count and the published rate; a task the drawing does not count can be given a quantity.
   const LO = S.labor || {}, num = v => v != null && v !== '' && Number.isFinite(Number(v)) && Number(v) >= 0;
   for (const [room] of ROOMS) {
@@ -734,21 +734,16 @@ export function estimateTrim({ pieces: piecesIn, faces: facesIn, catalog: catalo
     const eachOf = t => num(ov.each && ov.each[t.id]) ? [Number(ov.each[t.id]), 'room'] : num(LO.each && LO.each[t.id]) ? [Number(LO.each[t.id]), 'who'] : [t.hours, ''];
     const qtyOf = t => num(ov.qty && ov.qty[t.id]) ? Number(ov.qty[t.id]) : (m[t.per] || 0);
     const workH = sum(LAB.tasks.filter(t => t.per !== 'room_days'), t => qtyOf(t) * eachOf(t)[0]);
-    w.daysCounted = Math.max(1, Math.ceil(workH / DAY_HOURS - 1e-9));
-    // Days set for the room (rooms: { room: { days } }) win over the count: every working task's time
-    // is scaled by the same factor so the working hours fill those days exactly; setup and cleanup
-    // follow the days.
-    const daysSet = num(ov.days) && Number(ov.days) >= 1 ? Math.round(Number(ov.days)) : null;
-    const scale = daysSet && workH > 0 ? daysSet * DAY_HOURS / workH : 1;
-    m.room_days = daysSet || w.daysCounted;
-    w.daysSet = daysSet; w.scale = scale;
+    // A room's days always follow its hours: there is no hidden pin. Setting a room's days (SCHEDULE)
+    // rewrites its task times once, in the open (job.js fitRoomToDays).
+    m.room_days = Math.max(1, Math.ceil(workH / DAY_HOURS - 1e-9));
+    w.workHours = workH;
     w.labor = [];
     for (const t of LAB.tasks) {
-      const counted = m[t.per] || 0, q = qtyOf(t), [own, eachSet] = eachOf(t);
+      const counted = m[t.per] || 0, q = qtyOf(t), [each, eachSet] = eachOf(t);
       const qtySet = num(ov.qty && ov.qty[t.id]);
       if (q <= 0 && !qtySet) continue;
-      const each = t.per === 'room_days' ? own : own * scale;
-      w.labor.push({ task: t.id, label: t.label, unit: t.unit, unitOne: t.unit_one || t.unit, per: t.per, rate: each, own, scaled: each !== own, qty: q, hours: q * each, counted, qtySet, eachSet, published: t.hours });
+      w.labor.push({ task: t.id, label: t.label, unit: t.unit, unitOne: t.unit_one || t.unit, per: t.per, rate: each, qty: q, hours: q * each, counted, qtySet, eachSet, published: t.hours });
     }
     w.hours = sum(w.labor, l => l.hours);
     // A room's days: its working hours (all but setup and cleanup) at a productive day's hours, at

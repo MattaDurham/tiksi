@@ -9,13 +9,14 @@
 // One table: the work, who does it, its days and dates, what it waits for, and a chart of working
 // days beside it (weekends are left out, so a bar's length is its days). Tap or click a line or any
 // of its numbers for its dates and slack in the column on the right, where the number can be changed
-// for that one line or everywhere it appears in the project: a room's days (its tasks scale to fit),
+// for that one line or everywhere it appears in the project: a room's days (its task times are
+// rewritten once so the work fills them; nothing is pinned, so a time changed later moves the days),
 // a task's hours each, quantity or hours, a scope item's days. Drag a bar to change its days; drag
 // across the calendar to stretch it (each day, then each hour, gets its own mark), FIT to undo that.
 
 import { ws, touch, onChange, activeProperty, propertyProjects, projectById, escapeHtml, fmtDate, isoToday } from './store.js';
 import { programSchedule, workday, workdaysBetween } from './program.js';
-import { jobOf, rootOf, setRoomDays, setRoomLabor } from './job.js';
+import { jobOf, rootOf, fitRoomToDays, setRoomLabor } from './job.js';
 import { restoreProjectEdit } from './project-history.js';
 import { icon } from './icons.js';
 
@@ -29,6 +30,7 @@ let lineByKey = new Map(), viewJob = null;   // the lines drawn last, for the de
 let userW = 0;   // a day's width stretched by hand (0: fit the page)
 try { userW = Number(localStorage.getItem('tiksi.schedule.dayw')) || 0; } catch { /* not kept */ }
 let afterDrag = false;   // a drag ends with a click that must not pick
+let lastFit = null;      // the last room fitted to days, and by what factor, said once in the column
 const opened = new Set();   // rooms shown with their tasks (double-click a room's line)
 let fitW = 0;   // the day width that fills the page, measured after the first draw
 const LAST = 'tiksi.schedule.last.';
@@ -165,9 +167,8 @@ function jobLines(job, sched, origin, shift, editable) {
     const i = trims.indexOf(r), sub = r.kind === 'trim' && r.room.project !== job.root;
     const move = editable && sub ? `<button class="sc-move" data-move="${esc(r.room.project.id)}" data-dir="-1" ${i <= 0 ? 'disabled' : ''} aria-label="Do ${esc(r.name)} sooner">↑</button><button class="sc-move" data-move="${esc(r.room.project.id)}" data-dir="1" ${i === trims.length - 1 ? 'disabled' : ''} aria-label="Do ${esc(r.name)} later">↓</button>` : '';
     const label = r.kind === 'trim' ? r.name + ': trim' : (r.room ? r.room.name + ': ' : '') + r.name;
-    const daysSet = r.kind === 'trim' && (r.room.trim || []).some(x => x.daysSet);
     const line = { key: r.id, kind: r.kind, label, crew: r.crew || (r.kind === 'trim' ? 'Carpenter' : ''), days: r.durationDays, hours: r.hours, es: shift + s.es, ef: shift + s.ef, w: s.ef - s.es, slack: s.slack, critical: s.critical, after, move,
-      edit: editable, room: r.room, item: r.item, project: r.project, set: daysSet,
+      edit: editable, room: r.room, item: r.item, project: r.project, set: false,
       detail: detailOf(label, r.durationDays, origin, shift + s.es, shift + s.ef, r.kind === 'trim' ? hrs(r.hours) + ' carpenter hours; double-click for its tasks' : '', s) };
     return r.kind === 'trim' && opened.has(r.id) ? [line, ...taskLines(r, shift + s.es, shift + s.ef, origin, editable)] : [line];
   });
@@ -319,23 +320,23 @@ function paintDetail() {
   const l = lineByKey.get(picked);
   el.querySelector('.sc').classList.toggle('det-open', !!l);
   el.querySelector('#sc-crumb').textContent = l ? ({ trim: 'Room', task: 'Task', item: 'Scope item', job: 'Project' }[l.kind] || 'Line') : 'Details';
+  if (lastFit && lastFit.key !== picked) lastFit = null;
   if (!l) { body.innerHTML = '<div class="sc-detail" id="gantt-detail" role="status">Click a line or any number for its dates and slack, and to change it.</div>'; return; }
   let html = `<div class="d-title">${esc(l.label)}</div><div class="sc-detail" id="gantt-detail" role="status">${esc(l.detail)}</div>`;
   if (!l.edit) html += l.kind === 'job' || !viewJob ? `<p class="note">Open the project on the left to change its numbers.</p>` : '';
   else if (l.kind === 'trim') {
-    const t = l.room.trim || [], counted = t.reduce((n, x) => n + (x.daysCounted || 0), 0), scale = t[0] && t[0].scale;
-    const others = roomsWithTrim().length > 1;
+    const t = l.room.trim || [], others = roomsWithTrim().length > 1;
+    const work = t.reduce((n, x) => n + (x.workHours || 0), 0);
     html += fieldHtml('days', 'Days', l.days, 'working days', [['one', 'THIS ROOM'], ...(others ? [['all', 'EVERY ROOM']] : [])],
-      l.set ? `Set by hand; its hours count ${plural(counted, 'day')}. Every task's time is ×${(Math.round(scale * 100) / 100).toFixed(2)} so the work fills ${plural(l.days, 'day')}, and the labor follows. <button type="button" class="btn small ghost" data-reset="days">BACK TO ${counted}</button>`
-        : `Counted from its ${hrs(l.hours)} hours at 6 productive hours a day. Set it and every task's time scales to fit, so the labor follows.`);
+      `Counted from its tasks: ${hrs(work)} working hours at 6 a day, rounded up, plus setup and cleanup each day (${hrs(l.hours)} hours in all). Type other days and every task's time in this room is multiplied by one factor so the work fills them exactly; the new times are written into the room's times below and in ESTIMATE, and the labor follows. Nothing is pinned: change a time later and the days follow. UNDO puts the old times back.`);
+    if (lastFit && lastFit.key === l.key) html += `<p class="note sc-fit">Times ×${lastFit.factor.toFixed(2)} to fit ${plural(lastFit.days, 'day')}.</p>`;
     const labor = t.flatMap(x => x.labor || []);
     html += `<h4>Its tasks</h4><ul class="sc-tasks">${labor.map(x => `<li><a class="dl" data-pick-task="${esc(l.key + '|' + x.task)}">${esc(x.label)}</a>: ${hrs(x.hours)} h</li>`).join('')}</ul>`;
   } else if (l.kind === 'task') {
     const x = l.labor, others = roomsWithTrim().filter(r => r.trim.some(y => (y.labor || []).some(z => z.task === x.task))).length > 1;
     const unit = Math.abs(x.qty - 1) < 1e-9 ? x.unitOne || x.unit : x.unit;
-    const scaled = x.scaled ? ` The room's days are set, so it counts ×${(Math.round(x.rate / x.own * 100) / 100).toFixed(2)}: ${+x.rate.toFixed(4)} each.` : '';
-    html += fieldHtml('each', 'Hours each', +(x.own ?? x.rate).toFixed(4), 'hrs per ' + (x.unitOne || x.unit), [['one', 'THIS ROOM'], ...(others ? [['all', 'EVERY ROOM']] : [])],
-      `${x.eachSet === 'room' ? 'Typed for this room' : x.eachSet === 'who' ? 'The carpenter\'s own time' : 'The published time'} (published ${x.published}).${scaled}`);
+    html += fieldHtml('each', 'Hours each', +x.rate.toFixed(4), 'hrs per ' + (x.unitOne || x.unit), [['one', 'THIS ROOM'], ...(others ? [['all', 'EVERY ROOM']] : [])],
+      `${x.eachSet === 'room' ? 'Typed for this room' : x.eachSet === 'who' ? 'The carpenter\'s own time' : 'The published time'} (published ${x.published}). The room's hours, days and labor follow.`);
     html += fieldHtml('qty', 'Quantity', +(+x.qty).toFixed(2), unit, [['one', 'THIS ROOM']], x.qtySet ? `Typed; the drawing counts ${+(+x.counted).toFixed(2)}.` : 'Counted from the drawing.');
     html += fieldHtml('hours', 'Hours', hrs(x.hours), 'hrs', [['one', 'THIS ROOM']], 'Sets the hours each to these hours over the quantity.');
     if (l.set) html += `<p><button type="button" class="btn small ghost" data-reset="task">BACK TO THE COUNT AND THE ${x.eachSet === 'who' ? 'CARPENTER\'S' : 'PUBLISHED'} TIME</button></p>`;
@@ -349,7 +350,6 @@ function paintDetail() {
     if (!apply(l, f, input.value, scope)) { input.setCustomValidity('Type a number of 0 or more' + (f === 'days' ? ' (whole days, at least 1)' : '')); input.reportValidity(); }
   });
   body.querySelectorAll('input[data-f]').forEach(i => { i.oninput = () => i.setCustomValidity(''); i.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); body.querySelector(`[data-apply^="${i.dataset.f}|"]`)?.click(); } }; });
-  body.querySelector('[data-reset="days"]')?.addEventListener('click', () => { setRoomDays(viewJob.root, l.room.key, null); touch(); render(); });
   body.querySelector('[data-reset="task"]')?.addEventListener('click', () => { setRoomLabor(viewJob.root, l.room.key, 'qty', l.labor.task, null); setRoomLabor(viewJob.root, l.room.key, 'each', l.labor.task, null); touch(); render(); });
   body.querySelectorAll('[data-pick-task]').forEach(a => a.onclick = () => { opened.add(l.key); picked = a.dataset.pickTask; focusField = 'each'; render(); });
   const f = { days: 'days', hours: l.kind === 'task' ? 'each' : l.kind === 'item' ? 'idays' : 'days', dates: '' }[focusField] ?? '';
@@ -363,9 +363,11 @@ function apply(l, f, value, scope) {
   if (value === '' || !Number.isFinite(v) || v < 0) return false;
   const root = viewJob && viewJob.root; if (!root) return false;
   if (f === 'days') {
-    if (v < 1) return false;
+    if (v < 1 || !Number.isInteger(v)) return false;
     const keys = scope === 'all' ? roomsWithTrim().map(r => r.key) : [l.room.key];
-    for (const k of keys) setRoomDays(root, k, v);
+    let factor = 0;
+    for (const k of keys) { const x = fitRoomToDays(root, k, v); if (k === l.room.key) factor = x; if (!x) return false; }
+    lastFit = { key: l.key, days: v, factor };
   } else if (f === 'each') {
     const keys = scope === 'all' ? roomsWithTrim().filter(r => r.trim.some(y => (y.labor || []).some(z => z.task === l.labor.task))).map(r => r.key) : [l.room.key];
     for (const k of keys) setRoomLabor(root, k, 'each', l.labor.task, v);
