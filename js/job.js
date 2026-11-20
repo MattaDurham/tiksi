@@ -94,14 +94,25 @@ export function setRoomLabor(p, roomKey, field, task, value) {
   if (value != null && value !== '') { v = Number(value); if (!Number.isFinite(v) || v < 0) return false; }
   return editRoom(root, roomKey, room => { room[field] = { ...(room[field] || {}) }; if (v == null) delete room[field][task]; else room[field][task] = v; });
 }
-// A room's days (whole working days, at least 1), which scale its tasks to fit; null goes back to the
-// days its hours count.
-export function setRoomDays(p, roomKey, value) {
-  const root = rootOf(p);
-  if (!root || !roomKey) return false;
-  let v = null;
-  if (value != null && value !== '') { v = Math.round(Number(value)); if (!Number.isFinite(v) || v < 1) return false; }
-  return editRoom(root, roomKey, room => { if (v == null) delete room.days; else room.days = v; });
+// Fit a room's work into a number of whole working days: every working task's time (all but the
+// per-day setup and cleanup) is multiplied by one factor, so the working hours fill exactly those
+// days at 6 productive hours a day, and the new times are written as the room's own times, where
+// ESTIMATE and SCHEDULE show them. Nothing is pinned: change a time later and the days follow.
+// Returns the factor, or 0 when the room has no working hours to scale or the days are not a whole
+// number of at least 1. A days field left from before (job.labor[room].days) is cleared.
+export const DAY_HOURS = 6;
+export function fitRoomToDays(p, roomKey, value) {
+  const root = rootOf(p), days = Number(value);
+  if (!root || !Number.isInteger(days) || days < 1) return 0;
+  const room = jobOf(root).rooms.find(r => r.key === roomKey);
+  const work = room ? room.trim.flatMap(x => x.labor || []).filter(l => l.per !== 'room_days' && l.qty > 0 && l.rate > 0) : [];
+  const now = work.reduce((n, l) => n + l.qty * l.rate, 0);
+  if (!(now > 0)) return 0;
+  const factor = days * DAY_HOURS / now;
+  // A hair under the days, so the count rounds up to them and not past them.
+  for (const l of work) setRoomLabor(root, roomKey, 'each', l.task, +(l.rate * factor * (1 - 1e-9)).toPrecision(12));
+  editRoom(root, roomKey, x => { delete x.days; });
+  return factor;
 }
 function editRoom(root, roomKey, change) {
   const labor = { ...((root.job && root.job.labor) || {}) };
