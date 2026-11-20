@@ -28,9 +28,10 @@ export const JOB_DEFAULTS = Object.freeze({
   contingency: 0,         // fraction of the cost, for what the drawing cannot show
   markup: 0,              // overhead and profit, a fraction of cost + contingency
   taxRate: 0,             // sales tax on the trim boards and supplies bought
+  discount: 0,            // fraction off the price before tax
   sparePerMoulding: 1,    // spare boards of each moulding for the house
 });
-const LIMITS = { laborRate: [0, 1000], contingency: [0, 1], markup: [0, 3], taxRate: [0, 0.25], sparePerMoulding: [0, 10] };
+const LIMITS = { laborRate: [0, 1000], contingency: [0, 1], markup: [0, 3], taxRate: [0, 0.25], discount: [0, 1], sparePerMoulding: [0, 10] };
 
 export const rootOf = p => (p && p.parentId && projectById(p.parentId)) || p || null;
 export const treeOf = root => root ? [root, ...ws.data.projects.filter(x => x.parentId === root.id)] : [];
@@ -196,13 +197,17 @@ const zero3 = () => ({ low: 0, likely: 0, high: 0 });
 const one3 = v => ({ low: v, likely: v, high: v });
 const mul3 = (a, f) => ({ low: a.low * f, likely: a.likely * f, high: a.high * f });
 
-// A cost and its markups: contingency on the cost, markup on cost + contingency, tax on materials.
+// A cost and its markups: contingency on the cost, markup on cost + contingency, the discount off
+// all of that, then tax on the materials as bought (the store charges it whatever the discount).
 function priced(cost, materials, s) {
   const contingency = mul3(cost, s.contingency);
   const markup = mul3(add3(cost, contingency), s.markup);
+  const discount = mul3(add3(add3(cost, contingency), markup), s.discount);
   const tax = materials * s.taxRate;
-  return { cost, contingency, markup, tax, price: add3(add3(cost, contingency), add3(markup, one3(tax))) };
+  return { cost, contingency, markup, discount, tax, price: add3(add3(add3(cost, contingency), markup), add3(mul3(discount, -1), one3(tax))) };
 }
+// Hours are quoted to a tenth, and labor is those hours times the rate, so a printed room checks.
+const tenth3 = h => ({ low: Math.round(h.low * 10) / 10, likely: Math.round(h.likely * 10) / 10, high: Math.round(h.high * 10) / 10 });
 
 // Hours of labor lines at the rates' low, typical and high figures.
 function hoursOf(lines, taskById) {
@@ -252,7 +257,7 @@ export function jobOf(p) {
     room.boards = okTrim ? Object.values(okTrim.alloc || {}).filter(a => names.has(a.room)).reduce((n, a) => n + a.qty * a.price, 0) : 0;
     room.supplies = room.trim.reduce((n, r) => n + (r.supplies || 0), 0);
     room.materials = room.boards + room.supplies;
-    room.hours = room.trim.reduce((h, r) => add3(h, hoursOf(r.labor, taskById)), zero3());
+    room.hours = tenth3(room.trim.reduce((h, r) => add3(h, hoursOf(r.labor, taskById)), zero3()));
     room.labor = mul3(room.hours, s.laborRate);
     room.itemCost = room.items.reduce((t, it) => add3(t, itemTotals(it)), zero3());
     room.days = room.trim.reduce((n, r) => n + (r.days || 0), 0);
@@ -272,7 +277,7 @@ export function jobOf(p) {
     supplies: rooms.reduce((n, r) => n + r.supplies, 0),
     hours: rooms.reduce((h, r) => add3(h, r.hours), zero3()),
     labor: rooms.reduce((t, r) => add3(t, r.labor), zero3()),
-    itemCost: sum('itemCost'), cost: sum('cost'), contingency: sum('contingency'), markup: sum('markup'),
+    itemCost: sum('itemCost'), cost: sum('cost'), contingency: sum('contingency'), markup: sum('markup'), discount: sum('discount'),
     tax: parts.reduce((n, x) => n + x.tax, 0), price: sum('price'),
   };
   job.schedule = jobSchedule(job);

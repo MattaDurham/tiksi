@@ -3,6 +3,8 @@
 //   TRIM PACKAGE  the book for the carpenter and the yard: summary, options, buy list, each room's
 //                 walls with their boards, cut lists, installer bid form, price build-up, appendices
 //                 (trim-package-doc.js)
+//   SUMMARY       one page for the client: each room's materials, hours and labor, then the
+//                 materials, labor, discount, tax and total
 //   PROPOSAL      one page for the client: the work room by room, the price, the dates, payments,
 //                 what is and is not included, and a place to sign
 // Printed from the browser (PRINT, then Save as PDF for a PDF with real text).
@@ -17,6 +19,7 @@ import { icon } from './icons.js';
 
 const esc = escapeHtml;
 const DOCS = [
+  ['summary', 'Summary', 'One page: each room\'s materials, hours and labor, then the discount, tax and total'],
   ['package', 'Trim package', 'Buy list, every wall with its boards, cut lists, the installer bid form and the price build-up'],
   ['proposal', 'Proposal', 'One page for the client: the work, the price, the dates and a place to sign'],
 ];
@@ -25,7 +28,7 @@ export const PROPOSAL_DEFAULTS = Object.freeze({
   included: 'Protection of floors and furniture in the rooms worked in, daily cleanup and removal of debris, caulking, filling and painting the new trim.',
   excluded: 'Wall repair or painting beyond the trim, moving furniture, and conditions hidden behind finished surfaces.',
 });
-let el = null, off = null, timer = null, jobId = '', docId = 'package';
+let el = null, off = null, timer = null, jobId = '', docId = 'summary';
 
 export function mount(root) {
   el = root;
@@ -47,6 +50,7 @@ const termsOf = root => ({ ...PROPOSAL_DEFAULTS, ...(root.proposal || {}) });
 function docHtml(root) {
   const job = jobOf(root), prop = activeProperty();
   if (docId === 'proposal') return proposalHtml(job, prop);
+  if (docId === 'summary') return summaryHtml(job, prop);
   const t = trimForBook(root);
   if (!t) return { html: '<p class="note">This project has no drawn trim, so there is no trim package. Draw its trim in MODEL, each section in a room\'s subproject.</p>', css: '' };
   return trimPackageHtml(t, { title: prop ? prop.name : root.name, propertyName: prop ? prop.name : '', date: isoToday(), design: root.name, status: 'For review: check lengths on site before ordering',
@@ -129,4 +133,46 @@ export function proposalHtml(job, prop) {
     <div class="pp-sign"><div><span></span>Client signature</div><div><span></span>Date</div><div><span></span>${esc(B.name || 'Contractor')}</div><div><span></span>Date</div></div>
   </section></div>`;
   return { html, css: '' };
+}
+
+// ---------- the summary ----------
+// The estimate in its simplest form: the figures are ESTIMATE's, to the cent, so the page and the
+// paper agree. Hours are a tenth of an hour each room, and labor is those hours times the rate.
+const cents = v => (v < -0.005 ? '-' : '') + '$' + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const pctOf = v => +(v * 100).toFixed(3) + '%';
+export function summaryHtml(job, prop) {
+  const root = job.root, s = job.settings, B = ws.data.settings.business || {};
+  const rooms = job.rooms.filter(r => r.materials || r.hours.likely || r.itemCost.likely);
+  const other = job.other.itemCost.likely, items = other || rooms.some(r => r.itemCost.likely);
+  const row = r => `<tr><td>${esc(r.name)}</td><td class="r">${cents(r.materials)}</td><td class="r">${r.hours.likely.toFixed(1)}</td><td class="r">${cents(r.labor.likely)}</td>${items ? `<td class="r">${r.itemCost.likely ? cents(r.itemCost.likely) : ''}</td>` : ''}</tr>`;
+  const line = (label, v, cls = '') => `<tr class="${cls}"><td>${label}</td><td class="r">${cents(v)}</td></tr>`;
+  const date = new Date(isoToday() + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  const html = `<div class="sm"><section class="sm-page">
+    ${B.name ? `<div class="sm-biz">${esc(B.name)}</div>` : ''}<div class="sm-k">${esc(prop ? prop.name || '' : '')}</div><h1>${esc(root.name || 'Estimate')}</h1><div class="sm-sub">Estimate · ${esc(date)}</div>
+    <table class="sm-t"><thead><tr><th>Room</th><th class="r">Materials</th><th class="r">Hours</th><th class="r">Labor</th>${items ? '<th class="r">Other work</th>' : ''}</tr></thead>
+      <tbody>${rooms.map(row).join('')}${other ? `<tr><td>For the whole job</td><td></td><td></td><td></td><td class="r">${cents(other)}</td></tr>` : ''}</tbody>
+      <tfoot><tr><td>Total</td><td class="r">${cents(job.materials)}</td><td class="r">${job.hours.likely.toFixed(1)}</td><td class="r">${cents(job.labor.likely)}</td>${items ? `<td class="r">${cents(job.itemCost.likely)}</td>` : ''}</tr></tfoot></table>
+    <h2>Summary</h2>
+    <table class="sm-t sm-sum"><tbody>
+      ${line('Materials', job.materials)}${line('Labor', job.labor.likely)}
+      ${job.itemCost.likely ? line('Other work', job.itemCost.likely) : ''}
+      ${job.contingency.likely ? line(`Contingency (${pctOf(s.contingency)})`, job.contingency.likely) : ''}
+      ${job.markup.likely ? line(`Overhead and profit (${pctOf(s.markup)})`, job.markup.likely) : ''}
+      ${line(`Discount (${pctOf(s.discount)})`, -job.discount.likely)}
+      ${line(`Tax (${pctOf(s.taxRate)} on materials)`, job.tax)}
+      ${line('Total', job.price.likely, 'tot')}</tbody></table>
+    <p class="sm-note">Materials are the trim boards and the supplies to install and finish them (nails, adhesive, caulk, filler, primer, paint, protection). Labor is each room's hours at ${cents(s.laborRate).replace(/\.00$/, '')} an hour.${items ? ' Other work is priced per item in the room.' : ''}</p>
+  </section></div>`;
+  const css = `@page { size: letter; margin: 0.8in; }
+.sm { font: 11pt/1.45 -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1a1a1a; background: #fff; }
+.sm-page { max-width: 7in; margin: 0 auto; padding: 0.4in 0; }
+.sm-biz { font-weight: 600; margin-bottom: 14px; } .sm-k { font-size: 9pt; letter-spacing: .12em; text-transform: uppercase; color: #8a5a1c; }
+.sm h1 { font-size: 18pt; margin: 4px 0 2px; color: #1a1a1a; } .sm-sub { color: #555; margin-bottom: 26px; }
+.sm-t { width: 100%; border-collapse: collapse; } .sm-t th, .sm-t td { padding: 7px 8px; border-bottom: 1px solid #ddd; text-align: left; color: #1a1a1a; }
+.sm-t th { font-size: 9pt; text-transform: uppercase; letter-spacing: .06em; color: #555; border-bottom: 1.5px solid #1a1a1a; }
+.sm-t .r { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; } .sm-t tfoot td { font-weight: 600; border-top: 1.5px solid #1a1a1a; border-bottom: 0; }
+.sm h2 { font-size: 12pt; margin: 34px 0 8px; color: #1a1a1a; } .sm-sum { width: 55%; margin-left: auto; } .sm-sum td { border-bottom: 1px solid #eee; }
+.sm-sum tr.tot td { font-weight: 700; font-size: 12.5pt; border-top: 1.5px solid #1a1a1a; border-bottom: 0; }
+.sm-note { color: #666; font-size: 9pt; margin-top: 28px; }`;
+  return { html, css };
 }

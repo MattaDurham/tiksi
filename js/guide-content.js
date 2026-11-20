@@ -311,7 +311,7 @@ export const chapters = [
       'Under SCOPE ITEMS in the room, + ADD ITEM adds the rest of the work: type its name, quantity, unit, low, likely and high price each, and working days; × removes it. Under the name, pick the work and finish level from the price book and, for a measured item, the quantity it counts. PROJECT-WIDE ITEMS holds work for the whole job: permits, protection, a dumpster, measuring and ordering.',
       'Click an item\'s details link for its record in the right-hand column: its status, what it starts after, notes, the rooms and walls it is linked to in the model, its products and photos, CUT SHEET and FIND A PRODUCT. Click a piece, a board, a labor task or a line of the price for where its numbers come from. A task lists every room it is in (click one to go there); a moulding lists the store items bought, each with its store page and its record in PRODUCTS.',
       'Under WHO DOES THE WORK (left) add a carpenter or crew with their hourly rate and, for any task, their own time. Choose them under WHO DOES IT in a project\'s price.',
-      'Under HOW THE PRICE IS BUILT set the rate (without a carpenter chosen), contingency, overhead and profit, tax on materials, the spare boards and the price book area. SCHEDULE, ALL PROJECTS, the proposal and the one-pager follow.',
+      'Under HOW THE PRICE IS BUILT set the rate (without a carpenter chosen), contingency, overhead and profit, the discount, tax on materials, the spare boards and the price book area. The price reads in one column: materials, labor, discount, tax and total; the discount comes off before tax, and tax is on the materials as bought. Click any number on the page, in the rooms table or the price, for how it is worked out on the right; each answer links on down, from a room\'s supplies to the supplies list, one product and the measure of the drawing it is counted from. SCHEDULE, ALL PROJECTS, the proposal and the one-pager follow.',
       'Record carpenters\' bids under BIDS RECEIVED, beside the estimate\'s labor.',
       'ALL PROJECTS (top left) ticks projects into the program and compares them with the budget cap; PRINT REPORT prints it.',
     ],
@@ -388,7 +388,7 @@ export const chapters = [
   },
   {
     id: 'job-documents', group: 'Project work', title: 'Print the trim package and the proposal', path: 'DOCUMENTS → PROJECT DOCUMENTS', route: 'documents?job', workspace: 'PROJECT DOCUMENTS', image: 'documents.png',
-    intro: 'PROJECT DOCUMENTS prints what a project needs from its estimate. The trim package is the book for the carpenter and the yard; the proposal is one page for the client. Both carry the estimate\'s figures and the schedule\'s dates.',
+    intro: 'PROJECT DOCUMENTS prints what a project needs from its estimate. The summary is one page for the client: each room\'s materials (boards and supplies), hours and labor, then the materials, labor, discount, tax and total. The trim package is the book for the carpenter and the yard; the proposal is one page for the client. Both carry the estimate\'s figures and the schedule\'s dates.',
     caption: 'Choose the project and the document; the right column holds your business details and the proposal\'s terms.',
     steps: [
       'Open DOCUMENTS and choose PROJECT DOCUMENTS, then the project (DOCUMENTS → SEND lists each project\'s proposal too).',

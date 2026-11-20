@@ -160,37 +160,38 @@ function renderJob(inner, job, prop) {
     job.trim && job.trim.error ? `<div class="es-note bad">The drawn trim could not be worked out: ${esc(job.trim.error)}</div>` : '',
     job.covered.length ? `<div class="es-note">${plural(job.covered.length, 'scope item')} ${job.covered.length === 1 ? 'lists' : 'list'} only drawn trim of this project (boards written in by an earlier trim package). The drawing prices those boards now, so ${job.covered.length === 1 ? 'it is' : 'they are'} left out. <button class="btn small" data-remove-covered>REMOVE ${job.covered.length === 1 ? 'IT' : 'THEM'}</button></div>` : '',
   ].join('');
+  // A number in the table opens, on the right, how it is worked out.
+  const cell = (key, col, v) => v === '' ? '<td class="num"></td>' : `<td class="num lk" data-d="cell:${esc(key)}|${col}">${v}</td>`;
   const roomRow = r => {
     const has = r.trim.length > 0;
     return `<tr class="es-room ${open.has(r.key) ? 'open' : ''}" data-room="${esc(r.key)}" tabindex="0" aria-expanded="${open.has(r.key)}">
       <td><span class="tw">${open.has(r.key) ? '▾' : '▸'}</span><b>${esc(r.name)}</b>${r.project === root && !has ? '' : ''}</td>
-      <td class="num">${has ? Math.round(r.trimLf) : ''}</td><td class="num">${has ? r.pieces : ''}</td><td class="num">${has ? fm(r.boards) : ''}</td><td class="num">${has ? fm(r.supplies) : ''}</td>
-      <td class="num">${has ? hrs(r.hours.likely) : ''}</td><td class="num">${has ? fm(r.labor.likely) : ''}</td><td class="num">${r.itemCost.high ? fm(r.itemCost.likely) : ''}</td>
-      <td class="num">${r.days || ''}</td><td class="num"><b>${fm(r.price.likely)}</b></td></tr>
+      ${cell(r.key, 'lf', has ? Math.round(r.trimLf) : '')}${cell(r.key, 'pieces', has ? r.pieces : '')}${cell(r.key, 'boards', has ? fm(r.boards) : '')}${cell(r.key, 'supplies', has ? fm(r.supplies) : '')}
+      ${cell(r.key, 'hours', has ? hrs(r.hours.likely) : '')}${cell(r.key, 'labor', has ? fm(r.labor.likely) : '')}${cell(r.key, 'items', r.itemCost.high ? fm(r.itemCost.likely) : '')}
+      ${cell(r.key, 'days', r.days || '')}${cell(r.key, 'price', `<b>${fm(r.price.likely)}</b>`)}</tr>
       ${open.has(r.key) ? `<tr class="es-open"><td colspan="10">${roomBody(job, r)}</td></tr>` : ''}`;
   };
   const unpriced = job.other.items.filter(it => !it.likely).length;
-  const otherRow = `<tr class="es-room ${open.has('other') ? 'open' : ''}" data-room="other" tabindex="0"><td><span class="tw">${open.has('other') ? '▾' : '▸'}</span><b>Project-wide items</b></td><td colspan="6" class="note">${job.other.items.length ? (unpriced ? plural(unpriced, 'item') + ' without a price' : '') : 'none yet'}</td><td class="num">${job.other.itemCost.high ? fm(job.other.itemCost.likely) : ''}</td><td></td><td class="num"><b>${job.other.items.length ? fm(job.other.price.likely) : ''}</b></td></tr>
+  const otherRow = !job.other.items.length ? '' : `<tr class="es-room ${open.has('other') ? 'open' : ''}" data-room="other" tabindex="0"><td><span class="tw">${open.has('other') ? '▾' : '▸'}</span><b>Project-wide items</b></td><td colspan="6" class="note">${job.other.items.length ? (unpriced ? plural(unpriced, 'item') + ' without a price' : '') : 'none yet'}</td>${cell('other', 'items', job.other.itemCost.high ? fm(job.other.itemCost.likely) : '')}<td></td>${cell('other', 'price', `<b>${fm(job.other.price.likely)}</b>`)}</tr>
       ${open.has('other') ? `<tr class="es-open"><td colspan="10"><div class="es-roombody"><p class="note">Work for the whole project rather than one room: permits, protection, a dumpster, measuring and ordering.</p>${itemsTable(root, job.other.items)}</div></td></tr>` : ''}`;
   const table = `<section class="es-sec"><h2>Rooms</h2>
     <div class="es-tbl"><table class="es-t es-rooms"><thead><tr><th>Room</th><th class="num">Trim LF</th><th class="num">Pieces</th><th class="num">Boards</th><th class="num">Supplies</th><th class="num">Hours</th><th class="num">Labor</th><th class="num">Scope items</th><th class="num">Days</th><th class="num">Price</th></tr></thead>
     <tbody>${rows.map(roomRow).join('')}${otherRow}${rows.length || otherRow ? '' : '<tr><td colspan="10" class="note">No rooms yet: add one below, then draw its trim in MODEL or add its scope items here.</td></tr>'}</tbody>
-    <tfoot><tr><td>Total</td><td class="num">${trim ? Math.round(job.rooms.reduce((n, r) => n + r.trimLf, 0)) : ''}</td><td class="num">${trim ? job.rooms.reduce((n, r) => n + r.pieces, 0) : ''}</td><td class="num">${trim ? fm(job.boards) : ''}</td><td class="num">${trim ? fm(job.supplies) : ''}</td><td class="num">${trim ? hrs(job.hours.likely) : ''}</td><td class="num">${trim ? fm(job.labor.likely) : ''}</td><td class="num">${fm(job.itemCost.likely)}</td><td class="num">${days || ''}</td><td class="num">${fm(job.price.likely)}</td></tr></tfoot></table></div>
+    <tfoot><tr><td>Total</td>${cell('*', 'lf', trim ? Math.round(job.rooms.reduce((n, r) => n + r.trimLf, 0)) : '')}${cell('*', 'pieces', trim ? job.rooms.reduce((n, r) => n + r.pieces, 0) : '')}${cell('*', 'boards', trim ? fm(job.boards) : '')}${cell('*', 'supplies', trim ? fm(job.supplies) : '')}${cell('*', 'hours', trim ? hrs(job.hours.likely) : '')}${cell('*', 'labor', trim ? fm(job.labor.likely) : '')}${cell('*', 'items', fm(job.itemCost.likely))}${cell('*', 'days', days || '')}${cell('*', 'price', fm(job.price.likely))}</tr></tfoot></table></div>
     ${addRoomHtml(job, prop)}
-    <p class="note">Each room is cut from its own boards, so its cut list stands alone. Boards are bought at the cheapest store length that holds their cuts, at the prices in PRODUCTS; the buy list adds ${plural(s.sparePerMoulding, 'spare board')} of each moulding. Hours are each task's quantity, counted from the drawing, times ${s.who ? esc(s.who.name) + "'s" : 'the published'} time; open a room to type over either. Click a room to see its walls, boards, cut list and labor.</p></section>`;
+    <p class="note">Each room is cut from its own boards, so its cut list stands alone. Boards are bought at the cheapest store length that holds their cuts, at the prices in PRODUCTS; the buy list adds ${plural(s.sparePerMoulding, 'spare board')} of each moulding. Hours are each task's quantity, counted from the drawing, times ${s.who ? esc(s.who.name) + "'s" : 'the published'} time; open a room to type over either. Click a room to see its walls, boards, cut list and labor; click any number for how it is worked out.</p></section>`;
   const set = (key, label, value, unit, step) => `<label class="es-set"><span>${esc(label)}</span><span><input type="number" min="0" step="${step}" inputmode="decimal" data-set="${key}" value="${value}">${unit ? `<i>${unit}</i>` : ''}</span></label>`;
-  const line = (label, v, k, sub) => `<tr data-d="cost:${k}"><td>${esc(label)}${sub ? `<span class="note"> ${esc(sub)}</span>` : ''}</td><td class="num">${fm(v.low)}</td><td class="num">${fm(v.likely)}</td><td class="num">${fm(v.high)}</td></tr>`;
-  const one = v => ({ low: v, likely: v, high: v });
+  const line = (label, v, k, sub, cls = '') => `<tr data-d="cost:${k}" class="lk ${cls}"><td>${esc(label)}${sub ? `<span class="note"> ${esc(sub)}</span>` : ''}</td><td class="num">${fm(v)}</td></tr>`;
   const build = `<section class="es-sec"><h2>How the price is built</h2>
-    <div class="es-sets"><label class="es-set"><span>Who does it</span><span><select data-job-who aria-label="Who does the trim"><option value="">Published times</option>${installers().map(x => `<option value="${esc(x.id)}" ${s.who && s.who.id === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></span></label>${s.who ? `<label class="es-set"><span>${esc(s.who.name)}'s rate</span><span><input type="number" min="0" step="1" inputmode="decimal" data-who-rate value="${s.who.rate}"><i>$/hr</i></span></label>` : set('laborRate', 'Carpenter rate', s.laborRate, '$/hr', 1)}${set('contingency', 'Contingency', +(s.contingency * 100).toFixed(2), '%', 1)}${set('markup', 'Overhead and profit', +(s.markup * 100).toFixed(2), '%', 1)}${set('taxRate', 'Tax on materials', +(s.taxRate * 100).toFixed(3), '%', 0.125)}${set('sparePerMoulding', 'Spare boards each', s.sparePerMoulding, '', 1)}<label class="es-set"><span>Price book area</span><span><select data-cost-area aria-label="Prices for this area">${costAreas().map(a => `<option value="${esc(a.id)}" ${a.id === costAreaFor(root, prop) ? 'selected' : ''}>${esc(a.label + (a.factor !== 1 ? ' ×' + a.factor : ''))}</option>`).join('')}</select></span></label></div>
-    <div class="es-tbl"><table class="es-t es-build"><thead><tr><th></th><th class="num">Low</th><th class="num">Likely</th><th class="num">High</th></tr></thead><tbody>
-      ${trim ? line('Boards and supplies', one(job.materials), 'materials', `${order} boards, supplies counted from the job`) + line(s.who ? s.who.name : 'Carpenter', job.labor, 'labor', `${hrs(job.hours.likely)} hrs at ${fm(s.laborRate)}/hr; low and high from the published times' range`) : ''}
-      ${job.itemCost.high ? line('Scope items', job.itemCost, 'items', 'each room\'s and the project\'s own') : ''}
-      <tr class="sub"><td>Cost</td><td class="num">${fm(job.cost.low)}</td><td class="num">${fm(job.cost.likely)}</td><td class="num">${fm(job.cost.high)}</td></tr>
-      ${s.contingency ? line(`Contingency ${pct(s.contingency)}`, job.contingency, 'contingency') : ''}
-      ${s.markup ? line(`Overhead and profit ${pct(s.markup)}`, job.markup, 'markup') : ''}
-      ${s.taxRate ? line(`Tax ${pct(s.taxRate)} on ${fm(job.materials)} of materials`, one(job.tax), 'tax') : ''}
-      <tr class="tot"><td>Price</td><td class="num">${fm(job.price.low)}</td><td class="num">${fm(job.price.likely)}</td><td class="num">${fm(job.price.high)}</td></tr></tbody></table></div></section>`;
+    <div class="es-sets"><label class="es-set"><span>Who does it</span><span><select data-job-who aria-label="Who does the trim"><option value="">Published times</option>${installers().map(x => `<option value="${esc(x.id)}" ${s.who && s.who.id === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></span></label>${s.who ? `<label class="es-set"><span>${esc(s.who.name)}'s rate</span><span><input type="number" min="0" step="1" inputmode="decimal" data-who-rate value="${s.who.rate}"><i>$/hr</i></span></label>` : set('laborRate', 'Carpenter rate', s.laborRate, '$/hr', 1)}${set('contingency', 'Contingency', +(s.contingency * 100).toFixed(2), '%', 1)}${set('markup', 'Overhead and profit', +(s.markup * 100).toFixed(2), '%', 1)}${set('discount', 'Discount', +(s.discount * 100).toFixed(2), '%', 1)}${set('taxRate', 'Tax on materials', +(s.taxRate * 100).toFixed(3), '%', 0.125)}${set('sparePerMoulding', 'Spare boards each', s.sparePerMoulding, '', 1)}<label class="es-set"><span>Price book area</span><span><select data-cost-area aria-label="Prices for this area">${costAreas().map(a => `<option value="${esc(a.id)}" ${a.id === costAreaFor(root, prop) ? 'selected' : ''}>${esc(a.label + (a.factor !== 1 ? ' ×' + a.factor : ''))}</option>`).join('')}</select></span></label></div>
+    <div class="es-tbl"><table class="es-t es-build"><tbody>
+      ${trim ? line('Materials', job.materials, 'materials', `${order} boards and the supplies`) + line('Labor', job.labor.likely, 'labor', `${hrs(job.hours.likely)} hrs at ${fm(s.laborRate)}/hr${s.who ? ', ' + esc(s.who.name) : ''}`) : ''}
+      ${job.itemCost.high ? line('Scope items', job.itemCost.likely, 'items', 'priced in the rooms') : ''}
+      ${s.contingency ? line(`Contingency ${pct(s.contingency)}`, job.contingency.likely, 'contingency') : ''}
+      ${s.markup ? line(`Overhead and profit ${pct(s.markup)}`, job.markup.likely, 'markup') : ''}
+      ${line(`Discount ${pct(s.discount)}`, -job.discount.likely, 'discount')}
+      ${line(`Tax ${pct(s.taxRate)} on materials`, job.tax, 'tax')}
+      ${line('Total', job.price.likely, 'price', '', 'tot')}</tbody></table></div></section>`;
   inner.innerHTML = head + warn + table + build + bidsHtml(job);
   bindJob(inner, job);
   // Opening a project with the model beside the page outlines everything it is linked to.
@@ -254,7 +255,7 @@ function bidsHtml(job) {
     <form class="es-bid" data-add-bid><input name="who" placeholder="Bidder" required aria-label="Bidder"><input name="hours" type="number" min="0" step="0.5" placeholder="Hours" aria-label="Hours"><input name="amount" placeholder="Amount" required aria-label="Amount"><input name="scope" placeholder="What it covers" aria-label="What it covers"><button class="btn small" type="submit">ADD BID</button></form></section>`;
 }
 
-const PCT = new Set(['contingency', 'markup', 'taxRate']);
+const PCT = new Set(['contingency', 'markup', 'taxRate', 'discount']);
 // Where a project stands.
 const STATUSES = [['idea', 'Idea'], ['scoped', 'Scoped'], ['committed', 'Committed'], ['in-progress', 'In progress'], ['done', 'Done']];
 
@@ -388,7 +389,7 @@ function paint() {
   if (!d) {
     paintedKey = '';
     body.innerHTML = t.who ? '<p class="note">Click a task for where its published time comes from.</p>' : t.program ? '<p class="note">Tick projects into the program to compare them with the budget cap. Each price is the project\'s estimate.</p>'
-      : '<p class="note">Click a room to open its walls, boards and cut list. Click a piece, a board, a labor task, a scope item or a line of the price for where its numbers come from.</p>';
+      : '<p class="note">Click a room to open its walls, boards and cut list. Click any number, a piece, a board, a labor task, a scope item or a line of the price for how it is worked out; each answer links on down to what it is made of.</p>';
     return;
   }
   body.innerHTML = `<div class="d-title">${d.title}</div>${d.sub ? `<div class="d-sub">${d.sub}</div>` : ''}${d.html}${d.model ? `<p><button class="btn small" data-model>${icon('model')}SHOW IN THE MODEL</button></p>` : ''}`;
@@ -501,19 +502,176 @@ function detail(key, job) {
     return { kind: 'Scope item', title: esc(it.name || 'Item'), sub: `${esc(x === job.root ? 'Project-wide' : x.name)} · ${fmtQ(q)} ${esc(it.unit || '')}${it.likely ? ' · ' + fm(it.likely * q) : ''}`,
       html: itemDetailHtml(x, it, job.schedule.rows), bind: body => bindItemDetail(body, x, it, () => { touch(); render(true); }), model: linkedIds([], [it]).length ? linkedIds([], [it]) : null };
   }
-  if (kind === 'cost') {
-    const text = {
-      price: `The price to the client: the cost, then ${pct(s.contingency)} contingency, ${pct(s.markup)} overhead and profit and ${pct(s.taxRate)} tax on materials. Low and high carry each scope item's range and the labor rates' low and high hours.`,
-      hours: 'Carpenter hours from published production rates (mostly Craftsman estimating books), counted from the drawing: feet of base, rail and cap, frames, battens, copes, outside corners, scarfs, caulk, fill and paint, and setup and cleanup each day in a room. A carpenter\'s own bid is the check.',
-      days: 'Working days, Monday to Friday, one carpenter: each room takes its hours at 6 productive hours a day, at least a day, and the rooms follow one another in the order the subprojects are listed. SCHEDULE shows the dates.',
-      order: 'Boards bought at the cheapest store length that holds their cuts (up to 12\'-0", or 13\'-0" when that buys less), each room from its own boards, plus the spares. The buy list with item numbers is in DOCUMENTS.',
-      materials: 'Trim boards and supplies (nails, glue, adhesive, caulk, filler, primer, paint, protection, blades) at the store prices seen on the dates in the data.',
-      labor: `Carpenter hours × ${fm(s.laborRate)}/hr.`, items: 'Installed prices typed in each room or taken from the price book, each with its own range.',
-      contingency: 'For what the drawing cannot show: out-of-square walls, hidden conditions, a re-cut.', markup: 'Overhead and profit, on the cost and contingency.', tax: 'Sales tax on the boards and supplies bought. Scope items are installed prices; their tax is in them.',
-    }[id];
-    return text ? { kind: 'The price', title: esc({ price: 'Price', hours: 'Carpenter hours', days: 'Working days', order: 'Boards to buy', materials: 'Boards and supplies', labor: 'Carpenter', items: 'Scope items', contingency: 'Contingency', markup: 'Overhead and profit', tax: 'Tax' }[id]), html: `<p>${esc(text)}</p>` } : null;
+  if (kind === 'cell') return cellDetail(job, t, s, ...id.split('|'));
+  if (kind === 'supplies' && t) return suppliesDetail(t);
+  if (kind === 'supply' && t) return supplyDetail(t, id);
+  if (kind === 'measure' && t) return measureDetail(job, t, id);
+  if (kind === 'cost') return costDetail(job, t, s, id);
+  return null;
+}
+
+// ---------- how each number is worked out ----------
+// Every figure on the page opens here, and each answer links on down: a room's price to its boards,
+// supplies, hours and labor; the supplies to each product, its rule and the measure of the drawing it
+// is counted from; the hours to each task, its quantity and its time.
+const FT = 0.3048;
+const COLS = { lf: 'Trim LF', pieces: 'Pieces', boards: 'Boards', supplies: 'Supplies', hours: 'Hours', labor: 'Labor', items: 'Scope items', days: 'Days', price: 'Price' };
+const roomLink = (r, col, text) => link(`cell:${r.key}|${col}`, text);
+const ftOf = v => (Math.round(v * 10) / 10).toLocaleString('en-US') + ' ft';
+const eq = (parts, total) => `<p class="d-eq">${parts.join(' ')} = <b>${total}</b></p>`;
+// The rooms of the engine (by name) behind a room of the job.
+const engineRooms = (job, r) => r.trim.map(x => x.name);
+const supplyName = x => x.product || x.id;
+// What a measure of the drawing is and how it is counted.
+const MEASURES = {
+  rooms: ['Rooms', 'rooms', 'Rooms with trim in this job; per-room supplies (tape, plastic, sponges, blades) are counted per room or once for the job.'],
+  trim_lf: ['Trim', 'ft', 'Every drawn piece of trim, its length along the wall.'],
+  base_lf: ['Baseboard', 'ft', 'Feet of baseboard drawn.'], chair_lf: ['Chair rail', 'ft', 'Feet of chair rail drawn.'],
+  cap_lf: ['Wainscot cap', 'ft', 'Feet of cap drawn.'], rail_lf: ['Top and bottom rails', 'ft', 'Feet of flat rail board drawn (board and batten).'],
+  batten_lf: ['Battens', 'ft', 'Feet of vertical batten drawn.'], panel_lf: ['Panel moulding', 'ft', 'Feet of panel moulding drawn, round every frame.'],
+  caulk_lf: ['Caulk bead', 'ft', 'Each piece\'s length once per caulked edge: twice for chair rail, cap, panel moulding and battens (both edges), once for base (its top edge).'],
+  face_sf: ['Painted face', 'sf', 'Each piece\'s face width plus its thickness, times its length: the area two coats of paint cover.'],
+  adhesive_lf: ['Adhesive bead', 'ft', 'Feet of batten, rail and cap, which go on with construction adhesive as well as nails.'],
+  glued_joints: ['Glued joints', 'joints', 'Outside corners plus scarf joints, each glued.'],
+  frame_corners: ['Frame corners', 'corners', 'Four per panel frame.'], copes: ['Coped joints', 'copes', 'Inside corners where one piece is coped over the other.'],
+  holes: ['Nail holes', 'holes', 'Every nail the nailing rules put in, each a hole to fill.'],
+};
+function nailsOf(m) {
+  const out = {}, rules = (ESTIMATE_DATA.supplies || {}).nailing || {};
+  for (const r of Object.values(rules)) out['nails_' + r.gun] = (out['nails_' + r.gun] || 0) + (m[r.per] || 0) * r.nails_per_lf + (r.per_corner ? (m.frame_corners || 0) * r.per_corner : 0);
+  out.holes = Object.values(out).reduce((a, b) => a + b, 0);
+  return out;
+}
+function measureOf(t, name, key) {
+  const w = t.rooms.find(x => x.name === name); if (!w) return 0;
+  const m = w.measures || {};
+  return key in m && typeof m[key] === 'number' ? m[key] : (nailsOf(m)[key] || 0);
+}
+function measureLabel(key) {
+  if (MEASURES[key]) return MEASURES[key];
+  const gun = key.startsWith('nails_') ? key.slice(6) : '';
+  const GUN = { n16: '16-gauge finish nails', b15: '15-gauge finish nails', b20: '18-gauge brads', p23: '23-gauge pins' };
+  if (gun) { const rule = Object.entries((ESTIMATE_DATA.supplies || {}).nailing || {}).filter(([, r]) => r.gun === gun).map(([k, r]) => `${k.replace('_', ' ')} ${r.nails_per_lf} a foot${r.per_corner ? ` and ${r.per_corner} a frame corner` : ''}`); return [GUN[gun] || `Nails (${gun})`, 'nails', `Nails from the nailing rules: ${rule.join('; ')}.`]; }
+  return [key, '', ''];
+}
+const qtyOf = (v, unit) => `${(Math.round(v * 10) / 10).toLocaleString('en-US')} ${unit}`;
+// "180.4 ft of baseboard", "28 coped joints", "672 16-gauge finish nails".
+const amountOf = (key, v) => { const [label, unit] = measureLabel(key); return unit === 'ft' || unit === 'sf' ? `${qtyOf(v, unit)} of ${label.toLowerCase()}` : `${Math.round(v).toLocaleString('en-US')} ${label.replace(/^[A-Z]/, c => c.toLowerCase())}`; };
+
+function cellDetail(job, t, s, key, col) {
+  const all = key === '*', r = all ? null : key === 'other' ? { key: 'other', name: 'Project-wide items', ...job.other, trim: [], items: job.other.items } : job.rooms.find(x => x.key === key);
+  if (!all && !r) return null;
+  const where = all ? 'The whole job' : esc(r.name), kind = COLS[col] || 'Number';
+  const names = all ? null : new Set(engineRooms(job, r));
+  const perRoom = (f, fmt) => `<h4>By room</h4><ul>${job.rooms.filter(x => f(x)).map(x => `<li>${roomLink(x, col, esc(x.name))}: ${fmt(f(x))}</li>`).join('')}</ul>`;
+  if (col === 'lf') {
+    if (all) return { kind, title: `${Math.round(job.rooms.reduce((n, x) => n + x.trimLf, 0))} ft of trim`, sub: where, html: perRoom(x => x.trimLf, v => ftOf(v)) };
+    const by = new Map();
+    for (const p of (t && t.inputs && t.inputs.pieces) || []) if (names.has(p.room)) by.set(p.product, (by.get(p.product) || 0) + p.len / FT);
+    return { kind, title: `${ftOf(r.trimLf)} of trim`, sub: where, html: `<p>Every piece drawn in the room, measured along the wall, by moulding:</p><ul>${[...by].map(([pid, lf]) => `<li>${link('product:' + pid, esc((t.catalog[pid] || {}).short || pid))}: ${ftOf(lf)}</li>`).join('')}</ul>` };
+  }
+  if (col === 'pieces') {
+    if (all) return { kind, title: `${job.rooms.reduce((n, x) => n + x.pieces, 0)} pieces`, sub: where, html: perRoom(x => x.pieces, v => v + ' pieces') };
+    const groups = t ? t.groups.filter(g => names.has(g.room)) : [];
+    return { kind, title: `${r.pieces} pieces`, sub: where, html: `<p>Each piece cut for the room, by mark: how many and how long.</p><ul>${groups.map(g => `<li>${link('piece:' + g.mark, esc(g.mark))} ${esc(g.name)}: ${g.qty} × ${lenIn(g.lin)}</li>`).join('')}</ul>` };
+  }
+  if (col === 'boards') {
+    const allocs = t ? Object.values(t.alloc || {}).filter(a => all || names.has(a.room)) : [];
+    const byP = new Map();
+    for (const a of allocs) { const k = a.pid + '|' + a.lenIn + '|' + a.how; const x = byP.get(k) || { ...a, qty: 0, spare: 0, ext: 0 }; x.qty += a.qty; x.spare += a.spare || 0; x.ext += a.qty * a.price; byP.set(k, x); }
+    const rows = [...byP.values()].map(a => `<li>${link('product:' + a.pid, esc((t.catalog[a.pid] || {}).short || a.pid))}: ${a.qty} × ${a.how === 'kit' ? 'kit' : lenIn(a.lenIn)}${a.how === 'foot' ? ' cut at the store' : ''} at ${m2(a.price)} = ${m2(a.ext)}${a.spare ? ` <span class="note">(${plural(a.spare, 'spare')})</span>` : ''}</li>`).join('');
+    const sticks = !all && t ? t.boards.filter(b => names.has(b.room)) : [];
+    return { kind, title: fm(all ? job.boards : r.boards) + ' of boards', sub: where,
+      html: `<p>Boards bought at the cheapest store length that holds their cuts, at the prices in PRODUCTS. The spares (${plural(s.sparePerMoulding, 'board')} of each moulding) go on the room that buys the most of it.</p><ul>${rows}</ul>${all ? perRoom(x => x.boards, fm) : sticks.length ? `<h4>Each board and its cuts</h4><ul>${sticks.map(b => `<li>${link('stick:' + b.key, esc(b.id))}: ${esc(b.short)}, ${b.kit ? 'kit' : lenIn(b.stockIn)}</li>`).join('')}</ul>` : ''}` };
+  }
+  if (col === 'supplies') {
+    if (all) return { kind, title: fm(job.supplies) + ' of supplies', sub: where, html: `<p>Counted once for the whole job from the measures of the drawing, then shared out to the rooms by feet of trim.</p><p>${link('supplies:all', 'The supplies list, product by product')}</p>${perRoom(x => x.supplies, fm)}` };
+    const total = t ? t.totals.supplies : 0, lfJob = t ? t.house.trim_lf || 0 : 0;
+    return { kind, title: fm(r.supplies) + ' of supplies', sub: where,
+      html: `<p>The job's supplies are counted once, for all the rooms, and each room carries its share by feet of trim.</p>${eq([link('supplies:all', fm(total)), '×', link(`cell:${r.key}|lf`, ftOf(r.trimLf)), '÷', ftOf(lfJob)], fm(r.supplies))}<p>${link('supplies:all', 'The supplies list, product by product')}</p>` };
+  }
+  if (col === 'hours') {
+    if (all) return { kind, title: hrs(job.hours.likely) + ' hrs', sub: where, html: `<p>Each room's hours, to a tenth of an hour.</p>${perRoom(x => x.hours.likely, v => hrs(v) + ' hrs')}` };
+    const lines = r.trim.flatMap(x => x.labor || []), sumH = lines.reduce((n, l) => n + l.hours, 0);
+    return { kind, title: hrs(r.hours.likely) + ' hrs', sub: where,
+      html: `<p>Each task's quantity, counted from the drawing, times its hours each${s.who ? ` (${esc(s.who.name)}'s where set)` : ''}. Typed numbers are marked.</p><ul>${lines.map(l => `<li>${link('task:' + l.task, esc(l.label))}: ${fmtQ(l.qty)} ${esc(Math.abs(l.qty - 1) < 1e-9 ? l.unitOne || l.unit : l.unit)} × ${+l.rate.toFixed(4)} = ${hrs(l.hours)}${l.qtySet || l.eachSet === 'room' ? ' <span class="note">(typed)</span>' : ''}</li>`).join('')}</ul><p class="note">${(Math.round(sumH * 100) / 100).toFixed(2)} hrs, quoted to a tenth: ${hrs(r.hours.likely)} hrs.</p>` };
+  }
+  if (col === 'labor') {
+    const h = all ? job.hours.likely : r.hours.likely, v = all ? job.labor.likely : r.labor.likely;
+    return { kind, title: fm(v) + ' of labor', sub: where, html: eq([link(`cell:${key}|hours`, hrs(h) + ' hrs'), '×', `${fm(s.laborRate)}/hr`], fm(v)) + `<p class="note">${s.who ? `<a href="#/estimate?who=${encodeURIComponent(s.who.id)}" data-go-who="${esc(s.who.id)}">${esc(s.who.name)}</a>'s rate.` : 'The carpenter rate under How the price is built.'}</p>${all ? perRoom(x => x.labor.likely, fm) : ''}` };
+  }
+  if (col === 'items') {
+    const parts = all ? [...job.rooms, { key: 'other', name: 'Project-wide', items: job.other.items }] : [r];
+    const its = parts.flatMap(x => x.items.map(it => ({ x, it })));
+    return { kind, title: fm(all ? job.itemCost.likely : r.itemCost.likely) + ' of scope items', sub: where,
+      html: `<p>Work priced per unit in the room rather than counted from the drawing: quantity times the installed price.</p>${its.length ? `<ul>${its.map(({ x, it }) => `<li>${link('item:' + it.id, esc(it.name || 'Item'))}${all ? ` <span class="note">${esc(x.name)}</span>` : ''}: ${fmtQ(it.qty ?? 1)} ${esc(it.unit || '')} = ${fm((it.likely || 0) * (it.qty ?? 1))}</li>`).join('')}</ul>` : '<p class="note">None.</p>'}` };
+  }
+  if (col === 'days') {
+    if (all) return { kind, title: plural(job.schedule.days, 'working day'), sub: where, html: `<p>One carpenter does the rooms one after another, in the order they are listed, Monday to Friday; scope items with days of their own run alongside unless set to follow something. SCHEDULE has the dates.</p>${perRoom(x => x.days, v => plural(v, 'day'))}<p><a href="#/schedule?project=${encodeURIComponent(job.root.id)}">Open SCHEDULE</a></p>` };
+    const lines = r.trim.flatMap(x => x.labor || []), byId = (t && t.labor.taskById) || {};
+    const work = lines.filter(l => (byId[l.task] || {}).per !== 'room_days').reduce((n, l) => n + l.hours, 0);
+    return { kind, title: plural(r.days, 'working day'), sub: where, html: `<p>The room's working hours, all but the setup and cleanup that come each day, at 6 productive hours a day, rounded up, at least one day.</p>${eq([link(`cell:${r.key}|hours`, (Math.round(work * 100) / 100).toFixed(2) + ' working hrs'), '÷ 6, rounded up'], plural(r.days, 'day'))}` };
+  }
+  if (col === 'price') {
+    const x = all ? job : r;
+    const rows = [
+      x.materials != null && (x.materials || 0) ? [all ? link('cost:materials', 'Materials') : `${link(`cell:${key}|boards`, 'Boards')} + ${link(`cell:${key}|supplies`, 'supplies')}`, x.materials] : null,
+      x.labor && x.labor.likely ? [link(`cell:${key}|labor`, 'Labor'), x.labor.likely] : null,
+      x.itemCost && x.itemCost.likely ? [link(`cell:${key}|items`, 'Scope items'), x.itemCost.likely] : null,
+      x.contingency && x.contingency.likely ? [link('cost:contingency', `Contingency ${pct(s.contingency)}`), x.contingency.likely] : null,
+      x.markup && x.markup.likely ? [link('cost:markup', `Overhead and profit ${pct(s.markup)}`), x.markup.likely] : null,
+      x.discount && x.discount.likely ? [link('cost:discount', `Discount ${pct(s.discount)}`), -x.discount.likely] : null,
+      x.tax ? [link('cost:tax', `Tax ${pct(s.taxRate)} on materials`), x.tax] : null,
+    ].filter(Boolean);
+    return { kind, title: fm(x.price.likely), sub: where, html: `<table class="es-t d-sum"><tbody>${rows.map(([l, v]) => `<tr><td>${l}</td><td class="num">${fm(v)}</td></tr>`).join('')}<tr class="tot"><td>${all ? 'Total' : 'Room total'}</td><td class="num">${fm(x.price.likely)}</td></tr></tbody></table>` };
   }
   return null;
+}
+function suppliesDetail(t) {
+  const S = ESTIMATE_DATA.supplies || {}, cats = [...new Set(t.supplies.map(x => x.category))];
+  return { kind: 'Supplies', title: fm(t.totals.supplies) + ' of supplies', sub: `${t.supplies.length} products${S.seen ? ', prices seen ' + esc(fmtDate(S.seen)) : ''}`,
+    html: `<p>Each product's need is counted from a measure of the drawing for the whole job, then bought in whole packages. ${esc(S.note || '')}</p>`
+      + cats.map(c => `<h4>${esc(c.replace(/^[a-z]/, x => x.toUpperCase()))} <span class="note">${fm(t.suppliesByCategory[c] || 0)}</span></h4><ul>${t.supplies.filter(x => x.category === c).map(x => `<li>${link('supply:' + x.id, esc(supplyName(x)))}: ${x.packages} × ${m2(x.price)} = ${m2(x.ext)}</li>`).join('')}</ul>`).join('') };
+}
+function supplyDetail(t, id) {
+  const x = t.supplies.find(y => y.id === id); if (!x) return null;
+  const [, unit] = measureLabel(x.per), mn = x.min !== undefined ? x.min : 1;
+  const base = t.house[x.per] || 0, u = x.unit || unit;
+  const need = u === 'ft' || u === 'sf' ? qtyOf(x.need, u) : `${Math.ceil(x.need - 1e-9).toLocaleString('en-US')} ${u}`;
+  return { kind: 'Supply', title: esc(supplyName(x)), sub: `${esc(x.package || '')}${x.store ? ' · ' + esc(x.store) : ''}${x.item_no ? ' · ' + esc(x.item_no) : ''}`,
+    html: `<h4>How many</h4>${x.factor !== undefined && x.factor !== 1 ? eq([link('measure:' + x.per, esc(amountOf(x.per, base))), `× ${+x.factor.toFixed(4)}`], need) : `<p>${link('measure:' + x.per, esc(amountOf(x.per, base)))}</p>`}`
+      + (x.per_package ? eq([`${need} ÷ ${x.per_package.toLocaleString('en-US')} a package, rounded up${mn > 1 ? `, at least ${mn}` : ''}`], plural(x.packages, 'package')) : `<p>${plural(x.packages, 'package')}.</p>`)
+      + eq([`${x.packages} × ${m2(x.price)}`], m2(x.ext))
+      + `<h4>Why this much</h4><p>${esc(x.basis || '')}</p>`
+      + kv([['Price', `${m2(x.price)} ${esc(x.package ? 'for ' + x.package : '')}`], ['Seen', esc(x.seen ? fmtDate(x.seen) : '')], ['Store page', ext(x.url, esc(x.store || 'Store'))]]) };
+}
+function measureDetail(job, t, key) {
+  const [, , how] = measureLabel(key);
+  const total = key in t.house ? t.house[key] : 0;
+  const uses = t.supplies.filter(x => x.per === key);
+  return { kind: 'Measure', title: esc(amountOf(key, total)), sub: 'Counted from the drawing',
+    html: `<p>${esc(how)}</p><h4>By room</h4><ul>${job.rooms.filter(r => r.trim.length).map(r => `<li>${link(`cell:${r.key}|lf`, esc(r.name))}: ${esc(amountOf(key, engineRooms(job, r).reduce((n, name) => n + measureOf(t, name, key), 0)))}</li>`).join('')}</ul>`
+      + (uses.length ? `<h4>Supplies counted from it</h4><ul>${uses.map(x => `<li>${link('supply:' + x.id, esc(supplyName(x)))}</li>`).join('')}</ul>` : '') };
+}
+function costDetail(job, t, s, id) {
+  const base = job.cost.likely + job.contingency.likely + job.markup.likely;
+  const order = t ? t.buy.reduce((n, b) => n + b.order, 0) : 0;
+  const d = {
+    materials: () => ({ title: fm(job.materials) + ' of materials', html: eq([link('cell:*|boards', fm(job.boards) + ' boards'), '+', link('cell:*|supplies', fm(job.supplies) + ' supplies')], fm(job.materials)) + `<p class="note">${order} boards at the store prices in PRODUCTS, and the supplies to put them up and finish them.</p>` }),
+    labor: () => ({ title: fm(job.labor.likely) + ' of labor', html: eq([link('cell:*|hours', hrs(job.hours.likely) + ' hrs'), '×', `${fm(s.laborRate)}/hr`], fm(job.labor.likely)) }),
+    items: () => ({ title: fm(job.itemCost.likely) + ' of scope items', html: `<p>${link('cell:*|items', 'Every scope item, room by room')}</p>` }),
+    contingency: () => ({ title: fm(job.contingency.likely), html: eq([fm(job.cost.likely) + ' cost', '×', pct(s.contingency)], fm(job.contingency.likely)) + '<p class="note">For what the drawing cannot show: out-of-square walls, hidden conditions, a re-cut.</p>' }),
+    markup: () => ({ title: fm(job.markup.likely), html: eq([fm(job.cost.likely + job.contingency.likely) + ' cost and contingency', '×', pct(s.markup)], fm(job.markup.likely)) }),
+    discount: () => ({ title: fm(-job.discount.likely), html: eq([fm(base), '×', pct(s.discount)], fm(job.discount.likely)) + `<p>Taken off the ${link('cost:materials', 'materials')}, ${link('cost:labor', 'labor')}${job.itemCost.likely ? `, ${link('cost:items', 'scope items')}` : ''}${job.contingency.likely || job.markup.likely ? ', contingency and overhead' : ''} before tax. Set it under Discount above.</p>` }),
+    tax: () => ({ title: fm(job.tax), html: eq([link('cost:materials', fm(job.materials) + ' of materials'), '×', pct(s.taxRate)], fm(job.tax)) + '<p class="note">Sales tax on the boards and supplies as bought; the store charges it on the full price, whatever the discount. Scope items are installed prices with their tax in them.</p>' }),
+    price: () => ({ title: fm(job.price.likely), html: cellDetail(job, t, s, '*', 'price').html }),
+    hours: () => ({ title: hrs(job.hours.likely) + ' hrs', html: `<p>${link('cell:*|hours', 'Room by room')}</p>` }),
+    days: () => ({ title: plural(job.schedule.days, 'working day'), html: `<p>${link('cell:*|days', 'Room by room')}</p>` }),
+    order: () => ({ title: `${order} boards`, html: `<p>${link('cell:*|boards', 'The boards, room by room')}</p>` }),
+  }[id];
+  if (!d) return null;
+  const x = d();
+  return { kind: 'The price', title: x.title, sub: esc({ materials: 'Materials', labor: 'Labor', items: 'Scope items', contingency: 'Contingency', markup: 'Overhead and profit', discount: 'Discount', tax: 'Tax', price: 'Total', hours: 'Carpenter hours', days: 'Working days', order: 'Boards to buy' }[id]), html: x.html };
 }
 
 // ---------- all projects: the program against the cap ----------

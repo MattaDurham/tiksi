@@ -164,7 +164,26 @@ test('the trim package is priced with the job\'s contingency', () => {
   const { root } = setup();
   J.setJobSetting(root, 'contingency', 0.1); store.touch();
   const book = J.trimForBook(root), j = J.jobOf(root);
-  near(book.totals.total, j.rooms.reduce((n, r) => n + r.cost.likely, 0) * 1.1, 'the book\'s total is the trim cost with contingency');
+  // The book prices the engine's exact hours; the estimate quotes each room's hours to a tenth, so
+  // they differ by at most half a tenth of an hour a room at the rate, with contingency.
+  const slack = j.rooms.length * 0.05 * j.settings.laborRate * 1.1 + 1e-6;
+  const est = j.rooms.reduce((n, r) => n + r.cost.likely, 0) * 1.1;
+  assert.ok(Math.abs(book.totals.total - est) <= slack, `the book's total ${book.totals.total} is the trim cost with contingency ${est}, but for the hours' rounding`);
+});
+
+test('hours are quoted to a tenth, labor is those hours at the rate, and the discount comes off before tax', () => {
+  const { root } = setup();
+  J.setJobSetting(root, 'taxRate', 0.08); J.setJobSetting(root, 'discount', 0.5); store.touch();
+  const j = J.jobOf(root);
+  for (const r of j.rooms) {
+    near(r.hours.likely * 10, Math.round(r.hours.likely * 10), 'a room\'s hours are a whole number of tenths');
+    near(r.labor.likely, r.hours.likely * j.settings.laborRate, 'labor is the quoted hours at the rate');
+  }
+  const before = j.materials + j.labor.likely + j.itemCost.likely;
+  near(j.discount.likely, before * 0.5, 'the discount is half of materials, labor and items');
+  near(j.tax, j.materials * 0.08, 'tax is on the materials as bought, not discounted');
+  near(j.price.likely, before - j.discount.likely + j.tax, 'the total is what is left, plus tax');
+  assert.equal(J.setJobSetting(root, 'discount', 'x'), false, 'a discount that is not a number is refused');
 });
 
 test('a room\'s typed quantity or time replaces the count or the published time, and resets', () => {
