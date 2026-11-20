@@ -106,7 +106,8 @@ try {
   await navigateToView(page, 'estimate'); await page.locator('[data-new-job]').click();
   await page.locator('[data-jf=name]').fill('Synthetic audit project'); await page.locator('[data-jf=name]').press('Tab');
   await waitUntil(() => page.evaluate(async () => (await import('/js/store.js')).ws.data.projects.at(-1).name === 'Synthetic audit project'), 'the project');
-  await page.locator('tr[data-room="other"] td:first-child').click();
+  // A new project has no project-wide row until its first item, which the button under the rooms adds.
+  assert.equal(await page.locator('tr[data-room="other"]').count(), 0, 'no empty project-wide row');
   await page.locator('[data-add-item]').click();
   await page.locator('tr[data-si] [data-si-f=qty]').waitFor();
   await page.locator('tr[data-si] [data-si-f=qty]').fill('0'); await page.locator('tr[data-si] [data-si-f=qty]').press('Tab');
