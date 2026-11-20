@@ -85,16 +85,29 @@ export function setJobWho(p, id) {
 }
 
 // A room's typed quantities and times (field 'qty' or 'each'), kept on the top-level project by the
-// room's key (its subproject's id, or 'room:<name>'); null or '' goes back to the count or the rate.
+// room's key (its subproject's id, or 'room:<name>'), beside its days; null or '' goes back to the
+// count or the rate.
 export function setRoomLabor(p, roomKey, field, task, value) {
   const root = rootOf(p);
   if (!root || !['qty', 'each'].includes(field) || !task) return false;
   let v = null;
   if (value != null && value !== '') { v = Number(value); if (!Number.isFinite(v) || v < 0) return false; }
+  return editRoom(root, roomKey, room => { room[field] = { ...(room[field] || {}) }; if (v == null) delete room[field][task]; else room[field][task] = v; });
+}
+// A room's days (whole working days, at least 1), which scale its tasks to fit; null goes back to the
+// days its hours count.
+export function setRoomDays(p, roomKey, value) {
+  const root = rootOf(p);
+  if (!root || !roomKey) return false;
+  let v = null;
+  if (value != null && value !== '') { v = Math.round(Number(value)); if (!Number.isFinite(v) || v < 1) return false; }
+  return editRoom(root, roomKey, room => { if (v == null) delete room.days; else room.days = v; });
+}
+function editRoom(root, roomKey, change) {
   const labor = { ...((root.job && root.job.labor) || {}) };
-  const room = { qty: { ...((labor[roomKey] || {}).qty || {}) }, each: { ...((labor[roomKey] || {}).each || {}) } };
-  if (v == null) delete room[field][task]; else room[field][task] = v;
-  for (const f of ['qty', 'each']) if (!Object.keys(room[f]).length) delete room[f];
+  const room = { ...(labor[roomKey] || {}) };
+  change(room);
+  for (const f of ['qty', 'each']) if (room[f] && !Object.keys(room[f]).length) delete room[f];
   if (Object.keys(room).length) labor[roomKey] = room; else delete labor[roomKey];
   const next = { ...(root.job || {}) };
   if (Object.keys(labor).length) next.labor = labor; else delete next.labor;
