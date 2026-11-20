@@ -774,13 +774,24 @@ export function estimateTrim({ pieces: piecesIn, faces: facesIn, catalog: catalo
   }
   house.rooms = ROOMS.length;
   house.holes = sum(Object.entries(house).filter(([k]) => k.startsWith('nails_')), ([, v]) => v);
-  const supplies = [];
+  // The job's own changes to the list (S.supplies): { removed: [id], packages: { id: n }, price: { id: $ },
+  // added: [{ id, product, category, packages, price }] }. A typed count or price wins over the rule's.
+  const SO = S.supplies || {}, gone = new Set(SO.removed || []), own = v => v != null && v !== '' && Number.isFinite(Number(v)) && Number(v) >= 0;
+  const supplies = [], removedSupplies = [];
   for (const it of SUP.items || []) {
     const need = (house[it.per] || 0) * (it.factor !== undefined ? it.factor : 1);
     if (need <= 0 && !it.always) continue;
     const mn = it.min !== undefined ? it.min : 1;
-    const pk = it.per_package ? Math.max(mn, Math.ceil(need / it.per_package - 1e-9)) : mn;
-    supplies.push({ ...it, need, packages: pk, ext: pk * it.price });
+    const counted = it.per_package ? Math.max(mn, Math.ceil(need / it.per_package - 1e-9)) : mn;
+    const pkSet = own(SO.packages && SO.packages[it.id]), prSet = own(SO.price && SO.price[it.id]);
+    const pk = pkSet ? Number(SO.packages[it.id]) : counted, price = prSet ? Number(SO.price[it.id]) : it.price;
+    const row = { ...it, need, counted, packages: pk, listPrice: it.price, price, ext: pk * price, packagesSet: pkSet, priceSet: prSet };
+    if (gone.has(it.id)) removedSupplies.push(row); else supplies.push(row);
+  }
+  for (const a of SO.added || []) {
+    if (!a || !a.id) continue;
+    const pk = own(a.packages) ? Number(a.packages) : 1, price = own(a.price) ? Number(a.price) : 0;
+    supplies.push({ id: a.id, category: a.category || 'added', product: a.product || 'Supply', package: a.package || '', need: pk, counted: pk, packages: pk, listPrice: price, price, ext: pk * price, added: true, basis: 'Added to this job by hand.' });
   }
   const suppliesByCategory = {};
   for (const s of supplies) suppliesByCategory[s.category] = (suppliesByCategory[s.category] || 0) + s.ext;
@@ -867,7 +878,7 @@ export function estimateTrim({ pieces: piecesIn, faces: facesIn, catalog: catalo
     pieces: pieceOut, groups: G, boards, buy,
     catalog: CAT, prodOrder: PROD_ORDER, kits: [...KIT], roleOf: ROLE_OF, sale: SALE, stockIn: STOCK_IN,
     labor: { rate: RATE, tasks: LAB.tasks || [], tasksExtra: LAB.tasks_extra || [], byTask: hoursByTask, hours: totalHours, cost: laborTotal, note: LAB.note || '', rateNote: LAB.rate_note || '', seen: LAB.seen || '', taskById },
-    supplies, suppliesByCategory, tools: SUP.tools || [], suppliesNote: SUP.note || '', suppliesSeen: SUP.seen || '', house,
+    supplies, removedSupplies, suppliesByCategory, tools: SUP.tools || [], suppliesNote: SUP.note || '', suppliesSeen: SUP.seen || '', house,
     totals: { moulding: mouldingTotal, supplies: suppliesTotal, hours: totalHours, labor: laborTotal, subtotal, contingency, total: grand, spare: spareTotal,
       pieces: cutp.length, order: sum(buy, b => b.order), wholeHouse: sum(buy, b => b.whole), trimLf: house.trim_lf || 0 },
     scenarios, optionsNote: OPT.note || '', optionProducts: OPT.products || [],

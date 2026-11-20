@@ -343,3 +343,15 @@ html.touch #view .es-items .row-del { min-width: 44px; min-height: 44px; }
 @media (max-width: 760px) { .sc.det-open { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; } .sc.det-open .sc-det { grid-column: 1; } }
 /* The picked line's tint over a solid cell, so a stretched chart scrolled under the sticky name stays hidden. */
 .sc-tab tr.on td.sticky { background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--panel); }
+/* Supplies to change, rows taken out, and the right-click menu. */
+.es-sup td input.text { min-width: 220px; }
+.es-supadd { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.es-supadd input { background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--radius); padding: 5px 8px; color: var(--ink); }
+.es-supadd input[name=product] { min-width: 240px; } .es-supadd input[type=number] { width: 90px; }
+.es-t tr.off td { opacity: 0.45; text-decoration: line-through; } .es-t tr.off td:last-child { opacity: 1; text-decoration: none; }
+.es-t td.nw { white-space: nowrap; }
+.es-menu { position: fixed; z-index: 1000; min-width: 200px; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); padding: 4px; display: flex; flex-direction: column; }
+.es-menu button { background: none; border: 0; color: var(--ink); text-align: left; padding: 7px 10px; border-radius: 4px; font: inherit; font-size: 12.5px; cursor: pointer; }
+.es-menu button:hover, .es-menu button:focus { background: var(--accent-soft); outline: none; }
+.es-rooms .row-del, .es-sup .row-del, .es-labor .row-del { background: none; border: 0; color: var(--faint); font-size: 16px; cursor: pointer; padding: 2px 6px; }
+.es-rooms .row-del:hover, .es-sup .row-del:hover, .es-labor .row-del:hover { color: var(--red); }

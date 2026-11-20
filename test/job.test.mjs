@@ -171,7 +171,7 @@ test('the trim package is priced with the job\'s contingency', () => {
   assert.ok(Math.abs(book.totals.total - est) <= slack, `the book's total ${book.totals.total} is the trim cost with contingency ${est}, but for the hours' rounding`);
 });
 
-test('hours are quoted to a tenth, labor is those hours at the rate, and the discount comes off before tax', () => {
+test('hours are quoted to a tenth, labor is those hours at the rate, and the discount comes off the labor', () => {
   const { root } = setup();
   J.setJobSetting(root, 'taxRate', 0.08); J.setJobSetting(root, 'discount', 0.5); store.touch();
   const j = J.jobOf(root);
@@ -180,8 +180,8 @@ test('hours are quoted to a tenth, labor is those hours at the rate, and the dis
     near(r.labor.likely, r.hours.likely * j.settings.laborRate, 'labor is the quoted hours at the rate');
   }
   const before = j.materials + j.labor.likely + j.itemCost.likely;
-  near(j.discount.likely, before * 0.5, 'the discount is half of materials, labor and items');
-  near(j.tax, j.materials * 0.08, 'tax is on the materials as bought, not discounted');
+  near(j.discount.likely, j.labor.likely * 0.5, 'the discount is half of the labor, and nothing else');
+  near(j.tax, j.materials * 0.08, 'tax is on the materials as bought');
   near(j.price.likely, before - j.discount.likely + j.tax, 'the total is what is left, plus tax');
   assert.equal(J.setJobSetting(root, 'discount', 'x'), false, 'a discount that is not a number is refused');
 });
@@ -264,4 +264,28 @@ test('a room\'s days set by hand scale its tasks to fit, the labor follows, and 
   assert.ok(J.setRoomDays(root, room.key, null)); store.touch();
   assert.ok(J.jobOf(root).rooms[0].trim.every(x => !x.daysSet), 'reset: the days are counted again');
   assert.ok(root.job.labor[room.key].each.base === 0.05, 'and the typed time stays');
+});
+
+test('the job\'s supplies: a count or price typed over the rule, one removed and put back, one added', () => {
+  const { root } = setup();
+  const t0 = J.jobOf(root).trim, first = t0.supplies[0], total0 = t0.totals.supplies;
+  assert.ok(J.setSupply(root, first.id, 'packages', first.packages + 2)); store.touch();
+  let t = J.jobOf(root).trim, row = t.supplies.find(x => x.id === first.id);
+  assert.ok(row.packagesSet && row.packages === first.packages + 2, 'the typed count wins');
+  near(t.totals.supplies, total0 + 2 * first.price, 'and the total follows');
+  assert.ok(J.setSupply(root, first.id, 'price', 1)); store.touch();
+  near(J.jobOf(root).trim.supplies.find(x => x.id === first.id).ext, (first.packages + 2) * 1, 'a typed price each');
+  assert.equal(J.setSupply(root, first.id, 'price', -3), false, 'a negative price is refused');
+  assert.ok(J.removeSupply(root, first.id)); store.touch();
+  t = J.jobOf(root).trim;
+  assert.ok(!t.supplies.some(x => x.id === first.id) && t.removedSupplies.some(x => x.id === first.id), 'removed, and kept to put back');
+  const j = J.jobOf(root);
+  near(j.supplies, t.totals.supplies, 'the rooms\' supplies add up to the list without it');
+  const id = J.addSupply(root, { product: 'Synthetic tape', packages: 3, price: 2.5 }); store.touch();
+  near(J.jobOf(root).trim.supplies.find(x => x.id === id).ext, 7.5, 'a supply added by hand');
+  assert.ok(J.removeSupply(root, id)); store.touch();
+  assert.ok(!(root.job.supplies.added || []).length, 'an added supply removed is gone');
+  assert.ok(J.restoreSupply(root, first.id)); J.setSupply(root, first.id, 'packages', null); J.setSupply(root, first.id, 'price', null); store.touch();
+  near(J.jobOf(root).trim.totals.supplies, total0, 'put back and reset, the list is as counted');
+  assert.ok(!root.job || !root.job.supplies, 'and nothing is left stored');
 });
